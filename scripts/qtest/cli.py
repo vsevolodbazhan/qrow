@@ -9,6 +9,7 @@ import tarfile
 import catalog
 import runner  # Adds scripts/e2e to the import path for fixture.
 import fixture  # noqa: E402
+import opengl  # noqa: E402
 from runner import EXIT_FAILED, EXIT_MISSING, EXIT_PASSED, EXIT_USAGE, ROOT
 
 GUIDE = ROOT / "docs/testing.md"
@@ -177,8 +178,20 @@ def command_ci(args):
     output.note(f"CI job {job.name}: {', '.join(names)}")
     # A CI job stops at once when a prerequisite is missing, for example the
     # automation permissions of the desktop suite, so it builds nothing.
-    summary = runner.run(selected, {"runtime": job.runtime, "repeat": 1}, [], output,
-                         report_only=job.report_only, require_all=True)
+    options = {"runtime": job.runtime, "repeat": 1}
+    run_dir = None
+    # Keep the existing preflight contract: missing required tools/session
+    # permissions stop the job before compiling the capability probe.
+    prerequisites = [runner.precheck(item, options) for item in selected] if job.probe_opengl else []
+    missing = any(result and result.status == "missing" and result.name not in job.report_only
+                  for result in prerequisites)
+    if job.probe_opengl and not missing:
+        run_dir = runner.new_run_dir()
+        log = run_dir / "logs" / "opengl-capability.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        options["ci_opengl_capability"] = opengl.probe(runner.execute, log, output)
+    summary = runner.run(selected, options, [], output,
+                         report_only=job.report_only, require_all=True, run_dir=run_dir)
     print_summary(summary)
     return summary["exit_code"]
 

@@ -52,6 +52,20 @@ class CatalogJobTests(unittest.TestCase):
                     self.assertTrue(f"fromJSON(needs.plan.outputs.jobs).{name}" in body or
                                     f"fromJSON(needs.plan.outputs.jobs)['{name}']" in body)
 
+    def test_native_renderer_jobs_prepare_a_stable_desktop_without_reducing_the_viewport(self):
+        for name in ("e2e", "e2e-intel", "perf"):
+            with self.subTest(job=name):
+                body = job(name)
+                self.assertIn("defaults write com.apple.dock autohide -bool true", body)
+                self.assertIn("if pgrep -x Dock >/dev/null; then", body)
+                self.assertIn("killall Dock", body)
+                self.assertLess(body.index("name: Prepare desktop work area"),
+                                body.index(f"run: ./qtest ci {name} --install"))
+        driver = read("tests/desktop/Driver.swift")
+        self.assertIn("CGSize(width: 992, height: 652)", driver)
+        self.assertIn("visible.height - 32 >= testWindowSize.height", driver)
+        self.assertIn("safeFrame.insetBy(dx: -1, dy: -1).contains", driver)
+
     def test_suites_of_jobs_exist(self):
         for ci_job in catalog.CI_JOBS.values():
             for name in [*ci_job.suites, *ci_job.report_only]:
@@ -89,6 +103,7 @@ class PlanTests(unittest.TestCase):
             "tests/fixture/server/Blocking.java": ["static", "core", "package", "backend", "e2e"],
             "scripts/package/macos.sh": ["static", "core", "package"],
             "scripts/package/dmg.py": ["static", "core", "package"],
+            "scripts/perf/renderers.py": ["static", "core", "package", "perf"],
             ".github/workflows/checks.yml": everything,
             "scripts/qtest/catalog.py": everything,
         }

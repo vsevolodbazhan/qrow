@@ -6,6 +6,28 @@ macOS platform of GPUI. The source has an Apache 2.0 license. See
 
 Qrow changes these files:
 
+- `src/renderer.rs`, `src/software_renderer.rs`, `src/opengl_renderer/`,
+  `src/gpui_macos.rs`, `src/window.rs`, and `Cargo.toml`: the platform can
+  draw GPUI scenes on the CPU when software rendering is selected or OpenGL
+  cannot start. It presents the pixels through a Core Animation layer and keeps
+  native text, windows, input, and accessibility. Metal remains
+  the default when available. Headless tests use the same renderer selection.
+  `QROW_RENDERER` selects `auto`, `metal`, `opengl`, or `software`. An explicit
+  value takes precedence over `QROW_SOFTWARE_RENDERER=1`. Forced GPU modes
+  report initialization failures. Automatic selection uses Metal when
+  available, then OpenGL, then CPU if OpenGL cannot start.
+  OpenGL requires hardware Core Profile (OpenGL 3.3+, GLSL 3.30, VAO and
+  instanced drawing). It uses an atlas and a native OpenGL layer.
+  Renderer fallback is controlled by `QROW_RENDERER` and applies only during
+  initialization. Each rectangle or path triangle is one affine instance.
+  A rectangle uploads 224 bytes.
+  It composes quads, sprites, borders, paths, gradients, patterns, shadows,
+  and underlines without full frame CPU readback in window drawing.
+  The renderer unit tests run in the full `./qtest run ui` suite.
+  `./qtest run software-ui` checks native editor input and result pixels with
+  demo data. `./qtest run opengl-renderer opengl-ui` checks actual GPU pixels
+  and native window interaction. See the [rendering limits](../../README.md#limitations).
+
 - `src/window.rs` and `src/display_link.rs`: a window stops its display link
   1 second after GPUI last requested a frame, and starts it again at the next
   request. Before, the display link of a visible window fired at the refresh
@@ -20,5 +42,5 @@ Qrow changes these files:
   the idle footprint was 93 MB, and now it is 75 MB. `src/memory_relief.rs`
   has the unit tests of the timing.
 
-Remove the patch when a GPUI release includes the fix. Update the crate with
+Remove each patch when a GPUI release includes that change. Update the crate with
 the other GPUI crates as one set.

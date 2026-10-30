@@ -5,3 +5,6 @@
 __pycache__/
 
 .plans
+
+# Local release packages, screenshots, and renderer check logs.
+/artifacts/

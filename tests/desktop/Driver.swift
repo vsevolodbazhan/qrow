@@ -82,7 +82,8 @@ func setTestWindowFrame(_ app: AXUIElement) throws {
     let visible = screen.visibleFrame
     try require(
         visible.width - 32 >= testWindowSize.width && visible.height - 32 >= testWindowSize.height,
-        "Main display is too small for the \(Int(testWindowSize.width)) by \(Int(testWindowSize.height)) point test window"
+        "Main display is too small for the \(Int(testWindowSize.width)) by \(Int(testWindowSize.height)) point test window; "
+            + "screen=\(screen.frame), visible=\(visible), required margin=16 points"
     )
     let top = screen.frame.maxY - visible.maxY
     let safeFrame = CGRect(x: visible.minX, y: top, width: visible.width, height: visible.height)
@@ -200,6 +201,28 @@ func scrollUpAbove(_ element: AXUIElement, by distance: Int32 = 1200) throws {
     let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: distance, wheel2: 0, wheel3: 0)!
     scroll.location = location
     scroll.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
+func wheel(at point: CGPoint, vertical: Int32 = 0, horizontal: Int32 = 0) {
+    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
+        .post(tap: .cghidEventTap)
+    let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                        wheel1: vertical, wheel2: horizontal, wheel3: 0)!
+    event.location = point
+    event.post(tap: .cghidEventTap)
+}
+func drag(from start: CGPoint, to end: CGPoint) {
+    CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)!
+        .post(tap: .cghidEventTap)
+    for step in 1...10 {
+        let t = CGFloat(step) / 10
+        let point = CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
+        CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left)!
+            .post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+    }
+    CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)!
+        .post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
 func command(_ args: [String]) throws -> String {
@@ -461,6 +484,9 @@ final class Driver {
         process.executableURL = URL(fileURLWithPath: "\(bundle)/Contents/MacOS/qrow")
         let demo = CommandLine.arguments.contains("--editor-highlight-only")
             || CommandLine.arguments.contains("--results-text-only")
+            || CommandLine.arguments.contains("--software-input-only")
+            || CommandLine.arguments.contains("--renderer-lifecycle-only")
+            || CommandLine.arguments.contains("--renderer-performance-only")
         if demo {
             process.arguments = ["--demo"]
         }
@@ -530,6 +556,208 @@ final class Driver {
         }
         try require(distance(reference, edge) < 0.015, "Active line highlight stops before the editor's right edge")
         print("PASS: The active line highlight reaches the right edge of the editor")
+    }
+    func testSoftwareInput() throws {
+        let sql = "SELECT 'Привет 🦀' AS greeting;"
+        try query(sql)
+        try waitInputValue("SQL Editor", sql)
+        try press("Logs")
+        // Selectable log text does not expose AXStaticText nodes. Check the
+        // native Copy action and preserve the user's full pasteboard contents.
+        let clipboard = NSPasteboard.general
+        let saved = (clipboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
+                item.data(forType: type).map { (type, $0) }
+            }
+        }
+        defer {
+            clipboard.clearContents()
+            clipboard.writeObjects(saved.map { data -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, value) in data { item.setData(value, forType: type) }
+                return item
+            })
+        }
+        clipboard.clearContents()
+        try press("Copy all logs")
+        let deadline = monotonicSeconds() + 20
+        while !(clipboard.string(forType: .string) ?? "").contains("Submitted query:\n\(sql)") {
+            try require(monotonicSeconds() < deadline, "Copied logs do not contain the submitted Unicode SQL")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+        try press("Results")
+        _ = try wait("Singapore Airlines", timeout: 20, role: kAXCellRole)
+        try snapshot("software-input")
+        print("PASS: Rendering accepts Unicode SQL; native Copy confirms the submitted demo query")
+    }
+    func testRendererBlankWorkspace() throws {
+        let sql = "SELECT 'Привет 🦀' AS note;"
+        try fill("SQL Editor", sql)
+        try waitInputValue("SQL Editor", sql)
+        try testEditorHighlight()
+        try snapshot("renderer-blank")
+        try requestWindowClose()
+        let deadline = monotonicSeconds() + 10
+        while process.isRunning && monotonicSeconds() < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        try require(!process.isRunning && process.terminationStatus == 0, "Blank workspace did not close cleanly")
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        try require(savedSQL(sql, at: workspace), "Blank workspace did not save the editor text")
+        print("PASS: Normal window renders, accepts Unicode input, saves, and closes in an isolated workspace")
+    }
+    func testRendererLifecycle() throws {
+        guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first,
+              let running = NSRunningApplication(processIdentifier: process.processIdentifier) else {
+            throw Failure("Renderer test window is unavailable")
+        }
+        for extent in [CGSize(width: 880, height: 600), testWindowSize] {
+            var requested = extent
+            let value = AXValueCreate(.cgSize, &requested)!
+            try require(AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) == .success,
+                        "Could not resize the renderer test window")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+            let (_, actual) = try elementBounds(window)
+            try require(abs(actual.width - extent.width) <= 1 && abs(actual.height - extent.height) <= 1,
+                        "Renderer window did not reach the requested size")
+            try testEditorHighlight()
+        }
+        try require(AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success,
+                    "Could not minimize the renderer window")
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        try require(attribute(window, kAXMinimizedAttribute) as? Bool == true, "Window did not minimize")
+        try require(AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success,
+                    "Could not restore the renderer window")
+        running.activate(options: [])
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        try testEditorHighlight()
+        try require(AXUIElementSetAttributeValue(app, kAXHiddenAttribute as CFString, kCFBooleanTrue) == .success,
+                    "Could not hide the renderer application")
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        try require(attribute(app, kAXHiddenAttribute) as? Bool == true, "Application did not hide")
+        try require(AXUIElementSetAttributeValue(app, kAXHiddenAttribute as CFString, kCFBooleanFalse) == .success,
+                    "Could not show the renderer application")
+        running.activate(options: [])
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        try testEditorHighlight()
+        try testRendererNavigation()
+        try testAbout()
+        try testSoftwareInput()
+        try snapshot("renderer-restored")
+        try requestWindowClose()
+        let deadline = monotonicSeconds() + 5
+        while process.isRunning && monotonicSeconds() < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        try require(!process.isRunning, "Closing the last renderer window did not quit")
+        try require(process.terminationStatus == 0, "Renderer application failed during closure")
+        print("PASS: Renderer survives resize, minimize, hide, restore, input, and last-window closure")
+    }
+    func testRendererNavigation() throws {
+        let header = try waitExact("route", role: kAXCellRole)
+        let (origin, _) = try elementBounds(header)
+        let (_, window) = try qrowWindow()
+        let rect = "\(Int(origin.x)),\(Int(origin.y + 35)),\(Int(window.maxX - origin.x - 15)),\(Int(window.maxY - origin.y - 75))"
+        let location = CGPoint(x: origin.x + 60, y: origin.y + 70)
+        wheel(at: location)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        try captureRegion(rect, to: "\(artifacts)/scroll-before.png")
+        wheel(at: location, vertical: -240)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        try captureRegion(rect, to: "\(artifacts)/scroll-vertical.png")
+        try require(try Data(contentsOf: URL(fileURLWithPath: "\(artifacts)/scroll-before.png")) !=
+                    Data(contentsOf: URL(fileURLWithPath: "\(artifacts)/scroll-vertical.png")), "Vertical scrolling did not change result pixels")
+        wheel(at: location, horizontal: -260)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        try captureRegion(rect, to: "\(artifacts)/scroll-horizontal.png")
+        try require(try Data(contentsOf: URL(fileURLWithPath: "\(artifacts)/scroll-vertical.png")) !=
+                    Data(contentsOf: URL(fileURLWithPath: "\(artifacts)/scroll-horizontal.png")), "Horizontal scrolling did not change result pixels")
+        wheel(at: location, vertical: 1200, horizontal: 1200)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+        var editor = try waitInput("SQL Editor")
+        var (point, extent) = try elementBounds(editor)
+        drag(from: CGPoint(x: point.x + 100, y: point.y + extent.height),
+             to: CGPoint(x: point.x + 100, y: point.y + extent.height - 40))
+        editor = try waitInput("SQL Editor")
+        let (nextPoint, nextExtent) = try elementBounds(editor)
+        try require(nextExtent.height < extent.height - 20, "Editor splitter did not move")
+        drag(from: CGPoint(x: nextPoint.x + 100, y: nextPoint.y + nextExtent.height),
+             to: CGPoint(x: nextPoint.x + 100, y: nextPoint.y + nextExtent.height + 40))
+        (point, extent) = try elementBounds(try waitInput("SQL Editor"))
+        drag(from: CGPoint(x: point.x - 1, y: point.y + 80), to: CGPoint(x: point.x + 39, y: point.y + 80))
+        let (shifted, _) = try elementBounds(try waitInput("SQL Editor"))
+        try require(shifted.x > point.x + 20, "Sidebar splitter did not move")
+        drag(from: CGPoint(x: shifted.x - 1, y: shifted.y + 80), to: CGPoint(x: shifted.x - 41, y: shifted.y + 80))
+        // A released splitter must allow the next click to reach its control.
+        try press("Logs")
+        _ = try wait("Copy all logs", timeout: 10)
+        try press("Results")
+        _ = try wait("Singapore Airlines", timeout: 10, role: kAXCellRole)
+        print("PASS: Both result scroll axes, both splitters, release, and the next click")
+    }
+    func testRendererPerformance() throws {
+        let header = try waitExact("route", role: kAXCellRole)
+        let (origin, _) = try elementBounds(header)
+        let tablePoint = CGPoint(x: origin.x + 60, y: origin.y + 70)
+        func cpu() throws -> Double {
+            let text = try command(["ps", "-o", "time=", "-p", "\(process.processIdentifier)"])
+            return try text.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").reduce(0) { total, part in
+                guard let value = Double(part) else { throw Failure("Invalid process CPU time") }
+                return total * 60 + value
+            }
+        }
+        func measure(_ scenario: String, work: () throws -> Void) throws {
+            let before = try cpu()
+            let started = monotonicSeconds()
+            try work()
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            let cpuUsed = try cpu() - before
+            let rss = try command(["ps", "-o", "rss=", "-p", "\(process.processIdentifier)"])
+            let finished = monotonicSeconds()
+            let record: [String: Any] = ["scenario": scenario, "start_seconds": started, "end_seconds": finished, "seconds": finished - started,
+                                       "cpu_seconds": cpuUsed, "rss_mib": (Double(rss.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) / 1024]
+            let line = "QROW_NATIVE_PERF " + String(data: try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]), encoding: .utf8)!
+            samples.append(line)
+            print(line)
+        }
+        func scrollScenario(_ label: String, at point: CGPoint, rect: String, horizontal: Bool = false) throws {
+            wheel(at: point, vertical: horizontal ? 0 : 120000, horizontal: horizontal ? 120000 : 0)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+            let beforePath = "\(artifacts)/\(label)-before.png"
+            try captureRegion(rect, to: beforePath)
+            let beforePixels = try Data(contentsOf: URL(fileURLWithPath: beforePath))
+            try measure(label) {
+                for phase in 0..<2 {
+                    for _ in 0..<40 {
+                        let delta: Int32 = phase == 0 ? -60 : 60
+                        wheel(at: point, vertical: horizontal ? 0 : delta, horizontal: horizontal ? delta : 0)
+                        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+                    }
+                    if phase == 1 {
+                        wheel(at: point, vertical: horizontal ? 0 : 120000, horizontal: horizontal ? 120000 : 0)
+                    }
+                    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
+                    let path = "\(artifacts)/\(label)-\(phase).png"
+                    try captureRegion(rect, to: path)
+                    let pixels = try Data(contentsOf: URL(fileURLWithPath: path))
+                    try require(phase == 0 ? pixels != beforePixels : pixels == beforePixels,
+                                "\(label) did not \(phase == 0 ? "move" : "return to its start")")
+                }
+            }
+        }
+        let (_, window) = try qrowWindow()
+        let tableRect = "\(Int(origin.x)),\(Int(origin.y + 35)),\(Int(window.maxX - origin.x - 15)),\(Int(window.maxY - origin.y - 75))"
+        try scrollScenario("results_vertical", at: tablePoint, rect: tableRect)
+        try scrollScenario("results_horizontal", at: tablePoint, rect: tableRect, horizontal: true)
+        let sql = Array(repeating: "SELECT '日本語 🦀' AS note; -- synthetic rendering data", count: 500).joined(separator: "\n")
+        try fill("SQL Editor", sql)
+        let (editorPoint, editorSize) = try elementBounds(try waitInput("SQL Editor"))
+        let editorRect = "\(Int(editorPoint.x)),\(Int(editorPoint.y + 10)),60,\(Int(editorSize.height - 20))"
+        try scrollScenario("editor_vertical", at: CGPoint(x: editorPoint.x + 100, y: editorPoint.y + editorSize.height / 2), rect: editorRect)
+        // Let caret blinking and display-link shutdown finish before idle sampling.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 18))
+        try measure("idle") { RunLoop.current.run(until: Date(timeIntervalSinceNow: 3)) }
+        print("PASS: Release renderer performance actions completed")
     }
     /// The focus outline of a selected connection row stays on top when the
     /// pointer is on the status dot of the row.
@@ -797,19 +1025,21 @@ final class Driver {
     func seedAssistantLayoutWorkspace(panelWidth: Double = 536, uiScale: Double = 1.1, theme: String? = nil) throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
         try require(!FileManager.default.fileExists(atPath: workspace.path), "The layout check needs an empty workspace directory")
+        let assistant: [String: Any] = [
+            "enabled": true,
+            "data_sharing_notice_version": 5,
+            "codex_executable": FileManager.default.currentDirectoryPath + "/tests/desktop/fake-codex.sh",
+            "panel_width": panelWidth,
+        ]
         var settings: [String: Any] = [
             "ui_scale": uiScale,
-            "assistant": [
-                "enabled": true,
-                "data_sharing_notice_version": 5,
-                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/desktop/fake-codex.sh",
-                "panel_width": panelWidth,
-            ],
+            "assistant": assistant,
         ]
         if let theme { settings["theme"] = theme }
-        let data = try JSONSerialization.data(withJSONObject: [
-            "version": 3, "settings": settings, "profiles": [], "tabs": [], "active_tab": 0,
-        ])
+        let payload: [String: Any] = [
+            "version": 3, "settings": settings, "profiles": [Any](), "tabs": [Any](), "active_tab": 0,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
         try data.write(to: workspace)
     }
     /// A selection in a user message bubble shows in One Dark, and the selected
@@ -1125,6 +1355,18 @@ do {
             } else if CommandLine.arguments.contains("--results-text-only") {
                 try driver.start()
                 try driver.testResultsText()
+            } else if CommandLine.arguments.contains("--software-input-only") {
+                try driver.start()
+                try driver.testSoftwareInput()
+            } else if CommandLine.arguments.contains("--renderer-lifecycle-only") {
+                try driver.start()
+                try driver.testRendererLifecycle()
+            } else if CommandLine.arguments.contains("--renderer-performance-only") {
+                try driver.start()
+                try driver.testRendererPerformance()
+            } else if CommandLine.arguments.contains("--renderer-blank-only") {
+                try driver.start()
+                try driver.testRendererBlankWorkspace()
             } else if CommandLine.arguments.contains("--window-close-only") {
                 try driver.start()
                 try driver.testFailedSaveExit(closeWindow: true)
