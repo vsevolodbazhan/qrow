@@ -91,6 +91,20 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("--no-default-features", catalog.CLIPPY_CORE.command)
         self.assertNotIn("--no-default-features", catalog.CLIPPY_APP.command)
 
+    def test_coverage_serializes_shared_budget_tests_without_changing_selection(self):
+        coverage = catalog.SUITES["coverage"]
+        self.assertEqual(coverage.steps[1].command, (
+            "cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
+            "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
+            "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov",
+        ))
+        self.assertEqual(coverage.steps[1].env, (("RUST_TEST_THREADS", "1"),))
+        for suite in catalog.SUITES.values():
+            for step in suite.steps:
+                if suite.name != "coverage":
+                    with self.subTest(suite=suite.name):
+                        self.assertNotIn("RUST_TEST_THREADS", dict(step.env))
+
     def test_postgres_has_its_own_docker_suite_and_backend_ci_job(self):
         postgres = catalog.SUITES["postgres"]
         self.assertTrue(postgres.explicit_only)
@@ -104,6 +118,22 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("docker", trino.requires)
         self.assertIsNone(trino.fixture)
         self.assertIn("trino", catalog.CI_JOBS["backend"].suites)
+
+    def test_transfer_probes_keep_native_and_docker_ci_requirements_separate(self):
+        kyuubi = catalog.SUITES["perf-e2e"]
+        self.assertEqual(kyuubi.fixture, "any")
+        self.assertNotIn("docker", kyuubi.requires)
+        self.assertIn("transfer_perf::kyuubi", kyuubi.steps[1].nextest_filter)
+        for step, binary in zip(kyuubi.steps, ("e2e", "integration")):
+            self.assertEqual(step.command[step.command.index("--test") + 1], binary)
+        for engine in ("postgres", "trino"):
+            name = "perf-" + engine
+            suite = catalog.SUITES[name]
+            self.assertTrue(suite.explicit_only)
+            self.assertIn("docker", suite.requires)
+            self.assertIn("--perf", suite.steps[0].command)
+            self.assertIn(name, catalog.CI_JOBS["backend"].report_only)
+            self.assertNotIn(name, catalog.CI_JOBS["e2e"].report_only)
 
     def test_guide_topics_that_the_cli_names_exist(self):
         topics = cli.guide_sections()
@@ -497,7 +527,9 @@ class FixtureSessionTests(RunTests):
         self.assertIn("Preparation failed", summary["suites"][1]["reason"])
 
     def test_e2e_and_perf_e2e_share_the_build_of_the_test_binary(self):
-        self.assertEqual(catalog.SUITES["e2e"].prepare, catalog.SUITES["perf-e2e"].prepare)
+        self.assertEqual(catalog.SUITES["e2e"].prepare, (catalog.E2E_BUILD,))
+        self.assertEqual(catalog.SUITES["perf-e2e"].prepare,
+                         (catalog.E2E_BUILD, catalog.TRANSFER_PERF_BUILD))
 
     def test_failed_preparation_starts_no_servers(self):
         events, patches = self.fake()

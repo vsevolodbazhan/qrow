@@ -9,6 +9,7 @@ mod dbt;
 mod dbt_details;
 mod demo;
 mod environment;
+mod export_dialog;
 mod output;
 mod profile_view;
 mod result_toolbar;
@@ -19,6 +20,7 @@ mod sign_in_view;
 mod status_dot;
 mod status_tooltip;
 mod tab_view;
+mod unit_input;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
@@ -67,6 +69,7 @@ actions!(
     qrow,
     [
         RunQuery,
+        RunAndExport,
         SendAssistantMessage,
         NewTab,
         CloseTab,
@@ -93,6 +96,7 @@ actions!(
 /// Call once before opening a Qrow window.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    cx.set_global(crate::export::Jobs::default());
     themes::init(cx);
     // Wide result sets need a persistent, discoverable horizontal scrollbar.
     Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
@@ -107,6 +111,7 @@ pub fn init(cx: &mut App) {
             "",
         ),
     );
+    cx.bind_keys(results::bindings());
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
         KeyBinding::new(
@@ -235,6 +240,7 @@ struct Tab {
     cancelling: bool,
     connected: bool,
     more: bool,
+    preview_complete: bool,
     pending_page: Option<usize>,
     status: String,
     status_detail: Option<String>,
@@ -244,9 +250,14 @@ struct Tab {
     panel: PanelState,
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
+    result_session: Option<Uuid>,
+    result_profile: Option<Profile>,
     next_execution_id: u64,
     /// The SQL of the last Run, for a run after a browser sign-in.
     submitted_sql: Option<String>,
+    cursor: crate::worker::Cursor,
+    replay: Option<Arc<crate::export::spool::Spool>>,
+    download: Option<Arc<crate::worker::Download>>,
     /// The query waits for this browser sign-in, and then runs.
     sign_in_wait: Option<sign_in_view::SignInWait>,
     cancelled_sign_in: Option<Uuid>,
@@ -345,6 +356,7 @@ impl Tab {
     }
 }
 struct ProfileEditor {
+    transfer: connection_form::transfer::TransferForm,
     database_type: connection_form::RowSelect,
     _database_type_subscription: Subscription,
     postgres_ssl_mode: connection_form::RowSelect,
@@ -512,6 +524,7 @@ pub struct Qrow {
     /// The schema catalogs that several connections share.
     shared_catalogs: Vec<SharedCatalog>,
     tabs: Vec<Tab>,
+    exports: Vec<export_dialog::background::Entry>,
     active: usize,
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
@@ -768,6 +781,7 @@ impl Qrow {
             profiles: workspace.profiles,
             shared_catalogs: workspace.shared_catalogs,
             tabs: vec![],
+            exports: vec![],
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),
@@ -896,7 +910,19 @@ impl Qrow {
         let table = cx.new(|cx| {
             let mut results = Results::default();
             results.set_ui_scale(scale, cx);
-            TableState::new(results, window, cx).col_selectable(false)
+            results.export = self.settings.export.clone();
+            results.copy_format = self.settings.copy_format;
+            if let Some(profile) = self
+                .profiles
+                .iter()
+                .find(|profile| Some(profile.id) == saved.profile)
+            {
+                results.set_export_profile(profile);
+            }
+            // The results delegate owns the selection: a range of cells.
+            TableState::new(results, window, cx)
+                .col_selectable(false)
+                .row_selectable(false)
         });
         Tab {
             saved,
@@ -911,6 +937,7 @@ impl Qrow {
             cancelling: false,
             connected: false,
             more: false,
+            preview_complete: false,
             pending_page: None,
             status: "Not connected".into(),
             status_detail: None,
@@ -920,7 +947,12 @@ impl Qrow {
             panel: PanelState::default(),
             output_scroll: ScrollHandle::new(),
             current_execution: None,
+            result_session: None,
+            result_profile: None,
             submitted_sql: None,
+            cursor: crate::worker::Cursor::Unavailable,
+            replay: None,
+            download: None,
             sign_in_wait: None,
             cancelled_sign_in: None,
             signed_in_for_run: false,
@@ -958,6 +990,7 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        cx.global::<crate::export::Jobs>().cancel();
         self.sign_in_ui.cancel_all();
         self.assistant_state.save_transcripts = None;
         self.save_transcripts(None);
@@ -1000,10 +1033,23 @@ impl Qrow {
             }
         }
         self.catalog.wait_for_shutdown(deadline);
+        if !cx
+            .global::<crate::export::Jobs>()
+            .cancel_and_wait(Duration::from_secs(2))
+        {
+            eprintln!("An export destination did not stop before the shutdown deadline");
+        }
     }
-    fn active_work_description(&self) -> Option<&'static str> {
+    fn active_work_description(&self, cx: &App) -> Option<&'static str> {
         let assistant = self.assistant_working();
         let query = self.tabs.iter().any(|tab| tab.busy);
+        if cx.global::<crate::export::Jobs>().active_count() > 0 {
+            return Some(if assistant || query {
+                "Exports and other work are still running. Quit now to stop them?"
+            } else {
+                "An export is still running. Quit now to stop it?"
+            });
+        }
         match (assistant, query) {
             (true, true) => {
                 Some("An assistant turn and a query are still running. Quit now to stop both?")
@@ -1018,7 +1064,7 @@ impl Qrow {
         if self.quit_warning_open {
             return;
         }
-        let Some(description) = self.active_work_description() else {
+        let Some(description) = self.active_work_description(cx) else {
             return;
         };
         self.quit_warning_open = true;
@@ -1063,6 +1109,7 @@ impl Qrow {
                                     let _ = quit_anyway.update(cx, |this, cx| {
                                         this.quit_warning_open = false;
                                         this.quit_work_confirmed = true;
+                                        cx.global::<crate::export::Jobs>().cancel();
                                         this.request_quit(window, cx);
                                     });
                                 }),
@@ -1082,7 +1129,7 @@ impl Qrow {
             cx.notify();
             return;
         }
-        if !self.quit_work_confirmed && self.active_work_description().is_some() {
+        if !self.quit_work_confirmed && self.active_work_description(cx).is_some() {
             self.confirm_quit_while_working(window, cx);
             return;
         }
@@ -1320,6 +1367,7 @@ impl Qrow {
                     event,
                     workspace_visible && index == self.active,
                     &self.profiles,
+                    u64::from(self.settings.export_replay_limit_mib) * 1024 * 1024,
                     cx,
                 );
                 if let Some((status, detail)) = &waiting {
@@ -1347,6 +1395,7 @@ impl Qrow {
         event: Event,
         active: bool,
         profiles: &[Profile],
+        replay_limit: u64,
         cx: &mut Context<Self>,
     ) {
         if tab.started.is_some() {
@@ -1357,6 +1406,78 @@ impl Qrow {
             });
         }
         match event {
+            Event::Cursor { execution, state } => {
+                if tab.current_execution == Some(execution) {
+                    tab.cursor = state;
+                    if state == crate::worker::Cursor::Draining {
+                        tab.busy = true;
+                        tab.more = false;
+                        tab.pending_page = None;
+                        tab.set_status("Downloading export…");
+                    }
+                }
+            }
+            Event::DownloadProgress {
+                execution,
+                rows,
+                bytes,
+                elapsed,
+                percentage,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    let mib = bytes as f64 / (1024. * 1024.);
+                    let seconds = elapsed.as_secs_f64();
+                    let query =
+                        percentage.map_or(String::new(), |value| format!(", query {value:.0}%"));
+                    tab.set_status_detail(
+                        if bytes == 0 {
+                            "Executing export…"
+                        } else {
+                            "Downloading export…"
+                        },
+                        format!(
+                            "{rows} rows, {mib:.1} MiB, {:.0} rows/s, {seconds:.0}s{query}",
+                            rows as f64 / seconds.max(0.001)
+                        ),
+                    );
+                }
+            }
+            Event::Downloaded { execution, spool } => {
+                if tab.current_execution == Some(execution) {
+                    tab.busy = false;
+                    tab.cancelling = false;
+                    tab.more = false;
+                    tab.download = None;
+                    tab.cursor = crate::worker::Cursor::Downloaded;
+                    tab.elapsed = tab.started.take().map(|started| started.elapsed());
+                    tab.panel.success(active);
+                    tab.set_status_detail("Preview", "Export download complete");
+                    tab.replay =
+                        (replay_limit > 0 && spool.bytes() <= replay_limit).then_some(spool);
+                }
+            }
+            Event::DownloadFailed {
+                execution,
+                message,
+                consumed,
+                disconnected,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.busy = false;
+                    tab.cancelling = false;
+                    tab.download = None;
+                    if consumed {
+                        tab.cursor = crate::worker::Cursor::Consumed;
+                        tab.more = false;
+                    }
+                    if disconnected {
+                        tab.connected = false;
+                    }
+                    tab.elapsed = tab.started.take().map(|started| started.elapsed());
+                    Self::record_failure(tab, active);
+                    tab.set_status_detail("Export download stopped", message);
+                }
+            }
             Event::Connecting => {
                 tab.connected = false;
                 tab.busy = true;
@@ -1395,6 +1516,30 @@ impl Qrow {
                     tab.set_status("Connected");
                 }
             }
+            Event::Session {
+                execution,
+                generation,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.result_session = Some(generation);
+                }
+            }
+            Event::PreviewRows { execution, rows } => {
+                if tab.current_execution == Some(execution) {
+                    tab.table.update(cx, |table, cx| {
+                        table.delegate_mut().rows.append_shared(&rows);
+                        cx.notify();
+                    });
+                }
+            }
+            Event::PreviewComplete {
+                execution,
+                complete,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.preview_complete = complete;
+                }
+            }
             Event::Columns(columns) => {
                 tab.table.update(cx, |t, cx| {
                     t.delegate_mut().schema(columns, cx);
@@ -1411,9 +1556,15 @@ impl Qrow {
                     results::select_page(&tab.table, page, cx);
                 }
             }
+            Event::ExportContext(context) => {
+                tab.table.update(cx, |table, _| {
+                    table.delegate_mut().rows.set_context(context)
+                });
+            }
             Event::Ready { more, limited } => {
                 let was_cancelling = tab.cancelling;
                 tab.more = more;
+                tab.preview_complete = !more && !limited && !was_cancelling;
                 tab.pending_page = None;
                 tab.busy = false;
                 tab.cancelling = false;
@@ -1430,6 +1581,7 @@ impl Qrow {
                 }
             }
             Event::Cancelled => {
+                tab.cursor = crate::worker::Cursor::Consumed;
                 tab.busy = false;
                 tab.cancelling = false;
                 tab.more = false;
@@ -1469,6 +1621,7 @@ impl Qrow {
                 tab.cancelling = false;
             }
             Event::Disconnected | Event::IdleDisconnected => {
+                tab.cursor = crate::worker::Cursor::Unavailable;
                 tab.connected = false;
                 tab.more = false;
                 tab.pending_page = None;
@@ -1595,6 +1748,19 @@ impl Qrow {
                     }
                 }
                 self.oidc.configure(&self.sign_ins, &self.profiles);
+                for tab in &self.tabs {
+                    if tab
+                        .result_profile
+                        .as_ref()
+                        .map(|profile| profile.id)
+                        .or(tab.saved.profile)
+                        == Some(id)
+                    {
+                        tab.table.update(cx, |table, _| {
+                            table.delegate_mut().set_export_profile(&profile)
+                        });
+                    }
+                }
                 self.external_auth.configure(&self.profiles);
                 self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
@@ -1757,6 +1923,9 @@ impl Qrow {
         {
             return;
         }
+        if index == self.active {
+            window.release_pointer();
+        }
         // The menu names a tab that is about to disappear.
         self.menu = None;
         if let Some(w) = &self.tabs[index].worker {
@@ -1848,22 +2017,8 @@ impl Qrow {
         if self.demo {
             return self.run_tab_sql(index, String::new(), false, cx);
         }
+        let query = self.selected_tab_sql(index, window, cx);
         let tab = &mut self.tabs[index];
-        let query = tab.input.update(cx, |s, cx| {
-            let selected = s
-                .selected_text_range(false, window, cx)
-                .filter(|s| !s.range.is_empty());
-            selected
-                .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
-                .map(Ok)
-                .unwrap_or_else(|| {
-                    let text = s.value();
-                    sql::statement_range_at(&text, s.selected_range().start)
-                        .map(|range| text[range].to_string())
-                        .or_else(|| sql::statement_ranges(&text).is_empty().then(String::new))
-                        .ok_or("Move the cursor into a SQL statement or select SQL to run.")
-                })
-        });
         let query = match query {
             Ok(query) => query,
             Err(message) => {
@@ -1879,6 +2034,29 @@ impl Qrow {
             }
         };
         self.run_tab_sql(index, query, false, cx)
+    }
+
+    fn selected_tab_sql(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<String, &'static str> {
+        self.tabs[index].input.update(cx, |s, cx| {
+            let selected = s
+                .selected_text_range(false, window, cx)
+                .filter(|s| !s.range.is_empty());
+            selected
+                .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    let text = s.value();
+                    sql::statement_range_at(&text, s.selected_range().start)
+                        .map(|range| text[range].to_string())
+                        .or_else(|| sql::statement_ranges(&text).is_empty().then(String::new))
+                        .ok_or("Move the cursor into a SQL statement or select SQL to run.")
+                })
+        })
     }
     fn tab_database_type(&self, profile: Option<Uuid>) -> crate::model::DatabaseType {
         self.profiles
@@ -1961,6 +2139,8 @@ impl Qrow {
         let tab = &mut self.tabs[index];
         tab.signed_in_for_run = after_sign_in;
         tab.submitted_sql = Some(query.clone());
+        tab.result_profile = Some(profile.clone());
+        tab.result_session = None;
         // A session that a sign-out or another account released while the
         // tab was busy closes now, so the query opens a new one.
         if tab.release_pending {
@@ -1986,6 +2166,7 @@ impl Qrow {
         let tab = &mut self.tabs[index];
         tab.table.update(cx, |t, cx| {
             t.delegate_mut().clear();
+            t.delegate_mut().set_export_profile(&profile);
             t.delegate_mut().empty_message = Some("Waiting for query results…");
             t.clear_selection(cx);
             t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
@@ -1995,6 +2176,10 @@ impl Qrow {
         tab.more = false;
         tab.pending_page = None;
         tab.elapsed = None;
+        tab.preview_complete = false;
+        tab.cursor = crate::worker::Cursor::Unavailable;
+        tab.replay = None;
+        tab.download = None;
         tab.busy = true;
         tab.panel.execution_started();
         tab.cancelling = false;
@@ -2906,6 +3091,7 @@ impl Qrow {
                                     )
                                 });
                             }
+                            form.transfer.switch_engine(previous, selected, window, cx);
                             connection_form::reset_authentication(
                                 &form.authentication,
                                 selected,
@@ -2939,6 +3125,7 @@ impl Qrow {
                 }
             });
         self.form = Some(ProfileEditor {
+            transfer: connection_form::transfer::TransferForm::new(&profile.transfer, window, cx),
             dbt,
             database_type,
             _database_type_subscription: database_type_subscription,
@@ -3094,6 +3281,9 @@ impl Qrow {
         profile.database = values[5].trim().into();
         profile.trino_schema = values[15].trim().into();
         let parse = (|| -> anyhow::Result<()> {
+            profile.transfer = form
+                .transfer
+                .value(&profile.transfer, profile.database_type, cx)?;
             profile.port = values[2]
                 .trim()
                 .parse()
@@ -3529,6 +3719,10 @@ impl Qrow {
             t.refresh(cx);
         });
         tab.set_status_detail("Complete", "Demo data");
+        tab.preview_complete = true;
+        tab.cursor = crate::worker::Cursor::Complete;
+        tab.replay = None;
+        tab.download = None;
         tab.elapsed = Some(Duration::from_millis(842));
         tab.panel.success(true);
     }

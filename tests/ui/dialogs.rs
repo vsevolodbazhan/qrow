@@ -3,7 +3,7 @@ use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
 use qrow::{
     build_info,
-    model::Workspace,
+    model::{CopyFormat, Workspace},
     ui::{OpenAbout, OpenSettings},
 };
 use std::time::Duration;
@@ -58,6 +58,70 @@ fn wait_saved(
 
 fn left_edge(app: &TestApp, cx: &mut TestAppContext, id: &str) -> f32 {
     app.update(cx, |window, _| f32::from(bounds_of(window, id).origin.x))
+}
+
+#[gpui_kit::test]
+fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppContext) {
+    let field = "setting-export-replay-limit";
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "replay");
+    app.wait_for(cx, field);
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, field).as_deref(), Some("2048"));
+        // The unit follows the value, as in the connection export fields.
+        let input = window.find(field);
+        let unit = window.find("setting-export-replay-limit-unit");
+        assert!(unit.visible());
+        assert!(unit.bounds().left() > input.bounds().left());
+        assert!(unit.bounds().left() - input.bounds().left() < window.rem_size() * 4.);
+    });
+    app.fill(cx, field, "0");
+    app.click(cx, "save-settings");
+    app.wait_gone(cx, "save-settings");
+    wait_saved(&app, cx, "disabled replay retention", |workspace| {
+        workspace.settings.export_replay_limit_mib == 0
+    });
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "replay");
+    app.wait_for(cx, field);
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, field).as_deref(), Some("0"));
+    });
+    // Enter commits the value and clamps it to the maximum.
+    app.fill(cx, field, "2000000");
+    app.press(cx, "enter");
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, field).as_deref(), Some("1048576"));
+    });
+    app.fill(cx, field, "300");
+    app.click(cx, "save-settings");
+    wait_saved(&app, cx, "replay retention", |workspace| {
+        workspace.settings.export_replay_limit_mib == 300
+    });
+}
+
+#[gpui_kit::test]
+fn copy_format_is_saved(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "clipboard");
+    app.wait_for(cx, "setting-copy-format");
+    app.select(cx, "setting-copy-format", "JSON");
+    app.click(cx, "save-settings");
+    app.wait_gone(cx, "save-settings");
+    wait_saved(&app, cx, "the copy format", |workspace| {
+        workspace.settings.copy_format == CopyFormat::Json
+    });
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "clipboard");
+    app.wait_for(cx, "setting-copy-format");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "setting-copy-format").as_deref(),
+            Some("JSON")
+        );
+    });
 }
 
 #[gpui_kit::test]
@@ -158,8 +222,9 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
     });
     app.click(cx, "save-settings");
     app.wait_gone(cx, "save-settings");
-    let settings = app.saved().settings;
-    assert_eq!(settings.editor_font_size, 13.);
-    assert_eq!(settings.assistant_font_size, 14.);
-    assert_eq!(settings.editor_font_family, "Menlo");
+    wait_saved(&app, cx, "the restored default fonts", |w| {
+        w.settings.editor_font_size == 13.
+            && w.settings.assistant_font_size == 14.
+            && w.settings.editor_font_family == "Menlo"
+    });
 }

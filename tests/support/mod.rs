@@ -8,15 +8,16 @@ pub mod evidence;
 pub mod fixture;
 pub mod oidc;
 pub mod perf;
+pub mod response_gate;
 pub mod trino_protocol;
 use anyhow::Result;
 use gpui_kit::InputEvent as _;
 use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, WeakEntity,
-    Window, point, px, size,
+    Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext,
+    WeakEntity, Window, point, px, size,
 };
 use qrow::{
     model::{Profile, WORKSPACE_VERSION, Workspace},
@@ -535,13 +536,25 @@ pub fn pointer_click(
     button: MouseButton,
     cx: &mut App,
 ) {
+    pointer_click_with(window, element, button, Modifiers::default(), cx);
+}
+
+/// Presses and releases `button` with `modifiers` held, at the center of an
+/// observed element.
+pub fn pointer_click_with(
+    window: &mut Window,
+    element: &ElementSnapshot,
+    button: MouseButton,
+    modifiers: Modifiers,
+    cx: &mut App,
+) {
     assert!(element.visible(), "{:?} is not visible", element.path());
     let position = element.bounds().center();
     window.dispatch_event(
         MouseMoveEvent {
             position,
             pressed_button: None,
-            modifiers: Default::default(),
+            modifiers,
         }
         .to_platform_input(),
         cx,
@@ -550,7 +563,7 @@ pub fn pointer_click(
         MouseDownEvent {
             button,
             position,
-            modifiers: Default::default(),
+            modifiers,
             click_count: 1,
             first_mouse: false,
         }
@@ -561,7 +574,51 @@ pub fn pointer_click(
         MouseUpEvent {
             button,
             position,
-            modifiers: Default::default(),
+            modifiers,
+            click_count: 1,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+}
+
+/// Drag the left pointer between two visible elements.
+pub fn pointer_drag(
+    window: &mut Window,
+    from: &ElementSnapshot,
+    to: &ElementSnapshot,
+    cx: &mut App,
+) {
+    assert!(from.visible() && to.visible());
+    let modifiers = Modifiers::default();
+    window.dispatch_event(
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position: from.bounds().center(),
+            modifiers,
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+    window.dispatch_event(
+        MouseMoveEvent {
+            position: to.bounds().center(),
+            pressed_button: Some(MouseButton::Left),
+            modifiers,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+    window.dispatch_event(
+        MouseUpEvent {
+            button: MouseButton::Left,
+            position: to.bounds().center(),
+            modifiers,
             click_count: 1,
         }
         .to_platform_input(),
@@ -751,7 +808,7 @@ impl TestApp {
     /// Opens the page `title` of the Connection Settings dialog with its
     /// sidebar item.
     pub fn connection_page(&self, cx: &mut TestAppContext, title: &str) {
-        let index = ["General", "Catalog", "dbt", "Assistant"]
+        let index = ["General", "Export", "Catalog", "dbt", "Assistant"]
             .iter()
             .position(|page| *page == title)
             .unwrap_or_else(|| panic!("No connection page {title}"));
@@ -874,6 +931,11 @@ impl TestApp {
             };
         }
         panic!("{id} has no option {option}");
+    }
+
+    pub fn select_json(&self, cx: &mut TestAppContext, style: &str) {
+        self.select(cx, "export-format", "JSON");
+        self.select(cx, "export-json-style", style);
     }
 
     /// Runs the queued work of the UI, like deferred updates of a select.
@@ -1035,6 +1097,25 @@ impl TestApp {
         panic!("{target} did not scroll into view: {state:?}. Wheel positions: {positions:?}");
     }
 
+    /// Moves the pointer over an element with a stable ID.
+    pub fn hover(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.wait_for(cx, id.clone());
+        self.update(cx, |window, cx| {
+            let position = window.find(id).bounds().center();
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
     /// Moves the pointer over the element labelled exactly `text`, for
     /// controls that show on hover, like the close button of a tab.
     pub fn hover_labelled(&self, cx: &mut TestAppContext, text: &str) {
@@ -1170,6 +1251,11 @@ impl TestApp {
             Duration::from_secs(10),
             |_, _| self.saved().tabs.iter().any(|tab| tab.sql == sql),
         );
+    }
+
+    // Exercise the captured execution pipeline shared by export reruns.
+    pub fn run_export(&self, cx: &mut TestAppContext) {
+        self.dispatch(cx, qrow::ui::RunAndExport);
     }
 
     /// The workspace as Qrow last saved it.

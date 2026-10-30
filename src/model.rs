@@ -2,6 +2,7 @@ use crate::sql::{KeywordCase, SqlStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
+pub mod transfer;
 
 pub const PREVIEW_ROWS: usize = 1_000;
 pub const WORKSPACE_VERSION: u32 = 8;
@@ -158,6 +159,11 @@ pub struct Settings {
     pub assistant_font_size: f32,
     pub assistant_line_height: f32,
     pub assistant: AssistantSettings,
+    pub export: crate::export::Settings,
+    /// Maximum retained replay spool size. Zero disables replay retention.
+    pub export_replay_limit_mib: u32,
+    /// Format of ⌘C and the Copy commands of the results menu.
+    pub copy_format: CopyFormat,
 }
 
 impl Default for Settings {
@@ -177,12 +183,51 @@ impl Default for Settings {
             assistant_font_size: 14.,
             assistant_line_height: 1.6,
             assistant: AssistantSettings::default(),
+            export: crate::export::Settings::default(),
+            export_replay_limit_mib: 2048,
+            copy_format: CopyFormat::default(),
+        }
+    }
+}
+
+/// The text that ⌘C and the Copy commands of the results menu put on the
+/// clipboard. **Copy as** chooses a format for one copy.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyFormat {
+    /// An aligned Markdown table with column names.
+    #[default]
+    Markdown,
+    /// Tab-separated values without column names. One cell copies its value.
+    PlainText,
+    Csv,
+    Tsv,
+    Json,
+}
+
+impl CopyFormat {
+    pub const ALL: [Self; 5] = [
+        Self::Markdown,
+        Self::PlainText,
+        Self::Csv,
+        Self::Tsv,
+        Self::Json,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Markdown => "Markdown",
+            Self::PlainText => "Plain text",
+            Self::Csv => "CSV",
+            Self::Tsv => "TSV",
+            Self::Json => "JSON",
         }
     }
 }
 
 impl Settings {
     pub fn sanitize(&mut self) {
+        self.export_replay_limit_mib = self.export_replay_limit_mib.min(1024 * 1024);
         self.theme = self.theme.trim().into();
         if self.theme.is_empty() {
             self.theme = Self::default().theme;
@@ -425,6 +470,8 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub trino_schema: String,
     pub parameters: BTreeMap<String, String>,
+    #[serde(default)]
+    pub transfer: transfer::Transfer,
     #[serde(default)]
     pub lifecycle: ConnectionLifecycle,
     #[serde(default)]
@@ -953,6 +1000,7 @@ impl Default for Profile {
             database: "avia".into(),
             trino_schema: String::new(),
             parameters: BTreeMap::new(),
+            transfer: transfer::Transfer::default(),
             lifecycle: ConnectionLifecycle::default(),
             catalog: CatalogSettings::default(),
             catalog_column_reads: CatalogColumnReads::default(),
@@ -1001,6 +1049,7 @@ impl Profile {
 
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(!self.name.trim().is_empty(), "Give this connection a name.");
+        self.transfer.validate()?;
         anyhow::ensure!(
             self.name.chars().count() <= MAX_PROFILE_NAME,
             "Connection name must be {MAX_PROFILE_NAME} characters or fewer."
@@ -1724,7 +1773,7 @@ impl Default for Workspace {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Column {
     pub name: String,
     pub data_type: String,
@@ -2527,6 +2576,9 @@ mod tests {
             assistant_font_size: f32::NAN,
             assistant_line_height: f32::NAN,
             assistant: AssistantSettings::default(),
+            export: crate::export::Settings::default(),
+            export_replay_limit_mib: 2048,
+            copy_format: CopyFormat::Markdown,
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());
@@ -2555,6 +2607,23 @@ mod tests {
         settings.ui_scale = 9.;
         settings.sanitize();
         assert_eq!(settings.ui_scale, MAX_UI_SCALE);
+    }
+
+    #[test]
+    fn copy_format_defaults_to_markdown_and_round_trips() {
+        let restored: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored.copy_format, CopyFormat::Markdown);
+        for format in CopyFormat::ALL {
+            let settings = Settings {
+                copy_format: format,
+                ..Settings::default()
+            };
+            let encoded = serde_json::to_string(&settings).unwrap();
+            let restored: Settings = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(restored.copy_format, format);
+        }
+        let settings: Settings = serde_json::from_str(r#"{"copy_format":"plain_text"}"#).unwrap();
+        assert_eq!(settings.copy_format, CopyFormat::PlainText);
     }
 
     #[test]

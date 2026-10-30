@@ -91,8 +91,9 @@ each hook and each CI job. Hooks export snapshots into temporary directories
 and share a build cache under `target/hook-checks`. They do not stash,
 restage, or modify working files. They do not package the application.
 
-The release profile favors size so the optional assistant stays within the
-macOS package budget.
+The release profile uses one code generation unit to keep the macOS package
+within its size budget. The `perf` profile uses 16 units and no link-time
+optimization to reduce build time.
 
 Stage required code and configuration together. A passing working-copy check
 does not prove that the staged snapshot passes. Changes under `scripts/`
@@ -224,10 +225,15 @@ Packaging includes third-party license notices. Upgrade GPUI Kit and its
 framework components as a compatible set. Preserve runtime Metal shaders unless
 the build requirements deliberately change.
 
-`vendor/` contains patched copies of some GPUI crates, and
+`vendor/` contains patched copies of some GPUI crates, tokio-postgres and reqwest.
+
 [Cargo.toml](../Cargo.toml) uses them in place of the crates.io releases. The
-`QROW-PATCH.md` file of each crate lists the changes. When you upgrade GPUI Kit,
-apply the changes to the new release again, or remove a patch when the release
+`QROW-PATCH.md` file of each crate lists the changes. The
+[Postgres patch](../vendor/tokio-postgres/QROW-PATCH.md) adds bounded schema
+metadata and an ordered buffer reset. The
+[HTTP patch](../vendor/reqwest/QROW-PATCH.md) adds TCP ownership before TLS and
+an HTTP/1 read-buffer limit. When you upgrade a patched dependency,
+apply its changes to the new release again, or remove the patch when the release
 includes its fix.
 
 ## Build identity

@@ -1,39 +1,157 @@
 use crate::{
-    model::{Column as DataColumn, Row},
+    model::{Column as DataColumn, CopyFormat},
     pagination::Pagination,
     worker::Event,
 };
+use gpui_kit::base::actions::{
+    Cancel, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown, SelectPageUp,
+    SelectPrevColumn, SelectUp,
+};
 use gpui_kit::component::{
-    ActiveTheme, Sizable,
+    ActiveTheme, Sizable, WindowExt,
+    input::{Copy, SelectAll},
     menu::{PopupMenu, PopupMenuItem},
     table::{Column, DataTable, TableDelegate, TableState},
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use std::{
+    borrow::Cow,
+    ops::{Range, RangeInclusive},
+    sync::Arc,
+    time::Duration,
+};
+
+actions!(
+    qrow_results,
+    [
+        ExtendSelectionUp,
+        ExtendSelectionDown,
+        ExtendSelectionLeft,
+        ExtendSelectionRight
+    ]
+);
+
+/// The key context around the results table.
+const CONTEXT: &str = "Results";
+
+/// Key bindings of the results table. The table binds the plain arrow keys;
+/// the results view handles those actions before the table does.
+pub(super) fn bindings() -> [KeyBinding; 6] {
+    let context = Some("Results > DataTable");
+    [
+        KeyBinding::new("shift-up", ExtendSelectionUp, context),
+        KeyBinding::new("shift-down", ExtendSelectionDown, context),
+        KeyBinding::new("shift-left", ExtendSelectionLeft, context),
+        KeyBinding::new("shift-right", ExtendSelectionRight, context),
+        KeyBinding::new("cmd-c", Copy, context),
+        KeyBinding::new("cmd-a", SelectAll, context),
+    ]
+}
+
+/// A rectangle of result cells. Rows are indices into all downloaded rows.
+/// Columns are indices into the result columns, without the row number column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Selection {
+    /// The cell where the selection started. Shift extends from it.
+    pub anchor: (usize, usize),
+    /// The cell that moves with the keyboard, the pointer, or Shift-click.
+    pub focus: (usize, usize),
+}
+impl Selection {
+    pub fn cell(row: usize, column: usize) -> Self {
+        Self {
+            anchor: (row, column),
+            focus: (row, column),
+        }
+    }
+    pub fn rows(&self) -> RangeInclusive<usize> {
+        self.anchor.0.min(self.focus.0)..=self.anchor.0.max(self.focus.0)
+    }
+    pub fn columns(&self) -> RangeInclusive<usize> {
+        self.anchor.1.min(self.focus.1)..=self.anchor.1.max(self.focus.1)
+    }
+    pub fn contains(&self, row: usize, column: usize) -> bool {
+        self.rows().contains(&row) && self.columns().contains(&column)
+    }
+    pub fn is_cell(&self) -> bool {
+        self.anchor == self.focus
+    }
+}
+
+/// A copy command with the data that it copies. A menu command copies the
+/// cells that were selected when the menu opened.
+#[derive(Clone)]
+enum ClipboardCopy {
+    Text(String),
+    Export {
+        source: Arc<crate::export::Snapshot>,
+        range: (Range<usize>, RangeInclusive<usize>),
+        options: crate::export::Settings,
+        profile: Option<(uuid::Uuid, u8)>,
+    },
+    Failed(String),
+}
+impl ClipboardCopy {
+    fn run(&self, window: &mut Window, cx: &mut App) {
+        match self {
+            Self::Text(text) => super::export_dialog::copy_text(text.clone(), cx),
+            Self::Export {
+                source,
+                range,
+                options,
+                profile,
+            } => super::export_dialog::copy_format(
+                source.clone(),
+                Some(range.clone()),
+                options.clone(),
+                *profile,
+                window,
+                cx,
+            ),
+            Self::Failed(error) => window.push_notification(error.clone(), cx),
+        }
+    }
+}
 
 pub struct Results {
     pub columns: Vec<DataColumn>,
-    pub rows: Vec<Row>,
+    pub rows: crate::export::Rows,
     pub pagination: Pagination,
+    pub export: crate::export::Settings,
+    pub copy_format: CopyFormat,
+    export_profile: Option<(uuid::Uuid, u8)>,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
-    pub selected: Option<(usize, usize)>,
+    pub selection: Option<Selection>,
+    drag: Option<Point<Pixels>>,
+    drag_hitbox: Option<HitboxId>,
+    drag_task: Option<Task<()>>,
     ui_scale: f32,
 }
 impl Default for Results {
     fn default() -> Self {
         Self {
             columns: vec![],
-            rows: vec![],
+            rows: crate::export::Rows::default(),
             pagination: Pagination::default(),
+            export: crate::export::Settings::default(),
+            copy_format: CopyFormat::default(),
+            export_profile: None,
             empty_message: None,
             headers: vec![],
-            selected: None,
+            selection: None,
+            drag: None,
+            drag_hitbox: None,
+            drag_task: None,
             ui_scale: 1.,
         }
     }
 }
 impl Results {
+    pub(super) fn set_export_profile(&mut self, profile: &crate::model::Profile) {
+        self.export_profile = Some((profile.id, profile.transfer.settings().concurrent_exports));
+    }
     fn px(&self, value: f32) -> Pixels {
         px(self.ui_scale * value)
     }
@@ -53,6 +171,8 @@ impl Results {
                 Some("Statement completed without a result set")
             }
             Event::Ready { .. } => Some("Query returned no rows"),
+            Event::Downloaded { .. } => Some("Query returned no rows"),
+            Event::DownloadFailed { .. } => Some("Export download stopped before any rows arrived"),
             Event::Cancelled => Some("Query cancelled before any rows arrived"),
             Event::Error { .. } => Some("Query failed before any rows arrived"),
             _ => None,
@@ -96,10 +216,211 @@ impl Results {
         self.columns = columns;
     }
     pub fn clear(&mut self) {
+        // The next timer turn releases this gesture's capture after a reset.
+        let drag_task = self.drag_task.take();
         *self = Self {
             ui_scale: self.ui_scale,
+            export: self.export.clone(),
+            copy_format: self.copy_format,
+            export_profile: self.export_profile,
+            drag_task,
             ..Self::default()
         };
+    }
+
+    /// The rows of the current page.
+    fn page(&self) -> std::ops::Range<usize> {
+        self.pagination.range(self.rows.len())
+    }
+
+    /// Select one cell, or extend the selection to it from the anchor.
+    pub fn select_cell(&mut self, row: usize, column: usize, extend: bool) {
+        self.selection = Some(match self.selection {
+            Some(selection) if extend => Selection {
+                anchor: selection.anchor,
+                focus: (row, column),
+            },
+            _ => Selection::cell(row, column),
+        });
+    }
+
+    /// Select whole rows: one row, or the rows from the anchor to `row`.
+    pub fn select_rows(&mut self, row: usize, extend: bool) {
+        let Some(last) = self.columns.len().checked_sub(1) else {
+            return;
+        };
+        let anchor = match self.selection {
+            Some(selection) if extend => selection.anchor.0,
+            _ => row,
+        };
+        self.selection = Some(Selection {
+            anchor: (anchor, 0),
+            focus: (row, last),
+        });
+    }
+
+    /// Select whole columns of the current page: one column, or the columns
+    /// from the anchor to `column`.
+    pub fn select_columns(&mut self, column: usize, extend: bool) {
+        let page = self.page();
+        if page.is_empty() {
+            return;
+        }
+        let anchor = match self.selection {
+            Some(selection) if extend => selection.anchor.1,
+            _ => column,
+        };
+        self.selection = Some(Selection {
+            anchor: (page.start, anchor),
+            focus: (page.end - 1, column),
+        });
+    }
+
+    /// Select all cells of the current page.
+    pub fn select_page(&mut self) {
+        let page = self.page();
+        if let (false, Some(last)) = (page.is_empty(), self.columns.len().checked_sub(1)) {
+            self.selection = Some(Selection {
+                anchor: (page.start, 0),
+                focus: (page.end - 1, last),
+            });
+        }
+    }
+
+    /// Move the focus cell within the current page and return it. Without
+    /// `extend`, the selection becomes the focus cell. Without a selection,
+    /// the first cell of the page becomes selected.
+    pub fn move_focus(
+        &mut self,
+        rows: isize,
+        columns: isize,
+        extend: bool,
+    ) -> Option<(usize, usize)> {
+        let page = self.page();
+        let last = self.columns.len().checked_sub(1)?;
+        if page.is_empty() {
+            return None;
+        }
+        let Some(selection) = self.selection else {
+            self.selection = Some(Selection::cell(page.start, 0));
+            return Some((page.start, 0));
+        };
+        let row = selection
+            .focus
+            .0
+            .saturating_add_signed(rows)
+            .clamp(page.start, page.end - 1);
+        let column = selection.focus.1.saturating_add_signed(columns).min(last);
+        self.select_cell(row, column, extend);
+        Some((row, column))
+    }
+
+    /// The stored value of a cell, or `None` for a null.
+    fn value(&self, row: usize, column: usize) -> Option<&str> {
+        self.rows
+            .get(row)
+            .and_then(|values| values.get(column))
+            .and_then(|value| value.as_deref())
+    }
+
+    /// The plain text of a rectangle. One cell copies its value. A range
+    /// copies tab-separated values without a header, which pastes into a
+    /// spreadsheet as cells. Values with a tab, a line break, or a quote are
+    /// quoted, as spreadsheets expect. The text has the clipboard limit of
+    /// the other formats.
+    pub fn plain_text(&self, selection: Selection) -> std::io::Result<String> {
+        use std::io::Write as _;
+        let mut out = crate::export::LimitedWriter::new(crate::export::CLIPBOARD_BYTES);
+        if selection.is_cell() {
+            let (row, column) = selection.focus;
+            out.write_all(self.value(row, column).unwrap_or("NULL").as_bytes())?;
+        } else {
+            for row in selection.rows() {
+                if row != *selection.rows().start() {
+                    out.write_all(b"\n")?;
+                }
+                for column in selection.columns() {
+                    if column != *selection.columns().start() {
+                        out.write_all(b"\t")?;
+                    }
+                    let value = tsv_field(self.value(row, column).unwrap_or("NULL"));
+                    out.write_all(value.as_bytes())?;
+                }
+            }
+        }
+        Ok(out.into_text()?.into_string())
+    }
+
+    /// The options of **Copy as** in `format`, or `None` for plain text.
+    fn copy_as_options(&self, format: CopyFormat) -> Option<crate::export::Settings> {
+        use crate::export::{Format, Settings, csv};
+        Some(match format {
+            CopyFormat::PlainText => return None,
+            // The saved CSV options, with column names and a separator that
+            // differs from TSV.
+            CopyFormat::Csv => {
+                let mut csv = self.export.csv.clone();
+                csv.header = true;
+                if csv.separator == csv::Separator::Tab {
+                    csv.separator = csv::Separator::Comma;
+                }
+                Settings {
+                    format: Format::Csv,
+                    csv,
+                    ..self.export.clone()
+                }
+            }
+            CopyFormat::Tsv => Settings {
+                csv: csv::Preset::Tsv.options(),
+                ..Settings::default()
+            },
+            CopyFormat::Markdown => Settings {
+                format: Format::Markdown,
+                ..self.export.clone()
+            },
+            CopyFormat::Json => Settings {
+                format: Format::Json,
+                ..self.export.clone()
+            },
+        })
+    }
+
+    /// The options of ⌘C and the Copy commands of the menu. Markdown is an
+    /// aligned table, independent of the saved Markdown options.
+    fn copy_options(&self) -> Option<crate::export::Settings> {
+        match self.copy_format {
+            CopyFormat::Markdown => Some(crate::export::Settings {
+                format: crate::export::Format::Markdown,
+                markdown: crate::export::markdown::Options {
+                    pretty: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            format => self.copy_as_options(format),
+        }
+    }
+
+    /// Copy `selection` in the copy format.
+    fn clipboard_copy(&self, selection: Selection) -> ClipboardCopy {
+        let Some(options) = self.copy_options() else {
+            return match self.plain_text(selection) {
+                Ok(text) => ClipboardCopy::Text(text),
+                Err(error) => ClipboardCopy::Failed(error.to_string()),
+            };
+        };
+        match crate::export::Snapshot::new(&self.columns, &self.rows) {
+            Ok(source) => ClipboardCopy::Export {
+                source: Arc::new(source),
+                range: (
+                    *selection.rows().start()..selection.rows().end() + 1,
+                    selection.columns(),
+                ),
+                options,
+                profile: self.export_profile,
+            },
+            Err(error) => ClipboardCopy::Failed(error.to_string()),
+        }
     }
 
     fn empty_state(&self, cx: &App) -> Div {
@@ -193,6 +514,16 @@ impl TableDelegate for Results {
             .overflow_hidden()
             .text_size(rems(12. / 14.))
             .aria_label(self.headers[c].name.clone())
+            .on_click(cx.listener(move |state, event: &ClickEvent, window, cx| {
+                let data = state.delegate_mut();
+                if c == 0 {
+                    data.select_page();
+                } else {
+                    data.select_columns(c - 1, event.modifiers().shift);
+                }
+                window.focus(&state.focus_handle(cx), cx);
+                cx.notify();
+            }))
             .child(self.headers[c].name.clone())
             .when(c > 0, |el| {
                 el.child(
@@ -219,6 +550,10 @@ impl TableDelegate for Results {
         };
         let null = value.is_none();
         let display: String = value.unwrap_or("NULL").chars().take(500).collect();
+        let selection = self.selection.filter(|_| c > 0);
+        let selected = selection.is_some_and(|s| s.contains(r, c - 1));
+        // In a range, the focus cell also shows a ring.
+        let focus = selection.is_some_and(|s| !s.is_cell() && s.focus == (r, c - 1));
         div()
             .id(("cell", c))
             .test_support()
@@ -235,22 +570,50 @@ impl TableDelegate for Results {
             .when(c == 0 || null, |el| {
                 el.text_color(cx.theme().muted_foreground)
             })
-            .when(self.selected == Some((r, c)), |el| {
+            .when(selected, |el| {
                 el.bg(cx.theme().selection)
                     .text_color(cx.theme().foreground)
             })
+            .when(focus, |el| el.border_1().border_color(cx.theme().ring))
             .child(div().truncate().child(display))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |s, _, _, cx| {
-                    s.delegate_mut().selected = Some((r, c));
+                cx.listener(move |state, event: &MouseDownEvent, window, cx| {
+                    let data = state.delegate_mut();
+                    if c == 0 {
+                        data.select_rows(r, event.modifiers.shift);
+                    } else {
+                        data.select_cell(r, c - 1, event.modifiers.shift);
+                        data.drag = Some(event.position);
+                        if let Some(hitbox) = data.drag_hitbox {
+                            window.capture_pointer(hitbox);
+                        }
+                        start_drag(state, window, cx);
+                    }
+                    window.focus(&state.focus_handle(cx), cx);
                     cx.notify();
                 }),
             )
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |s, _, _, cx| {
-                    s.delegate_mut().selected = Some((r, c));
+                cx.listener(move |state, _, window, cx| {
+                    let data = state.delegate_mut();
+                    // A right-click inside the selection keeps it for the menu.
+                    let inside = data.selection.is_some_and(|s| {
+                        if c == 0 {
+                            s.rows().contains(&r)
+                        } else {
+                            s.contains(r, c - 1)
+                        }
+                    });
+                    if !inside {
+                        if c == 0 {
+                            data.select_rows(r, false);
+                        } else {
+                            data.select_cell(r, c - 1, false);
+                        }
+                    }
+                    window.focus(&state.focus_handle(cx), cx);
                     cx.notify();
                 }),
             )
@@ -259,32 +622,72 @@ impl TableDelegate for Results {
         &mut self,
         row: usize,
         menu: PopupMenu,
-        _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
         let row = self.pagination.range(self.rows.len()).start + row;
-        let cell = self.selected.filter(|(r, _)| *r == row).map(|(_, c)| {
-            if c == 0 {
-                (row + 1).to_string()
-            } else {
-                self.rows[row][c - 1]
-                    .clone()
-                    .unwrap_or_else(|| "NULL".into())
+        let label = match self.selection {
+            Some(selection) if selection.is_cell() && selection.focus.0 == row => "Copy cell",
+            Some(selection) if !selection.is_cell() && selection.rows().contains(&row) => {
+                "Copy selection"
             }
+            _ => "",
+        };
+        let selection = self
+            .selection
+            .filter(|_| !label.is_empty())
+            .map(|selection| self.clipboard_copy(selection));
+        let last = self.columns.len().saturating_sub(1);
+        let row_copy = self.clipboard_copy(Selection {
+            anchor: (row, 0),
+            focus: (row, last),
         });
-        let text = self.rows[row]
-            .iter()
-            .map(|v| v.as_deref().unwrap_or("NULL"))
-            .collect::<Vec<_>>()
-            .join("\t");
-        menu.when_some(cell, |menu, text| {
-            menu.item(PopupMenuItem::new("Copy cell").on_click(move |_, _, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-            }))
+        let source =
+            crate::export::Snapshot::new(&self.columns, &self.rows).map(std::sync::Arc::new);
+        let range = self.selection.map(|selection| {
+            (
+                *selection.rows().start()..selection.rows().end() + 1,
+                selection.columns(),
+            )
+        });
+        let formats = [
+            CopyFormat::Csv,
+            CopyFormat::Tsv,
+            CopyFormat::Markdown,
+            CopyFormat::Json,
+        ]
+        .map(|format| (format.label(), self.copy_as_options(format)));
+        let export_profile = self.export_profile;
+        let menu = if let Ok(source) = source {
+            let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
+                formats
+                    .iter()
+                    .filter_map(|(label, options)| Some((*label, options.clone()?)))
+                    .fold(menu, |menu, (label, options)| {
+                        let source = source.clone();
+                        let range = range.clone();
+                        menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                            super::export_dialog::copy_format(
+                                source.clone(),
+                                range.clone(),
+                                options.clone(),
+                                export_profile,
+                                window,
+                                cx,
+                            );
+                        }))
+                    })
+            });
+            menu.item(PopupMenuItem::submenu("Copy as", submenu))
+        } else {
+            menu
+        };
+        menu.when_some(selection, |menu, copy| {
+            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| copy.run(window, cx)))
         })
-        .item(PopupMenuItem::new("Copy row").on_click(move |_, _, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-        }))
+        .item(
+            PopupMenuItem::new("Copy row").on_click(move |_, window, cx| row_copy.run(window, cx)),
+        )
     }
     fn render_empty(
         &mut self,
@@ -298,10 +701,14 @@ impl TableDelegate for Results {
 /// Clear the cell selection after a click outside the results area.
 pub fn selection_boundary(table: &Entity<TableState<Results>>) -> Div {
     let table = table.clone();
-    div().on_mouse_down_out(move |_, _, cx| {
+    div().on_mouse_down_out(move |_, window, cx| {
+        if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
+            return;
+        }
         table.update(cx, |state, cx| {
-            if state.delegate().selected.is_some() || state.selected_row().is_some() {
-                state.delegate_mut().selected = None;
+            if state.delegate().selection.is_some() || state.selected_row().is_some() {
+                state.delegate_mut().selection = None;
+                state.delegate_mut().drag = None;
                 state.clear_selection(cx);
             }
         });
@@ -344,6 +751,134 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>, scale: f32) -> imp
     .inset_0()
 }
 
+/// Capture moves and release even after the pointer leaves a virtualized cell.
+fn drag_selection(table: &Entity<TableState<Results>>) -> impl IntoElement {
+    let geometry = table.downgrade();
+    let events = table.downgrade();
+    canvas(
+        move |bounds, window, cx| {
+            let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+            let _ = geometry.update(cx, |state, _| {
+                state.delegate_mut().drag_hitbox = Some(hitbox.id)
+            });
+        },
+        move |_, _, window, _| {
+            let moves = events.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                if !phase.capture() {
+                    return;
+                }
+                let _ = moves.update(cx, |state, cx| {
+                    if state.delegate().drag.is_none() {
+                        return;
+                    }
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        state.delegate_mut().drag = None;
+                        window.release_pointer();
+                        return;
+                    }
+                    state.delegate_mut().drag = Some(event.position);
+                    update_drag(state, event.position, cx);
+                    cx.stop_propagation();
+                });
+            });
+            let release = events;
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                if phase.capture() && event.button == MouseButton::Left {
+                    let _ = release.update(cx, |state, cx| {
+                        if state.delegate_mut().drag.take().is_some() {
+                            update_drag(state, event.position, cx);
+                            state.delegate_mut().drag_task = None;
+                            window.release_pointer();
+                        }
+                    });
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
+    .inset_0()
+}
+
+fn update_drag(
+    state: &mut TableState<Results>,
+    position: Point<Pixels>,
+    cx: &mut Context<TableState<Results>>,
+) {
+    if let Some((row, column)) = state.cell_at_position(position, cx) {
+        let data = state.delegate_mut();
+        let focus = (data.page().start + row, column.saturating_sub(1));
+        if let Some(selection) = data.selection.as_mut()
+            && selection.focus != focus
+        {
+            selection.focus = focus;
+            cx.notify();
+        }
+    }
+}
+
+/// Keep scrolling while a held pointer stays at an edge, even without new moves.
+fn start_drag(
+    state: &mut TableState<Results>,
+    window: &mut Window,
+    cx: &mut Context<TableState<Results>>,
+) {
+    let capture = window.captured_hitbox();
+    state.delegate_mut().drag_task = Some(cx.spawn_in(window, async move |weak, cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(16))
+                .await;
+            let keep = weak.update_in(cx, |state, window, cx| {
+                let Some(position) = state.delegate().drag else {
+                    if capture.is_some() && window.captured_hitbox() == capture {
+                        window.release_pointer();
+                    }
+                    return false;
+                };
+                if window.captured_hitbox() != capture {
+                    state.delegate_mut().drag = None;
+                    return false;
+                }
+                if !state.focus_handle(cx).contains_focused(window, cx)
+                    || window.has_active_dialog(cx)
+                    || window.has_active_sheet(cx)
+                    || !window.is_window_active()
+                {
+                    state.delegate_mut().drag = None;
+                    window.release_pointer();
+                    return false;
+                }
+                let bounds = state.body_bounds();
+                // Match the table's zoom: a row-height edge band, with a bounded step.
+                let row_height = state.row_height();
+                let edge = |value: Pixels, low: Pixels, high: Pixels| {
+                    if value < low + row_height {
+                        1.
+                    } else if value > high - row_height {
+                        -1.
+                    } else {
+                        0.
+                    }
+                };
+                let delta = point(
+                    row_height * 0.5 * edge(position.x, bounds.left(), bounds.right()),
+                    row_height * 0.3 * edge(position.y, bounds.top(), bounds.bottom()),
+                );
+                if state.scroll_by(delta, cx) {
+                    update_drag(state, position, cx);
+                    cx.notify();
+                }
+                true
+            });
+            if !matches!(keep, Ok(true)) {
+                break;
+            }
+        }
+    }));
+}
+
 pub(super) fn view(
     table: &Entity<TableState<Results>>,
     modal: bool,
@@ -355,8 +890,8 @@ pub(super) fn view(
         return data.empty_state(cx).into_any_element();
     }
 
-    div()
-        .size_full()
+    let keys = keyboard(table);
+    keys.size_full()
         .min_h_0()
         .min_w_0()
         .relative()
@@ -368,8 +903,140 @@ pub(super) fn view(
                 .bordered(false)
                 .scrollbar_visible(true, true),
         )
-        .when(!modal, |el| el.child(horizontal_scroll(table, scale)))
+        .when(!modal, |el| {
+            el.child(horizontal_scroll(table, scale))
+                .child(drag_selection(table))
+        })
         .into_any_element()
+}
+
+/// Quote a value for tab-separated text when it contains a separator.
+fn tsv_field(value: &str) -> Cow<'_, str> {
+    if value.contains(['\t', '\n', '\r', '"']) {
+        Cow::Owned(format!("\"{}\"", value.replace('"', "\"\"")))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+/// Move the focus cell and scroll it into view.
+fn move_focus(
+    table: &Entity<TableState<Results>>,
+    rows: isize,
+    columns: isize,
+    extend: bool,
+    cx: &mut App,
+) {
+    table.update(cx, |state, cx| {
+        let start = state.delegate().page().start;
+        if let Some((row, column)) = state.delegate_mut().move_focus(rows, columns, extend) {
+            state
+                .vertical_scroll_handle
+                .scroll_to_item(row - start, ScrollStrategy::Nearest);
+            state.scroll_to_col(column + 1, cx);
+        }
+        cx.notify();
+    });
+}
+
+/// The rows that Page Up and Page Down move: the visible rows less one.
+fn page_step(table: &Entity<TableState<Results>>, cx: &App) -> isize {
+    let rows = table.read(cx).visible_range().rows().len();
+    rows.saturating_sub(1).max(1) as isize
+}
+
+/// Whether the keys belong to the table. The open context menu of the table
+/// is inside the results view too; while it has the focus, its keys stay
+/// with the menu.
+fn table_keys(window: &Window) -> bool {
+    !window
+        .context_stack()
+        .iter()
+        .any(|context| context.contains("PopupMenu"))
+}
+
+/// The keyboard of the results table. The handlers run before the table's
+/// own handlers, so the table keeps no row or column selection of its own.
+fn keyboard(table: &Entity<TableState<Results>>) -> Div {
+    macro_rules! step {
+        ($action:ty, $rows:expr, $columns:expr, $extend:expr) => {{
+            let table = table.clone();
+            move |_: &$action, window: &mut Window, cx: &mut App| {
+                if table_keys(window) {
+                    cx.stop_propagation();
+                    move_focus(&table, $rows, $columns, $extend, cx);
+                }
+            }
+        }};
+    }
+    let far = isize::MAX / 2;
+    let page_up = table.clone();
+    let page_down = table.clone();
+    let cancel = table.clone();
+    let copy = table.clone();
+    let all = table.clone();
+    div()
+        .key_context(CONTEXT)
+        .capture_action(step!(SelectUp, -1, 0, false))
+        .capture_action(step!(SelectDown, 1, 0, false))
+        .capture_action(step!(SelectPrevColumn, 0, -1, false))
+        .capture_action(step!(SelectNextColumn, 0, 1, false))
+        .capture_action(step!(SelectFirst, 0, -far, false))
+        .capture_action(step!(SelectLast, 0, far, false))
+        .capture_action(step!(ExtendSelectionUp, -1, 0, true))
+        .capture_action(step!(ExtendSelectionDown, 1, 0, true))
+        .capture_action(step!(ExtendSelectionLeft, 0, -1, true))
+        .capture_action(step!(ExtendSelectionRight, 0, 1, true))
+        .capture_action(move |_: &SelectPageUp, window, cx| {
+            if table_keys(window) {
+                cx.stop_propagation();
+                let step = page_step(&page_up, cx);
+                move_focus(&page_up, -step, 0, false, cx);
+            }
+        })
+        .capture_action(move |_: &SelectPageDown, window, cx| {
+            if table_keys(window) {
+                cx.stop_propagation();
+                let step = page_step(&page_down, cx);
+                move_focus(&page_down, step, 0, false, cx);
+            }
+        })
+        .capture_action(move |_: &Cancel, window, cx| {
+            // Escape clears a selection; without one, it goes on to the window.
+            if !table_keys(window) {
+                return;
+            }
+            cancel.update(cx, |state, cx| {
+                if state.delegate_mut().selection.take().is_some() {
+                    state.delegate_mut().drag = None;
+                    state.delegate_mut().drag_task = None;
+                    window.release_pointer();
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            });
+        })
+        .on_action(move |_: &Copy, window, cx| {
+            if !table_keys(window) {
+                return;
+            }
+            let data = copy.read(cx).delegate();
+            let Some(selection) = data.selection else {
+                return;
+            };
+            let copy = data.clipboard_copy(selection);
+            cx.stop_propagation();
+            copy.run(window, cx);
+        })
+        .on_action(move |_: &SelectAll, window, cx| {
+            if !table_keys(window) {
+                return;
+            }
+            all.update(cx, |state, cx| {
+                state.delegate_mut().select_page();
+                cx.notify();
+            });
+        })
 }
 
 /// Move within downloaded results and reset selection and vertical position.
@@ -377,7 +1044,8 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
     table.update(cx, |state, cx| {
         let data = state.delegate_mut();
         if data.pagination.select(page, data.rows.len()) {
-            data.selected = None;
+            data.selection = None;
+            data.drag = None;
             state.clear_selection(cx);
             state.scroll_to_row(0, cx);
             cx.notify();
@@ -403,26 +1071,102 @@ mod tests {
         cx.update(|cx| {
             let mut results = Results::default();
             results.schema(vec![column("value", "STRING")], cx);
-            results.rows = vec![vec![Some("value".into())]; 1250];
+            results.rows = vec![vec![Some("value".into())]; 1250].into();
             assert!(results.pagination.select(1, results.rows.len()));
-            results.selected = Some((1000, 1));
+            results.selection = Some(super::Selection::cell(1000, 0));
             results.query_event(&Event::Cancelled, false);
 
             results.set_ui_scale(1.5, cx);
             assert_eq!(results.pagination.range(results.rows.len()), 1000..1250);
-            assert_eq!(results.selected, Some((1000, 1)));
+            assert_eq!(results.selection, Some(super::Selection::cell(1000, 0)));
             assert_eq!(
                 results.empty_message,
                 Some("Query cancelled before any rows arrived")
             );
             assert_eq!(results.px(48.), px(72.));
 
+            results.copy_format = crate::model::CopyFormat::PlainText;
             results.clear();
             assert_eq!(results.ui_scale, 1.5);
+            assert_eq!(results.copy_format, crate::model::CopyFormat::PlainText);
             assert_eq!(results.pagination.page(), 0);
             assert!(results.rows.is_empty());
             assert!(results.empty_message.is_none());
-            assert!(results.selected.is_none());
+            assert!(results.selection.is_none());
+        });
+    }
+
+    #[test]
+    fn tab_separated_fields_are_quoted_only_when_needed() {
+        assert_eq!(super::tsv_field("plain"), "plain");
+        assert_eq!(super::tsv_field("a\tb"), "\"a\tb\"");
+        assert_eq!(super::tsv_field("two\nlines"), "\"two\nlines\"");
+        assert_eq!(super::tsv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[gpui_kit::test]
+    fn selection_moves_and_extends_within_the_page(cx: &mut TestAppContext) {
+        cx.update(crate::ui::init);
+        cx.update(|cx| {
+            let mut results = Results::default();
+            results.schema(vec![column("a", "STRING"), column("b", "STRING")], cx);
+            results.rows = (0..1250)
+                .map(|i| vec![Some(format!("a{i}")), (i % 2 == 0).then(|| format!("b{i}"))])
+                .collect();
+            assert!(results.pagination.select(1, results.rows.len()));
+
+            // Without a selection, a move selects the first cell of the page.
+            assert_eq!(results.move_focus(1, 0, false), Some((1000, 0)));
+            // Moves stop at the page and column edges.
+            assert_eq!(results.move_focus(-5, -5, false), Some((1000, 0)));
+            assert_eq!(results.move_focus(1000, 1000, false), Some((1249, 1)));
+            assert_eq!(results.selection, Some(super::Selection::cell(1249, 1)));
+
+            results.select_cell(1001, 0, false);
+            results.move_focus(1, 1, true);
+            let selection = results.selection.unwrap();
+            assert_eq!(selection.anchor, (1001, 0));
+            assert_eq!(selection.rows(), 1001..=1002);
+            assert_eq!(selection.columns(), 0..=1);
+            assert_eq!(
+                results.plain_text(results.selection.unwrap()).unwrap(),
+                "a1001\tNULL\na1002\tb1002"
+            );
+
+            // Whole columns and the page stay within the current page.
+            results.select_columns(1, false);
+            assert_eq!(results.selection.unwrap().rows(), 1000..=1249);
+            results.select_columns(0, true);
+            assert_eq!(results.selection.unwrap().columns(), 0..=1);
+            results.select_rows(1005, false);
+            results.select_rows(1003, true);
+            let selection = results.selection.unwrap();
+            assert_eq!(selection.rows(), 1003..=1005);
+            assert_eq!(selection.columns(), 0..=1);
+            results.select_page();
+            assert_eq!(
+                results
+                    .plain_text(results.selection.unwrap())
+                    .unwrap()
+                    .lines()
+                    .count(),
+                250
+            );
+
+            // One cell copies its raw value, and a null copies NULL.
+            results.select_cell(1001, 1, false);
+            assert_eq!(
+                results.plain_text(results.selection.unwrap()).unwrap(),
+                "NULL"
+            );
+
+            // Plain text has the clipboard limit.
+            results.rows = vec![vec![
+                Some("x".repeat(crate::export::CLIPBOARD_BYTES + 1)),
+                None,
+            ]]
+            .into();
+            assert!(results.plain_text(super::Selection::cell(0, 0)).is_err());
         });
     }
 

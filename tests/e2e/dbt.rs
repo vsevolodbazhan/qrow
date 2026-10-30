@@ -2,6 +2,7 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::{TestApp, connection_row, label, labelled};
 use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt as _;
 use qrow::model::{CatalogRefresh, DbtProject, DbtRefresh, SchemaRule, SchemaRuleKind};
 
 /// A manifest with two models that dbt builds in `dev_<schema>`.
@@ -111,6 +112,20 @@ fn the_demo_manifest_matches_a_live_catalog_and_opens_model_sql(cx: &mut TestApp
     app.click_labelled(cx, &schema);
     app.wait_until(cx, "the demo table", QUERY_TIMEOUT, |window, _| {
         labelled(window, "bookings").is_some()
+    });
+    app.click_labelled(cx, "bookings");
+    let column =
+        format!("r\u{1f}{id}\u{1f}{schema}\u{1f}bookings\u{1f}0\u{1f}booking_id\u{1f}label");
+    app.wait_until(cx, "the booking column", QUERY_TIMEOUT, |window, _| {
+        window.try_find(column.clone()).is_some()
+    });
+    app.hover(cx, column);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.wait_until(cx, "the dbt column tooltip", QUERY_TIMEOUT, |window, _| {
+        label(window, "catalog-tooltip")
+            .is_some_and(|text| text == "booking_id bigint\nUnique booking identifier.")
+            && window.try_find("catalog-tooltip-description").is_some()
     });
     app.context_menu_labelled(cx, "bookings");
     app.choose(cx, "popup-menu", "Show dbt details");

@@ -2,7 +2,9 @@ use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable as _, TitleBar, h_flex,
+    Icon, Selectable as _, TitleBar,
+    alert::Alert,
+    h_flex,
     input::Editor,
     shimmer::ShimmerText,
     status_bar::StatusBar,
@@ -248,25 +250,22 @@ impl Qrow {
             .border_b_1()
             .border_color(cx.theme().border)
             .when(!tab.busy && !authenticating, |el| {
-                el.child(
-                    Button::new("run")
-                        .primary()
-                        .small()
-                        .icon(IconName::ArrowRight)
-                        .label("Run")
-                        .map(|mut button| {
-                            button.interactivity().tooltip(
-                                StatusTooltip::new("Run query", "")
-                                    .detail("Run the selected SQL or the statement at the cursor.")
-                                    .for_action(&RunQuery, None),
-                            );
-                            button
-                        })
-                        .disabled(active.is_none() && !self.demo)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),
-                        ),
-                )
+                let button = Button::new("run")
+                    .primary()
+                    .small()
+                    .icon(IconName::ArrowRight)
+                    .label("Run")
+                    .map(|mut button| {
+                        button.interactivity().tooltip(
+                            StatusTooltip::new("Run query", "")
+                                .detail("Run the selected SQL or the statement at the cursor.")
+                                .for_action(&RunQuery, None),
+                        );
+                        button
+                    })
+                    .disabled(active.is_none() && !self.demo)
+                    .on_click(cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)));
+                el.child(button)
             })
             .when(tab.busy || authenticating, |el| {
                 el.child(
@@ -765,6 +764,9 @@ impl Qrow {
             .text_color(cx.theme().foreground)
             .text_sm()
             .on_action(cx.listener(Self::run))
+            .on_action(
+                cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
+            )
             .on_action(cx.listener(Self::new_tab))
             .on_action(
                 cx.listener(|this, _: &CloseTab, window, cx| {
@@ -906,12 +908,8 @@ impl Qrow {
                     div()
                         .id("workspace-message")
                         .test_support()
-                        .px_3()
-                        .py_2()
-                        .text_color(cx.theme().warning)
-                        .role(Role::Status)
                         .aria_label(message.clone())
-                        .child(message),
+                        .child(Alert::warning("workspace-alert", message).banner()),
                 )
             })
             .child(self.status_bar(cx))

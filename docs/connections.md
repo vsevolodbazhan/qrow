@@ -85,6 +85,64 @@ For example, a session parameter can select an engine-sharing subdomain:
 
 macOS can request Keychain access when you save the password.
 
+## Export transfer policy
+
+Open **Connection Settings → Export** to choose a transfer preset for Kyuubi
+or Trino. Existing profiles use **Balanced**. For Postgres, choose the number
+of exports that can run at the same time.
+Preset values stay visible in read-only fields. Choose **Custom** to edit
+the values. A preset change keeps unsaved Custom values in the open form.
+Transfer-policy changes do not reconnect an otherwise unchanged session.
+
+| Setting | Conservative | Balanced | Fast |
+| --- | --- | --- | --- |
+| Kyuubi incremental collect | On | Inherit | Inherit |
+| Estimated Kyuubi data per request | 4 MiB | 16 MiB | 32 MiB |
+| Kyuubi speed limit | 20 MB/s | Off | Off |
+| Trino spooled results | Off | Serial | Parallel |
+| Exports at the same time per connection | 1 | 1 | 2 |
+
+**Custom** can select incremental collect as **Inherit**, **On**, or **Off**.
+Its Kyuubi request estimate is from 1 to 32 MiB. Its speed limit is from 0 to
+1000 MB/s. The fields show the units as you edit the values. Zero disables the
+speed limit. For Trino, select **Spooled Results**
+as **Off**, **Serial**, or **Parallel**. Set the export count from 0 to 255
+for each connection. Zero disables the count limit. The shared memory budget
+can admit fewer exports than this count. The count covers downloads, snapshot exports, retained-result
+exports, and **Copy as**. A file export holds its slot until publication or
+temporary-file cleanup ends. Admission occurs after you choose a file and
+before sign-in or SQL submission.
+
+Kyuubi export requests use the widest owned row seen so far and a 25 percent
+margin. Later rows can be wider. The 64 MiB response and allocation limits
+still apply. Normal preview requests remain limited to 1000 rows.
+The speed limit measures newly committed spool bytes in decimal MB per
+second. It excludes query execution time and rows already in the preview.
+A request can exceed the rate briefly. Cancellation interrupts the wait.
+
+An explicit incremental-collect choice changes the setting in the current
+session for one new export. Qrow restores and checks the previous setting
+after it submits the statement. If restoration fails, the export stops and
+the session reconnects on the next explicit Run. SQL does not run again
+automatically. The override supports up to 4096 explicit session settings
+and 1 MiB of decoded configuration text.
+**Inherit** makes no configuration requests. SET, RESET, and SQL with
+`${...}` substitution also inherit, to preserve their session behavior.
+An **All rows** export of a live cursor keeps the execution strategy that
+was selected when the original query started. The download uses the
+connection's transfer settings.
+
+Incremental collect can reduce Spark driver result memory. It can also
+increase execution time. Server policy can override profile settings.
+The export rerun form shows the configured collection value before
+you choose a file. It also shows a warning when connection parameters enable
+`saveToFile`.
+`kyuubi.engine.spark.operation.incremental.collect` takes precedence over
+`kyuubi.operation.incremental.collect`. The administrator's
+`kyuubi.operation.result.saveToFile.enabled` option conflicts with
+incremental collect. It needs shared staging storage and server cleanup.
+Qrow does not configure result staging or Arrow results.
+
 ## Use Postgres
 
 Select **Postgres** in **Connection Type**. The default port is 5432. The initial
@@ -118,10 +176,16 @@ Profiles with the old TLS checkbox enabled use **Verify certificate**.
 Each tab has a separate Postgres session. Temporary tables and transaction
 state stay with that tab until the session closes. Cancel stops a query before
 submission, or sends a Postgres cancellation request for active work. Qrow waits
-for the cancellation socket to close before it reuses the session. If that
+for the cancellation socket to close and for the server to report that it is
+ready for the next command before it reuses the session. If that
 request fails or times out, reconnect before you run another query.
 SQL errors usually keep the session connected. After an
 error in an explicit transaction, run `ROLLBACK` before other work.
+
+Each Postgres server message has a 128 MiB transport limit. Qrow checks its
+declared length before the driver reads the body. A message above this limit
+closes the session. Reconnect before you run another query. The preview limits
+in [results](results.md) still apply to rows that Qrow keeps.
 
 The schema browser shows user schemas, tables, partitioned tables, views,
 materialized views, and foreign tables. It reads column types and comments.
@@ -130,16 +194,29 @@ as the connector type in its connection context.
 For automatic relation context, the assistant uses `public` for unqualified
 names. Use qualified names when a different `search_path` applies.
 
+Result column types keep numeric precision, numeric scale, and timestamp
+precision from the server. Before a query with result columns executes,
+Qrow reads DateStyle, IntervalStyle, and TimeZone for [Parquet export](results.md#parquet).
+These read requests do not change the session settings. Commands without
+result columns do not need these requests.
+
 ### Postgres limits
 
 - Query results use the server's text format, including arrays, JSON, and dates.
-- Qrow reads the result stream before it shows the first page. It keeps up to
-  the result limits in a temporary file. It checks row sizes before retention.
-  Later pages read that file. It drains
-  rows beyond the limits without keeping them. Large results can delay the
-  first page even when only a preview is needed.
-- The Postgres client library can buffer a server row before Qrow checks its
-  size. Result limits do not cap the memory used to receive one oversized row.
+- Qrow shows the first page while it reads the result stream. The tab stays
+  busy until the server finishes. It keeps up to the result limits in a
+  temporary file and checks row sizes before retention. Later pages read that
+  file. It reads and discards rows beyond the limits without cancelling SQL.
+- The client library can buffer one row before Qrow checks the row's cell
+  sizes. The transport ceiling applies before this allocation. The preview
+  retention limit does not limit the memory for one accepted server message.
+- Direct exports limit SQL text to 1 MiB. Schema descriptions have at most
+  4,096 columns and 1,024 bytes for each name. Qrow reads custom type names
+  without collecting enum labels or composite members. It clears retained
+  protocol buffers before the export starts. This keeps the same session
+  and transaction.
+  Export data frames have a 16 MiB ceiling. Diagnostic, authentication,
+  notification, and session-status frames have a 1 MiB ceiling before decoding.
 - **Response Timeout** bounds connection setup, session settings, and cancellation.
   It does not set a query execution timeout. Use the `statement_timeout` session
   setting when you need one.
@@ -182,27 +259,89 @@ keep-alive does not replace its result cursor. Disconnect cancels an active
 query and sends `ROLLBACK` for an open transaction. The assistant receives
 `trino` as the connector type and the initial catalog and schema as context.
 
+Trino result text keeps the server's timestamp precision. Qrow declares
+support for variable-precision date and time types in the client protocol.
+For Parquet timestamp limits, see [Parquet](results.md#parquet).
+
+### Trino export spooling
+
+For an export rerun, Trino can send encoded result segments from storage.
+Set **Transfer Preset** on the connection. Conservative uses classic results.
+Balanced downloads one segment at a time. Fast can download the next segment
+while Qrow reads the current segment. Normal Run and schema queries keep
+classic results. If the server returns classic rows, the same export continues.
+Qrow does not submit the SQL again.
+
+Qrow supports `json` and `json+lz4`. Each segment has a 32 MiB limit for both
+received and decoded bytes. Parallel transfer keeps at most two segments.
+Qrow checks row offsets, row counts and the result schema. It acknowledges a
+segment only after the local spool accepts all its rows. Failed acknowledgements
+add a warning to the query log. They do not fail an export whose rows are safe.
+
+Storage requests use a separate HTTPS client. It has no coordinator password,
+sign-in token or session headers. Qrow permits at most two storage redirects.
+It removes storage headers when a redirect changes origin. HTTP downgrade,
+user information in URLs and credential headers are rejected. A failed segment
+GET can have three attempts. Trino 483 sends expiry without a time-zone
+offset. For those values, Qrow uses storage or coordinator rejection to detect
+expiry. It checks expiry with an explicit offset before a request. Invalid metadata, JSON,
+LZ4 or byte sizes stop the export. Qrow never retries the SQL submission.
+
+Spooling reserves 512 MiB of transport memory before SQL starts. Classic
+transfer reserves 192 MiB. The producer reserves another 128 MiB. The shared
+1 GiB export memory limit can reject another export even when the profile
+permits two. Cancellation closes storage requests and joins the segment
+threads within the same cleanup deadline. A thread that ends later keeps its
+memory reservation until it stops. Failed cleanup closes the session.
+
 ### Trino limits
 
 - The schema browser reads one catalog. It shows schemas, tables, views, and
   column types. It does not read table or column comments.
-- Qrow reads all result pages before it shows the first page. It keeps up to
+- Qrow shows the first page before the query ends. Normal Run keeps up to
   100,000 rows or approximately 64 MiB in a temporary file. It reads later rows
-  without keeping them. The result limits do not reduce server work.
-- Each HTTP response has a 16 MiB limit before JSON decoding. Decoding and one
-  response page use memory in addition to the retained result limits.
+  without keeping them before the tab becomes ready. The result limits do not
+  reduce server work. Direct export reads all rows into the export spool.
+- Each coordinator HTTP response has a 16 MiB limit before JSON decoding. The HTTP/1 read
+  buffer has a 1 MiB limit. Qrow keeps a raw JSON page and decodes one row at a
+  time. Decoding and one response page use memory in addition to the retained
+  result limits. Direct fetches contain at most 1,000 rows and 48 MiB, with one
+  pending row of up to 16 MiB. See [Export downloaded rows](results.md#export-downloaded-rows).
+- A schema can have 4,096 columns. Column names have a 1 KiB limit, type names
+  have a 4 KiB limit, and their combined text has a 1 MiB limit. Session state
+  can have 1,024 settings and 256 KiB of text. Each setting or encoded prepared
+  statement has a 64 KiB limit. Catalog, schema and transaction names have a
+  1 KiB limit. Expanded request session headers have a 512 KiB limit. Rejected
+  session updates do not change the saved client state.
+- Direct-export SQL has a 1 MiB limit. User names have a 1 KiB limit and
+  credentials have a 64 KiB limit.
 - Nested values use JSON text. Binary and temporal values use the server's
   JSON representation. Nulls remain distinct from empty strings.
 - **Response Timeout** bounds each HTTP request. It does not bound total query
   time. Use the `query_max_run_time` session property for that limit.
-- Qrow retries a request only after an explicit authentication rejection. It
+- After the first executing GET, a separate task sends `HEAD` heartbeats while
+  result reads or spool writes pause. It does not fetch rows or apply session
+  updates from HEAD. The task stops before the session runs another statement.
+  Heartbeats use cached credentials. Unsupported HEAD requests or an expired
+  credential can let the server's client timeout expire during a pause.
+- Qrow retries a coordinator request only after an explicit authentication rejection. It
   does not retry an uncertain network failure or follow HTTP redirects. A result URL
   must use the same scheme, hostname, and port as the coordinator. Configure
   reverse proxies to return URLs for that origin.
-- Cancellation sends HTTP `DELETE` to the query cursor. It cannot undo completed
-  SQL. A request already in progress can wait until its response timeout.
-- Client certificates, Kerberos, and the result spooling protocol are not
-  supported.
+- Cancellation sends HTTP `DELETE` to the captured query cursor. Cleanup uses
+  the established coordinator address and cached credentials. It does not
+  refresh tokens or start browser sign-in. Cleanup waits for the current
+  response read to stop, even when `DELETE` succeeds. Repeated cancellation
+  uses the same cleanup result and deadline. If cleanup cannot finish within
+  two seconds, Qrow closes the session and the next Run reconnects.
+- Cancellation closes raw sockets during TLS or a stalled response. It cannot
+  stop a system DNS lookup that has already started. A late connection is
+  rejected before TLS or authentication.
+- If submission succeeds but no query URL arrives, Qrow cannot send the server
+  cancel. The statement can continue until its server timeout. Run does not
+  repeat the SQL automatically. Cancellation cannot undo completed SQL.
+- Client certificates and Kerberos are not supported. Trino spooling supports
+  JSON and LZ4 only. Zstandard is not supported.
 - Automatic assistant relation context uses the initial schema. It does not
   track `USE` commands. Use qualified names after a schema change.
 
@@ -397,7 +536,11 @@ access token expires.
 
 An open session continues after its access token expires, if the server
 permits it. Cancellation opens a second transport, so it gets a new access
-token for the account that opened the session.
+token for the account that opened the session. All-row export cancellation
+has a cleanup deadline. It uses the credential that authenticated the
+session, so it does not wait for a token refresh. If that token has expired
+and cancellation fails, the worker interrupts the transport and discards
+the session. The server can continue work that it did not cancel.
 
 **Sign out** deletes the tokens from Keychain. It does not end the session at
 the provider, and it does not revoke the tokens. Sign out is disabled while a
@@ -524,6 +667,13 @@ source builds shows its kind after its name, for example `dbt incremental` or
 of the dbt description, cut to a few lines. The tooltip shows the Markdown of
 the description, for example code and bold text. A cut description has a
 small note below it that tells you to open the dbt details.
+
+Column tooltips show the column name and then the muted data type.
+Below the heading, the tooltip shows the dbt column
+description with the same Markdown format and length limit. A database
+comment comes before the dbt description. If both have the same text, the
+tooltip shows the text once. Column names use the same letter case rules as
+relation names. Ambiguous matches show no dbt description.
 
 To read the full description, right-click the table and select **Show dbt
 details**. A panel opens at the right side of the window. It shows:

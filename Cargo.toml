@@ -21,6 +21,7 @@ async-channel = { version = "2", optional = true }
 gpui-kit = { version = "=0.6.6", features = ["tree-sitter"], optional = true }
 tree-sitter-sequel = { version = "0.3.8", optional = true }
 base64 = "0.22"
+lz4_flex = { version = "0.14.0", default-features = false, features = ["std", "safe-decode", "safe-encode", "checked-decode"] }
 form_urlencoded = "1"
 httparse = "1"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
@@ -42,13 +43,20 @@ notify = "7"
 tokio-postgres = "0.7.18"
 tokio-postgres-rustls = "0.14"
 futures-util = "0.3"
+fs2 = "=0.4.3"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots"] }
+unicode-width = "=0.2.2"
+unicode-segmentation = "=1.13.3"
+parquet = { version = "=60.0.0", default-features = false, features = ["snap", "flate2", "flate2-rust_backend"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 
 [dev-dependencies]
+csv = "1"
 proptest = "=1.11.0"
 
 # Headless UI integration tests of the real Qrow window. The UI builds only on
@@ -75,14 +83,19 @@ path = "tests/native/tooltip_layout.rs"
 required-features = ["ui"]
 
 [patch.crates-io]
+# Pinned TCP ownership hook before TLS, plus a bounded HTTP/1 read buffer.
+reqwest = { path = "vendor/reqwest" }
+# Bounded metadata and ordered buffer reset for streaming exports.
+# See vendor/tokio-postgres/QROW-PATCH.md.
+tokio-postgres = { path = "vendor/tokio-postgres" }
 # GPUI Base 0.6.6 with Qrow fixes to the editor and Markdown text.
 # vendor/gpui-base/QROW-PATCH.md lists them. Remove this patch when a GPUI Kit
 # release includes all fixes.
 gpui-base = { path = "vendor/gpui-base" }
 
-# GPUI Component 0.6.6 with one Qrow fix: the rows of a dropdown list have
-# space between them. See vendor/gpui-component/QROW-PATCH.md. Remove this
-# patch when a GPUI Kit release includes the fix.
+# GPUI Component 0.6.6 with Qrow fixes, for example the rows of a dropdown
+# list have space between them. vendor/gpui-component/QROW-PATCH.md lists
+# them. Remove this patch when a GPUI Kit release includes all fixes.
 gpui-component = { path = "vendor/gpui-component" }
 
 # GPUI's macOS platform 0.3.6 with CPU/OpenGL rendering for older Macs and
@@ -96,12 +109,14 @@ gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 inherits = "release"
 lto = false
 incremental = false
+codegen-units = 16
 
 [profile.release]
 # Keep the optional GPUI assistant inside the macOS package size budget.
 opt-level = "s"
 lto = "thin"
 strip = true
+codegen-units = 1
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -130,4 +145,8 @@ harness = false
 
 [[bench]]
 name = "dbt"
+harness = false
+
+[[bench]]
+name = "export"
 harness = false

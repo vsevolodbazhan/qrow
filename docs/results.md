@@ -1,9 +1,11 @@
 # Results
 
 Qrow displays a bounded preview of query results. Rows appear as they arrive.
-The preview does not change the SQL sent to the server. Postgres and Trino read the
-result stream before the first page. See [Postgres limits](connections.md#postgres-limits)
-and [Trino limits](connections.md#trino-limits).
+The preview does not change the SQL sent to the server. Postgres can show the
+first page while SQL runs. The tab stays busy until the server finishes.
+Trino shows the first page while it reads the result stream.
+See [Postgres limits](connections.md#postgres-limits) and
+[Trino limits](connections.md#trino-limits).
 
 Select **Results** beside **Logs** to view the current preview. Qrow keeps
 one Results panel. A new execution replaces the preview. The [Queries](queries.md)
@@ -46,10 +48,312 @@ The scrollbars overlay the right and bottom edges of the table.
 Drag a column boundary to change its width. Drag the divider above Results
 to change the editor height.
 
-Right-click a cell to use **Copy cell** or **Copy row**. Copy actions use full
-stored values from the displayed page. Long cells show a shortened preview,
-but their stored and copied values are not shortened. File export is not
-implemented.
+### Select and copy cells
+
+Select a rectangle of cells on the current page, then press ⌘C to copy it.
+
+| Action | Selects |
+| --- | --- |
+| Click a cell | That cell. |
+| Drag from a cell | The rectangle from that cell to the pointer. |
+| Shift-click a cell | The rectangle from the first selected cell to the clicked cell. |
+| Click a column header | That column on the current page. Shift-click another header to add the columns between. |
+| Click a row number | That row. Shift-click another row number to add the rows between. |
+| Click the `#` header, or press ⌘A in the table | All cells of the current page. |
+| Arrow keys | The next cell. Shift with an arrow key extends the rectangle. |
+| Home, End | The first or last cell of the row. |
+| Page Up, Page Down | The cell one screen up or down. |
+
+The selected cells use the selection color. In a rectangle, the cell that the
+keys move also has a focus outline. Escape clears the selection. A click
+outside the results area or a page change also clears it.
+
+During a drag, keep the pointer at an edge to scroll rows or columns.
+Release the mouse button to finish the selection, including outside the table.
+The rectangle stays on the current page and excludes the row numbers.
+
+⌘C copies the selected cells in the copy format. Right-click a cell for
+**Copy cell**, **Copy selection**, or **Copy row**. These commands also use
+the copy format. A right-click inside the selection keeps it. A right-click
+outside selects that cell. **Copy row** copies the whole row, even when the
+selection is narrower.
+
+Select the copy format in **Settings → Export → Copy Format**:
+
+| Copy format | Copies |
+| --- | --- |
+| Markdown (default) | A Markdown table with column names. It aligns the columns and escapes Markdown characters in cell values. |
+| Plain text | Tab-separated values without column names. One cell copies its value. Values with a tab, a line break, or a quote are quoted. |
+| CSV, TSV, JSON | The same text as the **Copy as** command of that format. |
+
+Plain text copies immediately. The other formats copy in the background.
+For Markdown over 40,000 characters, confirm the copy. Text above 10 MiB
+must be saved to a file.
+
+Copy actions use full stored values from the displayed page. Long cells show
+a shortened preview, but their stored and copied values are not shortened.
+Use **Copy as → CSV** to copy the selection with column names and the saved
+CSV options. A saved tab separator changes to a comma for this action.
+Use **Copy as → TSV** to copy it with tab separators and column names.
+Use **Copy as → Markdown** or **Copy as → JSON** for the other text formats.
+**Copy as → Markdown** uses the saved Markdown options of the export. The copy
+format does not change **Copy as**. These actions run in the background. Text above 10 MiB must be saved to a file.
+
+## Export results
+
+Click **Export results…** in the Results toolbar. The button is available
+when the result has columns. Choose a format, then **Save**. The export
+includes all rows and columns. Grid selection does not limit the export.
+Use the [copy commands](#browse-and-copy) to copy selected cells.
+
+A complete result needs no server work. For an incomplete result, the export
+uses a retained download or reads the remaining cursor. If the cursor is
+unavailable, the export runs the original result query again. See
+[all-row exports](#export-all-rows-and-reuse-a-download) and
+[reruns](#rerun-for-export).
+
+For CSV or TSV, choose a preset, then adjust the separator, line ending, null marker,
+column names, quoting, byte-order mark, and formula escaping. A change to
+these options selects **Custom**. The dialog does not show a text preview.
+
+| Preset | Separator | Line ending | UTF-8 byte-order mark | Formula escaping |
+| --- | --- | --- | --- | --- |
+| Standard | Comma | CRLF | No | No |
+| Excel | Comma | CRLF | Yes | Yes |
+| Excel (semicolon) | Semicolon | CRLF | Yes | Yes |
+| Tab-separated | Tab | LF | No | No |
+
+**Copy** puts up to 10 MiB of text on the clipboard. It includes all rows
+and columns, and downloads or reruns the query when needed. If the text exceeds
+the limit, the clipboard does not change. You can save the downloaded result
+to a file. Parquet is available only as a file. **Save** opens the native save
+panel. Tab separators use the `.tsv` extension. Other separators
+use `.csv`. After a save, use **Reveal in Finder** to locate the file.
+A successful copy or save stores the options for the next export. A save
+also stores the last output directory.
+
+**Cancel**, Escape, and the dialog close button stop an active export.
+Quit asks for confirmation while an export runs. **Keep working** continues
+the export. **Quit anyway** cancels it and waits for cleanup within a deadline.
+Qrow writes a temporary file next to the destination. It replaces the
+destination only after the write completes. A write error or cancellation
+leaves the destination unchanged. Failed writes keep the dialog open.
+An application crash can leave a `.qrow-export-*.tmp` file next to the
+destination. You can delete that temporary file.
+
+Save checks free disk space before each write. Exports on the same volume
+share disk reservations. An export stops if the reserved writes would leave
+less than 1 GiB free. Other programs can still use that space. A disk error
+names the affected volume and leaves the destination unchanged.
+
+Export stops if a cell exceeds 8 MiB or a row exceeds 16 MiB. These limits
+apply to each format. They do not limit a server message before Qrow receives
+the message.
+Export also stops if the column headers exceed 16 MiB.
+
+### CSV values and limits
+
+CSV uses double quotes and doubles each quote inside a quoted value.
+Separators are comma, semicolon, tab, or pipe. Null markers are an empty
+field, `NULL`, `\N`, or custom text. Choose **Custom** in **Null Values** to
+enter a marker. Exclude the selected separator, double quotes, and line breaks.
+Invalid markers disable Copy and Save. A null marker is never quoted. An empty string
+is always quoted. A literal value that equals a non-empty null marker is
+also quoted. Set the CSV reader to treat only unquoted markers as null.
+Some readers ignore quotes when they detect null values.
+
+With one column and the empty null marker, a null row is an empty line.
+Some CSV readers skip that line. Choose a non-empty marker to preserve the
+row count.
+
+Formula escaping adds an apostrophe before text that starts with `=`, `+`,
+`-`, `@`, a tab, or a carriage return. It also applies to column names.
+Numeric and Boolean values keep their server text. CSV does not change
+decimal values to floating-point numbers.
+
+Exports share immutable preview batches. Concurrent exports can retain up
+to 1 GiB across retained sources and reserved writer and spool working memory.
+Shared batches count once. Encoding writes
+cell slices directly for text formats; it does not copy a wide cell into an escape buffer.
+The clipboard limit applies while text is written.
+
+For Kyuubi, [exports](#export-all-rows-and-reuse-a-download) can read the
+remaining cursor without the preview limits.
+
+### Markdown
+
+Choose **Table** for a Markdown table. Numeric columns align to the right. The `:` in a separator such as `---:`
+sets that alignment in Markdown.
+The writer escapes pipes and backslashes. It changes line breaks to `<br>`.
+Null values use `NULL`. Empty strings stay empty.
+
+**Pretty output** aligns the pipes in the Markdown source.
+Each column uses the widest escaped value from the complete result.
+The writer adds spaces without shortening values. Tabs use `&#9;` so their
+source width is fixed. This option is on by default and stays saved after
+a successful export. A workspace that was saved before this default keeps
+its saved value. It does not apply to **Code block**, which is always padded.
+
+Choose **Code block** for a padded text table in a fence. Set **Maximum Cell
+Width** from 1 to 1000 display columns. Longer cells end with an ellipsis. Line
+breaks and other control characters become spaces. This changes only the
+exported text. **Include row numbers** adds the result row numbers.
+
+Markdown above 40,000 characters can exceed message limits. Copy asks you
+to choose **Copy anyway** before it changes the clipboard. Save keeps the
+text in a `.md` file.
+
+### JSON
+
+Choose **JSON**, then choose **Array** for an array of row objects or **Lines**
+for one compact object on each line. **Pretty output** adds indentation to
+an array and is available only for **Array**.
+Files use `.json` or `.jsonl` respectively.
+
+**Typed values** writes Boolean, integer, and finite floating-point values
+as JSON values. Null stays `null`. Non-finite floating-point values stay
+strings. Decimal values stay exact strings by default. **Decimals as numbers**
+writes their exact digits as JSON numbers. Some readers change those numbers
+to floating-point values. Keep decimals as strings for those readers.
+
+Dates and timestamps keep the server text. Binary values use base64.
+Nested values become JSON when their server text is valid JSON. Other nested
+values stay strings. Turn off **Typed values** to keep all non-null values
+as server text strings.
+
+Repeated column names get numeric suffixes, such as `id_2`. Existing names
+keep their names. Suffixes do not overwrite an existing column.
+
+## Parquet
+
+Select **Parquet** to save a binary file. **Copy** is disabled for this format.
+Choose **Snappy**, **Gzip**, or **None** for compression. Snappy is the default.
+
+**Typed** column types preserve booleans, integers, floating-point values,
+exact decimals, dates, timestamps, and binary values. Nested values remain
+text. Repeated column names follow the JSON naming rules. **Text** column
+types keep every non-null value as server text.
+
+**Numeric As** defaults to **Decimal (exact)**. For Postgres `numeric`, the
+writer checks all downloaded values before it chooses one common precision
+and scale. For example, `9999` and `1.2345` use `DECIMAL(8,4)`.
+A numeric column remains text if its common precision exceeds 38, its scale
+is outside the declared precision, all values are null, or a special value
+such as `NaN` occurs. **Double (approximate)** can change numeric values.
+Use **Text** to keep their exact server representation.
+
+Timestamps with up to 6 fractional digits use microseconds. Timestamps with
+7 to 9 digits use nanoseconds. Wall-clock timestamps keep their local date
+and time. Timestamps with a time zone represent UTC instants. Named zones
+use their time-zone rules. Hive `TIMESTAMP LOCAL TZ` also needs an offset
+or zone in the result text. A missing or unexpected zone stops the export.
+An unresolved daylight-saving gap or overlap
+stops the export. Precision above 9, an unsupported date, or a timestamp
+outside the selected integer range also stops the export. Choose **Text**
+column types to keep such values without rounding.
+
+For Postgres results, the connector records DateStyle, IntervalStyle, and
+TimeZone before execution. It does not change those settings. When the result
+uses a non-ISO DateStyle, dates and timestamps remain text. The export form
+shows this condition.
+
+The writer uses Parquet 1.0 data pages, dictionaries, and statistics. It
+limits each row group to approximately 64 MiB of source values. A group can
+close earlier to stay within the writer memory allowance. The writer prepares
+one column at a time. Row-group metadata stays in memory
+until the file closes and grows with the number of row groups. These
+limits do not cap total application memory. File metadata contains the
+application version and no query text. A failed or cancelled save preserves
+an existing destination file.
+
+## Export all rows and reuse a download
+
+Choose **Save** to export the complete result. A complete
+preview needs no server work. For an incomplete Kyuubi result, the tab worker
+reads the remaining cursor into a temporary spool. It includes the preview
+and any batch held at the preview limit, in their original order. It does
+not submit the SQL again. A page fetched after the dialog opened can make
+its snapshot stale. Reopen Export in that case.
+
+The tab is busy during the download. **Run** and **Next page** are disabled.
+The form closes when saving starts. A progress notification shows the filename,
+downloaded rows, bytes, average speed, and elapsed time. The format
+writer reads committed spool batches. Parquet exact decimals, pretty Markdown tables, and Markdown
+code blocks need a complete first pass. After the download, you can run
+another query or close the tab while the file writer continues.
+
+**Cancel** in the notification stops the writer and the download.
+Closing the notification hides it while the job runs.
+An error shows the notification again. When multiple exports are active,
+**All exports…** opens a list of their controls. The worker sends cancellation
+to the operation that owns the download and completes protocol cleanup
+before the session can accept another query. Cleanup has a 2-second deadline.
+If cleanup fails or times out, the transport is interrupted and the session
+is discarded. The deadline starts when protocol cancellation begins.
+It does not limit credential lookup, token refresh, DNS lookup, or a TCP
+connection that has not yet returned a socket on every connector. See the
+[connection limits](connections.md) for each connector. Export jobs stay active
+until the producer and writer return. A stopped drain consumes its cursor. To
+get all rows after that, reopen Export and choose **Copy** or **Save**.
+
+After download completion, writer cancellation and errors affect only that
+file. They cannot cancel a later query. A writer error stays in a notification
+and keeps the completed spool. **Retry…** opens the form and uses that
+spool without running SQL. You can change the format or destination.
+**Dismiss** releases this job's handle.
+
+A new export automatically uses the tab's retained spool. You can choose
+another format without server work. **Settings → Export → Replay Limit** controls
+the maximum retained size. The default is 2048 MiB. Zero disables retention.
+A larger spool remains available to its running writer and failed job.
+A new query or tab close releases only the tab's replay handle. The
+anonymous spool disappears when its last handle closes, including after a
+crash. Disconnecting keeps a completed replay spool but releases a live
+cursor.
+
+## Rerun for export
+
+For an incomplete result with no retained spool or available cursor, **Copy**
+or **Save** runs the original result query again. The rerun uses the captured
+query and connection. Changes to the editor text do not change that query.
+Cancelling the save panel submits no SQL. A completed spool can be copied or
+saved without a new execution.
+
+The rerun uses the tab's session. Session settings, temporary views,
+and an open transaction still apply. The new execution replaces the result.
+The grid keeps up to 100,000 rows and 64 MiB. You can navigate between its
+pages after the download. The spool and file receive all rows from the same
+fetch sequence. The preview is complete only when the whole result fits in it.
+
+If the original session ended or its connection changed, the export uses the
+current session. The original settings, temporary tables, and open transaction
+do not apply. The form checks the session again after the save panel and
+browser sign-in. A change during that time stops submission. Choose **Copy**
+or **Save** again.
+
+For Trino transfer modes and storage limits, see [Trino export spooling](connections.md#trino-export-spooling).
+
+The tab stays busy until the download ends. **Cancel** in the tab stops the
+download. **Cancel** in the export notification also stops its file writer.
+Cancellation can interrupt
+an established socket before the operation handle or schema arrives.
+If SQL reached the server before its handle arrived, the server can still
+continue that statement after the socket closes. Qrow does not submit it
+again automatically. See [cleanup limits](#export-all-rows-and-reuse-a-download).
+
+A result with columns and no rows produces a valid empty file. A successful
+statement with no result set shows a message and writes no file. It is not
+submitted again to obtain columns. A failed download requires an explicit
+rerun. A failed file write with a complete spool uses **Retry…** without SQL.
+Postgres exports keep exact numeric text and the session's date settings.
+For typed Parquet, non-ISO dates and timestamps remain text. The form shows
+the result's DateStyle warning when that setting is known.
+
+Trino exports keep exact decimal text and the full server type. A separate
+heartbeat keeps an active query alive while the download pauses. The progress notification and export details show downloaded rows, spool bytes, rows per second,
+and elapsed time. They also show Trino query progress when the server sends
+it. Query progress is separate from download and file completion. See
+[Trino limits](connections.md#trino-limits) for heartbeat and transfer limits.
 
 ## Value representation
 
@@ -58,17 +362,38 @@ implemented.
 | Null | `NULL` |
 | Empty string | An empty cell |
 | Decimal or textual timestamp | The server's text representation |
-| Binary | Hexadecimal text |
+| Binary | Kyuubi hexadecimal text, Postgres server text, or Trino base64 text |
 | Nested value | The text returned by the server |
 
 Qrow preserves the distinction between null and an empty string. It does not
 convert exact decimal text to floating-point values for display.
 
+## Export transfer limits
+
+The connection's [transfer policy](connections.md#export-transfer-policy)
+sets the export count, Kyuubi fetch estimate and speed limit, and Trino
+spooling mode.
+A busy connection rejects another export before sign-in or SQL submission.
+Snapshot exports, retained-result exports, and **Copy as** use the same count.
+A file export holds its slot until publication or temporary-file cleanup ends.
+The count uses the connection captured when the export form opens. Retry
+keeps that connection after you close the result tab.
+
+Exports use the connection's transfer settings. A live Kyuubi cursor keeps
+the collection mode of the original query. A retained spool needs no server
+transfer.
+
+An oversized Kyuubi response stops the export. Qrow does not retry an
+advancing fetch. The target file is not published, and the cursor becomes
+**Consumed**. Choose **Copy** or **Save** to start a new execution. Normal
+preview requests keep their 1000-row limit.
+
 ## Preview limits
 
 The preview can store up to 100,000 rows or approximately 64 MiB per tab.
-For Kyuubi, if an incoming batch would exceed either limit, Qrow discards that batch and
-closes the cursor. Previously downloaded rows remain available. The memory
+For Kyuubi, if an incoming batch would exceed either limit, Qrow keeps that
+batch outside the preview and keeps the cursor open for export. The
+grid cannot fetch more pages at the preview limit. The memory
 limit measures retained row storage, not the total application memory.
 
 For Kyuubi, Qrow asks for each page of 1,000 rows in one request. When the server sends

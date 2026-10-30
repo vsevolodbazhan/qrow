@@ -165,6 +165,7 @@ class FixtureTests(unittest.TestCase):
             ca = str((Path(directory) / "security/ca.pem").resolve())
         self.assertEqual((loaded.project, loaded.bind_port, loaded.port), ("qrow-e2e-unit", 2, 3))
         self.assertEqual(loaded.env(), {"QROW_E2E_PROJECT": "qrow-e2e-unit", "QROW_E2E_PORT": "3",
+                                        "QROW_E2E_RUNTIME": "docker",
                                         "QROW_E2E_NATIVE_EVIDENCE": evidence, "QROW_E2E_TLS_PORT": "0",
                                         "QROW_E2E_OIDC_ISSUER": "https://127.0.0.1:0",
                                         "QROW_E2E_TLS_CA": ca})
@@ -178,6 +179,7 @@ class FixtureTests(unittest.TestCase):
                 with self.subTest(runtime=runtime.runtime):
                     fixture.save(runtime, path)
                     loaded = fixture.load(path)
+                    self.assertEqual(loaded.env()["QROW_E2E_RUNTIME"], runtime.runtime)
                     self.assertEqual((loaded.tls_port, loaded.oidc_port), (5, 6))
                     self.assertEqual(loaded.env(), runtime.env())
 

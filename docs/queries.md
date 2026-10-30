@@ -25,6 +25,11 @@ If you select text, Qrow runs that text. Each execution must contain one SQL
 statement. Qrow rejects a selection with multiple statements before it sends
 SQL to the server.
 
+After a query finishes, use **Export results…** in Results to save all rows.
+If the result cursor is unavailable, review the original SQL before an export
+rerun. See [Rerun for export](results.md#rerun-for-export) for session checks
+and cancellation limits.
+
 The dot of a tab shows the state of its work. Point to the dot to read the
 tab name and a short status. The tooltip has no query detail line. The bar
 above Results shows neutral tags for the visible rows, loaded rows, columns,

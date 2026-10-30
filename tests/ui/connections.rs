@@ -41,6 +41,377 @@ fn saved_names(app: &TestApp) -> Vec<String> {
     names
 }
 
+#[gpui_kit::test]
+fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
+    cx: &mut TestAppContext,
+) {
+    use qrow::model::transfer::{IncrementalCollect, TransferPreset};
+    let (workspace, credentials) = connections(&["Transfer fixture"]);
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.wait_for(cx, "connection-transfer-preset");
+    app.select(cx, "connection-transfer-preset", "Custom");
+    app.wait_for(cx, "connection-transfer-request");
+    app.update(cx, |window, _| {
+        assert!(window.find("connection-transfer-request-unit").visible());
+        assert!(window.find("connection-transfer-speed-unit").visible());
+    });
+    app.fill(cx, "connection-transfer-request", "33");
+    app.click(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "invalid transfer request",
+        Duration::from_secs(5),
+        |window, _| {
+            label(window, "connection-form-error-accessibility")
+                .is_some_and(|error| error.contains("1 to 32"))
+        },
+    );
+    app.fill(cx, "connection-transfer-request", "7");
+    app.fill(cx, "connection-transfer-count", "256");
+    app.click(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "invalid export count",
+        Duration::from_secs(5),
+        |window, _| {
+            label(window, "connection-form-error-accessibility")
+                .is_some_and(|error| error.contains("0 to 255"))
+        },
+    );
+    app.fill(cx, "connection-transfer-speed", "12");
+    app.update(cx, |window, cx| {
+        window.press("cmd-a", cx);
+        // Clicking the blank right side of the full input puts the caret at the end.
+        window.click("connection-transfer-speed", cx);
+        window.input("3", cx);
+        assert_eq!(
+            window.find("connection-transfer-speed").value(),
+            Some("123")
+        );
+    });
+    app.fill(cx, "connection-transfer-speed", "12345");
+    app.update(cx, |window, _| {
+        let field = window.find("connection-transfer-speed");
+        let unit = window.find("connection-transfer-speed-unit");
+        assert!(unit.visible());
+        assert!(unit.bounds().left() - field.bounds().left() < window.rem_size() * 7.);
+    });
+    app.fill(
+        cx,
+        "connection-transfer-speed",
+        "1234567890123456789012345678901234567890",
+    );
+    app.update(cx, |window, _| {
+        assert!(window.find("connection-transfer-speed-unit").visible());
+    });
+    app.fill(cx, "connection-transfer-speed", "12");
+    app.update(cx, |window, _| {
+        for (field, unit) in [
+            (
+                "connection-transfer-request",
+                "connection-transfer-request-unit",
+            ),
+            (
+                "connection-transfer-speed",
+                "connection-transfer-speed-unit",
+            ),
+        ] {
+            let field = window.find(field);
+            let unit = window.find(unit);
+            assert!(unit.visible());
+            assert!(unit.bounds().left() > field.bounds().left());
+            assert!(unit.bounds().left() - field.bounds().left() < window.rem_size() * 4.);
+        }
+    });
+    app.select(cx, "connection-transfer-incremental", "Off");
+    app.fill(cx, "connection-transfer-count", "3");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "saved transfer values",
+        Duration::from_secs(5),
+        |_, _| app.saved().profiles[0].transfer.preset == TransferPreset::Custom,
+    );
+    let transfer = &app.saved().profiles[0].transfer;
+    assert_eq!(transfer.custom.request_mib, 7);
+    assert_eq!(transfer.custom.speed_limit_mb, 12);
+    assert_eq!(transfer.custom.incremental_collect, IncrementalCollect::Off);
+    assert_eq!(transfer.custom.concurrent_exports, 3);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.wait_for(cx, "connection-transfer-request");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("connection-transfer-request").value(),
+            Some("7")
+        )
+    });
+    cancel_form(&app, cx);
+}
+
+#[gpui_kit::test]
+fn preset_values_keep_readonly_fields_and_preserve_unsaved_custom_values(cx: &mut TestAppContext) {
+    for engine in [
+        qrow::model::DatabaseType::Kyuubi,
+        qrow::model::DatabaseType::Trino,
+    ] {
+        let mut profile = offline_profile("Preset fields");
+        profile.database_type = engine;
+        let id = profile.id;
+        let app = TestApp::launch(
+            cx,
+            Workspace {
+                profiles: vec![profile],
+                ..Default::default()
+            },
+        );
+        app.context_menu(cx, connection_row(id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.connection_page(cx, "Export");
+        app.select(cx, "connection-transfer-preset", "Custom");
+        app.fill(cx, "connection-transfer-count", "2");
+        if engine == qrow::model::DatabaseType::Kyuubi {
+            app.fill(cx, "connection-transfer-request", "7");
+            app.fill(cx, "connection-transfer-speed", "12");
+            app.select(cx, "connection-transfer-incremental", "Off");
+        } else {
+            app.select(cx, "connection-transfer-spooling", "Parallel");
+        }
+        app.select(cx, "connection-transfer-preset", "Conservative");
+        app.wait_for(cx, "connection-transfer-count");
+        let mut expected = vec![("connection-transfer-count", "1")];
+        if engine == qrow::model::DatabaseType::Kyuubi {
+            expected.extend([
+                ("connection-transfer-incremental", "On"),
+                ("connection-transfer-request", "4 MiB"),
+                ("connection-transfer-speed", "20 MB/s"),
+            ]);
+        } else {
+            expected.push(("connection-transfer-spooling", "Off"));
+        }
+        for (field, value) in expected {
+            app.click(cx, field);
+            app.press(cx, "cmd-a");
+            app.update(cx, |window, cx| window.input("must not change", cx));
+            app.update(cx, |window, _| {
+                assert_eq!(window.find(field).value(), Some(value))
+            });
+        }
+        app.select(cx, "connection-transfer-preset", "Fast");
+        app.update(cx, |window, _| {
+            assert_eq!(window.find("connection-transfer-count").value(), Some("2"));
+            if engine == qrow::model::DatabaseType::Kyuubi {
+                assert_eq!(
+                    window.find("connection-transfer-request").value(),
+                    Some("32 MiB")
+                );
+            } else {
+                assert_eq!(
+                    window.find("connection-transfer-spooling").value(),
+                    Some("Parallel")
+                );
+            }
+        });
+        app.select(cx, "connection-transfer-preset", "Custom");
+        app.update(cx, |window, _| {
+            assert_eq!(window.find("connection-transfer-count").value(), Some("2"));
+            if engine == qrow::model::DatabaseType::Kyuubi {
+                assert_eq!(
+                    window.find("connection-transfer-request").value(),
+                    Some("7")
+                );
+                assert_eq!(window.find("connection-transfer-speed").value(), Some("12"));
+                assert_eq!(
+                    window.find("connection-transfer-incremental").value(),
+                    Some("Off")
+                );
+            } else {
+                assert_eq!(
+                    window.find("connection-transfer-spooling").value(),
+                    Some("Parallel")
+                );
+            }
+        });
+        cancel_form(&app, cx);
+    }
+}
+
+#[gpui_kit::test]
+fn postgres_export_count_preserves_existing_preset_and_saves_changes(cx: &mut TestAppContext) {
+    use qrow::model::{DatabaseType, transfer::TransferPreset};
+    let mut profile = offline_profile("Postgres exports");
+    profile.database_type = DatabaseType::Postgres;
+    profile.transfer.preset = TransferPreset::Fast;
+    let original = profile.transfer.clone();
+    let id = profile.id;
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            ..Default::default()
+        },
+    );
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("connection-transfer-preset").is_none());
+        assert_eq!(window.find("connection-transfer-count").value(), Some("2"));
+    });
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    assert_eq!(
+        app.saved().profiles[0]
+            .transfer
+            .settings()
+            .concurrent_exports,
+        2
+    );
+    assert_eq!(app.saved().profiles[0].transfer, original);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.fill(cx, "connection-transfer-count", "0");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "saved Postgres export limit",
+        Duration::from_secs(5),
+        |_, _| {
+            app.saved().profiles[0]
+                .transfer
+                .settings()
+                .concurrent_exports
+                == 0
+        },
+    );
+    let mut expected = original.settings();
+    expected.concurrent_exports = 0;
+    assert_eq!(app.saved().profiles[0].transfer.settings(), expected);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("connection-transfer-count").value(), Some("0"));
+    });
+    cancel_form(&app, cx);
+}
+
+#[gpui_kit::test]
+fn switching_connection_types_preserves_export_count_edits(cx: &mut TestAppContext) {
+    let (workspace, credentials) = connections(&["Switch engines"]);
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.select(cx, "connection-transfer-preset", "Fast");
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("connection-transfer-count").value(), Some("2"))
+    });
+    app.fill(cx, "connection-transfer-count", "02");
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Spark (HiveServer2)");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("connection-transfer-preset").value(),
+            Some("Fast")
+        )
+    });
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.connection_page(cx, "Export");
+    app.fill(cx, "connection-transfer-count", "1");
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Spark (HiveServer2)");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("connection-transfer-preset").value(),
+            Some("Custom")
+        );
+        assert_eq!(window.find("connection-transfer-count").value(), Some("1"));
+    });
+    app.fill(cx, "connection-transfer-count", "2");
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("connection-transfer-count").value(), Some("2"))
+    });
+    cancel_form(&app, cx);
+}
+
+#[gpui_kit::test]
+fn postgres_and_trino_transfer_forms_show_only_applicable_controls(cx: &mut TestAppContext) {
+    for engine in [
+        qrow::model::DatabaseType::Postgres,
+        qrow::model::DatabaseType::Trino,
+    ] {
+        let mut profile = offline_profile("Transfer controls");
+        profile.database_type = engine;
+        let id = profile.id;
+        let app = TestApp::launch(
+            cx,
+            Workspace {
+                profiles: vec![profile],
+                ..Default::default()
+            },
+        );
+        app.context_menu(cx, connection_row(id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.connection_page(cx, "Export");
+        if engine == qrow::model::DatabaseType::Trino {
+            app.select(cx, "connection-transfer-preset", "Custom");
+        }
+        app.wait_for(cx, "connection-transfer-count");
+        app.update(cx, |window, _| {
+            assert_eq!(
+                window.try_find("connection-transfer-preset").is_some(),
+                engine == qrow::model::DatabaseType::Trino
+            );
+            assert!(window.try_find("connection-transfer-request").is_none());
+            assert!(window.try_find("connection-transfer-speed").is_none());
+            assert!(window.try_find("connection-transfer-incremental").is_none());
+            assert_eq!(
+                window.try_find("connection-transfer-spooling").is_some(),
+                engine == qrow::model::DatabaseType::Trino
+            );
+        });
+        if engine == qrow::model::DatabaseType::Trino {
+            app.select(cx, "connection-transfer-spooling", "Parallel");
+            app.click(cx, "save-profile");
+            app.wait_gone(cx, "save-profile");
+            app.wait_until(cx, "saved spooling mode", Duration::from_secs(5), |_, _| {
+                app.saved().profiles[0].transfer.custom.trino_spooling
+                    == qrow::model::transfer::TrinoSpooling::Parallel
+            });
+            app.context_menu(cx, connection_row(id));
+            app.choose(cx, "popup-menu", "Edit");
+            app.connection_page(cx, "Export");
+            app.wait_for(cx, "connection-transfer-spooling");
+            app.update(cx, |window, _| {
+                assert_eq!(
+                    window.find("connection-transfer-spooling").value(),
+                    Some("Parallel")
+                )
+            });
+        }
+        cancel_form(&app, cx);
+    }
+}
+
 /// A workspace with these offline connections, one tab each, and a password
 /// for each connection.
 fn connections(names: &[&str]) -> (Workspace, MemoryCredentials) {

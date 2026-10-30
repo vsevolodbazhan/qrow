@@ -10,7 +10,10 @@ pub mod t_c_l_i_service;
 use crate::model::{Batch, Column, Profile};
 use anyhow::Result;
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -19,7 +22,13 @@ use zeroize::Zeroizing;
 #[derive(Debug, PartialEq)]
 pub enum QueryState {
     Running,
-    Finished { has_results: bool },
+    /// The schema is ready and rows can be fetched while SQL still runs.
+    Streaming {
+        has_results: bool,
+    },
+    Finished {
+        has_results: bool,
+    },
     Cancelled,
 }
 
@@ -34,6 +43,70 @@ impl std::error::Error for QueryError {}
 
 pub trait Cancellation: Send + Sync {
     fn cancel(&self) -> Result<()>;
+    fn cancel_with_deadline(&self, _deadline: Instant) -> Result<()> {
+        self.cancel()
+    }
+    /// Interrupt a stuck transport when cancellation cleanup exceeds its deadline.
+    /// The owning worker must discard the session after this call.
+    fn abort_transport(&self) {}
+}
+
+type RegisterTransport = Arc<dyn Fn(Arc<dyn Cancellation>) -> Result<()> + Send + Sync>;
+
+/// Cancellation of setup before the server returns an operation handle.
+#[derive(Clone, Default)]
+pub struct ConnectionControl {
+    cancelled: Option<Arc<AtomicBool>>,
+    register: Option<RegisterTransport>,
+    allowance: Option<Arc<crate::export::budget::Allowance>>,
+}
+
+impl ConnectionControl {
+    pub fn new(cancelled: Arc<AtomicBool>, register: RegisterTransport) -> Self {
+        Self {
+            cancelled: Some(cancelled),
+            register: Some(register),
+            allowance: None,
+        }
+    }
+
+    pub(crate) fn with_allowance(
+        mut self,
+        allowance: Arc<crate::export::budget::Allowance>,
+    ) -> Self {
+        self.allowance = Some(allowance);
+        self
+    }
+    pub(crate) fn allowance(&self) -> Option<Arc<crate::export::budget::Allowance>> {
+        self.allowance.clone()
+    }
+    pub(crate) fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
+        self.cancelled.clone()
+    }
+
+    pub fn check(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self
+                .cancelled
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::SeqCst)),
+            crate::export::Cancelled,
+        );
+        Ok(())
+    }
+
+    pub fn register(&self, transport: Arc<dyn Cancellation>) -> Result<()> {
+        let result = self.check().and_then(|()| {
+            if let Some(register) = &self.register {
+                register(transport.clone())?;
+            }
+            self.check()
+        });
+        if result.is_err() {
+            transport.abort_transport();
+        }
+        result
+    }
 }
 
 /// A catalog request. The connector answers it with a result set that uses
@@ -62,6 +135,34 @@ pub enum MetadataRequest {
 
 pub trait Session: Send {
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>>;
+    /// Start one execution whose result is consumed without preview limits.
+    fn execute_export(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.execute(sql)
+    }
+
+    fn execute_export_controlled(
+        &mut self,
+        sql: &str,
+        control: &ConnectionControl,
+    ) -> Result<Arc<dyn Cancellation>> {
+        control.check()?;
+        self.execute_export(sql)
+    }
+    /// Apply captured export policy, including when the session is reused.
+    fn configure_export(&mut self, transfer: &crate::model::transfer::Transfer) -> Result<()> {
+        transfer.validate()
+    }
+    /// Switch an existing live cursor to export transfer without submitting SQL.
+    fn start_export_fetch(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn export_fetch_rows(&self) -> usize {
+        crate::model::PREVIEW_ROWS
+    }
+    /// Wait for server completion and protocol cleanup after reading rows.
+    fn finish_execution(&mut self) -> Result<Completion> {
+        wait_for_completion(self, None)
+    }
     /// Start a catalog request as the current operation. Read its rows with
     /// [`poll`](Self::poll), [`columns`](Self::columns), and
     /// [`fetch`](Self::fetch), like the rows of a query.
@@ -69,6 +170,26 @@ pub trait Session: Send {
     fn poll(&mut self) -> Result<QueryState>;
     fn columns(&mut self) -> Result<Vec<Column>>;
     fn fetch(&mut self, count: usize) -> Result<Batch>;
+    /// Commit a fetched export batch after the spool accepts every row.
+    /// For an empty batch, true requests another fetch and false means EOF.
+    fn commit_export_rows(&mut self, _rows: usize) -> Result<bool> {
+        Ok(false)
+    }
+    fn export_cleanup_warning(&self) -> Option<String> {
+        None
+    }
+    /// Settings captured for the current result. Export must not change them.
+    /// Interrupt setup or schema reads before an operation cancellation exists.
+    fn transport_cancellation(&self) -> Option<Arc<dyn Cancellation>> {
+        None
+    }
+    fn export_context(&self) -> crate::export::Context {
+        crate::export::Context::default()
+    }
+    /// The server's query progress, when the current response provides it.
+    fn progress_percentage(&self) -> Option<f64> {
+        None
+    }
     /// Whether the connector stopped retaining rows at a result limit.
     fn result_limited(&self) -> bool {
         false
@@ -102,13 +223,33 @@ pub fn wait_for_completion<S: Session + ?Sized>(
                 return Ok(Completion::Finished { has_results });
             }
             QueryState::Cancelled => return Ok(Completion::Cancelled),
-            QueryState::Running => {
+            QueryState::Running | QueryState::Streaming { .. } => {
                 anyhow::ensure!(
                     deadline.is_none_or(|deadline| Instant::now() < deadline),
                     "The operation did not end in time"
                 );
                 thread::sleep(POLL_INTERVAL);
             }
+        }
+    }
+}
+
+/// Wait for a result schema or a completed command. Streaming does not mean
+/// that SQL ended; callers must finish execution before releasing the session.
+pub fn wait_for_result<S: Session + ?Sized>(
+    session: &mut S,
+    deadline: Option<Instant>,
+) -> Result<QueryState> {
+    loop {
+        match session.poll()? {
+            QueryState::Running => {
+                anyhow::ensure!(
+                    deadline.is_none_or(|deadline| Instant::now() < deadline),
+                    "The result schema did not arrive in time"
+                );
+                thread::sleep(POLL_INTERVAL);
+            }
+            state => return Ok(state),
         }
     }
 }
@@ -171,6 +312,20 @@ impl std::fmt::Debug for Secret {
 
 pub trait Connector: Send + Sync {
     fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>>;
+    fn connect_controlled(
+        &self,
+        profile: &Profile,
+        secret: Secret,
+        control: &ConnectionControl,
+    ) -> Result<Box<dyn Session>> {
+        control.check()?;
+        let session = self.connect(profile, secret)?;
+        if let Some(transport) = session.transport_cancellation() {
+            control.register(transport)?;
+        }
+        control.check()?;
+        Ok(session)
+    }
 }
 
 /// Include the diagnostic that Thrift omits from its Display implementation.
@@ -207,6 +362,25 @@ impl DatabaseConnector {
 }
 
 impl Connector for DatabaseConnector {
+    fn connect_controlled(
+        &self,
+        profile: &Profile,
+        secret: Secret,
+        control: &ConnectionControl,
+    ) -> Result<Box<dyn Session>> {
+        match profile.database_type {
+            crate::model::DatabaseType::Kyuubi => {
+                self.hive.connect_controlled(profile, secret, control)
+            }
+            crate::model::DatabaseType::Postgres => {
+                self.postgres.connect_controlled(profile, secret, control)
+            }
+            crate::model::DatabaseType::Trino => {
+                self.trino.connect_controlled(profile, secret, control)
+            }
+        }
+    }
+
     fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
         match profile.database_type {
             crate::model::DatabaseType::Kyuubi => self.hive.connect(profile, secret),
@@ -258,6 +432,7 @@ mod tests {
     fn waits_until_the_operation_ends() {
         let mut session = Scripted(VecDeque::from([
             QueryState::Running,
+            QueryState::Streaming { has_results: true },
             QueryState::Finished { has_results: true },
         ]));
         let started = Instant::now();
@@ -278,5 +453,24 @@ mod tests {
         let mut session = Scripted(VecDeque::new());
         let error = wait_for_completion(&mut session, Some(Instant::now())).unwrap_err();
         assert_eq!(error.to_string(), "The operation did not end in time");
+    }
+
+    #[test]
+    fn schema_readiness_does_not_claim_execution_completion() {
+        let mut session = Scripted(VecDeque::from([
+            QueryState::Streaming { has_results: true },
+            QueryState::Streaming { has_results: true },
+            QueryState::Finished { has_results: true },
+        ]));
+        assert_eq!(
+            wait_for_result(&mut session, None).unwrap(),
+            QueryState::Streaming { has_results: true }
+        );
+        let started = Instant::now();
+        assert_eq!(
+            session.finish_execution().unwrap(),
+            Completion::Finished { has_results: true }
+        );
+        assert!(started.elapsed() >= POLL_INTERVAL);
     }
 }

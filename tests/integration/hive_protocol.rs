@@ -170,6 +170,182 @@ fn initialize(peer: &mut Peer) {
     peer.reply(TCloseOperationResp::new(success()));
 }
 
+fn configuration(peer: &mut Peer, sql: &str, read_value: Option<&str>) {
+    let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+    assert_eq!(request.statement, sql);
+    assert_eq!(request.run_async, Some(false));
+    assert!(request.conf_overlay.is_none());
+    peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+    let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+    peer.reply(status(TOperationState::FINISHED_STATE, true));
+    if let Some(value) = read_value {
+        for values in [
+            vec![
+                vec![qrow::model::transfer::INCREMENTAL_KEY.to_owned()],
+                vec![value.to_owned()],
+            ],
+            vec![vec![], vec![]],
+        ] {
+            let _: TFetchResultsReq = peer.read("FetchResults");
+            peer.reply(TFetchResultsResp::new(
+                success(),
+                Some(false),
+                Some(TRowSet::new(
+                    0,
+                    vec![],
+                    Some(
+                        values
+                            .into_iter()
+                            .map(|values| TColumn::StringVal(TStringColumn::new(values, vec![0])))
+                            .collect(),
+                    ),
+                    None,
+                    None,
+                )),
+            ));
+        }
+    }
+    let _: TCloseOperationReq = peer.read("CloseOperation");
+    peer.reply(TCloseOperationResp::new(success()));
+}
+
+#[test]
+fn export_collect_setting_is_restored_and_adaptive_fetch_preserves_normal_limits() {
+    use qrow::model::transfer::{INCREMENTAL_KEY, Transfer, TransferPreset};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = profile(listener.local_addr().unwrap().port());
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        for (sql, overrides, requested, value) in [
+            ("SELECT export", true, 3276, "x".repeat(4096)),
+            ("SELECT inherit", false, 13107, "small".into()),
+            ("SELECT normal", false, 1000, "n".into()),
+        ] {
+            if overrides {
+                configuration(&mut peer, "SET", Some("false"));
+                configuration(&mut peer, &format!("SET {INCREMENTAL_KEY}=true"), None);
+            }
+            let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(request.statement, sql);
+            assert!(request.conf_overlay.is_none());
+            peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+            if overrides {
+                configuration(&mut peer, &format!("SET {INCREMENTAL_KEY}=false"), None);
+                configuration(&mut peer, "SET", Some("false"));
+            }
+            let _: TGetResultSetMetadataReq = peer.read("GetResultSetMetadata");
+            peer.reply(TGetResultSetMetadataResp::new(
+                success(),
+                Some(TTableSchema::new(vec![TColumnDesc::new(
+                    "value".into(),
+                    TTypeDesc::new(vec![TTypeEntry::PrimitiveEntry(TPrimitiveTypeEntry::new(
+                        TTypeId::STRING_TYPE,
+                        None,
+                    ))]),
+                    0,
+                    None,
+                )])),
+            ));
+            let fetch: TFetchResultsReq = peer.read("FetchResults");
+            assert_eq!(fetch.max_rows, requested);
+            peer.reply(TFetchResultsResp::new(
+                success(),
+                Some(true),
+                Some(TRowSet::new(
+                    0,
+                    vec![],
+                    Some(vec![TColumn::StringVal(TStringColumn::new(
+                        vec![value],
+                        vec![0],
+                    ))]),
+                    None,
+                    None,
+                )),
+            ));
+            let _: TCloseOperationReq = peer.read("CloseOperation");
+            peer.reply(TCloseOperationResp::new(success()));
+        }
+        let _: TCloseSessionReq = peer.read("CloseSession");
+        peer.reply(TCloseSessionResp::new(success()));
+    });
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
+        .unwrap();
+    session
+        .configure_export(&Transfer {
+            preset: TransferPreset::Conservative,
+            ..Default::default()
+        })
+        .unwrap();
+    session.execute_export("SELECT export").unwrap();
+    session.columns().unwrap();
+    let rows = session.fetch(session.export_fetch_rows()).unwrap().rows;
+    assert_eq!(rows[0][0].as_ref().unwrap().len(), 4096);
+    assert!(session.export_fetch_rows() < 900);
+    session.close_operation().unwrap();
+    session.configure_export(&Transfer::default()).unwrap();
+    session.execute_export("SELECT inherit").unwrap();
+    session.columns().unwrap();
+    assert_eq!(
+        session.fetch(session.export_fetch_rows()).unwrap().rows[0][0].as_deref(),
+        Some("small")
+    );
+    session.close_operation().unwrap();
+    session.execute("SELECT normal").unwrap();
+    session.columns().unwrap();
+    assert_eq!(
+        session.fetch(50_000).unwrap().rows[0][0].as_deref(),
+        Some("n")
+    );
+    session.close_operation().unwrap();
+    session.close().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn export_cancellation_deadline_bounds_a_stalled_separate_authentication() {
+    use std::{sync::mpsc, time::Instant};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = profile(listener.local_addr().unwrap().port());
+    let (stalled, observed) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        let _: TExecuteStatementReq = peer.read("ExecuteStatement");
+        peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        // Consume PLAIN and credentials, then withhold authentication completion.
+        for _ in 0..2 {
+            let mut header = [0; 5];
+            socket.read_exact(&mut header).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(header[1..].try_into().unwrap()) as usize];
+            socket.read_exact(&mut payload).unwrap();
+        }
+        stalled.send(()).unwrap();
+        let mut byte = [0];
+        assert_eq!(socket.read(&mut byte).unwrap(), 0);
+    });
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
+        .unwrap();
+    let cancel = session.execute("SELECT n").unwrap();
+    let target = cancel.clone();
+    let started = Instant::now();
+    let request =
+        thread::spawn(move || target.cancel_with_deadline(Instant::now() + Duration::from_secs(2)));
+    observed.recv_timeout(Duration::from_secs(1)).unwrap();
+    cancel.abort_transport();
+    assert!(request.join().unwrap().is_err());
+    assert!(started.elapsed() < Duration::from_secs(1));
+    drop(cancel);
+    drop(session);
+    server.join().unwrap();
+}
+
 #[test]
 fn ldap_session_parameters_async_query_exact_values_and_fetch_exhaustion() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -729,5 +905,366 @@ fn a_setup_step_without_an_answer_explains_the_engine_start() {
     assert!(!message.contains("os error"), "{message}");
     assert!(started.elapsed() < Duration::from_secs(20));
     done.send(()).unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn run_export_cancel_aborts_sasl_before_open_session_or_schema() {
+    use qrow::{export, logs::ExecutionId, worker::Worker};
+    use std::{
+        sync::{Arc, atomic::AtomicBool, mpsc},
+        time::Instant,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = profile(listener.local_addr().unwrap().port());
+    let (stalled, observed) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        for _ in 0..2 {
+            let mut header = [0; 5];
+            socket.read_exact(&mut header).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(header[1..].try_into().unwrap()) as usize];
+            socket.read_exact(&mut payload).unwrap();
+        }
+        stalled.send(()).unwrap();
+        let mut byte = [0];
+        assert_eq!(socket.read(&mut byte).unwrap(), 0);
+    });
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(HiveConnector::default()),
+        Arc::new(|_| Ok(Secret::password("synthetic"))),
+    );
+    let jobs = export::Jobs::default();
+    let download = worker
+        .run_and_export(
+            profile,
+            "SELECT never_submitted".into(),
+            ExecutionId(201),
+            None,
+            &jobs,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    observed.recv_timeout(Duration::from_secs(2)).unwrap();
+    let start = Instant::now();
+    worker.cancel();
+    let error = download.wait_spool().err().unwrap();
+    assert!(error.get_ref().unwrap().is::<export::Cancelled>());
+    assert!(jobs.cancel_and_wait(Duration::from_secs(2)));
+    assert!(start.elapsed() < Duration::from_secs(1));
+    server.join().unwrap();
+}
+
+#[test]
+fn run_export_cancel_stops_execute_and_schema_replies_before_releasing_the_worker() {
+    use qrow::{export, logs::ExecutionId, worker::Worker};
+    use std::{
+        sync::{Arc, atomic::AtomicBool, mpsc},
+        time::Instant,
+    };
+    for schema in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let profile = profile(listener.local_addr().unwrap().port());
+        let (stalled, observed) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut peer = Peer::accept(&listener);
+            initialize(&mut peer);
+            let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(request.statement, "SELECT blocked_reply");
+            if schema {
+                peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+                let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+                peer.reply(status(TOperationState::FINISHED_STATE, true));
+                let _: TGetResultSetMetadataReq = peer.read("GetResultSetMetadata");
+            }
+            stalled.send(()).unwrap();
+            if schema {
+                let mut cancellation = Peer::accept(&listener);
+                let _: TCancelOperationReq = cancellation.read("CancelOperation");
+                cancellation.reply(TCancelOperationResp::new(success()));
+            }
+            let mut byte = [0];
+            assert_eq!(peer.socket.read(&mut byte).unwrap(), 0);
+        });
+        let worker = Worker::with_connector(
+            Arc::new(|| {}),
+            Arc::new(HiveConnector::default()),
+            Arc::new(|_| Ok(Secret::password("test-password"))),
+        );
+        let jobs = export::Jobs::default();
+        let download = worker
+            .run_and_export(
+                profile,
+                "SELECT blocked_reply".into(),
+                ExecutionId(202),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        observed.recv_timeout(Duration::from_secs(3)).unwrap();
+        let started = Instant::now();
+        worker.cancel();
+        assert!(
+            download
+                .wait_spool()
+                .err()
+                .unwrap()
+                .get_ref()
+                .unwrap()
+                .is::<export::Cancelled>()
+        );
+        assert!(jobs.cancel_and_wait(Duration::from_secs(3)));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn finished_exports_close_without_another_status_request() {
+    use qrow::{
+        export,
+        logs::ExecutionId,
+        worker::{Event, Worker},
+    };
+    use std::sync::{Arc, atomic::AtomicBool};
+    for has_results in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let p = profile(listener.local_addr().unwrap().port());
+        let server = thread::spawn(move || {
+            let mut peer = Peer::accept(&listener);
+            initialize(&mut peer);
+            let req: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(req.statement, "SELECT synthetic_empty");
+            peer.reply(TExecuteStatementResp::new(
+                success(),
+                Some(operation(has_results)),
+            ));
+            let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+            peer.reply(status(TOperationState::FINISHED_STATE, has_results));
+            if has_results {
+                let _: TGetResultSetMetadataReq = peer.read("GetResultSetMetadata");
+                peer.reply(TGetResultSetMetadataResp::new(
+                    success(),
+                    Some(TTableSchema::new(vec![TColumnDesc::new(
+                        "value".into(),
+                        TTypeDesc::new(vec![TTypeEntry::PrimitiveEntry(TPrimitiveTypeEntry::new(
+                            TTypeId::INT_TYPE,
+                            None,
+                        ))]),
+                        0,
+                        None,
+                    )])),
+                ));
+                let _: TFetchResultsReq = peer.read("FetchResults");
+                peer.reply(TFetchResultsResp::new(
+                    success(),
+                    Some(false),
+                    Some(TRowSet::new(0, vec![], Some(vec![]), None, None)),
+                ));
+            }
+            let _: TCloseOperationReq = peer.read("CloseOperation");
+            peer.reply(TCloseOperationResp::new(success()));
+            let _: TCloseSessionReq = peer.read("CloseSession");
+            peer.reply(TCloseSessionResp::new(success()));
+        });
+        let worker = Worker::with_connector(
+            Arc::new(|| {}),
+            Arc::new(HiveConnector::default()),
+            Arc::new(|_| Ok(Secret::password("test-password"))),
+        );
+        let jobs = export::Jobs::default();
+        let download = worker
+            .run_and_export(
+                p,
+                "SELECT synthetic_empty".into(),
+                ExecutionId(204),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        loop {
+            match worker.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Event::Downloaded { spool, .. } => {
+                    assert!(has_results);
+                    assert_eq!(spool.status(), export::spool::Status::Complete { rows: 0 });
+                    break;
+                }
+                Event::Ready { .. } if !has_results => {
+                    assert!(
+                        download
+                            .wait_spool()
+                            .err()
+                            .unwrap()
+                            .to_string()
+                            .contains("without a result set")
+                    );
+                    break;
+                }
+                Event::Error { message, .. } | Event::DownloadFailed { message, .. } => {
+                    panic!("{message}")
+                }
+                _ => {}
+            }
+        }
+        worker.shutdown();
+        worker.wait_for_shutdown(Duration::from_secs(3));
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn run_export_cancel_interrupts_the_previous_profiles_session_close() {
+    use qrow::{
+        export,
+        logs::ExecutionId,
+        worker::{Event, Worker},
+    };
+    use std::{
+        sync::{Arc, atomic::AtomicBool, mpsc},
+        time::Instant,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let original = profile(listener.local_addr().unwrap().port());
+    let mut changed = original.clone();
+    changed.username = "different-account".into();
+    let (stalled, observed) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        let _: TExecuteStatementReq = peer.read("ExecuteStatement");
+        peer.reply(TExecuteStatementResp::new(
+            success(),
+            Some(operation(false)),
+        ));
+        let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+        peer.reply(status(TOperationState::FINISHED_STATE, false));
+        let _: TCloseOperationReq = peer.read("CloseOperation");
+        peer.reply(TCloseOperationResp::new(success()));
+        let _: TCloseSessionReq = peer.read("CloseSession");
+        stalled.send(()).unwrap();
+        let mut byte = [0];
+        assert_eq!(peer.socket.read(&mut byte).unwrap(), 0);
+    });
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(HiveConnector::default()),
+        Arc::new(|_| Ok(Secret::password("test-password"))),
+    );
+    worker.run(original, "SET previous_session".into());
+    while !matches!(
+        worker.events.recv_timeout(Duration::from_secs(3)).unwrap(),
+        Event::Ready { .. }
+    ) {}
+    let jobs = export::Jobs::default();
+    let download = worker
+        .run_and_export(
+            changed,
+            "SELECT must_not_execute".into(),
+            ExecutionId(203),
+            None,
+            &jobs,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    observed.recv_timeout(Duration::from_secs(3)).unwrap();
+    let started = Instant::now();
+    worker.cancel();
+    assert!(download.wait_spool().is_err());
+    assert!(jobs.cancel_and_wait(Duration::from_secs(2)));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    server.join().unwrap();
+}
+
+#[test]
+fn failed_collect_restoration_discards_the_session_without_submitting_user_sql() {
+    use qrow::{
+        export::Jobs,
+        logs::ExecutionId,
+        model::transfer::TransferPreset,
+        worker::{Event, Worker},
+    };
+    use std::sync::{Arc, atomic::AtomicBool};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut profile = profile(listener.local_addr().unwrap().port());
+    profile.transfer.preset = TransferPreset::Conservative;
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        configuration(&mut peer, "SET", Some("false"));
+        for value in ["true", "false"] {
+            let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(
+                request.statement,
+                format!("SET {}={value}", qrow::model::transfer::INCREMENTAL_KEY)
+            );
+            peer.reply(TExecuteStatementResp::new(
+                TStatus {
+                    status_code: TStatusCode::ERROR_STATUS,
+                    error_message: Some("Setting denied".into()),
+                    ..success()
+                },
+                None,
+            ));
+        }
+        drop(peer);
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+        assert_eq!(request.statement, "SELECT reconnect");
+        peer.reply(TExecuteStatementResp::new(
+            success(),
+            Some(operation(false)),
+        ));
+        let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+        peer.reply(status(TOperationState::FINISHED_STATE, false));
+        let _: TCloseOperationReq = peer.read("CloseOperation");
+        peer.reply(TCloseOperationResp::new(success()));
+        let _: TCloseSessionReq = peer.read("CloseSession");
+        peer.reply(TCloseSessionResp::new(success()));
+    });
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(HiveConnector::default()),
+        Arc::new(|_| Ok(Secret::password("test-password"))),
+    );
+    worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT must_not_run".into(),
+            ExecutionId(501),
+            None,
+            &Jobs::default(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    loop {
+        if let Event::DownloadFailed {
+            message,
+            disconnected,
+            ..
+        } = worker.events.recv_timeout(Duration::from_secs(10)).unwrap()
+        {
+            assert!(disconnected);
+            assert!(message.contains("could not be restored"));
+            break;
+        }
+    }
+    assert!(worker.session_generation(&profile).is_none());
+    worker.run(profile.clone(), "SELECT reconnect".into());
+    loop {
+        match worker.events.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Event::Ready { .. } => break,
+            Event::Error { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert!(worker.session_generation(&profile).is_some());
+    worker.shutdown();
     server.join().unwrap();
 }
