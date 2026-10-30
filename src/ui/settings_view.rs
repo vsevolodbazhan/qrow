@@ -902,7 +902,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 ))
                 .item(setting_item(
                     "SQL Keyword Case",
-                    "Keyword case for Format SQL and assistant SQL.",
+                    "Keyword case for formatted and assistant-generated SQL.",
                     &[
                         "editor",
                         "sql",

@@ -671,16 +671,19 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
     app.press(cx, "alt-cmd-l");
     app.wait_label(
         cx,
-        "Some SQL statements are not supported by the formatter. That text was kept.",
+        "Some SQL statements are not supported by the formatter.",
     );
     assert_eq!(app.saved().tabs[0].sql, "SET x=1");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("format-sql-notice").role(),
+            Some(gpui_kit::Role::Alert)
+        );
+    });
     app.type_sql(cx, "select ${hivevar:dt}");
     app.press(cx, "cmd-a");
     app.press(cx, "alt-cmd-l");
-    app.wait_label(
-        cx,
-        "Some SQL could not be formatted safely. That text was kept.",
-    );
+    app.wait_label(cx, "Some SQL could not be formatted safely.");
     assert_eq!(app.saved().tabs[0].sql, "select ${hivevar:dt}");
 }
 
@@ -702,10 +705,7 @@ fn format_sql_keeps_selections_inside_quoted_tokens(cx: &mut TestAppContext) {
             app.press(cx, "shift-right");
         }
         app.press(cx, "alt-cmd-l");
-        app.wait_label(
-            cx,
-            "Some SQL could not be formatted safely. That text was kept.",
-        );
+        app.wait_label(cx, "Some SQL could not be formatted safely.");
         assert_eq!(app.saved().tabs[0].sql, sql);
     }
 }
@@ -738,6 +738,49 @@ fn format_sql_uses_editor_style(cx: &mut TestAppContext) {
         "Move the cursor into a SQL statement or select SQL to format.",
     );
     assert_eq!(app.saved().tabs[0].sql, "select 1;\n\nselect 2;");
+}
+
+#[gpui_kit::test]
+fn format_real_trino_queries_and_undo(cx: &mut TestAppContext) {
+    let sql = include_str!("../fixtures/trino-format.sql");
+    let profile = Profile {
+        database_type: qrow::model::DatabaseType::Trino,
+        ..Profile::default()
+    };
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = sql.into();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(
+        cx,
+        "formatted Trino cost queries",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql.matches("SELECT").count() == 3,
+    );
+    let formatted = app.saved().tabs[0].sql.clone();
+    assert_eq!(formatted.matches("DATE'2026-10-").count(), 5);
+    assert!(formatted.contains("SUM(unused_cost_usd) / NULLIF("));
+    assert!(formatted.contains("\n\nSELECT"));
+    app.update(cx, |window, _| {
+        assert!(window.try_find("format-sql-notice").is_none())
+    });
+    app.press(cx, "cmd-z");
+    app.wait_until(
+        cx,
+        "undo Trino cost formatting",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == sql,
+    );
+    assert_eq!(app.credentials.reads(), 0);
 }
 
 #[gpui_kit::test]

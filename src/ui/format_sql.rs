@@ -61,11 +61,7 @@ impl Qrow {
             // A selection can begin inside a quoted token. Check the surrounding
             // document too, so formatting cannot change a literal or identifier.
             if !sql::same_tokens_for(&text, &formatted, database_type) {
-                format_notice(
-                    "Some SQL could not be formatted safely. That text was kept.",
-                    window,
-                    cx,
-                );
+                format_notice("Some SQL could not be formatted safely.", window, cx);
                 return;
             }
             editor.update(cx, |editor, cx| {
@@ -81,14 +77,10 @@ impl Qrow {
             });
         }
         if rejected {
-            format_notice(
-                "Some SQL could not be formatted safely. That text was kept.",
-                window,
-                cx,
-            );
+            format_notice("Some SQL could not be formatted safely.", window, cx);
         } else if unsupported {
             format_notice(
-                "Some SQL statements are not supported by the formatter. That text was kept.",
+                "Some SQL statements are not supported by the formatter.",
                 window,
                 cx,
             );
@@ -97,15 +89,16 @@ impl Qrow {
 }
 
 fn format_notice(message: &'static str, window: &mut Window, cx: &mut App) {
-    use gpui_kit::component::notification::Notification;
+    use gpui_kit::component::notification::{Notification, NotificationType};
     window.push_notification(
         Notification::new()
+            .with_type(NotificationType::Warning)
             .id::<FormatSql>()
             .content(move |_, _, _| {
                 div()
                     .id("format-sql-notice")
                     .test_support()
-                    .role(Role::Status)
+                    .role(Role::Alert)
                     .aria_label(message)
                     .text_sm()
                     .child(message)
@@ -133,7 +126,7 @@ pub(super) fn editor_menu(
                 .disabled(!(enabled && capabilities.has_definition())),
             MenuItem::action("Show Code Actions", ToggleCodeActions)
                 .disabled(!(editable && capabilities.has_code_actions())),
-            MenuItem::action("Format SQL", FormatSql).disabled(!editable),
+            MenuItem::action("Format", FormatSql).disabled(!editable),
             MenuItem::separator(),
             MenuItem::action("Cut", Cut).disabled(!(editable && capabilities.is_copyable())),
             MenuItem::action("Copy", Copy).disabled(!capabilities.is_copyable()),
@@ -190,7 +183,7 @@ mod tests {
                 [
                     "Go to Definition",
                     "Show Code Actions",
-                    "Format SQL",
+                    "Format",
                     "---",
                     "Cut",
                     "Copy",

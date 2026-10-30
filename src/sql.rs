@@ -368,9 +368,8 @@ pub fn format_statement_for(
 // recognize dollar quotes. Hide quoted tokens during layout, then restore
 // their exact text before the dialect-aware token check.
 fn format_layout(sql: &str, options: &FormatOptions<'_>, database_type: DatabaseType) -> String {
-    if database_type == DatabaseType::Kyuubi {
-        return sqlformat::format(sql, &QueryParams::None, options);
-    }
+    let normalized = normalize_layout_whitespace(sql, database_type);
+    let sql = normalized.as_str();
     let mut prefix = "__qrow_format_token_".to_string();
     while sql.contains(&prefix) {
         prefix.push('_');
@@ -378,16 +377,28 @@ fn format_layout(sql: &str, options: &FormatOptions<'_>, database_type: Database
     let mut protected = Vec::new();
     let mut masked = String::new();
     let mut end = 0;
-    for (mut range, kind) in tokens_for(sql, database_type) {
+    let tokens = tokens_for(sql, database_type);
+    for (i, (range, kind)) in tokens.iter().enumerate() {
+        let mut range = range.clone();
         if matches!(kind, Kind::String | Kind::Identifier) {
-            if database_type == DatabaseType::Postgres
+            // Keep adjacent literal prefixes with their string. Layout must not
+            // split DATE'…', X'…', or Postgres E'…' before the token check.
+            let adjacent_prefix = *kind == Kind::String
                 && sql[range.clone()].starts_with('\'')
-                && range.start > 0
-                && matches!(sql.as_bytes()[range.start - 1], b'E' | b'e')
-                && (range.start == 1
-                    || !sql[..range.start - 1].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
-            {
-                range.start -= 1;
+                && i.checked_sub(1).is_some_and(|i| {
+                    let (prefix_range, kind) = &tokens[i];
+                    let prefix = sql[prefix_range.clone()].to_ascii_lowercase();
+                    *kind == Kind::Plain
+                        && prefix_range.end == range.start
+                        && (LITERAL_PREFIXES.contains(&prefix.as_str())
+                            || matches!(prefix.as_str(), "e" | "x" | "b" | "n"))
+                });
+            if adjacent_prefix {
+                let prefix_range = &tokens[i - 1].0;
+                range.start = prefix_range.start;
+            }
+            if database_type == DatabaseType::Kyuubi && !adjacent_prefix {
+                continue;
             }
             let marker = format!("'{prefix}{}'", protected.len());
             masked.push_str(&sql[end..range.start]);
@@ -397,11 +408,35 @@ fn format_layout(sql: &str, options: &FormatOptions<'_>, database_type: Database
         }
     }
     masked.push_str(&sql[end..]);
-    let mut formatted = sqlformat::format(&masked, &QueryParams::None, options);
+    // Canonicalize keyword case before the final layout. sqlformat's BETWEEN
+    // state check is case-sensitive, so a single pass can change on the next run.
+    let canonical = sqlformat::format(&masked, &QueryParams::None, options);
+    let canonical = normalize_layout_whitespace(&canonical, database_type);
+    let mut formatted = sqlformat::format(&canonical, &QueryParams::None, options);
     for (marker, original) in protected {
         formatted = formatted.replace(&marker, original);
     }
     formatted
+}
+
+fn normalize_layout_whitespace(sql: &str, database_type: DatabaseType) -> String {
+    // sqlformat counts source whitespace when choosing inline layouts.
+    let mut normalized = String::new();
+    let mut after_line_comment = false;
+    for (range, kind) in tokens_for(sql, database_type) {
+        let token = &sql[range];
+        if token.trim().is_empty() {
+            normalized.push(if after_line_comment && token.contains(['\n', '\r']) {
+                '\n'
+            } else {
+                ' '
+            });
+        } else {
+            normalized.push_str(token);
+            after_line_comment = kind == Kind::Comment && token.starts_with("--");
+        }
+    }
+    normalized
 }
 
 /// Spark built-in functions, and `OVER`, that Qrow writes in the keyword case
@@ -666,6 +701,7 @@ const TYPES: &[&str] = &[
 /// Prefixes of typed literals, such as `DATE '2026-09-26'`.
 const LITERAL_PREFIXES: &[&str] = &[
     "date",
+    "time",
     "interval",
     "timestamp",
     "timestamp_ltz",
@@ -830,6 +866,65 @@ pub(crate) fn same_tokens_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn formats_real_trino_cost_queries() {
+        let sql = include_str!("../tests/fixtures/trino-format.sql");
+        let ranges = statement_ranges_for(sql, DatabaseType::Trino);
+        assert_eq!(ranges.len(), 3);
+        for range in ranges {
+            let original = &sql[range];
+            for keyword_case in [KeywordCase::Uppercase, KeywordCase::Lowercase] {
+                let style = SqlStyle {
+                    keyword_case,
+                    ..SqlStyle::default()
+                };
+                for mode in [FormatMode::Manual, FormatMode::Assistant] {
+                    let outcome = format_statement_for(original, style, mode, DatabaseType::Trino);
+                    let FormatOutcome::Formatted(formatted) = outcome else {
+                        panic!("Expected formatting, got {outcome:?}: {original}");
+                    };
+                    assert!(same_tokens_for(original, &formatted, DatabaseType::Trino));
+                    assert!(formatted.starts_with(match keyword_case {
+                        KeywordCase::Uppercase => "SELECT",
+                        KeywordCase::Lowercase => "select",
+                    }));
+                    assert_eq!(
+                        format_statement_for(&formatted, style, mode, DatabaseType::Trino),
+                        FormatOutcome::Unchanged,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn formatting_preserves_adjacent_typed_literal_prefixes() {
+        for database_type in [
+            DatabaseType::Kyuubi,
+            DatabaseType::Postgres,
+            DatabaseType::Trino,
+        ] {
+            for sql in [
+                "select date'2026-10-21'",
+                "select timestamp'2026-10-21 10:00:00'",
+                "select interval'2' day",
+                "select X'1F'",
+            ] {
+                let outcome = format_statement_for(
+                    sql,
+                    SqlStyle::default(),
+                    FormatMode::Manual,
+                    database_type,
+                );
+                let FormatOutcome::Formatted(formatted) = outcome else {
+                    panic!("{database_type:?}: {sql}: {outcome:?}");
+                };
+                assert!(same_tokens_for(sql, &formatted, database_type));
+                assert!(!formatted.contains(" '"), "{formatted}");
+            }
+        }
+    }
+
     #[test]
     fn single_statement_respects_literals_comments_and_unicode() {
         for sql in [

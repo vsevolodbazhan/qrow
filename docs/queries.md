@@ -175,7 +175,7 @@ session settings from earlier SQL statements.
 
 ## Format SQL
 
-Right-click in the SQL editor and choose **Format SQL**, or press **⌥⌘L**.
+Right-click in the SQL editor and choose **Format**, or press **⌥⌘L**.
 If you select text, the command formats each statement in that selection.
 Otherwise, it formats the statement at the cursor. Text between statements
 stays the same. Press **⌘Z** once to undo the command.
@@ -185,7 +185,7 @@ The command uses **Tab Size** and **SQL Keyword Case** from
 or open a connection. Formatting runs only when you request it.
 
 The formatter checks that SQL tokens stay the same. If the check fails,
-the command keeps that statement and shows a notice. Unsupported statements
+the command keeps that statement and shows a warning. Unsupported statements
 also stay the same. The command uses the quoting rules of the connection
 type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 

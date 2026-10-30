@@ -601,6 +601,56 @@ fn parallel_spooling_saves_all_rows_and_keeps_normal_queries_usable(cx: &mut Tes
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run trino"]
+fn format_real_cost_queries_and_execute(cx: &mut TestAppContext) {
+    let source = include_str!("../fixtures/trino-format.sql");
+    let source = source
+        .replace(
+            "sandbox_vbazhan.silver__dwh_meta__rivendell_models_cost_dedicated",
+            "costs",
+        )
+        .replace(
+            "sandbox_vbazhan.silver__dwh_meta__rivendell_pods_hourly_cost",
+            "costs",
+        );
+    let fixture = "with costs(model_reference, owner, team, application_id, total_cost_usd, used_cost_usd, unused_cost_usd, storage_cost_usd, iops_cost_usd, throughput_cost_usd, savings_plan_cost_usd, as_of) as (values ('model', 'owner', 'DE', 'application', 12, 6, 2, 1, 1, 1, 1, date'2026-10-22')) ";
+    let sql = qrow::sql::statement_ranges_for(&source, DatabaseType::Trino)
+        .into_iter()
+        .map(|range| format!("{fixture}{}", &source[range]))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let app = launch(cx, &sql);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(
+        cx,
+        "formatted cost queries",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql.matches("SELECT").count() == 3,
+    );
+    let formatted = app.saved().tabs[0].sql.clone();
+    app.press(cx, "cmd-z");
+    app.wait_until(
+        cx,
+        "format undo",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == sql,
+    );
+    for (i, range) in qrow::sql::statement_ranges_for(&formatted, DatabaseType::Trino)
+        .into_iter()
+        .enumerate()
+    {
+        app.run_complete(cx, &formatted[range]);
+        match i {
+            0 | 1 => app.wait_cell(cx, 0, 1, "model"),
+            2 => app.wait_cell(cx, 0, 2, "DE"),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
 fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
     let sql = r#"select '日本語😀; path\' as "Mixed Case""#;
     let app = launch(cx, sql);
