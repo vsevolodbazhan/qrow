@@ -629,6 +629,27 @@ fn confirmed_quit_cancels_an_export_before_waiting_for_cleanup(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn export_field_columns_use_the_dialog_inset_gap(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    open(&app, cx);
+    for (format, second) in [
+        ("CSV / TSV", "export-preset"),
+        ("Markdown", "export-markdown-style"),
+        ("JSON", "export-json-style"),
+        ("Parquet", "export-parquet-compression"),
+    ] {
+        app.select(cx, "export-format", format);
+        app.update(cx, |window, _| {
+            let first = window.find("export-format").bounds();
+            let second = window.find(second).bounds();
+            assert_eq!(first.top(), second.top());
+            assert!((second.left() - first.right() - window.rem_size()).abs() < gpui_kit::px(1.));
+        });
+    }
+    app.click(cx, "export-cancel");
+}
+
+#[gpui_kit::test]
 fn markdown_styles_row_numbers_and_saved_options(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);

@@ -7,7 +7,6 @@ pub(super) struct Intent {
     pub profile: Profile,
     pub sql: String,
     pub expected: Option<Uuid>,
-    pub warning: bool,
 }
 
 impl Qrow {
@@ -46,7 +45,6 @@ impl Qrow {
                 .and_then(|worker| worker.session_generation(&profile)),
             profile,
             sql,
-            warning: false,
         };
         let source = match if self.demo {
             let data = tab.table.read(cx).delegate();
@@ -101,9 +99,6 @@ impl Qrow {
             .as_ref()
             .and_then(|worker| worker.session_generation(&profile));
         Some(Intent {
-            warning: expected.is_none()
-                || expected != tab.result_session
-                || !original.connection_identity_eq(&profile),
             profile,
             sql: tab.submitted_sql.clone()?,
             expected,
@@ -289,7 +284,6 @@ impl ExportDialog {
                     .worker
                     .as_ref()
                     .and_then(|worker| worker.session_generation(&intent.profile));
-                intent.warning = intent.expected.is_none() || intent.expected != tab.result_session;
             }
         });
     }
@@ -305,7 +299,6 @@ impl ExportDialog {
                 .find(|tab| tab.saved.id == self.result.tab)
                 .and_then(|tab| tab.worker.as_ref())
                 .and_then(|worker| worker.session_generation(&intent.profile));
-            intent.warning = true;
         });
     }
 
@@ -352,11 +345,6 @@ impl ExportDialog {
         self.result.replay = None;
         self.retained = None;
         self.download = Some(download.clone());
-        if let Some(intent) = &mut self.run {
-            // The execution's actual generation is refreshed when a failed
-            // source requires a reviewed rerun.
-            intent.warning = false;
-        }
         Ok(download)
     }
 }

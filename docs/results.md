@@ -325,10 +325,11 @@ The grid keeps up to 100,000 rows and 64 MiB. You can navigate between its
 pages after the download. The spool and file receive all rows from the same
 fetch sequence. The preview is complete only when the whole result fits in it.
 
-If the original session ended or its connection changed, the form explains
-that its settings, temporary tables, and open transaction are gone. The form
-checks the session again after the save panel and browser sign-in. A change
-during that time stops submission. Choose **Copy** or **Save** again.
+If the original session ended or its connection changed, the export uses the
+current session. The original settings, temporary tables, and open transaction
+do not apply. The form checks the session again after the save panel and
+browser sign-in. A change during that time stops submission. Choose **Copy**
+or **Save** again.
 
 For Trino transfer modes and storage limits, see [Trino export spooling](connections.md#trino-export-spooling).
 
