@@ -269,9 +269,12 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     app.click(cx, "export-cancel");
     app.click(cx, "export-results");
     app.select(cx, "export-markdown-style", "Code block");
+    app.fill(cx, "export-cell-width", "4");
     let text = copy_query(cx, app);
     assert!(text.starts_with("```\n"));
     assert!(text.ends_with("```\n"));
+    assert!(text.contains("| a|b "), "{text}");
+    assert!(text.contains("| 123… |"), "{text}");
     assert_parquet(cx, app);
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
 }
