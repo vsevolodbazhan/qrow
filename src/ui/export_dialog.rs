@@ -1295,6 +1295,29 @@ mod tests {
     use super::{CopyRequest, copy_text};
     use gpui_kit::{ClipboardItem, Image, ImageFormat, TestAppContext};
 
+    /// Notifications slide in on the real clock, and a click renders between
+    /// the press and the release. Wait until `id` stops moving, so that the
+    /// press and the release land on it.
+    pub(super) fn wait_until_still(
+        window: &mut gpui_kit::Window,
+        id: gpui_kit::SharedString,
+        cx: &mut gpui_kit::App,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = None;
+        loop {
+            window.render_frame(cx);
+            let bounds = window.find(id.clone()).bounds();
+            if last == Some(bounds) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "{id} kept moving");
+            last = Some(bounds);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     #[gpui_kit::test]
     fn replay_publication_holds_the_profile_slot_and_retry_keeps_it_after_tab_close(
         cx: &mut TestAppContext,
@@ -1673,7 +1696,9 @@ mod tests {
         cx.update_window(window.into(), |_, window, cx| {
             window.render_frame(cx);
             let id = notice_id.unwrap();
-            window.click(SharedString::from(format!("export-stop-{id}")), cx);
+            let stop = SharedString::from(format!("export-stop-{id}"));
+            wait_until_still(window, stop.clone(), cx);
+            window.click(stop, cx);
             assert!(owner.upgrade().unwrap().read(cx).exports.is_empty());
         })
         .unwrap();

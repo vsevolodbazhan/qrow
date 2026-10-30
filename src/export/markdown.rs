@@ -20,6 +20,8 @@ pub struct Options {
     pub style: Style,
     pub max_cell_width: usize,
     pub row_numbers: bool,
+    /// On by default. Saved options from before this field stay compact.
+    #[serde(default)]
     pub pretty: bool,
 }
 impl Default for Options {
@@ -28,7 +30,7 @@ impl Default for Options {
             style: Style::Table,
             max_cell_width: 40,
             row_numbers: false,
-            pretty: false,
+            pretty: true,
         }
     }
 }
@@ -430,6 +432,7 @@ mod tests {
             &table,
             &Options {
                 row_numbers: true,
+                pretty: false,
                 ..Options::default()
             },
             &AtomicBool::new(false),
@@ -548,6 +551,7 @@ mod tests {
 
     #[test]
     fn old_markdown_settings_keep_compact_tables() {
+        assert!(Options::default().pretty);
         let options: Options =
             serde_json::from_str(r#"{"style":"Table","row_numbers":true}"#).unwrap();
         assert!(!options.pretty);

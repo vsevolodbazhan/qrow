@@ -634,8 +634,12 @@ fn markdown_styles_row_numbers_and_saved_options(cx: &mut TestAppContext) {
     select(&app, cx);
     open(&app, cx);
     app.select(cx, "export-format", "Markdown");
+    // Pretty output is on by default.
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("export-markdown-pretty").checked(), Some(true))
+    });
     let text = copy(&app, cx);
-    assert!(text.starts_with("| route | carrier | departures |"));
+    assert!(text.starts_with("| route     | carrier            | departures |"));
     assert_eq!(text.lines().count(), 2252);
     open(&app, cx);
     app.select(cx, "export-markdown-style", "Code block");
@@ -714,14 +718,18 @@ fn export_shows_only_controls_that_apply_to_the_selected_format(cx: &mut TestApp
     });
     app.select(cx, "export-format", "Markdown");
     app.wait_for(cx, "export-markdown-pretty");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("export-markdown-pretty").checked(), Some(true))
+    });
     app.click(cx, "export-markdown-pretty");
     app.select(cx, "export-markdown-style", "Code block");
     app.update(cx, |window, _| {
         assert!(window.try_find("export-markdown-pretty").is_none())
     });
+    // The cleared option stays cleared while the style changes.
     app.select(cx, "export-markdown-style", "Table");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("export-markdown-pretty").checked(), Some(true))
+        assert_eq!(window.find("export-markdown-pretty").checked(), Some(false))
     });
     app.click(cx, "export-cancel");
 }
@@ -747,7 +755,7 @@ fn large_markdown_requires_a_second_copy_and_preserves_the_clipboard_until_then(
             .unwrap()
             .text()
             .unwrap()
-            .starts_with("| route | carrier |")
+            .starts_with("| route     | carrier            |")
     );
 }
 
@@ -775,7 +783,7 @@ fn context_copy_as_markdown_and_json_include_column_names(cx: &mut TestAppContex
         );
         let text = cx.read_from_clipboard().unwrap().text().unwrap();
         if format == "Markdown" {
-            assert!(text.starts_with("| route | carrier | departures |\n"));
+            assert!(text.starts_with("| route     | carrier            | departures |\n"));
         } else {
             let json: serde_json::Value = serde_json::from_str(&text).unwrap();
             assert_eq!(json[0]["departures"], 3820);
@@ -814,7 +822,7 @@ fn context_large_markdown_confirms_with_enter_and_cancel_preserves_clipboard(
         app.wait_gone(cx, "markdown-copy-anyway");
         let text = cx.read_from_clipboard().unwrap().text().unwrap();
         if confirm {
-            assert!(text.starts_with("| route | carrier |"));
+            assert!(text.starts_with("| route     | carrier            |"));
             assert_eq!(text.lines().count(), 1002);
             assert!(text.chars().count() > 40_000);
         } else {

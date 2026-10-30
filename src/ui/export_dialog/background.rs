@@ -698,11 +698,9 @@ mod tests {
         cx.executor().advance_clock(Duration::from_millis(500));
         cx.run_until_parked();
         cx.update_window(window.into(), |_, window, cx| {
-            window.render_frame(cx);
-            window.click(
-                SharedString::from(format!("export-all-jobs-{}", last_id.unwrap())),
-                cx,
-            );
+            let all = SharedString::from(format!("export-all-jobs-{}", last_id.unwrap()));
+            super::super::tests::wait_until_still(window, all.clone(), cx);
+            window.click(all, cx);
             window.render_frame(cx);
         })
         .unwrap();
