@@ -474,9 +474,9 @@ fn column_tooltips_show_dbt_descriptions_and_database_comments(cx: &mut TestAppC
             let text = label(window, "catalog-tooltip").unwrap();
             let title = window.find("catalog-tooltip-title").bounds();
             let data_type = window.find("catalog-tooltip-type").bounds();
-            let tooltip = window.find("catalog-tooltip").bounds();
-            assert_eq!(data_type.right(), tooltip.right());
+            // The type follows the name, not the right edge of the tooltip.
             assert!(title.right() < data_type.left());
+            assert!(data_type.left() - title.right() <= gpui_kit::px(8.));
 
             if ix == 1 {
                 assert!(text.starts_with(expected), "{text}");
