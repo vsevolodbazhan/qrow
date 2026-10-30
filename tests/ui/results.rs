@@ -343,6 +343,14 @@ fn the_copy_format_setting_applies_to_command_c_and_the_menu_but_not_copy_as(
     app.select(cx, "setting-copy-format", "Plain text");
     app.click(cx, "save-settings");
     app.wait_gone(cx, "save-settings");
+    // A new result keeps the format.
+    app.press(cx, "cmd-enter");
+    app.wait_until(
+        cx,
+        "the new demo result",
+        Duration::from_secs(10),
+        |window, _| cell(window, 0, 1).is_some(),
+    );
 
     // ⌘C and the menu commands copy tab-separated values without names.
     click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());

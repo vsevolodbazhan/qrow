@@ -221,6 +221,7 @@ impl Results {
         *self = Self {
             ui_scale: self.ui_scale,
             export: self.export.clone(),
+            copy_format: self.copy_format,
             export_profile: self.export_profile,
             drag_task,
             ..Self::default()
@@ -325,23 +326,29 @@ impl Results {
     /// The plain text of a rectangle. One cell copies its value. A range
     /// copies tab-separated values without a header, which pastes into a
     /// spreadsheet as cells. Values with a tab, a line break, or a quote are
-    /// quoted, as spreadsheets expect.
-    pub fn plain_text(&self, selection: Selection) -> String {
+    /// quoted, as spreadsheets expect. The text has the clipboard limit of
+    /// the other formats.
+    pub fn plain_text(&self, selection: Selection) -> std::io::Result<String> {
+        use std::io::Write as _;
+        let mut out = crate::export::LimitedWriter::new(crate::export::CLIPBOARD_BYTES);
         if selection.is_cell() {
             let (row, column) = selection.focus;
-            return self.value(row, column).unwrap_or("NULL").to_owned();
+            out.write_all(self.value(row, column).unwrap_or("NULL").as_bytes())?;
+        } else {
+            for row in selection.rows() {
+                if row != *selection.rows().start() {
+                    out.write_all(b"\n")?;
+                }
+                for column in selection.columns() {
+                    if column != *selection.columns().start() {
+                        out.write_all(b"\t")?;
+                    }
+                    let value = tsv_field(self.value(row, column).unwrap_or("NULL"));
+                    out.write_all(value.as_bytes())?;
+                }
+            }
         }
-        let lines: Vec<String> = selection
-            .rows()
-            .map(|row| {
-                selection
-                    .columns()
-                    .map(|column| tsv_field(self.value(row, column).unwrap_or("NULL")))
-                    .collect::<Vec<_>>()
-                    .join("\t")
-            })
-            .collect();
-        lines.join("\n")
+        Ok(out.into_text()?.into_string())
     }
 
     /// The options of **Copy as** in `format`, or `None` for plain text.
@@ -397,7 +404,10 @@ impl Results {
     /// Copy `selection` in the copy format.
     fn clipboard_copy(&self, selection: Selection) -> ClipboardCopy {
         let Some(options) = self.copy_options() else {
-            return ClipboardCopy::Text(self.plain_text(selection));
+            return match self.plain_text(selection) {
+                Ok(text) => ClipboardCopy::Text(text),
+                Err(error) => ClipboardCopy::Failed(error.to_string()),
+            };
         };
         match crate::export::Snapshot::new(&self.columns, &self.rows) {
             Ok(source) => ClipboardCopy::Export {
@@ -1075,8 +1085,10 @@ mod tests {
             );
             assert_eq!(results.px(48.), px(72.));
 
+            results.copy_format = crate::model::CopyFormat::PlainText;
             results.clear();
             assert_eq!(results.ui_scale, 1.5);
+            assert_eq!(results.copy_format, crate::model::CopyFormat::PlainText);
             assert_eq!(results.pagination.page(), 0);
             assert!(results.rows.is_empty());
             assert!(results.empty_message.is_none());
@@ -1117,7 +1129,7 @@ mod tests {
             assert_eq!(selection.rows(), 1001..=1002);
             assert_eq!(selection.columns(), 0..=1);
             assert_eq!(
-                results.plain_text(results.selection.unwrap()),
+                results.plain_text(results.selection.unwrap()).unwrap(),
                 "a1001\tNULL\na1002\tb1002"
             );
 
@@ -1135,6 +1147,7 @@ mod tests {
             assert_eq!(
                 results
                     .plain_text(results.selection.unwrap())
+                    .unwrap()
                     .lines()
                     .count(),
                 250
@@ -1142,7 +1155,18 @@ mod tests {
 
             // One cell copies its raw value, and a null copies NULL.
             results.select_cell(1001, 1, false);
-            assert_eq!(results.plain_text(results.selection.unwrap()), "NULL");
+            assert_eq!(
+                results.plain_text(results.selection.unwrap()).unwrap(),
+                "NULL"
+            );
+
+            // Plain text has the clipboard limit.
+            results.rows = vec![vec![
+                Some("x".repeat(crate::export::CLIPBOARD_BYTES + 1)),
+                None,
+            ]]
+            .into();
+            assert!(results.plain_text(super::Selection::cell(0, 0)).is_err());
         });
     }
 
