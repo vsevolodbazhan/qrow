@@ -277,6 +277,8 @@ fn the_append_tool_writes_sql_and_undo_removes_it_in_one_step(cx: &mut TestAppCo
     app.press(cx, "cmd-down");
     app.update(cx, |window, cx| window.input("a", cx));
     app.wait_editor(cx, "SELECT 1a");
+    // The completion description and assistant messages occupy cached panes.
+    app.wait_for(cx, "completion-menu");
     app.press(cx, "cmd-z");
     app.wait_editor(cx, "SELECT 1");
     app.press(cx, "cmd-z");

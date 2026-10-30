@@ -15,6 +15,12 @@ Qrow changes these files:
   dismissal cancels an older task. Each accepted completion is one undo step.
   The input module re-exports the protocol types used by its provider API.
 
+- `src/text_selection.rs`: clearing an empty selection participant sends no
+  selection event or cleanup callback. Cached panes can skip the paint that
+  registers their text. Before, the frame sweep notified their empty text
+  views, so completion descriptions and assistant messages could repeatedly
+  invalidate each other's cached panes. The assistant append/undo UI test
+  checks completion while both panes are present.
 - `src/input/base/element.rs`: the active line paint now covers the editor's
   right padding.
 - `src/text/inline_flow.rs`: a Markdown line with inline code keeps one line at

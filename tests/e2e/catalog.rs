@@ -1059,7 +1059,7 @@ fn completion_refresh_loads_a_cold_shared_catalog_and_preserves_selection(cx: &m
     );
     setup.run_complete(
         cx,
-        &format!("CREATE TABLE {schema}.refunds (refund_amount BIGINT) USING parquet"),
+        &format!("CREATE TABLE {schema}.refunds (am_count BIGINT) USING parquet"),
     );
 
     let (mut workspace, credentials) = fixture.connections(&["First member", "Second member"], "");
@@ -1097,7 +1097,7 @@ fn completion_refresh_loads_a_cold_shared_catalog_and_preserves_selection(cx: &m
     assert_eq!(app.credentials.reads(), 0);
     app.press(cx, "down");
     app.click(cx, "completion-note-action");
-    app.wait_label(cx, "refund_amount");
+    app.wait_label(cx, "am_count");
     app.update(cx, |window, _| {
         assert!(
             crate::support::label(window, "completion-documentation")
@@ -1120,13 +1120,20 @@ fn completion_refresh_loads_a_cold_shared_catalog_and_preserves_selection(cx: &m
     });
     let reads = app.credentials.reads();
     app.click(cx, connection_row(second));
-    app.complete_sql(cx, &format!("select r.ref| from {schema}.refunds r"));
-    app.wait_label(cx, "refund_amount");
+    app.complete_sql(cx, &format!("select r.am_| from {schema}.refunds r"));
+    app.wait_label(cx, "am_count");
     assert_eq!(
         app.credentials.reads(),
         reads,
         "The second member uses cached completion without connecting"
     );
+    app.complete_sql(
+        cx,
+        &format!("select m.| from {schema}.completion_missing m"),
+    );
+    app.wait_for(cx, "completion-note-action");
+    app.click(cx, "completion-note-action");
+    app.wait_label(cx, &format!("{schema}.completion_missing was not found."));
 }
 
 #[gpui_kit::test]
@@ -1208,6 +1215,6 @@ fn completion_refresh_cancelled_after_menu_close_does_not_reopen_it(cx: &mut Tes
     app.update(cx, |window, _| {
         assert!(window.try_find("completion-menu").is_none())
     });
-    app.complete_sql(cx, sql);
+    app.dispatch(cx, qrow::ui::CompleteSql);
     app.wait_label(cx, "Catalog refresh was cancelled.");
 }
