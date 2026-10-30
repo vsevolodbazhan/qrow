@@ -62,14 +62,21 @@ fn left_edge(app: &TestApp, cx: &mut TestAppContext, id: &str) -> f32 {
 
 #[gpui_kit::test]
 fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppContext) {
+    let field = "setting-export-replay-limit";
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, OpenSettings);
     app.fill_labelled(cx, "Search...", "replay");
-    app.wait_for(cx, "setting-export-replay-limit");
-    assert_eq!(app.stepper(cx, "setting-export-replay-limit"), "2048");
-    for expected in ["1792", "1536", "1280", "1024", "768", "512", "256", "0"] {
-        app.step(cx, "setting-export-replay-limit", "decrement", expected);
-    }
+    app.wait_for(cx, field);
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, field).as_deref(), Some("2048"));
+        // The unit follows the value, as in the connection export fields.
+        let input = window.find(field);
+        let unit = window.find("setting-export-replay-limit-unit");
+        assert!(unit.visible());
+        assert!(unit.bounds().left() > input.bounds().left());
+        assert!(unit.bounds().left() - input.bounds().left() < window.rem_size() * 4.);
+    });
+    app.fill(cx, field, "0");
     app.click(cx, "save-settings");
     app.wait_gone(cx, "save-settings");
     wait_saved(&app, cx, "disabled replay retention", |workspace| {
@@ -77,12 +84,20 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
     });
     app.dispatch(cx, OpenSettings);
     app.fill_labelled(cx, "Search...", "replay");
-    app.wait_for(cx, "setting-export-replay-limit");
-    assert_eq!(app.stepper(cx, "setting-export-replay-limit"), "0");
-    app.step(cx, "setting-export-replay-limit", "increment", "256");
+    app.wait_for(cx, field);
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, field).as_deref(), Some("0"));
+    });
+    // Enter commits the value and clamps it to the maximum.
+    app.fill(cx, field, "2000000");
+    app.press(cx, "enter");
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, field).as_deref(), Some("1048576"));
+    });
+    app.fill(cx, field, "300");
     app.click(cx, "save-settings");
     wait_saved(&app, cx, "replay retention", |workspace| {
-        workspace.settings.export_replay_limit_mib == 256
+        workspace.settings.export_replay_limit_mib == 300
     });
 }
 
