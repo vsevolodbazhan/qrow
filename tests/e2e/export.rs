@@ -101,7 +101,6 @@ fn copy_downloads_all_rows_and_reuses_the_spool(cx: &mut TestAppContext) {
     app.wait_status(cx, "Preview: More rows available");
     app.click(cx, "export-results");
     app.select(cx, "export-format", "Markdown");
-    app.click(cx, "export-markdown-pretty");
     cx.write_to_clipboard(ClipboardItem::new_string("preserve this".into()));
     app.click(cx, "export-copy");
     app.wait_until(
@@ -251,11 +250,7 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     assert_eq!(json[0]["amount"].as_number().unwrap().to_string(), "123.45");
     app.click(cx, "export-results");
     app.select(cx, "export-format", "Markdown");
-    let text = copy_query(cx, app);
-    assert!(text.contains("a\\|b | NULL |  | 123.45 |"), "{text}");
-    assert_eq!(text.lines().count(), 3);
-    app.click(cx, "export-results");
-    app.click(cx, "export-markdown-pretty");
+    // Pretty output is on by default.
     let pretty = copy_query(cx, app);
     use unicode_width::UnicodeWidthStr as _;
     let widths: Vec<_> = pretty.lines().map(|line| line.width()).collect();
@@ -263,8 +258,13 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     assert!(widths.iter().all(|width| *width == widths[0]), "{pretty}");
     assert!(pretty.contains("a\\|b"));
     app.click(cx, "export-results");
+    app.click(cx, "export-markdown-pretty");
+    let text = copy_query(cx, app);
+    assert!(text.contains("a\\|b | NULL |  | 123.45 |"), "{text}");
+    assert_eq!(text.lines().count(), 3);
+    app.click(cx, "export-results");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("export-markdown-pretty").checked(), Some(true))
+        assert_eq!(window.find("export-markdown-pretty").checked(), Some(false))
     });
     app.click(cx, "export-cancel");
     app.click(cx, "export-results");
