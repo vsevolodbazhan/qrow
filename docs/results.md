@@ -187,11 +187,12 @@ sets that alignment in Markdown.
 The writer escapes pipes and backslashes. It changes line breaks to `<br>`.
 Null values use `NULL`. Empty strings stay empty.
 
-Enable **Pretty output** to align the pipes in the Markdown source.
+**Pretty output** aligns the pipes in the Markdown source.
 Each column uses the widest escaped value from the complete result.
 The writer adds spaces without shortening values. Tabs use `&#9;` so their
-source width is fixed. This option is off by default and stays saved after
-a successful export. It does not apply to **Code block**, which is always padded.
+source width is fixed. This option is on by default and stays saved after
+a successful export. A workspace that was saved before this default keeps
+its saved value. It does not apply to **Code block**, which is always padded.
 
 Choose **Code block** for a padded text table in a fence. Set **Maximum Cell
 Width** from 1 to 1000 display columns. Longer cells end with an ellipsis. Line
