@@ -184,8 +184,9 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
     });
     app.click(cx, "save-settings");
     app.wait_gone(cx, "save-settings");
-    let settings = app.saved().settings;
-    assert_eq!(settings.editor_font_size, 13.);
-    assert_eq!(settings.assistant_font_size, 14.);
-    assert_eq!(settings.editor_font_family, "Menlo");
+    wait_saved(&app, cx, "the restored default fonts", |w| {
+        w.settings.editor_font_size == 13.
+            && w.settings.assistant_font_size == 14.
+            && w.settings.editor_font_family == "Menlo"
+    });
 }
