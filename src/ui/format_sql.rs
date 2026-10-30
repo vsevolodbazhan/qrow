@@ -14,7 +14,7 @@ impl Qrow {
             return;
         };
         if self.tab_database_type(tab.saved.profile) != crate::model::DatabaseType::Kyuubi {
-            window.push_notification("Format SQL supports Spark SQL only.", cx);
+            format_notice("Format SQL supports Spark SQL only.", window, cx);
             return;
         }
         let editor = tab.input.clone();
@@ -26,8 +26,9 @@ impl Qrow {
             Some(selected.clone())
         };
         let Some(range) = range else {
-            window.push_notification(
+            format_notice(
                 "Move the cursor into a SQL statement or select SQL to format.",
+                window,
                 cx,
             );
             return;
@@ -59,8 +60,9 @@ impl Qrow {
             // A selection can begin inside a quoted token. Check the surrounding
             // document too, so formatting cannot change a literal or identifier.
             if !sql::same_tokens(&text, &formatted) {
-                window.push_notification(
+                format_notice(
                     "Some SQL could not be formatted safely. That text was kept.",
+                    window,
                     cx,
                 );
                 return;
@@ -78,15 +80,36 @@ impl Qrow {
             });
         }
         if rejected {
-            window.push_notification(
+            format_notice(
                 "Some SQL could not be formatted safely. That text was kept.",
+                window,
                 cx,
             );
         } else if unsupported {
-            window.push_notification(
+            format_notice(
                 "Some SQL statements are not supported by the formatter. That text was kept.",
+                window,
                 cx,
             );
         }
     }
+}
+
+fn format_notice(message: &'static str, window: &mut Window, cx: &mut App) {
+    use gpui_kit::component::notification::Notification;
+    window.push_notification(
+        Notification::new()
+            .id::<FormatSql>()
+            .content(move |_, _, _| {
+                div()
+                    .id("format-sql-notice")
+                    .test_support()
+                    .role(Role::Status)
+                    .aria_label(message)
+                    .text_sm()
+                    .child(message)
+                    .into_any_element()
+            }),
+        cx,
+    );
 }
