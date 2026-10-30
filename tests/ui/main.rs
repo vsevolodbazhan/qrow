@@ -17,6 +17,7 @@ mod dbt;
 #[path = "../support/dbt_manifest.rs"]
 mod dbt_manifest;
 mod dialogs;
+mod editor_menu;
 mod export;
 mod metadata;
 mod queries;

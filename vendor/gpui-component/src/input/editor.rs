@@ -1,3 +1,4 @@
+use gpui_base::input::InputContextMenuCapabilities;
 use std::rc::Rc;
 
 use gpui::{
@@ -30,7 +31,9 @@ pub struct Editor {
     /// An optional context menu builder to allow a custom context menu.
     ///
     /// If set, this overrides the built-in context menu.
-    context_menu_builder: Option<Rc<dyn Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu>>,
+    context_menu_builder: Option<
+        Rc<dyn Fn(NativeMenu, InputContextMenuCapabilities, &mut Window, &mut App) -> NativeMenu>,
+    >,
 
     paste_handler: Option<Rc<dyn Fn(&gpui::ClipboardItem, &mut Window, &mut App) -> bool>>,
 }
@@ -106,6 +109,19 @@ impl Editor {
         mut self,
         f: impl Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu + 'static,
     ) -> Self {
+        self.context_menu_builder = Some(Rc::new(move |menu, _, window, cx| f(menu, window, cx)));
+        self
+    }
+
+    /// Replace the context menu using the current input capabilities.
+    ///
+    /// The input is borrowed while this callback runs. Use the supplied
+    /// capabilities instead of reading the input entity from the callback.
+    pub fn context_menu_with_capabilities(
+        mut self,
+        f: impl Fn(NativeMenu, InputContextMenuCapabilities, &mut Window, &mut App) -> NativeMenu
+        + 'static,
+    ) -> Self {
         self.context_menu_builder = Some(Rc::new(f));
         self
     }
@@ -151,7 +167,9 @@ impl RenderOnce for Editor {
             .when_some(self.height, |this, height| this.h(height))
             .when_some(self.aria_label, |this, label| this.aria_label(label))
             .when_some(self.context_menu_builder, |this, build| {
-                this.context_menu(move |menu, window, cx| build(menu, window, cx))
+                this.context_menu_with_capabilities(move |menu, capabilities, window, cx| {
+                    build(menu, capabilities, window, cx)
+                })
             })
             .when_some(self.paste_handler, |this, handler| {
                 this.on_paste(move |item, window, cx| handler(item, window, cx))

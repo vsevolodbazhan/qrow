@@ -461,7 +461,15 @@ impl ToolBroker {
                 .first()
                 .map_or(0, |range| range.start),
         );
-        let formatted = sql::format_statement(statement, document.sql_style);
+        let formatted = match sql::format_statement_for(
+            statement,
+            document.sql_style,
+            sql::FormatMode::Assistant,
+            document.database_type,
+        ) {
+            sql::FormatOutcome::Formatted(text) => Some(text),
+            _ => None,
+        };
         let statement = formatted.as_deref().unwrap_or(statement);
 
         let mut sql = document.sql.to_owned();
@@ -795,7 +803,12 @@ fn format_replaced_statements(
             .rev()
             .filter(|range| start <= range.start && range.end <= end)
         {
-            if let Some(text) = sql::format_statement(&edited[range.clone()], style) {
+            if let sql::FormatOutcome::Formatted(text) = sql::format_statement_for(
+                &edited[range.clone()],
+                style,
+                sql::FormatMode::Assistant,
+                database_type,
+            ) {
                 edit.replacement
                     .replace_range(range.start - start..range.end - start, &text);
                 formatted = true;
