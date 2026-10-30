@@ -6,7 +6,7 @@ use gpui_kit::{
     ParentElement, Render, Styled, Task, TestAppContext, TestSupportExt as _, Window,
     component::{
         Root,
-        input::{CompletionProvider, Editor, EditorState, Rope},
+        input::{CompletionNote, CompletionProvider, Editor, EditorState, Rope},
     },
     div, px, size,
 };
@@ -15,6 +15,7 @@ use std::{cell::RefCell, rc::Rc};
 type Gates = Rc<RefCell<Vec<async_channel::Sender<Vec<lsp::CompletionItem>>>>>;
 struct Provider {
     gates: Gates,
+    note: Rc<RefCell<Option<CompletionNote>>>,
 }
 impl CompletionProvider for Provider {
     fn completions(
@@ -27,7 +28,15 @@ impl CompletionProvider for Provider {
     ) -> Task<anyhow::Result<lsp::CompletionResponse>> {
         let (send, receive) = async_channel::bounded(1);
         self.gates.borrow_mut().push(send);
-        cx.spawn(async move |_| Ok(lsp::CompletionResponse::Array(receive.recv().await?)))
+        let note = self.note.clone();
+        cx.spawn(async move |_| {
+            let items = receive.recv().await?;
+            *note.borrow_mut() = Some(CompletionNote::new("Asynchronous catalog note"));
+            Ok(lsp::CompletionResponse::Array(items))
+        })
+    }
+    fn completion_note(&self) -> Option<CompletionNote> {
+        self.note.borrow().clone()
     }
     fn is_completion_trigger(&self, _: usize, text: &str, _: &mut App) -> bool {
         text.chars().count() == 1 && text.chars().all(char::is_alphabetic)
@@ -60,6 +69,7 @@ fn launch(cx: &mut TestAppContext) -> Harness {
             let mut state = EditorState::new(window, cx).language("sql");
             state.lsp_mut().completion_provider = Some(Rc::new(Provider {
                 gates: gates.clone(),
+                note: Default::default(),
             }));
             state
         });
@@ -139,6 +149,19 @@ fn manual_presentation_invalidates_an_older_provider_response(cx: &mut TestAppCo
         let state = harness.editor.read(cx).completion_menu_state();
         assert!(state.open);
         assert_eq!(state.items[0].label, "active");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn asynchronous_empty_response_keeps_its_completion_note(cx: &mut TestAppContext) {
+    let harness = launch(cx);
+    harness.gates.borrow()[0].try_send(vec![]).unwrap();
+    cx.run_until_parked();
+    cx.update_window(harness.window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("completion-note").is_some());
+        assert!(harness.editor.read(cx).completion_menu_state().open);
     })
     .unwrap();
 }

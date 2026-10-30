@@ -274,3 +274,20 @@ fn mouse_acceptance_and_automatic_typing_keep_atomic_edits(cx: &mut TestAppConte
         |_, _| app.saved().tabs[0].sql == "select o.am from sales.orders o",
     );
 }
+
+#[gpui_kit::test]
+fn typing_and_enter_do_not_wait_for_or_accept_stale_suggestions(cx: &mut TestAppContext) {
+    let app = launch(cx, DatabaseType::Trino, true);
+    complete(&app, cx, "select o.am| from sales.orders o");
+    wait_item(&app, cx, "amount");
+    app.update(cx, |window, cx| {
+        window.input("o", cx);
+        window.press("enter", cx);
+    });
+    app.wait_until(
+        cx,
+        "newline during pending completion",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql.starts_with("select o.amo\n"),
+    );
+}

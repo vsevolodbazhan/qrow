@@ -175,7 +175,8 @@ session settings from earlier SQL statements.
 
 ## Autocomplete
 
-Type a name or a qualifier such as `orders.` to see suggestions. Press
+Type a name or a qualifier such as `orders.` to see suggestions after a
+brief pause. Typing does not wait for completion analysis. Press
 **Control-Space** to request suggestions at the cursor. Use the arrow keys to
 choose an item, **Return** to insert it, and **Escape** to close the menu.
 One **⌘Z** restores the text before insertion. macOS can reserve
@@ -239,6 +240,10 @@ an external language server process. SQL correctness checks and style lint
 are not available.
 
 ## Design
+
+Autocomplete prepares automatic suggestions and catalog indexes in background
+tasks. A new edit cancels the previous request. The editor rejects responses
+that no longer match its text, cursor, connection, or catalog snapshot.
 
 The [UI](../src/ui.rs) reads selected text through the native input handler.
 Native selection ranges use UTF-16 offsets. Rust string offsets use bytes.

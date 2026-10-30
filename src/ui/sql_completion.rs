@@ -2,7 +2,7 @@
 //! ask the catalog worker to refresh metadata.
 use super::*;
 use crate::{
-    catalog::{CatalogIdentity, RefreshOutcome, RefreshResult, Scope, catalog_key},
+    catalog::{Catalog, CatalogIdentity, RefreshOutcome, RefreshResult, Scope, catalog_key},
     model::DatabaseType,
     sql::analysis::{self, CatalogIndex, CompletionConfig, CompletionKind},
 };
@@ -10,9 +10,19 @@ use gpui_kit::base::input::lsp_types as lsp;
 use gpui_kit::component::input::{CompletionNote, CompletionProvider, Rope, RopeExt};
 use std::{cell::RefCell, rc::Rc};
 
+pub(super) type IndexJobs = HashMap<Uuid, (Arc<Catalog>, Task<()>)>;
+
+fn same_schemas(a: &Catalog, b: &Catalog) -> bool {
+    a.schemas.len() == b.schemas.len()
+        && a.schemas
+            .iter()
+            .zip(&b.schemas)
+            .all(|((a, old), (b, new))| a == b && Arc::ptr_eq(old, new))
+}
+
 #[derive(Clone, PartialEq)]
 struct Anchor {
-    sql: String,
+    sql: Rope,
     cursor: usize,
     context_revision: u64,
 }
@@ -32,10 +42,11 @@ struct SourceState {
     note: Option<CompletionNote>,
 }
 
+#[derive(Clone)]
 pub(super) struct Source {
     owner: WeakEntity<Qrow>,
     tab: Uuid,
-    state: RefCell<SourceState>,
+    state: Rc<RefCell<SourceState>>,
 }
 
 impl Source {
@@ -43,7 +54,7 @@ impl Source {
         Rc::new(Self {
             owner,
             tab,
-            state: RefCell::new(SourceState {
+            state: Rc::new(RefCell::new(SourceState {
                 enabled: true,
                 context_revision: 0,
                 dirty: false,
@@ -62,7 +73,7 @@ impl Source {
                 pending: None,
                 request: None,
                 note: None,
-            }),
+            })),
         })
     }
 
@@ -70,6 +81,7 @@ impl Source {
         &self,
         text: &Rope,
         cursor: usize,
+        prepared: Option<(analysis::CompletionBatch, Vec<lsp::CompletionItem>)>,
     ) -> (
         usize,
         String,
@@ -82,7 +94,7 @@ impl Source {
             return (cursor, String::new(), vec![], None);
         }
         let anchor = Anchor {
-            sql: text.to_string(),
+            sql: text.clone(),
             cursor,
             context_revision: state.context_revision,
         };
@@ -90,7 +102,11 @@ impl Source {
             state.pending = None;
         }
         state.request = Some(anchor.clone());
-        let batch = analysis::complete(&anchor.sql, cursor, &state.index, &state.config);
+        let (batch, items) = prepared.unwrap_or_else(|| {
+            let batch = analysis::complete(&text.to_string(), cursor, &state.index, &state.config);
+            let items = completion_items(text, &batch);
+            (batch, items)
+        });
         let note = batch.notes().first().map(|first| {
             let scope = first.refresh().cloned();
             let pending = state
@@ -139,34 +155,6 @@ impl Source {
                 note
             }
         });
-        let items = batch
-            .items()
-            .iter()
-            .map(|item| lsp::CompletionItem {
-                label: item.label().into(),
-                detail: item.detail().map(str::to_owned),
-                filter_text: Some(batch.prefix().into()),
-                kind: Some(match item.kind() {
-                    CompletionKind::Schema => lsp::CompletionItemKind::MODULE,
-                    CompletionKind::Relation => lsp::CompletionItemKind::CLASS,
-                    CompletionKind::Column => lsp::CompletionItemKind::FIELD,
-                    CompletionKind::Keyword => lsp::CompletionItemKind::KEYWORD,
-                    CompletionKind::Function => lsp::CompletionItemKind::FUNCTION,
-                }),
-                documentation: Some(lsp::Documentation::MarkupContent(lsp::MarkupContent {
-                    kind: lsp::MarkupKind::Markdown,
-                    value: escape_markdown(item.documentation()),
-                })),
-                text_edit: Some(lsp::CompletionTextEdit::Edit(lsp::TextEdit {
-                    range: lsp::Range::new(
-                        text.offset_to_position(item.replacement().start),
-                        text.offset_to_position(item.replacement().end),
-                    ),
-                    new_text: item.insert().into(),
-                })),
-                ..Default::default()
-            })
-            .collect();
         state.note = note.clone();
         (
             batch.replacement().start,
@@ -184,11 +172,41 @@ impl CompletionProvider for Source {
         offset: usize,
         _: lsp::CompletionContext,
         _: &mut Window,
-        _: &mut App,
+        cx: &mut App,
     ) -> Task<anyhow::Result<lsp::CompletionResponse>> {
-        Task::ready(Ok(lsp::CompletionResponse::Array(
-            self.response(text, offset).2,
-        )))
+        self.state.borrow_mut().note = None;
+        let source = self.clone();
+        let text = text.clone();
+        let (index, config, revision) = {
+            let state = self.state.borrow();
+            (
+                state.index.clone(),
+                state.config.clone(),
+                state.context_revision,
+            )
+        };
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |_| {
+            // Dropping the superseded provider task also cancels its debounce.
+            executor.timer(Duration::from_millis(80)).await;
+            let sql = text.clone();
+            let request_index = index.clone();
+            let batch = executor
+                .spawn(async move {
+                    let batch = analysis::complete(&sql.to_string(), offset, &index, &config);
+                    let items = completion_items(&sql, &batch);
+                    (batch, items)
+                })
+                .await;
+            if source.state.borrow().context_revision != revision
+                || !Arc::ptr_eq(&source.state.borrow().index, &request_index)
+            {
+                return Ok(lsp::CompletionResponse::Array(vec![]));
+            }
+            Ok(lsp::CompletionResponse::Array(
+                source.response(&text, offset, Some(batch)).2,
+            ))
+        })
     }
     fn completion_note(&self) -> Option<CompletionNote> {
         self.state.borrow().note.clone()
@@ -200,6 +218,38 @@ impl CompletionProvider for Source {
                 .chars()
                 .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '`' | '"' | ' '))
     }
+}
+
+fn completion_items(text: &Rope, batch: &analysis::CompletionBatch) -> Vec<lsp::CompletionItem> {
+    let replacement = lsp::Range::new(
+        text.offset_to_position(batch.replacement().start),
+        text.offset_to_position(batch.replacement().end),
+    );
+    batch
+        .items()
+        .iter()
+        .map(|item| lsp::CompletionItem {
+            label: item.label().into(),
+            detail: item.detail().map(str::to_owned),
+            filter_text: Some(batch.prefix().into()),
+            kind: Some(match item.kind() {
+                CompletionKind::Schema => lsp::CompletionItemKind::MODULE,
+                CompletionKind::Relation => lsp::CompletionItemKind::CLASS,
+                CompletionKind::Column => lsp::CompletionItemKind::FIELD,
+                CompletionKind::Keyword => lsp::CompletionItemKind::KEYWORD,
+                CompletionKind::Function => lsp::CompletionItemKind::FUNCTION,
+            }),
+            documentation: Some(lsp::Documentation::MarkupContent(lsp::MarkupContent {
+                kind: lsp::MarkupKind::Markdown,
+                value: escape_markdown(item.documentation()),
+            })),
+            text_edit: Some(lsp::CompletionTextEdit::Edit(lsp::TextEdit {
+                range: replacement,
+                new_text: item.insert().into(),
+            })),
+            ..Default::default()
+        })
+        .collect()
 }
 
 fn escape_markdown(text: &str) -> String {
@@ -224,7 +274,7 @@ impl Qrow {
         let editor = tab.input.clone();
         let text = Rope::from(editor.read(cx).value().as_str());
         let cursor = editor.read(cx).cursor();
-        let (start, prefix, items, note) = tab.completion.response(&text, cursor);
+        let (start, prefix, items, note) = tab.completion.response(&text, cursor, None);
         editor.update(cx, |editor, cx| {
             editor.present_completion_items_with_note(start, prefix, items, note, cx)
         });
@@ -248,7 +298,7 @@ impl Qrow {
             || tab.completion.state.borrow().context_revision != anchor.context_revision
             || !editor.completion_menu_state().open
             || editor.cursor() != anchor.cursor
-            || editor.value() != anchor.sql
+            || anchor.sql != editor.value().as_str()
         {
             return;
         }
@@ -287,14 +337,49 @@ impl Qrow {
             });
             used.insert(key);
             let snapshot = profile.and_then(|profile| self.catalog.completion_snapshot(profile.id));
-            if self
+            let indexed = self
                 .completion_indexes
                 .get(&key)
-                .is_none_or(|index| !index.matches_snapshot(snapshot.as_ref()))
-            {
-                let index =
-                    CatalogIndex::new(snapshot, self.completion_indexes.get(&key).map(Arc::as_ref));
-                self.completion_indexes.insert(key, Arc::new(index));
+                .is_some_and(|index| index.matches_snapshot(snapshot.as_ref()));
+            if indexed {
+                self.completion_index_jobs.remove(&key);
+            }
+            if !indexed {
+                if let Some(snapshot) = snapshot {
+                    let pending = self
+                        .completion_index_jobs
+                        .get(&key)
+                        .is_some_and(|(pending, _)| same_schemas(pending, &snapshot));
+                    if !pending {
+                        let previous = self.completion_indexes.get(&key).cloned();
+                        let input = snapshot.clone();
+                        let work = cx.background_executor().spawn(async move {
+                            CatalogIndex::new(Some(input), previous.as_deref())
+                        });
+                        let requested = snapshot.clone();
+                        let task = cx.spawn(async move |owner, cx| {
+                            let index = Arc::new(work.await);
+                            let _ =
+                                owner.update(cx, |this, cx| {
+                                    if !this.completion_index_jobs.get(&key).is_some_and(
+                                        |(pending, _)| same_schemas(pending, &requested),
+                                    ) {
+                                        return;
+                                    }
+                                    this.completion_index_jobs.remove(&key);
+                                    this.completion_indexes.insert(key, index);
+                                    this.sync_completions(cx);
+                                    cx.notify();
+                                });
+                        });
+                        self.completion_index_jobs.insert(key, (snapshot, task));
+                    }
+                    self.completion_indexes.entry(key).or_default();
+                } else {
+                    self.completion_index_jobs.remove(&key);
+                    self.completion_indexes
+                        .insert(key, Arc::new(CatalogIndex::default()));
+                }
             }
             let (kind, schema, catalog, filters) = profile.map_or_else(
                 || {
@@ -387,11 +472,13 @@ impl Qrow {
             {
                 continue;
             }
-            let (start, prefix, items, note) = tab.completion.response(&text, cursor);
+            let (start, prefix, items, note) = tab.completion.response(&text, cursor, None);
             tab.input.update(cx, |editor, cx| {
                 editor.present_completion_items_with_note(start, prefix, items, note, cx)
             });
         }
         self.completion_indexes.retain(|key, _| used.contains(key));
+        self.completion_index_jobs
+            .retain(|key, _| used.contains(key));
     }
 }

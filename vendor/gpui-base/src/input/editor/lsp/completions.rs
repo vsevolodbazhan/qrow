@@ -99,7 +99,7 @@ impl Default for CompletionMenuOptions {
 /// A trait for providing code completions based on the current input state and context.
 pub trait CompletionProvider {
     /// Supplemental information for the response returned by `completions`.
-    /// Capture this on the request thread before awaiting its task.
+    /// Read this on the request thread after its completion task resolves.
     fn completion_note(&self) -> Option<CompletionNote> {
         None
     }
@@ -243,9 +243,13 @@ impl InputBaseState<EditorMode> {
             trigger_character: Some(query),
         };
 
+        // The previous menu describes older text. While the new request is
+        // pending, let editor keys act normally instead of consuming a stale edit.
+        self.extras.context_menu_content.completion.open = false;
+        self.extras.context_menu_content.completion.note = None;
+        cx.notify();
         let provider_responses =
             provider.completions(&self.text, new_offset, completion_context, window, cx);
-        let note = provider.completion_note();
         self.extras.context_menu_content.completion.request_revision = self
             .extras
             .context_menu_content
@@ -263,6 +267,7 @@ impl InputBaseState<EditorMode> {
                 }
             }
 
+            let note = provider.completion_note();
             editor
                 .update_in(cx, |editor, window, cx| {
                     if !editor.focus_handle.is_focused(window)

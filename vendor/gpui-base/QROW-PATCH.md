@@ -13,7 +13,9 @@ Qrow changes these files:
   before the old anchor starts a new completion range. Responses must match
   the request generation, editor text, cursor, and focus. A manual request or
   dismissal cancels an older task. Each accepted completion is one undo step.
-  The input module re-exports the protocol types used by its provider API.
+  Pending requests close the previous menu so it cannot consume Enter with a
+  stale edit. Providers can prepare notes asynchronously; the editor reads the
+  note after the response resolves. The input module re-exports the protocol types used by its provider API.
 
 - `src/text_selection.rs`: clearing an empty selection participant sends no
   selection event or cleanup callback. Cached panes can skip the paint that

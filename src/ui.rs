@@ -567,6 +567,7 @@ pub struct Qrow {
     wake: async_channel::Sender<()>,
     catalog: catalog_tree::CatalogTree,
     completion_indexes: HashMap<Uuid, Arc<crate::sql::analysis::CatalogIndex>>,
+    completion_index_jobs: sql_completion::IndexJobs,
     _catalog_subscriptions: [Subscription; 2],
     /// The background work of each connection. It covers the main area of
     /// the window while it is open.
@@ -820,6 +821,7 @@ impl Qrow {
             wake,
             catalog,
             completion_indexes: HashMap::new(),
+            completion_index_jobs: HashMap::new(),
             _catalog_subscriptions: catalog_subscriptions,
             activity,
             _activity_events: activity_events,

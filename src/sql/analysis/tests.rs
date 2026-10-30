@@ -451,3 +451,66 @@ fn incremental_indexes_reuse_unchanged_relations_and_handle_large_catalogs() {
         "completion must stay interactive with 5,000 relations"
     );
 }
+
+#[test]
+fn status_only_catalog_publications_do_not_rebuild_the_name_index() {
+    let cache = Arc::new(catalog());
+    let index = CatalogIndex::new(Some(cache.clone()), None);
+    let mut publication = (*cache).clone();
+    publication.fetched_at = Some(42);
+    assert!(index.matches_snapshot(Some(&Arc::new(publication.clone()))));
+    Arc::make_mut(publication.schemas.get_mut("sales").unwrap()).error =
+        Some("Refresh failed".into());
+    assert!(!index.matches_snapshot(Some(&Arc::new(publication))));
+}
+
+#[test]
+fn indexed_lookup_keeps_postgres_quoted_names_distinct() {
+    let mut cache = catalog();
+    Arc::make_mut(cache.schemas.get_mut("sales").unwrap())
+        .relations
+        .as_mut()
+        .unwrap()
+        .insert("Orders".into(), relation(Some(vec![column("quoted_only")])));
+    let index = CatalogIndex::new(Some(Arc::new(cache)), None);
+    let plain = at(
+        "select o.am| from sales.orders o",
+        &index,
+        &config(DatabaseType::Postgres),
+    );
+    assert_eq!(plain.items[0].label(), "amount");
+    let quoted = at(
+        "select o.quo| from sales.\"Orders\" o",
+        &index,
+        &config(DatabaseType::Postgres),
+    );
+    assert_eq!(quoted.items[0].label(), "quoted_only");
+}
+
+#[test]
+fn qualified_lookup_stays_bounded_in_a_large_catalog() {
+    let mut cache = catalog();
+    let schema = Arc::make_mut(cache.schemas.get_mut("sales").unwrap());
+    for i in 0..50_000 {
+        schema
+            .relations
+            .as_mut()
+            .unwrap()
+            .insert(format!("table_{i:05}"), relation(Some(vec![column("id")])));
+    }
+    let index = CatalogIndex::new(Some(Arc::new(cache)), None);
+    let config = config(DatabaseType::Trino);
+    let started = Instant::now();
+    for _ in 0..100 {
+        let batch = at("select t.i| from sales.table_49999 t", &index, &config);
+        assert_eq!(batch.items[0].label(), "id");
+    }
+    eprintln!(
+        "100 qualified completions in 50k relations: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        started.elapsed().as_millis() < 100,
+        "Qualified completion must not scan the catalog"
+    );
+}

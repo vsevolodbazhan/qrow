@@ -87,20 +87,32 @@ fn one_megabyte_of_sql() -> Workspace {
 #[gpui_kit::test]
 #[ignore = "a performance probe: ./qtest run perf-ui"]
 fn editor_with_one_megabyte_of_sql(cx: &mut TestAppContext) {
-    let workspace = one_megabyte_of_sql();
-    let started = Instant::now();
-    let app = TestApp::launch_with(cx, workspace, MemoryCredentials::default());
-    report(
-        "ui.editor.open_1mb",
-        started.elapsed().as_secs_f64() * 1000.,
-        "ms",
-        1000.,
-    );
-
-    app.click(cx, "sql-editor");
-    app.press(cx, "cmd-down");
-    let samples = app.update(cx, |window, cx| sample(3, 20, || window.input("x", cx)));
-    report("ui.editor.keystroke_1mb", median_ms(&samples), "ms", 50.);
+    for autocomplete in [false, true] {
+        let mut workspace = one_megabyte_of_sql();
+        workspace.settings.autocomplete = autocomplete;
+        let started = Instant::now();
+        let app = TestApp::launch_with(cx, workspace, MemoryCredentials::default());
+        let suffix = if autocomplete {
+            ""
+        } else {
+            ".autocomplete_off"
+        };
+        report(
+            &format!("ui.editor.open_1mb{suffix}"),
+            started.elapsed().as_secs_f64() * 1000.,
+            "ms",
+            1000.,
+        );
+        app.click(cx, "sql-editor");
+        app.press(cx, "cmd-down");
+        let samples = app.update(cx, |window, cx| sample(3, 20, || window.input("x", cx)));
+        report(
+            &format!("ui.editor.keystroke_1mb{suffix}"),
+            median_ms(&samples),
+            "ms",
+            50.,
+        );
+    }
 }
 
 #[gpui_kit::test]

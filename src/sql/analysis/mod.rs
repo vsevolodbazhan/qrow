@@ -161,6 +161,7 @@ struct IndexedRelation {
 pub struct CatalogIndex {
     catalog: Option<Arc<Catalog>>,
     relations: BTreeMap<(String, String), Arc<IndexedRelation>>,
+    folded_relations: BTreeMap<(String, String), Arc<IndexedRelation>>,
 }
 
 impl CatalogIndex {
@@ -196,13 +197,31 @@ impl CatalogIndex {
                 }
             }
         }
-        Self { catalog, relations }
+        let mut folded_relations = BTreeMap::new();
+        for entry in relations.values() {
+            folded_relations
+                .entry((entry.schema.to_lowercase(), entry.folded.clone()))
+                .or_insert_with(|| entry.clone());
+        }
+        Self {
+            catalog,
+            relations,
+            folded_relations,
+        }
     }
 
     pub fn matches_snapshot(&self, catalog: Option<&Arc<Catalog>>) -> bool {
         match (self.catalog.as_ref(), catalog) {
             (None, None) => true,
-            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+            (Some(old), Some(new)) => {
+                Arc::ptr_eq(old, new)
+                    || old.schemas.len() == new.schemas.len()
+                        && old
+                            .schemas
+                            .iter()
+                            .zip(&new.schemas)
+                            .all(|((a, old), (b, new))| a == b && Arc::ptr_eq(old, new))
+            }
             _ => false,
         }
     }
@@ -353,6 +372,7 @@ impl CompletionBatch {
 }
 
 struct Builder<'a> {
+    prefix: String,
     context: Context,
     index: &'a CatalogIndex,
     config: &'a CompletionConfig,
@@ -369,6 +389,7 @@ pub fn complete(
         return CompletionBatch::default();
     };
     let mut builder = Builder {
+        prefix: context.prefix.to_lowercase(),
         batch: CompletionBatch {
             prefix: context.prefix.clone(),
             replacement: context.replacement.clone(),
@@ -424,8 +445,7 @@ impl<'a> Builder<'a> {
             CompletionKind::Keyword => 2,
             _ => 1,
         };
-        let prefix = self.context.prefix.to_lowercase();
-        let Some((tier, score)) = match_rank(&prefix, match_name) else {
+        let Some((tier, score)) = match_rank(&self.prefix, match_name) else {
             return;
         };
         self.batch.items.push(Candidate {
@@ -594,10 +614,26 @@ impl<'a> Builder<'a> {
                 None,
             );
         }
+        let visible = self
+            .index
+            .catalog
+            .as_ref()
+            .map(|catalog| {
+                catalog
+                    .schemas
+                    .keys()
+                    .filter(|name| self.config.filters.shows(name))
+                    .map(String::as_str)
+                    .collect::<std::collections::HashSet<_>>()
+            })
+            .unwrap_or_default();
         for entry in self.index.relations.values() {
-            if !self.config.filters.shows(&entry.schema)
+            if !visible.contains(entry.schema.as_str())
                 || schema.is_some_and(|schema| schema != entry.schema)
             {
+                continue;
+            }
+            if match_rank(&self.prefix, &entry.folded).is_none() {
                 continue;
             }
             let insert =
@@ -676,17 +712,38 @@ impl<'a> Builder<'a> {
         {
             return None;
         }
-        self.index
-            .relations
-            .values()
-            .find(|entry| {
-                self.config.matches(relation, &entry.name)
-                    && schema.map_or_else(
-                        || entry.schema.eq_ignore_ascii_case(&self.config.schema),
-                        |name| self.config.matches(name, &entry.schema),
-                    )
-            })
-            .map(Arc::as_ref)
+        if self.config.dialect != DatabaseType::Postgres {
+            let schema = schema.map_or(self.config.schema.as_str(), |name| name.text.as_str());
+            return self
+                .index
+                .folded_relations
+                .get(&(schema.to_lowercase(), relation.text.to_lowercase()))
+                .map(Arc::as_ref);
+        }
+        let name = if relation.quoted {
+            relation.text.clone()
+        } else {
+            relation.text.to_lowercase()
+        };
+        let schema = match schema {
+            Some(schema) if schema.quoted => schema.text.clone(),
+            Some(schema) => schema.text.to_lowercase(),
+            None => self
+                .index
+                .catalog
+                .as_ref()?
+                .schemas
+                .keys()
+                .find(|schema| {
+                    schema.eq_ignore_ascii_case(&self.config.schema)
+                        && self
+                            .index
+                            .relations
+                            .contains_key(&(schema.to_string(), name.clone()))
+                })?
+                .clone(),
+        };
+        self.index.relations.get(&(schema, name)).map(Arc::as_ref)
     }
 
     fn columns(
@@ -807,6 +864,9 @@ impl<'a> Builder<'a> {
             return;
         }
         for column in &entry.columns {
+            if match_rank(&self.prefix, &column.folded).is_none() {
+                continue;
+            }
             let data = &entry.relation.columns.as_ref().unwrap()[column.position];
             let name = &data.name;
             let ambiguous =
