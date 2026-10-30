@@ -122,6 +122,34 @@ impl Status {
 pub enum Event {
     Catalog(Arc<Catalog>),
     Status(Status),
+    Refreshed(RefreshResult),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    Complete,
+    Failed(String),
+    Cancelled,
+}
+
+/// The actual outcome of one explicit or automatic catalog refresh.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshResult {
+    member: Uuid,
+    scope: Scope,
+    outcome: RefreshOutcome,
+}
+
+impl RefreshResult {
+    pub fn member(&self) -> Uuid {
+        self.member
+    }
+    pub fn scope(&self) -> &Scope {
+        &self.scope
+    }
+    pub fn outcome(&self) -> &RefreshOutcome {
+        &self.outcome
+    }
 }
 
 /// A catalog that a new shared catalog starts with: the private catalog of
@@ -223,6 +251,7 @@ impl CatalogWorker {
             batch: 0,
             profile: config.members.first().cloned().unwrap_or_default(),
             failures: 0,
+            last_failure: None,
             wake,
             live: BTreeSet::new(),
             minute,
@@ -408,6 +437,7 @@ struct Runner {
     profile: Profile,
     /// The nodes that the refresh in progress could not read.
     failures: usize,
+    last_failure: Option<String>,
     wake: Arc<dyn Fn() + Send + Sync>,
     /// The members that have a tab with a live session.
     live: BTreeSet<Uuid>,
@@ -549,6 +579,7 @@ impl Runner {
                 self.interrupted = false;
                 self.publish(true);
                 self.failures = 0;
+                self.last_failure = None;
                 let started = Instant::now();
                 let timeout = self.config.settings.timeout_minutes;
                 let deadline = started + self.minute * timeout;
@@ -605,16 +636,28 @@ impl Runner {
                     Severity::Info
                 };
                 let member = self.profile.id;
+                let refresh_outcome = match &result {
+                    Ok(()) if self.failures == 0 => RefreshOutcome::Complete,
+                    Ok(()) => {
+                        RefreshOutcome::Failed(self.last_failure.clone().unwrap_or_else(|| {
+                            format!("Refresh completed with {} errors", self.failures)
+                        }))
+                    }
+                    Err(Interrupt::Unavailable(message)) => RefreshOutcome::Failed(message.clone()),
+                    Err(Interrupt::TimedOut) => RefreshOutcome::Failed(format!(
+                        "Refresh stopped after {}",
+                        format_minutes(timeout)
+                    )),
+                    _ => RefreshOutcome::Cancelled,
+                };
                 let close_session =
                     matches!(result, Err(Interrupt::Unavailable(_) | Interrupt::TimedOut));
                 match result {
                     Ok(()) => {}
                     // The `Cancel` command can arrive after the flag stops the
                     // request. It also clears the queue, so do it here.
-                    Err(Interrupt::Cancelled) if cancelled_all => self.queue.clear(),
-                    Err(Interrupt::Cancelled) => {
-                        self.queue.retain(|queued| queued.member != member)
-                    }
+                    Err(Interrupt::Cancelled) if cancelled_all => self.cancel_queued(None),
+                    Err(Interrupt::Cancelled) => self.cancel_queued(Some(member)),
                     Err(Interrupt::Stopped) => break 'commands,
                     Err(Interrupt::Unavailable(message)) => {
                         // The other refreshes of the member would fail in the
@@ -628,6 +671,11 @@ impl Runner {
                             self.update(|catalog| {
                                 catalog.set_error(&queued.scope, message.clone(), member)
                             });
+                            let _ = self.tx.send(Event::Refreshed(RefreshResult {
+                                member: queued.member,
+                                scope: queued.scope,
+                                outcome: RefreshOutcome::Failed(message.clone()),
+                            }));
                         }
                     }
                     Err(Interrupt::TimedOut) => {
@@ -641,6 +689,12 @@ impl Runner {
                     ..Status::default()
                 };
                 self.publish(true);
+                let _ = self.tx.send(Event::Refreshed(RefreshResult {
+                    member,
+                    scope: scope.clone(),
+                    outcome: refresh_outcome,
+                }));
+                (self.wake)();
                 // Activity can mark the outcome read as soon as it arrives.
                 // Send the failure snapshot first so that acknowledgement
                 // also includes every error produced by this refresh.
@@ -767,8 +821,9 @@ impl Runner {
             Command::Cancel(None) => {
                 self.cancelled.store(0, Ordering::SeqCst);
                 self.interrupted = true;
-                self.queue.clear();
+                self.cancel_queued(None);
                 self.status.queued.clear();
+                self.publish(true);
             }
             Command::Cancel(Some(member)) => {
                 let active = self.status.active.is_some();
@@ -781,7 +836,7 @@ impl Runner {
                 if active && self.profile.id == member {
                     self.interrupted = true;
                 }
-                self.queue.retain(|queued| queued.member != member);
+                self.cancel_queued(Some(member));
                 self.status.queued = self.queue.iter().cloned().collect();
                 self.publish(true);
             }
@@ -1137,8 +1192,25 @@ impl Runner {
     /// Record an error on the node of `scope`. The refresh reports it at its end.
     fn fail(&mut self, scope: &Scope, message: String) {
         self.failures += 1;
+        self.last_failure = Some(message.clone());
         let member = self.profile.id;
         self.update(|catalog| catalog.set_error(scope, message, member));
+    }
+
+    fn cancel_queued(&mut self, member: Option<Uuid>) {
+        let queued = std::mem::take(&mut self.queue);
+        for request in queued {
+            if member.is_none_or(|member| member == request.member) {
+                let _ = self.tx.send(Event::Refreshed(RefreshResult {
+                    member: request.member,
+                    scope: request.scope,
+                    outcome: RefreshOutcome::Cancelled,
+                }));
+            } else {
+                self.queue.push_back(request);
+            }
+        }
+        (self.wake)();
     }
 
     /// Read all rows of a catalog request. An outer error stops the refresh;

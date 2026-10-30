@@ -706,6 +706,7 @@ fn catalog_reads_exact_schemas_relations_and_columns() -> Result<()> {
                 .context("Timed out waiting for the catalog worker")?
             {
                 catalog::Event::Catalog(catalog) => latest = Some(catalog),
+                catalog::Event::Refreshed(_) => {}
                 catalog::Event::Status(status) => {
                     started |= status.includes(&scope);
                     if started && status == Status::default() {

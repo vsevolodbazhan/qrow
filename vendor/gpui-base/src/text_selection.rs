@@ -662,9 +662,14 @@ impl SelectableTextState {
     }
 
     fn clear_state(&mut self, cx: &mut Context<Self>) -> Option<ClearHandler> {
-        self.snapshot = None;
+        let had_selection = self.snapshot.take().is_some() || self.local_selection;
         self.projected_copy_text = None;
         self.local_selection = false;
+        // Cached views can skip participant registration during a repaint.
+        // Clearing an already empty participant must not invalidate its view.
+        if !had_selection {
+            return None;
+        }
         cx.emit(TextSelectionEvent::Cleared);
         cx.emit(TextSelectionEvent::SelectionChanged(None));
         self.clear.clone()

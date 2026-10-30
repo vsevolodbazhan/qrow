@@ -174,6 +174,10 @@ struct SlowRefresh {
 
 impl SlowRefresh {
     fn new(server_port: u16) -> Self {
+        Self::delay_connection(server_port, 2)
+    }
+
+    fn delay_connection(server_port: u16, delayed: usize) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         listener.set_nonblocking(true).unwrap();
@@ -190,7 +194,7 @@ impl SlowRefresh {
                     Ok((mut client, _)) => {
                         client.set_nonblocking(false).unwrap();
                         connections += 1;
-                        let delay = connections == 2;
+                        let delay = connections == delayed;
                         let release = release.clone();
                         sessions.fetch_add(1, Ordering::SeqCst);
                         let sessions = sessions.clone();
@@ -976,4 +980,241 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
     app.wait_until(cx, "the seeded columns", QUERY_TIMEOUT, |window, _| {
         labelled(window, "cached_id bigint").is_some()
     });
+}
+
+fn completion_cache(
+    directory: &tempfile::TempDir,
+    profile: &qrow::model::Profile,
+    owner: uuid::Uuid,
+    shared: bool,
+    schema: &str,
+    tables: bool,
+    orders_loaded: bool,
+) {
+    let mut cache = if shared {
+        Catalog::empty(owner, None)
+    } else {
+        Catalog::new(profile)
+    };
+    cache.apply_schemas(
+        vec![schema.into()],
+        &CatalogSettings {
+            refresh: CatalogRefresh::Manual,
+            ..CatalogSettings::default()
+        },
+        1,
+    );
+    if tables {
+        cache.apply_relations(
+            schema,
+            None,
+            ["orders", "refunds"]
+                .into_iter()
+                .map(|name| RelationEntry {
+                    name: name.into(),
+                    kind: RelationKind::Table,
+                    comment: None,
+                })
+                .collect(),
+            1,
+        );
+    }
+    if orders_loaded {
+        cache.apply_columns(
+            schema,
+            Some("orders"),
+            std::collections::BTreeMap::from([(
+                "orders".into(),
+                ["amount", "amount_eur"]
+                    .into_iter()
+                    .map(|name| CatalogColumn {
+                        name: name.into(),
+                        data_type: "BIGINT".into(),
+                        comment: None,
+                    })
+                    .collect(),
+            )]),
+            1,
+        );
+    }
+    storage::save_catalog(
+        &storage::catalog_path(&directory.path().join("workspace.json"), owner),
+        &cache,
+    )
+    .unwrap();
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn completion_refresh_loads_a_cold_shared_catalog_and_preserves_selection(cx: &mut TestAppContext) {
+    let fixture = Kyuubi::get();
+    let schema = format!("qrow_completion_{}", uuid::Uuid::new_v4().simple());
+    let (mut setup, credentials) = fixture.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    setup.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+    let setup = TestApp::launch_with(cx, setup, credentials);
+    setup.run_complete(cx, &format!("CREATE DATABASE {schema}"));
+    setup.run_complete(
+        cx,
+        &format!("CREATE TABLE {schema}.orders (amount BIGINT, amount_eur BIGINT) USING parquet"),
+    );
+    setup.run_complete(
+        cx,
+        &format!("CREATE TABLE {schema}.refunds (am_count BIGINT) USING parquet"),
+    );
+
+    let (mut workspace, credentials) = fixture.connections(&["First member", "Second member"], "");
+    let shared = uuid::Uuid::new_v4();
+    for profile in &mut workspace.profiles {
+        profile.catalog.refresh = CatalogRefresh::Manual;
+        profile.shared_catalog = Some(shared);
+    }
+    workspace.shared_catalogs.push(SharedCatalog {
+        id: shared,
+        name: "Completion shared cache".into(),
+        settings: CatalogSettings {
+            refresh: CatalogRefresh::Manual,
+            include: vec![schema.clone()],
+            ..CatalogSettings::default()
+        },
+        preferred: None,
+    });
+    let second = workspace.profiles[1].id;
+    let directory = tempfile::tempdir().unwrap();
+    completion_cache(
+        &directory,
+        &workspace.profiles[0],
+        shared,
+        true,
+        &schema,
+        true,
+        true,
+    );
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    let sql = format!("select am| from {schema}.orders o join {schema}.refunds r on true");
+    app.complete_sql(cx, &sql);
+    app.wait_label(cx, "amount");
+    app.wait_label(cx, &format!("Columns of {schema}.refunds are not loaded."));
+    assert_eq!(app.credentials.reads(), 0);
+    app.press(cx, "down");
+    app.click(cx, "completion-note-action");
+    app.wait_label(cx, "am_count");
+    app.update(cx, |window, _| {
+        assert!(
+            crate::support::label(window, "completion-documentation")
+                .is_some_and(|text| text.contains("amount\\_eur"))
+        );
+        assert!(window.try_find("completion-note").is_none());
+    });
+    assert_eq!(app.credentials.reads(), 1);
+    app.press(cx, "enter");
+    let expected = sql.replace("am|", "`amount_eur`");
+    app.wait_until(cx, "selected completion", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == expected
+    });
+    app.press(cx, "cmd-enter");
+    app.wait_status(cx, "Complete");
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-z");
+    app.wait_until(cx, "completion undo", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == sql.replace('|', "")
+    });
+    let reads = app.credentials.reads();
+    app.click(cx, connection_row(second));
+    app.complete_sql(cx, &format!("select r.am_| from {schema}.refunds r"));
+    app.wait_label(cx, "am_count");
+    assert_eq!(
+        app.credentials.reads(),
+        reads,
+        "The second member uses cached completion without connecting"
+    );
+    app.complete_sql(
+        cx,
+        &format!("select m.| from {schema}.completion_missing m"),
+    );
+    app.wait_for(cx, "completion-note-action");
+    app.click(cx, "completion-note-action");
+    app.wait_label(cx, &format!("{schema}.completion_missing was not found."));
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn completion_refresh_reports_unknown_table_and_schema_authentication_failures(
+    cx: &mut TestAppContext,
+) {
+    for tables_loaded in [false, true] {
+        let (mut workspace, credentials) = Kyuubi::get().workspace("", "not-the-password");
+        workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+        let directory = tempfile::tempdir().unwrap();
+        completion_cache(
+            &directory,
+            &workspace.profiles[0],
+            workspace.profiles[0].id,
+            false,
+            "default",
+            tables_loaded,
+            false,
+        );
+        let app = TestApp::launch_in(cx, directory, workspace, credentials);
+        app.complete_sql(cx, "select m.| from default.completion_missing m");
+        app.wait_for(cx, "completion-note-action");
+        assert_eq!(app.credentials.reads(), 0);
+        app.click(cx, "completion-note-action");
+        app.wait_until(
+            cx,
+            "catalog authentication failure",
+            QUERY_TIMEOUT,
+            |window, _| {
+                crate::support::label(window, "completion-note").is_some_and(|text| {
+                    text.starts_with("Catalog refresh failed.") && text.contains("SASL")
+                })
+            },
+        );
+        assert_eq!(app.credentials.reads(), 1);
+    }
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn completion_refresh_cancelled_after_menu_close_does_not_reopen_it(cx: &mut TestAppContext) {
+    let (mut workspace, credentials) =
+        Kyuubi::get().workspace("", crate::support::fixture::PASSWORD);
+    let proxy = SlowRefresh::delay_connection(workspace.profiles[0].port, 1);
+    workspace.profiles[0].port = proxy.port;
+    workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+    let profile = workspace.profiles[0].id;
+    let directory = tempfile::tempdir().unwrap();
+    completion_cache(
+        &directory,
+        &workspace.profiles[0],
+        profile,
+        false,
+        "default",
+        true,
+        false,
+    );
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    let sql = "select m.| from default.completion_missing m";
+    app.complete_sql(cx, sql);
+    app.wait_for(cx, "completion-note-action");
+    app.click(cx, "completion-note-action");
+    app.wait_until(
+        cx,
+        "refresh authentication in progress",
+        QUERY_TIMEOUT,
+        |_, _| proxy.active.load(Ordering::SeqCst) > 0,
+    );
+    app.press(cx, "escape");
+    app.wait_gone(cx, "completion-menu");
+    app.context_menu(cx, connection_row(profile));
+    app.choose(cx, "popup-menu", "Stop refresh");
+    // Let authentication return so the worker can observe the cancellation.
+    proxy.released.store(true, Ordering::SeqCst);
+    app.wait_until(cx, "cancelled refresh connection", QUERY_TIMEOUT, |_, _| {
+        proxy.active.load(Ordering::SeqCst) == 0
+    });
+    app.update(cx, |window, _| {
+        assert!(window.try_find("completion-menu").is_none())
+    });
+    app.dispatch(cx, qrow::ui::CompleteSql);
+    app.wait_label(cx, "Catalog refresh was cancelled.");
 }

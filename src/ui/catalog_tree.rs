@@ -188,6 +188,8 @@ struct CatalogConnection {
     live: HashSet<Uuid>,
     /// How many times the worker reported that it has no refresh.
     idle_reports: u64,
+    completion_revision: u64,
+    completion_results: Vec<(u64, crate::catalog::RefreshResult)>,
 }
 
 pub(super) struct CatalogTree {
@@ -268,6 +270,34 @@ impl CatalogTree {
 
     pub(super) fn catalog(&self, profile: Uuid) -> Option<&Catalog> {
         self.connection(profile)?.catalog.as_deref()
+    }
+
+    pub(super) fn completion_snapshot(&self, profile: Uuid) -> Option<Arc<Catalog>> {
+        self.connection(profile)?.catalog.clone()
+    }
+
+    pub(super) fn has_completion_source(&self, profile: Uuid) -> bool {
+        self.connection(profile).is_some()
+    }
+
+    pub(super) fn completion_status(&self, profile: Uuid) -> Status {
+        self.connection(profile)
+            .map(|connection| connection.status.clone())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn completion_results(
+        &self,
+        profile: Uuid,
+    ) -> (u64, Vec<(u64, crate::catalog::RefreshResult)>) {
+        self.connection(profile)
+            .map(|connection| {
+                (
+                    connection.completion_revision,
+                    connection.completion_results.clone(),
+                )
+            })
+            .unwrap_or_default()
     }
 
     /// How many times the catalog worker of `profile` reported that it has no
@@ -1011,6 +1041,16 @@ impl Qrow {
                 match event {
                     CatalogEvent::Catalog(catalog) => connection.catalog = Some(catalog),
                     CatalogEvent::Status(status) => statuses.push((*key, status)),
+                    CatalogEvent::Refreshed(result) => {
+                        connection.completion_revision =
+                            connection.completion_revision.wrapping_add(1);
+                        connection
+                            .completion_results
+                            .push((connection.completion_revision, result));
+                        if connection.completion_results.len() > 32 {
+                            connection.completion_results.remove(0);
+                        }
+                    }
                 }
             }
         }
@@ -1024,6 +1064,7 @@ impl Qrow {
         }
         if changed {
             self.rebuild_catalog_tree(cx);
+            self.sync_completions(cx);
         }
         changed
     }

@@ -94,10 +94,12 @@ pub(crate) use language_config::LanguageConfig;
 pub use language_config::{AutoClosingPair, BracketPair, IndentationRules};
 pub use lsp::{
     CodeActionItem, CodeActionMenuState, CodeActionProvider, CompletionMenuOptions,
-    CompletionMenuState, CompletionProvider, DefinitionProvider, DocumentColorProvider,
-    DocumentRangeSemanticTokensProvider, HoverPopoverState, HoverProvider, InputOverlayKind, Lsp,
-    ShowDocumentHandler,
+    CompletionMenuState, CompletionNote, CompletionProvider, DefinitionProvider,
+    DocumentColorProvider, DocumentRangeSemanticTokensProvider, HoverPopoverState, HoverProvider,
+    InputOverlayKind, Lsp, ShowDocumentHandler,
 };
+/// Protocol types used by editor providers, without an extra application dependency.
+pub use lsp_types;
 pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;
 #[cfg(target_os = "macos")]

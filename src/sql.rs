@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use sqlformat::{Dialect, FormatOptions, Indent, QueryParams};
 use std::ops::Range;
 
+pub mod analysis;
+
 /// The letter case of SQL keywords in formatted SQL.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

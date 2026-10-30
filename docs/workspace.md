@@ -12,8 +12,10 @@ has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant have
 to controls and results. Editor also has **Tab Size**, the number of spaces for
 each indent level. The default is 2. The Tab key and SQL that Qrow formats for
 the assistant and **Format** use this size. The editor indents with spaces. **SQL Keyword
-Case** is the last Editor setting. It applies to **Format** and SQL that
-the [assistant](assistant.md) writes.
+Case** applies to **Format**, completion suggestions, and SQL that
+the [assistant](assistant.md) writes. **Autocomplete** enables
+[SQL suggestions](queries.md#autocomplete) from the catalog cache. It is on
+by default.
 Editor settings apply to SQL. Logs settings apply to log entries.
 Assistant settings apply to conversation messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the

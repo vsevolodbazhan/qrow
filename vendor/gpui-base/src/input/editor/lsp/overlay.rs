@@ -10,10 +10,18 @@ pub struct CompletionMenuState {
     pub trigger_start_offset: Option<usize>,
     pub query: String,
     pub items: Vec<CompletionItem>,
+    pub(super) note: Option<super::CompletionNote>,
+    pub(super) request_revision: u64,
     revision: u64,
 }
 
 impl CompletionMenuState {
+    pub fn request_revision(&self) -> u64 {
+        self.request_revision
+    }
+    pub fn note(&self) -> Option<&super::CompletionNote> {
+        self.note.as_ref()
+    }
     /// Bumped whenever the content changes.
     ///
     /// A renderer that mirrors this menu compares revisions to decide whether
@@ -71,14 +79,35 @@ impl InputBaseState<EditorMode> {
         items: Vec<CompletionItem>,
         cx: &mut Context<Self>,
     ) {
+        self.present_completion_items_with_note(trigger_start_offset, query, items, None, cx);
+    }
+
+    /// Present candidates and a nonselectable note, including a note-only menu.
+    pub fn present_completion_items_with_note(
+        &mut self,
+        trigger_start_offset: usize,
+        query: impl Into<String>,
+        items: Vec<CompletionItem>,
+        note: Option<super::CompletionNote>,
+        cx: &mut Context<Self>,
+    ) {
+        self.extras.context_menu_task = Task::ready(Ok(()));
+        self.extras.context_menu_content.completion.request_revision = self
+            .extras
+            .context_menu_content
+            .completion
+            .request_revision
+            .wrapping_add(1);
         self.extras
             .context_menu_content
             .completion
             .trigger_start_offset = Some(trigger_start_offset);
         self.extras.context_menu_content.completion.query = query.into();
         self.extras.context_menu_content.completion.items = items;
+        self.extras.context_menu_content.completion.note = note;
         self.extras.context_menu_content.completion.open =
-            !self.extras.context_menu_content.completion.items.is_empty();
+            self.extras.context_menu_content.completion.note.is_some()
+                || !self.extras.context_menu_content.completion.items.is_empty();
         self.extras.context_menu_content.completion.bump();
         cx.notify();
     }
@@ -150,8 +179,20 @@ impl InputBaseState<EditorMode> {
     }
 
     pub fn dismiss_completion_overlay(&mut self, cx: &mut Context<Self>) {
+        self.extras.context_menu_task = Task::ready(Ok(()));
+        self.extras.context_menu_content.completion.request_revision = self
+            .extras
+            .context_menu_content
+            .completion
+            .request_revision
+            .wrapping_add(1);
         if self.extras.context_menu_content.completion.open {
             self.extras.context_menu_content.completion.open = false;
+            self.extras
+                .context_menu_content
+                .completion
+                .trigger_start_offset = None;
+            self.extras.context_menu_content.completion.note = None;
             cx.notify();
         }
     }
@@ -170,6 +211,9 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.is_editable() {
+            return;
+        }
         let mut range = fallback_range;
         let mut new_text = item.label.clone();
         if let Some(edit) = item.text_edit.as_ref() {
@@ -190,9 +234,12 @@ impl InputBaseState<EditorMode> {
             range = range.end..range.end;
         }
         self.completion_inserting = true;
+        self.undo_manager
+            .set_pending_intent(crate::input::undo_manager::EditIntent::Atomic);
         let range = self.range_to_utf16(&range);
         self.replace_text_in_range_silent(Some(range), &new_text, window, cx);
         self.completion_inserting = false;
+        self.undo_manager.break_transaction_coalescing();
         self.focus(window, cx);
     }
 

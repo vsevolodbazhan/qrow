@@ -23,4 +23,6 @@ mod metadata;
 mod queries;
 mod results;
 mod sign_ins;
+mod sql_completion;
+mod sql_completion_races;
 mod tabs;
