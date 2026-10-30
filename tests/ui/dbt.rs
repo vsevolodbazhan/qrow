@@ -359,6 +359,15 @@ fn launch_project(
     bytes: &[u8],
     refresh: DbtRefresh,
 ) -> (TestApp, PathBuf, uuid::Uuid) {
+    launch_project_with_columns(cx, bytes, refresh, vec![])
+}
+
+fn launch_project_with_columns(
+    cx: &mut TestAppContext,
+    bytes: &[u8],
+    refresh: DbtRefresh,
+    columns: Vec<qrow::catalog::CatalogColumn>,
+) -> (TestApp, PathBuf, uuid::Uuid) {
     let directory = tempfile::tempdir().unwrap();
     let manifest = project(&directory, bytes);
     let mut profile = offline_profile("Lake");
@@ -372,6 +381,19 @@ fn launch_project(
         }],
     });
     cache(&directory, &profile);
+    if !columns.is_empty() {
+        let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+        let mut catalog = storage::load_catalog(&path).unwrap();
+        let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
+        let alias = dbt_manifest::model_alias(1);
+        catalog.apply_columns(
+            &schema,
+            Some(&alias),
+            std::collections::BTreeMap::from([(alias.clone(), columns)]),
+            1,
+        );
+        storage::save_catalog(&path, &catalog).unwrap();
+    }
     let saved = directory.path().join("dbt");
     let id = profile.id;
     let app = launch(cx, directory, profile);
@@ -394,6 +416,96 @@ fn show_model_table(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid) -> S
         crate::support::labelled(window, &alias).is_some()
     });
     alias
+}
+
+#[gpui_kit::test]
+fn column_tooltips_show_dbt_descriptions_and_database_comments(cx: &mut TestAppContext) {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&dbt_manifest::generate(&shape())).unwrap();
+    let descriptions = [
+        ("id", "A **booking** identifier.".to_owned()),
+        ("col_001", "The `cost` of a booking. ".repeat(40)),
+        ("col_002", "Same description".to_owned()),
+    ];
+    for (name, description) in &descriptions {
+        value["nodes"][dbt_manifest::model_id(1)]["columns"][name]["description"] =
+            description.clone().into();
+    }
+    let columns = [
+        ("ID", None),
+        ("col_001", Some("Database comment")),
+        ("col_002", Some("Same description")),
+        ("unmatched", Some("Only a database comment")),
+        ("empty", None),
+    ]
+    .into_iter()
+    .map(|(name, comment)| qrow::catalog::CatalogColumn {
+        name: name.into(),
+        data_type: "BIGINT".into(),
+        comment: comment.map(str::to_owned),
+    })
+    .collect();
+    let (app, _, id) = launch_project_with_columns(
+        cx,
+        &serde_json::to_vec(&value).unwrap(),
+        DbtRefresh::Manual,
+        columns,
+    );
+    let alias = show_model_table(&app, cx, id);
+    app.click_labelled(cx, &alias);
+    let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
+    for (ix, name, expected) in [
+        (0, "ID", "ID bigint\nA **booking** identifier."),
+        (
+            1,
+            "col_001",
+            "col_001 bigint\nDatabase comment\nThe `cost` of a booking.",
+        ),
+        (2, "col_002", "col_002 bigint\nSame description"),
+        (3, "unmatched", "unmatched bigint\nOnly a database comment"),
+    ] {
+        let row =
+            format!("r\u{1f}{id}\u{1f}{schema}\u{1f}{alias}\u{1f}{ix}\u{1f}{name}\u{1f}label");
+        app.wait_for(cx, row.clone());
+        app.hover(cx, row);
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            let text = label(window, "catalog-tooltip").unwrap();
+            let title = window.find("catalog-tooltip-title").bounds();
+            let data_type = window.find("catalog-tooltip-type").bounds();
+            let tooltip = window.find("catalog-tooltip").bounds();
+            assert_eq!(data_type.right(), tooltip.right());
+            assert!(title.right() < data_type.left());
+
+            if ix == 1 {
+                assert!(text.starts_with(expected), "{text}");
+                assert!(
+                    text.ends_with("…\nOpen dbt details to see the full description."),
+                    "{text}"
+                );
+                assert!(crate::support::present(
+                    window,
+                    &"catalog-tooltip-description".into()
+                ));
+            } else {
+                assert_eq!(text, expected);
+                assert!(!crate::support::present(
+                    window,
+                    &"catalog-tooltip-hint".into()
+                ));
+            }
+        });
+    }
+    app.hover(
+        cx,
+        format!("r\u{1f}{id}\u{1f}{schema}\u{1f}{alias}\u{1f}4\u{1f}empty\u{1f}label"),
+    );
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(label(window, "catalog-tooltip").is_none())
+    });
 }
 
 #[gpui_kit::test]

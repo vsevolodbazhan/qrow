@@ -668,6 +668,13 @@ of the dbt description, cut to a few lines. The tooltip shows the Markdown of
 the description, for example code and bold text. A cut description has a
 small note below it that tells you to open the dbt details.
 
+Column tooltips show the column name at the left and the muted data type
+at the right. Below the heading, the tooltip shows the dbt column
+description with the same Markdown format and length limit. A database
+comment comes before the dbt description. If both have the same text, the
+tooltip shows the text once. Column names use the same letter case rules as
+relation names. Ambiguous matches show no dbt description.
+
 To read the full description, right-click the table and select **Show dbt
 details**. A panel opens at the right side of the window. It shows:
 
