@@ -627,15 +627,48 @@ impl<'a> Builder<'a> {
                     .collect::<std::collections::HashSet<_>>()
             })
             .unwrap_or_default();
-        for entry in self.index.relations.values() {
-            if !visible.contains(entry.schema.as_str())
-                || schema.is_some_and(|schema| schema != entry.schema)
-            {
-                continue;
-            }
-            if match_rank(&self.prefix, &entry.folded).is_none() {
-                continue;
-            }
+        // Rank borrowed names first; comments and quoted edits can be large.
+        let mut candidates: Vec<_> = self
+            .index
+            .relations
+            .values()
+            .filter_map(|entry| {
+                if !visible.contains(entry.schema.as_str())
+                    || schema.is_some_and(|schema| schema != entry.schema)
+                {
+                    return None;
+                }
+                let (tier, score) = match_rank(&self.prefix, &entry.folded)?;
+                let priority = usize::from(
+                    entry.schema != "CTE"
+                        && !entry.schema.eq_ignore_ascii_case(&self.config.schema),
+                );
+                Some(((priority, tier, score), entry.as_ref()))
+            })
+            .collect();
+        let compare = |a: &((usize, usize, usize), &IndexedRelation),
+                       b: &((usize, usize, usize), &IndexedRelation)| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.name.cmp(&b.1.name))
+                .then_with(|| {
+                    a.1.schema
+                        .bytes()
+                        .chain(std::iter::once(b'.'))
+                        .chain(a.1.name.bytes())
+                        .cmp(
+                            b.1.schema
+                                .bytes()
+                                .chain(std::iter::once(b'.'))
+                                .chain(b.1.name.bytes()),
+                        )
+                })
+        };
+        if candidates.len() > MAX_ITEMS {
+            candidates.select_nth_unstable_by(MAX_ITEMS, compare);
+            candidates.truncate(MAX_ITEMS);
+        }
+        candidates.sort_unstable_by(compare);
+        for (_, entry) in candidates {
             let insert =
                 if schema.is_some() || entry.schema.eq_ignore_ascii_case(&self.config.schema) {
                     self.config.identifier(&entry.name, self.context.quoted)

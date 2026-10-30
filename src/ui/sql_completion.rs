@@ -177,35 +177,38 @@ impl CompletionProvider for Source {
         self.state.borrow_mut().note = None;
         let source = self.clone();
         let text = text.clone();
-        let (index, config, revision) = {
-            let state = self.state.borrow();
-            (
-                state.index.clone(),
-                state.config.clone(),
-                state.context_revision,
-            )
-        };
+        let revision = self.state.borrow().context_revision;
         let executor = cx.background_executor().clone();
         cx.spawn(async move |_| {
             // Dropping the superseded provider task also cancels its debounce.
             executor.timer(Duration::from_millis(80)).await;
-            let sql = text.clone();
-            let request_index = index.clone();
-            let batch = executor
-                .spawn(async move {
-                    let batch = analysis::complete(&sql.to_string(), offset, &index, &config);
-                    let items = completion_items(&sql, &batch);
-                    (batch, items)
-                })
-                .await;
-            if source.state.borrow().context_revision != revision
-                || !Arc::ptr_eq(&source.state.borrow().index, &request_index)
-            {
-                return Ok(lsp::CompletionResponse::Array(vec![]));
+            loop {
+                let (index, config) = {
+                    let state = source.state.borrow();
+                    if state.context_revision != revision {
+                        return Ok(lsp::CompletionResponse::Array(vec![]));
+                    }
+                    (state.index.clone(), state.config.clone())
+                };
+                let sql = text.clone();
+                let request_index = index.clone();
+                let batch = executor
+                    .spawn(async move {
+                        let batch = analysis::complete(&sql.to_string(), offset, &index, &config);
+                        let items = completion_items(&sql, &batch);
+                        (batch, items)
+                    })
+                    .await;
+                if source.state.borrow().context_revision != revision {
+                    return Ok(lsp::CompletionResponse::Array(vec![]));
+                }
+                if !Arc::ptr_eq(&source.state.borrow().index, &request_index) {
+                    continue;
+                }
+                return Ok(lsp::CompletionResponse::Array(
+                    source.response(&text, offset, Some(batch)).2,
+                ));
             }
-            Ok(lsp::CompletionResponse::Array(
-                source.response(&text, offset, Some(batch)).2,
-            ))
         })
     }
     fn completion_note(&self) -> Option<CompletionNote> {

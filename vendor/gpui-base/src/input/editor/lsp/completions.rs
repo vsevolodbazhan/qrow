@@ -1,6 +1,6 @@
 use crate::input::EditorMode;
 use anyhow::Result;
-use gpui::{App, Context, EntityInputHandler, Pixels, Task, Window, px};
+use gpui::{App, Context, Pixels, Task, Window, px};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionResponse, InlineCompletionContext,
     InlineCompletionItem, InlineCompletionResponse, InlineCompletionTriggerKind,
@@ -219,15 +219,14 @@ impl InputBaseState<EditorMode> {
             .filter(|start| *start <= new_offset)
             .unwrap_or(range.start.min(new_offset));
 
+        // Both offsets are already UTF-8 bytes. Converting through the
+        // platform UTF-16 input API needlessly scans the document prefix.
         let query = self
-            .text_for_range(
-                self.range_to_utf16(&(start_offset..new_offset)),
-                &mut None,
-                window,
-                cx,
-            )
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
+            .text
+            .slice(start_offset..new_offset)
+            .to_string()
+            .trim()
+            .to_string();
         self.extras
             .context_menu_content
             .completion

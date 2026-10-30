@@ -514,3 +514,35 @@ fn qualified_lookup_stays_bounded_in_a_large_catalog() {
         "Qualified completion must not scan the catalog"
     );
 }
+
+#[test]
+fn bounded_table_ranking_keeps_full_descriptions_and_qualified_tie_order() {
+    let mut cache = catalog();
+    let comment = "Long catalog description. ".repeat(1000);
+    for schema in ["a", "a-"] {
+        let mut tables = BTreeMap::new();
+        for n in 0..200 {
+            let mut table = relation(None);
+            Arc::make_mut(&mut table).comment = Some(comment.clone());
+            tables.insert(format!("item{n:04}"), table);
+        }
+        cache.schemas.insert(
+            schema.into(),
+            Arc::new(Schema {
+                relations: Some(tables),
+                ..Schema::default()
+            }),
+        );
+    }
+    let index = CatalogIndex::new(Some(Arc::new(cache)), None);
+    let batch = at("select * from it|", &index, &config(DatabaseType::Trino));
+    assert_eq!(batch.items.len(), 100);
+    for (n, pair) in batch.items.chunks_exact(2).enumerate() {
+        assert_eq!(pair[0].insert(), format!("\"a-\".\"item{n:04}\""));
+        assert_eq!(pair[1].insert(), format!("\"a\".\"item{n:04}\""));
+        assert!(
+            pair.iter()
+                .all(|item| item.documentation().ends_with(&comment))
+        );
+    }
+}
