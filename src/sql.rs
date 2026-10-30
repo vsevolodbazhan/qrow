@@ -270,7 +270,30 @@ pub fn validate_single_for(
 /// spaces, or returns `None` to keep it as written. The result changes only
 /// whitespace where Spark SQL ignores it and the letter case of keywords.
 pub fn format_statement(sql: &str, style: SqlStyle) -> Option<String> {
-    const MIN_CHARS: usize = 80;
+    match format_statement_with_mode(sql, style, FormatMode::Assistant) {
+        FormatOutcome::Formatted(text) => Some(text),
+        _ => None,
+    }
+}
+
+/// Formatting initiated by the user has no minimum statement length.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormatMode {
+    Assistant,
+    Manual,
+}
+
+/// Why formatting changed or kept the input.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FormatOutcome {
+    Formatted(String),
+    TooShort,
+    Unsupported,
+    Unchanged,
+    Rejected,
+}
+
+pub fn format_statement_with_mode(sql: &str, style: SqlStyle, mode: FormatMode) -> FormatOutcome {
     const FORMATTABLE: [&str; 10] = [
         "SELECT", "WITH", "FROM", "VALUES", "INSERT", "CREATE", "EXPLAIN", "MERGE", "UPDATE",
         "DELETE",
@@ -280,12 +303,14 @@ pub fn format_statement(sql: &str, style: SqlStyle) -> Option<String> {
         .iter()
         .map(|t| t.text.chars().count() + usize::from(t.space_before))
         .sum();
-    if chars <= MIN_CHARS {
-        return None;
+    if mode == FormatMode::Assistant && chars <= 80 {
+        return FormatOutcome::TooShort;
     }
-    let first = tokens.into_iter().find(|t| t.kind != Kind::Comment)?;
+    let Some(first) = tokens.into_iter().find(|t| t.kind != Kind::Comment) else {
+        return FormatOutcome::Unsupported;
+    };
     if !FORMATTABLE.contains(&first.text.to_ascii_uppercase().as_str()) {
-        return None;
+        return FormatOutcome::Unsupported;
     }
     let options = FormatOptions {
         indent: Indent::Spaces(style.indent_spaces),
@@ -302,7 +327,13 @@ pub fn format_statement(sql: &str, style: SqlStyle) -> Option<String> {
     };
     let formatted = sqlformat::format(sql, &QueryParams::None, &options);
     let formatted = case_other_keywords(formatted.trim(), style.keyword_case);
-    (formatted != sql && same_tokens(sql, &formatted)).then_some(formatted)
+    if !same_tokens(sql, &formatted) {
+        FormatOutcome::Rejected
+    } else if formatted == sql {
+        FormatOutcome::Unchanged
+    } else {
+        FormatOutcome::Formatted(formatted)
+    }
 }
 
 /// Spark built-in functions, and `OVER`, that Qrow writes in the keyword case
@@ -669,7 +700,7 @@ fn significant(sql: &str) -> Vec<Significant<'_>> {
 /// `${var}`, and `X'1F'` must stay together. Delimiters such as `,` and `(`
 /// never join with other symbols. Words can change letter case, except next to
 /// `.`, where they name a field, a column, or a table.
-fn same_tokens(original: &str, formatted: &str) -> bool {
+pub(crate) fn same_tokens(original: &str, formatted: &str) -> bool {
     let (original, formatted) = (significant(original), significant(formatted));
     let starts_word = |t: &Significant| {
         t.text
@@ -717,6 +748,44 @@ mod tests {
         let sql = "select '日\\本', 列 from 表";
         for (range, _) in tokens(sql) {
             let _ = &sql[range];
+        }
+    }
+
+    #[test]
+    fn manual_format_outcomes_and_assistant_minimum() {
+        let style = SqlStyle::default();
+        assert_eq!(
+            format_statement_with_mode("select 1", style, FormatMode::Assistant),
+            FormatOutcome::TooShort
+        );
+        assert_eq!(
+            format_statement_with_mode("select 1", style, FormatMode::Manual),
+            FormatOutcome::Formatted("SELECT 1".into())
+        );
+        assert_eq!(
+            format_statement_with_mode("SELECT 1", style, FormatMode::Manual),
+            FormatOutcome::Unchanged
+        );
+        for sql in ["SET x=1", "-- only a comment", ""] {
+            assert_eq!(
+                format_statement_with_mode(sql, style, FormatMode::Manual),
+                FormatOutcome::Unsupported
+            );
+        }
+        assert_eq!(
+            format_statement_with_mode("select ${hivevar:dt}", style, FormatMode::Manual),
+            FormatOutcome::Rejected
+        );
+        for sql in [
+            "select /*+ BROADCAST(t) */ `日 本`, '😀; x' from t where a>=1",
+            "select 'a  b', 'it\\'s' from t -- keep  this",
+            "select `a``b` from t where a!=b",
+        ] {
+            match format_statement_with_mode(sql, style, FormatMode::Manual) {
+                FormatOutcome::Formatted(text) => assert!(same_tokens(sql, &text)),
+                FormatOutcome::Rejected | FormatOutcome::Unchanged => {}
+                other => panic!("unexpected outcome: {other:?}"),
+            }
         }
     }
 

@@ -173,6 +173,21 @@ SQL, Logs history, and downloaded rows remain available after a query or
 fetch failure. Reconnection requires an explicit Run and does not restore
 session settings from earlier SQL statements.
 
+## Format SQL
+
+Choose **Query → Format SQL** or press **⌥⌘L** to format Spark SQL.
+If you select text, the command formats each statement in that selection.
+Otherwise, it formats the statement at the cursor. Text between statements
+stays the same. Press **⌘Z** once to undo the command.
+
+The command uses **Tab Size** and **SQL Keyword Case** from
+[Editor settings](workspace.md#appearance-and-layout). It does not run SQL
+or open a connection. Formatting runs only when you request it.
+
+The formatter checks that SQL tokens stay the same. If the check fails,
+the command keeps that statement and shows a notice. Unsupported statements
+also stay the same. Format SQL supports Spark SQL only.
+
 ## Syntax
 
 The editor highlights SQL syntax and the full width of the active line.

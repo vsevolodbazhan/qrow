@@ -764,6 +764,7 @@ impl Qrow {
             .text_color(cx.theme().foreground)
             .text_sm()
             .on_action(cx.listener(Self::run))
+            .on_action(cx.listener(Self::format_sql))
             .on_action(
                 cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
             )

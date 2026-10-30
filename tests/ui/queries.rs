@@ -636,3 +636,125 @@ fn a_tab_without_a_dot_shows_only_its_connection_state_in_its_tooltip(cx: &mut T
         assert!(window.try_find("status-tooltip-detail").is_none());
     });
 }
+
+#[gpui_kit::test]
+fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    let sql = "select '日本語😀;' as value from t;\n\n-- between;\nselect 2 from t;";
+    app.type_sql(cx, sql);
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    let formatted = "SELECT '日本語😀;' AS value\nFROM t;\n\n-- between;\nSELECT 2\nFROM t;";
+    app.wait_until(
+        cx,
+        "formatted selection",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == formatted,
+    );
+    app.press(cx, "cmd-z");
+    app.wait_until(cx, "format undo", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.press(cx, "left");
+    app.press(cx, "alt-cmd-l");
+    let first_only = "SELECT '日本語😀;' AS value\nFROM t;\n\n-- between;\nselect 2 from t;";
+    app.wait_until(
+        cx,
+        "cursor statement only",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == first_only,
+    );
+    assert_eq!(app.credentials.reads(), 0);
+
+    app.type_sql(cx, "SET x=1");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_label(
+        cx,
+        "Some SQL statements are not supported by the formatter. That text was kept.",
+    );
+    assert_eq!(app.saved().tabs[0].sql, "SET x=1");
+    app.type_sql(cx, "select ${hivevar:dt}");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_label(
+        cx,
+        "Some SQL could not be formatted safely. That text was kept.",
+    );
+    assert_eq!(app.saved().tabs[0].sql, "select ${hivevar:dt}");
+}
+
+#[gpui_kit::test]
+fn format_sql_keeps_selections_inside_quoted_tokens(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    for sql in [
+        "SELECT 'select 1' AS value",
+        "SELECT `select 1` FROM t",
+        "SELECT 1 /*select 1*/",
+    ] {
+        app.type_sql(cx, sql);
+        app.press(cx, "cmd-a");
+        app.press(cx, "left");
+        for _ in 0..sql.find("select 1").unwrap() {
+            app.press(cx, "right");
+        }
+        for _ in 0..8 {
+            app.press(cx, "shift-right");
+        }
+        app.press(cx, "alt-cmd-l");
+        app.wait_label(
+            cx,
+            "Some SQL could not be formatted safely. That text was kept.",
+        );
+        assert_eq!(app.saved().tabs[0].sql, sql);
+    }
+}
+
+#[gpui_kit::test]
+fn format_sql_uses_editor_style_and_rejects_other_dialects(cx: &mut TestAppContext) {
+    let mut workspace = Workspace::default();
+    workspace.settings.assistant.sql_keyword_case = qrow::sql::KeywordCase::Lowercase;
+    workspace.settings.editor_tab_size = 4;
+    let app = TestApp::launch(cx, workspace);
+    app.type_sql(cx, "SELECT a FROM t WHERE x=1 AND y=2");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(
+        cx,
+        "editor format style",
+        Duration::from_secs(10),
+        |_, _| {
+            let text = &app.saved().tabs[0].sql;
+            text.starts_with("select a\nfrom t\nwhere") && !text.contains("SELECT")
+        },
+    );
+    app.type_sql(cx, "select 1;\n\nselect 2;");
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    app.press(cx, "down");
+    app.press(cx, "alt-cmd-l");
+    app.wait_label(
+        cx,
+        "Move the cursor into a SQL statement or select SQL to format.",
+    );
+    assert_eq!(app.saved().tabs[0].sql, "select 1;\n\nselect 2;");
+
+    let profile = Profile {
+        database_type: qrow::model::DatabaseType::Postgres,
+        ..Profile::default()
+    };
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "select $$select 1$$".into();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "alt-cmd-l");
+    app.wait_label(cx, "Format SQL supports Spark SQL only.");
+    assert_eq!(app.saved().tabs[0].sql, "select $$select 1$$");
+}
