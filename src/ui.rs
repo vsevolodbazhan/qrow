@@ -198,14 +198,6 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                 ),
             ],
         },
-        Menu {
-            disabled: false,
-            name: "Query".into(),
-            items: vec![
-                MenuItem::action("Run query", RunQuery),
-                MenuItem::action("Format SQL", FormatSql),
-            ],
-        },
     ];
     let mut view = vec![
         MenuItem::action("Connections", ShowConnections),

@@ -114,3 +114,99 @@ fn format_notice(message: &'static str, window: &mut Window, cx: &mut App) {
         cx,
     );
 }
+
+/// Keep editor commands in the native right-click menu, with clipboard commands below.
+pub(super) fn editor_menu(
+    capabilities: gpui_kit::base::input::InputContextMenuCapabilities,
+    has_clipboard: bool,
+) -> Menu {
+    use gpui_kit::component::input::{
+        Copy, Cut, GoToDefinition, Paste, SelectAll, ToggleCodeActions,
+    };
+    let enabled = !capabilities.is_disabled();
+    let editable = capabilities.is_editable();
+    Menu {
+        name: "SQL Editor".into(),
+        disabled: false,
+        items: vec![
+            MenuItem::action("Go to Definition", GoToDefinition)
+                .disabled(!(enabled && capabilities.has_definition())),
+            MenuItem::action("Show Code Actions", ToggleCodeActions)
+                .disabled(!(editable && capabilities.has_code_actions())),
+            MenuItem::action("Format SQL", FormatSql).disabled(!editable),
+            MenuItem::separator(),
+            MenuItem::action("Cut", Cut).disabled(!(editable && capabilities.is_copyable())),
+            MenuItem::action("Copy", Copy).disabled(!capabilities.is_copyable()),
+            MenuItem::action("Paste", Paste).disabled(!(editable && has_clipboard)),
+            MenuItem::separator(),
+            MenuItem::action("Select All", SelectAll),
+        ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::editor_menu;
+    use gpui_kit::{MenuItem, base::input::InputContextMenuCapabilities};
+
+    #[test]
+    fn editor_menu_orders_format_before_clipboard_commands_and_obeys_editability() {
+        for (capabilities, clipboard, expected) in [
+            (
+                InputContextMenuCapabilities::new(),
+                false,
+                [true, false, false, false],
+            ),
+            (
+                InputContextMenuCapabilities::new().selection(true),
+                true,
+                [true, true, true, true],
+            ),
+            (
+                InputContextMenuCapabilities::new()
+                    .selection(true)
+                    .readonly(true),
+                true,
+                [false, false, true, false],
+            ),
+            (
+                InputContextMenuCapabilities::new().disabled(true),
+                true,
+                [false, false, false, false],
+            ),
+        ] {
+            let menu = editor_menu(capabilities, clipboard);
+            let entries: Vec<_> = menu
+                .items
+                .iter()
+                .map(|item| match item {
+                    MenuItem::Action { name, disabled, .. } => (name.as_ref(), !disabled),
+                    MenuItem::Separator => ("---", false),
+                    _ => panic!("Unexpected editor menu entry"),
+                })
+                .collect();
+            assert_eq!(
+                entries.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+                [
+                    "Go to Definition",
+                    "Show Code Actions",
+                    "Format SQL",
+                    "---",
+                    "Cut",
+                    "Copy",
+                    "Paste",
+                    "---",
+                    "Select All"
+                ]
+            );
+            assert_eq!(
+                [entries[2].1, entries[4].1, entries[5].1, entries[6].1],
+                expected
+            );
+            let MenuItem::Action { action, .. } = &menu.items[2] else {
+                unreachable!()
+            };
+            assert!(action.as_any().is::<crate::ui::FormatSql>());
+        }
+    }
+}

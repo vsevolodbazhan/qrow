@@ -175,7 +175,7 @@ session settings from earlier SQL statements.
 
 ## Format SQL
 
-Choose **Query → Format SQL** or press **⌥⌘L** to format SQL.
+Right-click in the SQL editor and choose **Format SQL**, or press **⌥⌘L**.
 If you select text, the command formats each statement in that selection.
 Otherwise, it formats the statement at the cursor. Text between statements
 stays the same. Press **⌘Z** once to undo the command.

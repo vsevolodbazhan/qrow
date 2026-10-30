@@ -966,6 +966,14 @@ impl Render for Qrow {
                             .child(
                                 Editor::new(&self.tabs[self.active].input)
                                     .appearance(false)
+                                    .context_menu_with_capabilities(|_, capabilities, _, cx| {
+                                        gpui_kit::component::native_menu::NativeMenu::from(
+                                            format_sql::editor_menu(
+                                                capabilities,
+                                                cx.read_from_clipboard().is_some(),
+                                            ),
+                                        )
+                                    })
                                     .font_family(self.settings.editor_font_family.clone())
                                     .text_size(self.ui_px(self.settings.editor_font_size))
                                     .size_full()
