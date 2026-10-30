@@ -54,7 +54,10 @@ fn config(dialect: DatabaseType) -> CompletionConfig {
         dialect,
         "sales",
         "warehouse",
-        CatalogSettings::default(),
+        CatalogSettings {
+            refresh: crate::model::CatalogRefresh::Manual,
+            ..CatalogSettings::default()
+        },
         KeywordCase::Uppercase,
     )
 }
@@ -347,6 +350,45 @@ fn cache_states_have_scoped_notes_and_loaded_empty_columns_have_no_note() {
         "sales is hidden by the catalog filters."
     );
     assert!(result.notes[0].refresh().is_none());
+}
+
+#[test]
+fn disabled_catalogs_and_failed_refreshes_keep_their_actual_cache_state() {
+    let mut cache = catalog();
+    Arc::make_mut(cache.schemas.get_mut("sales").unwrap()).error = Some("Permission denied".into());
+    let relation = Arc::make_mut(cache.schemas.get_mut("sales").unwrap())
+        .relations
+        .as_mut()
+        .unwrap()
+        .get_mut("orders")
+        .unwrap();
+    Arc::make_mut(relation).error = Some("Read failed".into());
+    let index = CatalogIndex::new(Some(Arc::new(cache)), None);
+    let mut settings = config(DatabaseType::Postgres);
+    let result = at("select o.am| from sales.orders o", &index, &settings);
+    assert_eq!(result.items[0].label(), "amount");
+    assert!(result.notes[0].text().contains("Read failed"));
+    let result = at("select m.| from sales.MISSING m", &index, &settings);
+    assert!(result.notes[0].text().contains("Permission denied"));
+    assert_eq!(
+        result.notes[0].refresh(),
+        Some(&Scope::Schema("sales".into()))
+    );
+    settings.filters.refresh = crate::model::CatalogRefresh::Disabled;
+    let result = at("select o.am| from sales.orders o", &index, &settings);
+    assert!(result.items.is_empty());
+    assert_eq!(
+        result.notes[0].text(),
+        "The catalog is disabled for this connection."
+    );
+    assert!(result.notes[0].refresh().is_none());
+    let result = at(
+        "with c(x) as (select 1) select c.x| from c",
+        &index,
+        &settings,
+    );
+    assert_eq!(result.items[0].label(), "x");
+    assert!(result.notes.is_empty());
 }
 
 #[test]

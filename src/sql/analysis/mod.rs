@@ -7,7 +7,7 @@ mod tests;
 
 use super::KeywordCase;
 use crate::{
-    catalog::{Catalog, CatalogColumn, Relation, Scope},
+    catalog::{Catalog, Relation, Scope},
     model::{CatalogSettings, DatabaseType},
 };
 use context::{Context, Name};
@@ -143,7 +143,7 @@ const POSTGRES_FUNCTIONS: &[&str] = &[
 ];
 
 struct IndexedColumn {
-    column: CatalogColumn,
+    position: usize,
     folded: String,
 }
 
@@ -184,8 +184,9 @@ impl CatalogIndex {
                                     .columns
                                     .iter()
                                     .flatten()
-                                    .map(|column| IndexedColumn {
-                                        column: column.clone(),
+                                    .enumerate()
+                                    .map(|(position, column)| IndexedColumn {
+                                        position,
                                         folded: column.name.to_lowercase(),
                                     })
                                     .collect(),
@@ -305,9 +306,21 @@ impl Candidate {
 pub struct CatalogNote {
     text: String,
     refresh: Option<Scope>,
+    missing_relation: bool,
 }
 
 impl CatalogNote {
+    pub fn is_missing_relation(&self) -> bool {
+        self.missing_relation
+    }
+    pub fn not_found_text(&self) -> Option<String> {
+        match &self.refresh {
+            Some(Scope::Relation(schema, name)) if self.missing_relation => {
+                Some(format!("{schema}.{name} was not found."))
+            }
+            _ => None,
+        }
+    }
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -427,13 +440,21 @@ impl<'a> Builder<'a> {
     }
 
     fn note(&mut self, text: String, refresh: Option<Scope>) {
-        let note = CatalogNote { text, refresh };
+        let note = CatalogNote {
+            text,
+            refresh,
+            missing_relation: false,
+        };
         if !self.batch.notes.contains(&note) {
             self.batch.notes.push(note);
         }
     }
 
     fn schema(&mut self, name: &Name) -> Option<String> {
+        if !self.config.filters.browses() {
+            self.note("The catalog is disabled for this connection.".into(), None);
+            return None;
+        }
         if !self.config.filters.shows(&name.text) {
             self.note(
                 format!("{} is hidden by the catalog filters.", name.text),
@@ -556,17 +577,21 @@ impl<'a> Builder<'a> {
     }
 
     fn tables(&mut self, schema: Option<&str>) {
-        if let Some(schema) = schema
-            && self
-                .index
-                .catalog
-                .as_ref()
-                .and_then(|catalog| catalog.schemas.get(schema))
-                .is_some_and(|schema| schema.relations.is_none())
+        if !self.config.filters.browses() {
+            self.note("The catalog is disabled for this connection.".into(), None);
+            return;
+        }
+        if let Some(schema) = schema {
+            self.schema_note(schema);
+        } else if self
+            .index
+            .catalog
+            .as_ref()
+            .is_none_or(|catalog| catalog.schemas.is_empty())
         {
             self.note(
-                format!("Tables of {schema} are not loaded."),
-                Some(Scope::Schema(schema.into())),
+                "No schema data is cached. Refresh the catalog in Connections.".into(),
+                None,
             );
         }
         for entry in self.index.relations.values() {
@@ -613,6 +638,32 @@ impl<'a> Builder<'a> {
                     CompletionKind::Schema,
                 );
             }
+        }
+    }
+
+    fn schema_note(&mut self, schema: &str) -> bool {
+        let Some(data) = self
+            .index
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.schemas.get(schema))
+        else {
+            return false;
+        };
+        if let Some(error) = &data.error {
+            self.note(
+                format!("Tables of {schema} could not be loaded. {error}"),
+                Some(Scope::Schema(schema.into())),
+            );
+            true
+        } else if data.relations.is_none() {
+            self.note(
+                format!("Tables of {schema} are not loaded."),
+                Some(Scope::Schema(schema.into())),
+            );
+            true
+        } else {
+            false
         }
     }
 
@@ -718,45 +769,46 @@ impl<'a> Builder<'a> {
         let Some(schema) = self.schema(&schema_name) else {
             return;
         };
-        let name = &reference.path.last().unwrap().text;
+        let part = reference.path.last().unwrap();
+        let name = if self.config.dialect == DatabaseType::Postgres && !part.quoted {
+            part.text.to_lowercase()
+        } else {
+            part.text.clone()
+        };
         let qualified_name = format!("{schema}.{name}");
         let entry = self.lookup(&reference.path);
         let Some(entry) = entry else {
-            let unloaded = self
-                .index
-                .catalog
-                .as_ref()
-                .and_then(|catalog| catalog.schemas.get(&schema))
-                .is_some_and(|schema| schema.relations.is_none());
-            if unloaded {
-                self.note(
-                    format!("Tables of {schema} are not loaded."),
-                    Some(Scope::Schema(schema)),
-                );
-            } else {
-                self.note(
-                    format!("{qualified_name} is not in the catalog."),
-                    Some(Scope::Relation(schema, name.clone())),
-                );
+            if !self.schema_note(&schema) {
+                let note = CatalogNote {
+                    text: format!("{qualified_name} is not in the catalog."),
+                    refresh: Some(Scope::Relation(schema, name)),
+                    missing_relation: true,
+                };
+                if !self.batch.notes.contains(&note) {
+                    self.batch.notes.push(note);
+                }
             }
             return;
         };
         if let Some(error) = &entry.relation.error {
             self.note(
                 format!("Columns of {qualified_name} could not be loaded. {error}"),
-                Some(Scope::Relation(schema, name.clone())),
+                Some(Scope::Relation(schema.clone(), name.clone())),
             );
-            return;
+            if entry.relation.columns.is_none() {
+                return;
+            }
         }
         if entry.relation.columns.is_none() {
             self.note(
                 format!("Columns of {qualified_name} are not loaded."),
-                Some(Scope::Relation(schema, name.clone())),
+                Some(Scope::Relation(schema, name)),
             );
             return;
         }
         for column in &entry.columns {
-            let name = &column.column.name;
+            let data = &entry.relation.columns.as_ref().unwrap()[column.position];
+            let name = &data.name;
             let ambiguous =
                 !qualified && counts.get(&column.folded).is_some_and(|count| *count > 1);
             let label = if ambiguous {
@@ -776,11 +828,8 @@ impl<'a> Builder<'a> {
             self.add(
                 &label,
                 &column.folded,
-                Some(&column.column.data_type),
-                documentation(
-                    &format!("{qualified_name}.{name}"),
-                    column.column.comment.as_deref(),
-                ),
+                Some(&data.data_type),
+                documentation(&format!("{qualified_name}.{name}"), data.comment.as_deref()),
                 insert,
                 CompletionKind::Column,
             );

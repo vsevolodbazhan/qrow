@@ -753,7 +753,11 @@ impl Qrow {
             .border_color(cx.theme().border)
             .child(
                 settings_panel("settings", window, cx)
-                    .page(appearance_page(form))
+                    .page(appearance_page(
+                        form,
+                        cx.weak_entity(),
+                        self.settings.autocomplete,
+                    ))
                     .page(SettingPage::new("Export").resettable(false).group(
                         SettingGroup::new().title("Replay").item(setting_item(
                             "Replay Limit",
@@ -823,7 +827,11 @@ impl Qrow {
 }
 
 /// Appearance settings for the interface, assistant messages, editor, and logs.
-fn appearance_page(form: &SettingsForm) -> SettingPage {
+fn appearance_page(
+    form: &SettingsForm,
+    owner: WeakEntity<Qrow>,
+    autocomplete: bool,
+) -> SettingPage {
     SettingPage::new("Appearance")
         .default_open(true)
         // The footer resets all appearance settings, so this page does not
@@ -913,6 +921,24 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                         "assistant",
                     ],
                     select_field(&form.assistant_keyword_case, "SQL Keyword Case"),
+                ))
+                .item(setting_item(
+                    "Autocomplete",
+                    "Suggest cached SQL names.",
+                    &["editor", "sql", "completion", "suggestions", "catalog"],
+                    move |_, _| {
+                        let owner = owner.clone();
+                        Switch::new("setting-autocomplete")
+                            .accessibility_label("Autocomplete")
+                            .checked(autocomplete)
+                            .on_change(move |checked, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.autocomplete = *checked;
+                                    this.changed(cx);
+                                });
+                            })
+                            .into_any_element()
+                    },
                 )),
         )
         .group(

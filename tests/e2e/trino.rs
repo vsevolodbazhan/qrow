@@ -675,3 +675,24 @@ fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
         |_, _| app.saved().tabs[0].sql == sql,
     );
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn completion_of_cte_columns_is_valid_trino_sql(cx: &mut TestAppContext) {
+    let app = launch(cx, "");
+    app.complete_sql(
+        cx,
+        "with orders(amount) as (values (7)) select o.am| from orders o",
+    );
+    app.wait_label(cx, "amount");
+    assert_eq!(app.credentials.reads(), 0);
+    app.press(cx, "enter");
+    app.wait_until(
+        cx,
+        "quoted CTE column",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql.contains("o.\"amount\""),
+    );
+    app.press(cx, "cmd-enter");
+    app.wait_cell(cx, 0, 1, "7");
+}

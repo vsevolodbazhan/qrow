@@ -1,5 +1,17 @@
 # GPUI Component patch
 
+The completion overlay host passes nonselectable notes to the menu. Notes
+can appear without candidates and offer an explicit action below the list.
+Keyboard navigation visits candidates only. Catalog updates preserve the
+selected candidate when its replacement edit is unchanged. Narrow windows
+keep the full description in a scrollable stacked panel. Completion labels
+use UTF-8 character boundaries for highlights, and menu, note, row, and
+description elements expose accessibility and test metadata. Handled menu keys
+stop propagation to the editor. Deferred insertion and dismissal must match
+the menu generation. The list delegate holds its menu weakly, so a closed menu
+can be released. `tests/ui/sql_completion.rs` covers the production integration,
+and `tests/ui/sql_completion_races.rs` checks delayed responses.
+
 This directory contains the `gpui-component` 0.6.6 crate from crates.io. The
 source has an Apache 2.0 license. See `LICENSE-APACHE`.
 

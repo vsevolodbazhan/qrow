@@ -5,6 +5,16 @@ has an Apache 2.0 license. See `LICENSE-APACHE`.
 
 Qrow changes these files:
 
+- `src/input/editor/lsp/completions.rs`, `overlay.rs`, and `src/input/mod.rs`:
+  completion providers can supply a nonselectable `CompletionNote` with an
+  optional explicit action. A note can keep an empty menu open. Existing
+  providers and `present_completion_items` keep their original API. Dismissal
+  resets the trigger anchor, and non-trigger edits close stale menus. Deleting
+  before the old anchor starts a new completion range. Responses must match
+  the request generation, editor text, cursor, and focus. A manual request or
+  dismissal cancels an older task. Each accepted completion is one undo step.
+  The input module re-exports the protocol types used by its provider API.
+
 - `src/input/base/element.rs`: the active line paint now covers the editor's
   right padding.
 - `src/text/inline_flow.rs`: a Markdown line with inline code keeps one line at

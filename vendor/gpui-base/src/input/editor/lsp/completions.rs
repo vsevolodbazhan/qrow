@@ -14,6 +14,66 @@ use crate::input::InputBaseState;
 /// Default debounce duration for inline completions.
 const DEFAULT_INLINE_COMPLETION_DEBOUNCE: Duration = Duration::from_millis(300);
 
+/// Nonselectable information below completion candidates. The application owns
+/// its text and optional action; the overlay host owns its presentation.
+#[derive(Clone)]
+pub struct CompletionNote {
+    text: gpui::SharedString,
+    action_label: Option<gpui::SharedString>,
+    action: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    loading: bool,
+}
+
+impl std::fmt::Debug for CompletionNote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletionNote")
+            .field("text", &self.text)
+            .field("action_label", &self.action_label)
+            .field("loading", &self.loading)
+            .finish()
+    }
+}
+
+impl CompletionNote {
+    pub fn new(text: impl Into<gpui::SharedString>) -> Self {
+        Self {
+            text: text.into(),
+            action_label: None,
+            action: None,
+            loading: false,
+        }
+    }
+    pub fn action(
+        mut self,
+        label: impl Into<gpui::SharedString>,
+        action: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.action_label = Some(label.into());
+        self.action = Some(Rc::new(action));
+        self
+    }
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+    pub fn text(&self) -> &gpui::SharedString {
+        &self.text
+    }
+    pub fn action_label(&self) -> Option<&gpui::SharedString> {
+        self.action_label.as_ref()
+    }
+    pub fn is_loading(&self) -> bool {
+        self.loading
+    }
+    pub fn activate(&self, window: &mut Window, cx: &mut App) {
+        if !self.loading
+            && let Some(action) = &self.action
+        {
+            action(window, cx);
+        }
+    }
+}
+
 /// Display options for the LSP completion popover.
 ///
 /// Accessed through [`super::Lsp::completion_menu`] so embedders can tweak the
@@ -38,6 +98,11 @@ impl Default for CompletionMenuOptions {
 
 /// A trait for providing code completions based on the current input state and context.
 pub trait CompletionProvider {
+    /// Supplemental information for the response returned by `completions`.
+    /// Capture this on the request thread before awaiting its task.
+    fn completion_note(&self) -> Option<CompletionNote> {
+        None
+    }
     /// Fetches completions based on the given byte offset.
     ///
     /// - The `offset` is in bytes of current cursor.
@@ -142,6 +207,7 @@ impl InputBaseState<EditorMode> {
         let new_offset = self.cursor();
 
         if !provider.is_completion_trigger(start, new_text, cx) {
+            self.dismiss_completion_overlay(cx);
             return;
         }
 
@@ -150,10 +216,8 @@ impl InputBaseState<EditorMode> {
             .context_menu_content
             .completion
             .trigger_start_offset
-            .unwrap_or(start);
-        if new_offset < start_offset {
-            return;
-        }
+            .filter(|start| *start <= new_offset)
+            .unwrap_or(range.start.min(new_offset));
 
         let query = self
             .text_for_range(
@@ -181,6 +245,15 @@ impl InputBaseState<EditorMode> {
 
         let provider_responses =
             provider.completions(&self.text, new_offset, completion_context, window, cx);
+        let note = provider.completion_note();
+        self.extras.context_menu_content.completion.request_revision = self
+            .extras
+            .context_menu_content
+            .completion
+            .request_revision
+            .wrapping_add(1);
+        let request_revision = self.extras.context_menu_content.completion.request_revision;
+        let request_text = self.text.clone();
         self.extras.context_menu_task = cx.spawn_in(window, async move |editor, cx| {
             let mut completions: Vec<CompletionItem> = vec![];
             if let Some(provider_responses) = provider_responses.await.ok() {
@@ -190,29 +263,31 @@ impl InputBaseState<EditorMode> {
                 }
             }
 
-            if completions.is_empty() {
-                editor.update(cx, |editor, cx| {
-                    editor.extras.context_menu_content.completion.open = false;
-                    editor.extras.context_menu_content.completion.items.clear();
-                    editor.extras.context_menu_content.completion.bump();
-                    cx.notify();
-                })?;
-                return Ok(());
-            }
-
             editor
                 .update_in(cx, |editor, window, cx| {
-                    if !editor.focus_handle.is_focused(window) {
+                    if !editor.focus_handle.is_focused(window)
+                        || editor.cursor() != new_offset
+                        || editor.text != request_text
+                        || editor
+                            .extras
+                            .context_menu_content
+                            .completion
+                            .request_revision
+                            != request_revision
+                    {
                         return;
                     }
 
                     editor.extras.context_menu_content.completion.items = completions;
-                    editor.extras.context_menu_content.completion.open = !editor
-                        .extras
-                        .context_menu_content
-                        .completion
-                        .items
-                        .is_empty();
+                    editor.extras.context_menu_content.completion.note = note;
+                    editor.extras.context_menu_content.completion.open =
+                        editor.extras.context_menu_content.completion.note.is_some()
+                            || !editor
+                                .extras
+                                .context_menu_content
+                                .completion
+                                .items
+                                .is_empty();
                     editor.extras.context_menu_content.completion.bump();
 
                     cx.notify();
@@ -224,7 +299,18 @@ impl InputBaseState<EditorMode> {
     }
 
     pub(crate) fn hide_context_menu(&mut self, cx: &mut Context<Self>) {
+        self.extras.context_menu_content.completion.request_revision = self
+            .extras
+            .context_menu_content
+            .completion
+            .request_revision
+            .wrapping_add(1);
         self.extras.context_menu_content.completion.open = false;
+        self.extras
+            .context_menu_content
+            .completion
+            .trigger_start_offset = None;
+        self.extras.context_menu_content.completion.note = None;
         self.extras.context_menu_content.code_action.open = false;
         self.extras.context_menu_task = Task::ready(Ok(()));
         cx.notify();
@@ -251,6 +337,9 @@ impl InputBaseState<EditorMode> {
             None
         };
         let Some((kind, handler)) = kind.zip(self.overlay_action_handler.clone()) else {
+            if action.partial_eq(&crate::input::Escape) {
+                self.dismiss_completion_overlay(cx);
+            }
             return false;
         };
         let handled = handler(kind, action, window, cx);

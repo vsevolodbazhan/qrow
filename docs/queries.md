@@ -173,6 +173,48 @@ SQL, Logs history, and downloaded rows remain available after a query or
 fetch failure. Reconnection requires an explicit Run and does not restore
 session settings from earlier SQL statements.
 
+## Autocomplete
+
+Type a name or a qualifier such as `orders.` to see suggestions. Press
+**Control-Space** to request suggestions at the cursor. Use the arrow keys to
+choose an item, **Return** to insert it, and **Escape** to close the menu.
+One **⌘Z** restores the text before insertion. macOS can reserve
+Control-Space to change the input source. In that case, use automatic
+suggestions or change that system shortcut.
+
+Autocomplete uses the saved catalog cache. It suggests schemas, tables, views,
+columns, SQL keywords, and built-in functions for Spark SQL, Postgres, and
+Trino. Column rows show their types. The description panel shows the qualified
+name and catalog comment, or **No description**. Catalog comments appear as
+plain text. The panel remains available in narrow windows.
+
+A note below the suggestions identifies missing metadata. **Refresh** reads
+that schema or table through the catalog worker. This explicit action can
+open a connection and use its saved authentication. Typing and requesting
+suggestions do not open a connection or request a refresh. The note is not a
+selectable suggestion. While a refresh runs, it shows a loading message.
+The note reports refresh failures or cancellation.
+Suggestions update only if the same tab, SQL, cursor, and menu remain active.
+
+Autocomplete uses aliases, common table expressions, and the relations in the
+cursor's query. It replaces the complete identifier at the cursor, including
+a suffix after the cursor. It quotes inserted database names to preserve their
+meaning. Keyword and function suggestions use **SQL Keyword Case**.
+
+Unqualified table names use the initial database for Spark, the initial schema
+for Trino, and `public` for Postgres. Use qualified names for another schema.
+The scanner does not infer session changes from `USE` or `SET search_path` in
+the editor. That text might not have run.
+
+Turn **Autocomplete** off in **Settings → Appearance → Editor** to stop
+suggestions. It is on by default. The catalog can be incomplete or out of date.
+If a schema is unknown or hidden by filters, use the Connections sidebar to
+change its catalog settings or refresh its schema list. Completion does not
+validate SQL. Output names of CTEs and subqueries come from explicit column
+lists and simple named projections; wildcard outputs are not expanded.
+Function suggestions come from built-in lists, so they can differ from the
+functions available on a server.
+
 ## Format SQL
 
 Right-click in the SQL editor and choose **Format**, or press **⌥⌘L**.
@@ -192,7 +234,9 @@ type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 ## Syntax
 
 The editor highlights SQL syntax and the full width of the active line.
-Autocomplete, schema exploration, and language server features are not available.
+Autocomplete uses the catalog cache as described above. It does not require
+an external language server process. SQL correctness checks and style lint
+are not available.
 
 ## Design
 

@@ -18,6 +18,7 @@ mod results;
 mod setting_row;
 mod settings_view;
 mod sign_in_view;
+mod sql_completion;
 mod status_dot;
 mod status_tooltip;
 mod tab_view;
@@ -58,7 +59,8 @@ use results::Results;
 use status_dot::DotStatus;
 use status_tooltip::StatusTooltip;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
     sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
@@ -70,6 +72,7 @@ actions!(
     [
         RunQuery,
         FormatSql,
+        CompleteSql,
         RunAndExport,
         SendAssistantMessage,
         NewTab,
@@ -116,6 +119,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
         KeyBinding::new("alt-cmd-l", FormatSql, None),
+        KeyBinding::new("ctrl-space", CompleteSql, None),
         KeyBinding::new(
             "cmd-enter",
             SendAssistantMessage,
@@ -228,6 +232,7 @@ struct Tab {
     revision: u64,
     pending_assistant_edit: Option<String>,
     input: Entity<EditorState>,
+    completion: Rc<sql_completion::Source>,
     table: Entity<TableState<Results>>,
     _subscription: Subscription,
     worker: Option<Worker>,
@@ -561,6 +566,7 @@ pub struct Qrow {
     finished: bool,
     wake: async_channel::Sender<()>,
     catalog: catalog_tree::CatalogTree,
+    completion_indexes: HashMap<Uuid, Arc<crate::sql::analysis::CatalogIndex>>,
     _catalog_subscriptions: [Subscription; 2],
     /// The background work of each connection. It covers the main area of
     /// the window while it is open.
@@ -813,6 +819,7 @@ impl Qrow {
             finished: false,
             wake,
             catalog,
+            completion_indexes: HashMap::new(),
             _catalog_subscriptions: catalog_subscriptions,
             activity,
             _activity_events: activity_events,
@@ -847,6 +854,7 @@ impl Qrow {
             this.expand_demo_catalog();
         }
         this.rebuild_catalog_tree(cx);
+        this.sync_completions(cx);
         this.tabs[this.active]
             .input
             .update(cx, |s, cx| s.focus(window, cx));
@@ -885,6 +893,7 @@ impl Qrow {
     }
     fn make_tab(&self, saved: SavedTab, window: &mut Window, cx: &mut Context<Self>) -> Tab {
         let tab_id = saved.id;
+        let completion = sql_completion::Source::new(cx.weak_entity(), tab_id);
         let input = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language("sql")
@@ -902,6 +911,9 @@ impl Qrow {
                 }
                 this.changed(cx);
             }
+        });
+        input.update(cx, |input, _| {
+            input.lsp_mut().completion_provider = Some(completion.clone())
         });
         let scale = self.settings.ui_scale;
         let table = cx.new(|cx| {
@@ -925,6 +937,7 @@ impl Qrow {
             revision: 0,
             pending_assistant_edit: None,
             input,
+            completion,
             table,
             _subscription: subscription,
             worker: None,
@@ -1214,6 +1227,7 @@ impl Qrow {
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_completions(cx);
         self.oidc.configure(&self.sign_ins, &self.profiles);
         self.external_auth.configure(&self.profiles);
         self.dirty = Some(Instant::now());
@@ -2409,6 +2423,7 @@ impl Qrow {
         self.settings.editor_line_height = settings.editor_line_height;
         self.set_editor_tab_size(settings.editor_tab_size, cx);
         self.settings.assistant.sql_keyword_case = settings.assistant.sql_keyword_case;
+        self.settings.autocomplete = settings.autocomplete;
         self.settings.logs_font_family = settings.logs_font_family;
         self.settings.logs_font_size = settings.logs_font_size;
         self.settings.logs_line_height = settings.logs_line_height;

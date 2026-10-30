@@ -1234,6 +1234,23 @@ impl TestApp {
         );
     }
 
+    /// Requests completion at `|` through keyboard input in the real editor.
+    pub fn complete_sql(&self, cx: &mut TestAppContext, sql: &str) {
+        let cursor = sql
+            .find('|')
+            .expect("Completion fixture needs a cursor marker");
+        let characters = sql[..cursor].chars().count();
+        self.type_sql(cx, &sql.replace('|', ""));
+        self.update(cx, |window, cx| {
+            window.press("cmd-a", cx);
+            window.press("left", cx);
+            for _ in 0..characters {
+                window.press("right", cx);
+            }
+            window.press("ctrl-space", cx);
+        });
+    }
+
     // Exercise the captured execution pipeline shared by export reruns.
     pub fn run_export(&self, cx: &mut TestAppContext) {
         self.dispatch(cx, qrow::ui::RunAndExport);

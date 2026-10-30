@@ -1,18 +1,25 @@
 use std::rc::Rc;
 
+use crate::{
+    Sizable as _,
+    button::{Button, ButtonVariants as _},
+    scroll::ScrollableElement as _,
+    v_flex,
+};
 use gpui::{
     Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
     Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Point,
-    Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window,
-    deferred, div, prelude::FluentBuilder, px, relative,
+    Render, RenderOnce, SharedString, StatefulInteractiveElement as _, Styled, StyledText,
+    Subscription, WeakEntity, Window, deferred, div, prelude::FluentBuilder, px, relative,
 };
+use gpui_base::{TestSupportExt as _, input::CompletionNote};
 use lsp_types::CompletionItem;
 
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
 
 use crate::{
-    ActiveTheme, IndexPath, Selectable, actions, h_flex,
+    ActiveTheme, Disableable as _, IndexPath, Selectable, actions, h_flex,
     input::{
         self, EditorState,
         popovers::{editor_popover, render_markdown},
@@ -23,15 +30,24 @@ use crate::{
 
 struct ContextMenuDelegate {
     query: SharedString,
-    menu: Entity<CompletionMenu>,
+    menu: WeakEntity<CompletionMenu>,
     items: Vec<Rc<CompletionItem>>,
     selected_ix: usize,
 }
 
 impl ContextMenuDelegate {
     fn set_items(&mut self, items: Vec<CompletionItem>) {
+        let selected = self.selected_item().cloned();
         self.items = items.into_iter().map(Rc::new).collect();
-        self.selected_ix = 0;
+        self.selected_ix = selected
+            .and_then(|old| {
+                self.items.iter().position(|item| {
+                    item.label == old.label
+                        && item.text_edit == old.text_edit
+                        && item.insert_text == old.insert_text
+                })
+            })
+            .unwrap_or(0);
     }
 
     fn selected_item(&self) -> Option<&Rc<CompletionItem>> {
@@ -85,23 +101,44 @@ impl RenderOnce for CompletionMenuItem {
         let item = self.item;
 
         let deprecated = item.deprecated.unwrap_or(false);
-        let matched_len = item
+        let mut query = item
             .filter_text
-            .as_ref()
-            .map(|s| s.len())
-            .unwrap_or(self.highlight_prefix.len())
-            .min(item.label.len());
-
-        let highlights = vec![(
-            0..matched_len,
-            HighlightStyle {
-                color: Some(cx.theme().blue),
-                ..Default::default()
-            },
-        )];
+            .as_deref()
+            .unwrap_or(&self.highlight_prefix)
+            .chars()
+            .flat_map(char::to_lowercase)
+            .peekable();
+        let mut ranges = Vec::new();
+        for (offset, ch) in item.label.char_indices() {
+            if query
+                .peek()
+                .is_some_and(|wanted| ch.to_lowercase().any(|actual| actual == *wanted))
+            {
+                query.next();
+                ranges.push(offset..offset + ch.len_utf8());
+            }
+        }
+        if query.peek().is_some() {
+            ranges.clear();
+        }
+        let highlights = ranges
+            .into_iter()
+            .map(|range| {
+                (
+                    range,
+                    HighlightStyle {
+                        color: Some(cx.theme().blue),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
 
         h_flex()
             .id(self.ix)
+            .test_support()
+            .role(gpui::Role::MenuItem)
+            .aria_label(item.label.clone())
             .gap_2()
             .p_1()
             .text_xs()
@@ -160,7 +197,7 @@ impl ListDelegate for ContextMenuDelegate {
             return;
         };
 
-        self.menu.update(cx, |this, cx| {
+        let _ = self.menu.update(cx, |this, cx| {
             this.select_item(&item, window, cx);
         });
     }
@@ -172,6 +209,8 @@ pub struct CompletionMenu {
     editor: WeakEntity<EditorState>,
     list: Entity<ListState<ContextMenuDelegate>>,
     open: bool,
+    note: Option<CompletionNote>,
+    anchor: Option<(SharedString, usize, u64)>,
 
     /// The offset of the first character that triggered the completion.
     pub(crate) trigger_start_offset: Option<usize>,
@@ -189,7 +228,7 @@ impl CompletionMenu {
         cx: &mut App,
     ) -> Entity<Self> {
         cx.new(|cx| {
-            let view = cx.entity();
+            let view = cx.weak_entity();
             let menu = ContextMenuDelegate {
                 query: SharedString::default(),
                 menu: view,
@@ -217,6 +256,8 @@ impl CompletionMenu {
                 editor: editor.downgrade(),
                 list,
                 open: false,
+                note: None,
+                anchor: None,
                 trigger_start_offset: None,
                 query: SharedString::default(),
                 _subscriptions,
@@ -229,9 +270,17 @@ impl CompletionMenu {
         let range = self.trigger_start_offset.unwrap_or(self.offset)..self.offset;
 
         let editor = self.editor.clone();
+        let anchor = self.anchor.clone();
 
         cx.spawn_in(window, async move |_, cx| {
             editor.update_in(cx, |editor, window, cx| {
+                if anchor.as_ref().is_none_or(|(text, cursor, revision)| {
+                    editor.value() != *text
+                        || editor.cursor() != *cursor
+                        || editor.completion_menu_state().request_revision() != *revision
+                }) {
+                    return;
+                }
                 editor.insert_completion(&item, range, window, cx);
             })
         })
@@ -250,7 +299,6 @@ impl CompletionMenu {
             return false;
         }
 
-        cx.propagate();
         if input::Enter::is_primary(&*action) {
             self.on_action_enter(window, cx);
         } else if action.partial_eq(&input::Escape) {
@@ -263,6 +311,7 @@ impl CompletionMenu {
             return false;
         }
 
+        cx.stop_propagation();
         true
     }
 
@@ -278,12 +327,18 @@ impl CompletionMenu {
     }
 
     fn on_action_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.list.read(cx).delegate().items.is_empty() {
+            return;
+        }
         self.list.update(cx, |this, cx| {
             this.on_action_select_prev(&actions::SelectUp, window, cx)
         });
     }
 
     fn on_action_down(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.list.read(cx).delegate().items.is_empty() {
+            return;
+        }
         self.list.update(cx, |this, cx| {
             this.on_action_select_next(&actions::SelectDown, window, cx)
         });
@@ -291,13 +346,21 @@ impl CompletionMenu {
 
     /// Hide the completion menu and reset the trigger start offset.
     pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
+        let revision = self.anchor.as_ref().map(|(_, _, revision)| *revision);
         self.open = false;
+        self.anchor = None;
         self.trigger_start_offset = None;
         let editor = self.editor.clone();
-        cx.spawn(async move |_, cx| {
-            let _ = editor.update(cx, |editor, cx| editor.dismiss_completion_overlay(cx));
-        })
-        .detach();
+        if let Some(revision) = revision {
+            cx.spawn(async move |_, cx| {
+                let _ = editor.update(cx, |editor, cx| {
+                    if editor.completion_menu_state().request_revision() == revision {
+                        editor.dismiss_completion_overlay(cx);
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 
@@ -318,6 +381,14 @@ impl CompletionMenu {
     ) {
         let items = items.into();
         self.offset = offset;
+        self.anchor = self.editor.upgrade().map(|editor| {
+            let editor = editor.read(cx);
+            (
+                editor.value(),
+                offset,
+                editor.completion_menu_state().request_revision(),
+            )
+        });
         self.open = true;
         self.list.update(cx, |this, cx| {
             let longest_ix = items
@@ -331,11 +402,54 @@ impl CompletionMenu {
 
             this.delegate_mut().query = self.query.clone();
             this.delegate_mut().set_items(items);
-            this.set_selected_index(Some(IndexPath::new(0)), window, cx);
+            let selected = (!this.delegate().items.is_empty())
+                .then(|| IndexPath::new(this.delegate().selected_ix));
+            this.set_selected_index(selected, window, cx);
             this.set_item_to_measure_index(IndexPath::new(longest_ix), window, cx);
         });
 
         cx.notify();
+    }
+
+    pub(crate) fn set_note(&mut self, note: Option<CompletionNote>) {
+        self.note = note;
+    }
+
+    fn render_note(&self, has_items: bool, cx: &App) -> Option<AnyElement> {
+        let note = self.note.clone()?;
+        let editor = self.editor.clone();
+        Some(
+            h_flex()
+                .id("completion-note")
+                .test_support()
+                .role(gpui::Role::Status)
+                .aria_label(note.text().clone())
+                .gap_2()
+                .px_2()
+                .py_1()
+                .text_color(cx.theme().muted_foreground)
+                .when(has_items, |this| {
+                    this.border_t_1().border_color(cx.theme().border)
+                })
+                .child(div().flex_1().min_w_0().child(note.text().clone()))
+                .when_some(note.action_label().cloned(), |this, label| {
+                    this.child(
+                        Button::new("completion-note-action")
+                            .link()
+                            .xsmall()
+                            .label(label.clone())
+                            .accessibility_label(label)
+                            .disabled(note.is_loading())
+                            .on_click(move |_, window, cx| {
+                                note.activate(window, cx);
+                                if let Some(editor) = editor.upgrade() {
+                                    editor.update(cx, |editor, cx| editor.focus(window, cx));
+                                }
+                            }),
+                    )
+                })
+                .into_any_element(),
+        )
     }
 
     fn origin(&self, cx: &App) -> Option<Point<Pixels>> {
@@ -361,7 +475,8 @@ impl Render for CompletionMenu {
             return Empty.into_any_element();
         }
 
-        if self.list.read(cx).delegate().items.is_empty() {
+        let has_items = !self.list.read(cx).delegate().items.is_empty();
+        if !has_items && self.note.is_none() {
             self.open = false;
             return Empty.into_any_element();
         }
@@ -381,8 +496,10 @@ impl Render for CompletionMenu {
             return Empty.into_any_element();
         };
         let configured_max = editor.read(cx).lsp().completion_menu.max_width;
-        let max_width = configured_max.min(window.bounds().size.width - pos.x);
         let abs_pos = editor.read(cx).input_bounds().origin + pos;
+        let max_width = configured_max
+            .min(window.bounds().size.width - abs_pos.x)
+            .max(px(120.));
         let vertical_layout =
             abs_pos.x + configured_max + POPOVER_GAP + configured_max + POPOVER_GAP
                 > window.bounds().size.width;
@@ -399,26 +516,38 @@ impl Render for CompletionMenu {
                 .when(vertical_layout, |this| this.flex_col())
                 .child(
                     editor_popover("completion-menu", cx)
+                        .test_support()
+                        .role(gpui::Role::Menu)
+                        .aria_label("SQL completions")
                         .max_w(max_width)
                         .min_w(px(120.))
-                        .child(List::new(&self.list).max_h(MAX_MENU_HEIGHT)),
+                        .child(
+                            v_flex()
+                                .when(has_items, |this| {
+                                    this.child(List::new(&self.list).max_h(MAX_MENU_HEIGHT))
+                                })
+                                .children(self.render_note(has_items, cx)),
+                        ),
                 )
                 .when_some(selected_documentation, |this, documentation| {
-                    let mut doc = match documentation {
+                    let doc = match documentation {
                         lsp_types::Documentation::String(s) => s.clone(),
                         lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
                     };
-                    if vertical_layout {
-                        doc = doc.split("\n").next().unwrap_or_default().to_string();
-                    }
-
                     this.child(
-                        div().child(
-                            editor_popover("completion-menu", cx)
-                                .w(configured_max)
-                                .px_2()
-                                .child(render_markdown("doc", doc, window, cx)),
-                        ),
+                        div()
+                            .id("completion-documentation")
+                            .test_support()
+                            .role(gpui::Role::Label)
+                            .aria_label(doc.clone())
+                            .child(
+                                editor_popover("completion-documentation", cx)
+                                    .w(max_width)
+                                    .max_h(MAX_MENU_HEIGHT)
+                                    .overflow_y_scrollbar()
+                                    .px_2()
+                                    .child(render_markdown("doc", doc, window, cx)),
+                            ),
                     )
                 })
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {

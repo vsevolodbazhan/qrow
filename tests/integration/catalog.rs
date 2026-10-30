@@ -411,6 +411,7 @@ impl Harness {
             match self.worker.events.recv_timeout(remaining) {
                 Ok(Event::Catalog(catalog)) => self.catalog = Some(catalog),
                 Ok(Event::Status(status)) => self.status = status,
+                Ok(Event::Refreshed(_)) => {}
                 Err(_) => panic!("timed out; status {:?}", self.status),
             }
         }
