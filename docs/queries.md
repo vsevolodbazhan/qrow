@@ -175,7 +175,7 @@ session settings from earlier SQL statements.
 
 ## Format SQL
 
-Choose **Query → Format SQL** or press **⌥⌘L** to format Spark SQL.
+Choose **Query → Format SQL** or press **⌥⌘L** to format SQL.
 If you select text, the command formats each statement in that selection.
 Otherwise, it formats the statement at the cursor. Text between statements
 stays the same. Press **⌘Z** once to undo the command.
@@ -186,7 +186,8 @@ or open a connection. Formatting runs only when you request it.
 
 The formatter checks that SQL tokens stay the same. If the check fails,
 the command keeps that statement and shows a notice. Unsupported statements
-also stay the same. Format SQL supports Spark SQL only.
+also stay the same. The command uses the quoting rules of the connection
+type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 
 ## Syntax
 

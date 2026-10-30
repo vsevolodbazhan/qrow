@@ -711,7 +711,7 @@ fn format_sql_keeps_selections_inside_quoted_tokens(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn format_sql_uses_editor_style_and_rejects_other_dialects(cx: &mut TestAppContext) {
+fn format_sql_uses_editor_style(cx: &mut TestAppContext) {
     let mut workspace = Workspace::default();
     workspace.settings.assistant.sql_keyword_case = qrow::sql::KeywordCase::Lowercase;
     workspace.settings.editor_tab_size = 4;
@@ -738,23 +738,68 @@ fn format_sql_uses_editor_style_and_rejects_other_dialects(cx: &mut TestAppConte
         "Move the cursor into a SQL statement or select SQL to format.",
     );
     assert_eq!(app.saved().tabs[0].sql, "select 1;\n\nselect 2;");
+}
 
-    let profile = Profile {
-        database_type: qrow::model::DatabaseType::Postgres,
-        ..Profile::default()
-    };
-    let mut tab = SavedTab::new(1, Some(profile.id));
-    tab.sql = "select $$select 1$$".into();
-    let app = TestApp::launch(
-        cx,
-        Workspace {
-            profiles: vec![profile],
-            tabs: vec![tab],
-            ..Workspace::default()
-        },
-    );
-    app.click(cx, "sql-editor");
-    app.press(cx, "alt-cmd-l");
-    app.wait_label(cx, "Format SQL supports Spark SQL only.");
-    assert_eq!(app.saved().tabs[0].sql, "select $$select 1$$");
+#[gpui_kit::test]
+fn format_sql_uses_each_connections_quoting_rules(cx: &mut TestAppContext) {
+    use qrow::model::DatabaseType;
+    for (database_type, sql, expected) in [
+        (
+            DatabaseType::Postgres,
+            r#"select $body$select; '日本語😀'$body$ as "Mixed Case";"#,
+            r#"SELECT $body$select; '日本語😀'$body$ AS "Mixed Case";"#,
+        ),
+        (
+            DatabaseType::Trino,
+            r#"select '日本語😀;' as "Mixed Case";"#,
+            r#"SELECT '日本語😀;' AS "Mixed Case";"#,
+        ),
+        (
+            DatabaseType::Kyuubi,
+            "select '日本語😀;' as `Mixed Case`;",
+            "SELECT '日本語😀;' AS `Mixed Case`;",
+        ),
+    ] {
+        let profile = Profile {
+            database_type,
+            ..Profile::default()
+        };
+        let mut tab = SavedTab::new(1, Some(profile.id));
+        tab.sql = format!("{sql}\n\nselect 2;");
+        let original = tab.sql.clone();
+        let app = TestApp::launch(
+            cx,
+            Workspace {
+                profiles: vec![profile],
+                tabs: vec![tab],
+                ..Workspace::default()
+            },
+        );
+        app.click(cx, "sql-editor");
+        app.press(cx, "cmd-a");
+        app.press(cx, "left");
+        app.press(cx, "alt-cmd-l");
+        app.wait_until(
+            cx,
+            "dialect cursor formatting",
+            Duration::from_secs(10),
+            |_, _| app.saved().tabs[0].sql == format!("{expected}\n\nselect 2;"),
+        );
+        app.press(cx, "cmd-z");
+        app.wait_until(
+            cx,
+            "dialect format undo",
+            Duration::from_secs(10),
+            |_, _| app.saved().tabs[0].sql == original,
+        );
+        app.press(cx, "cmd-a");
+        app.press(cx, "alt-cmd-l");
+        app.wait_until(
+            cx,
+            "dialect selection formatting",
+            Duration::from_secs(10),
+            |_, _| app.saved().tabs[0].sql == format!("{expected}\n\nSELECT 2;"),
+        );
+        assert_eq!(app.credentials.reads(), 0);
+    }
 }

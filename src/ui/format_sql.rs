@@ -13,15 +13,12 @@ impl Qrow {
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
-        if self.tab_database_type(tab.saved.profile) != crate::model::DatabaseType::Kyuubi {
-            format_notice("Format SQL supports Spark SQL only.", window, cx);
-            return;
-        }
+        let database_type = self.tab_database_type(tab.saved.profile);
         let editor = tab.input.clone();
         let text = editor.read(cx).value().to_string();
         let selected = editor.read(cx).selected_range();
         let range = if selected.is_empty() {
-            sql::statement_range_at(&text, selected.start)
+            sql::statement_range_at_for(&text, selected.start, database_type)
         } else {
             Some(selected.clone())
         };
@@ -36,11 +33,15 @@ impl Qrow {
         let mut replacement = text[range.clone()].to_string();
         let mut unsupported = false;
         let mut rejected = false;
-        for statement in sql::statement_ranges(&replacement).into_iter().rev() {
-            match sql::format_statement_with_mode(
+        for statement in sql::statement_ranges_for(&replacement, database_type)
+            .into_iter()
+            .rev()
+        {
+            match sql::format_statement_for(
                 &replacement[statement.clone()],
                 self.settings.sql_style(),
                 sql::FormatMode::Manual,
+                database_type,
             ) {
                 sql::FormatOutcome::Formatted(formatted) => {
                     replacement.replace_range(statement, &formatted)
@@ -50,7 +51,7 @@ impl Qrow {
                 _ => {}
             }
         }
-        if sql::statement_ranges(&replacement).is_empty() {
+        if sql::statement_ranges_for(&replacement, database_type).is_empty() {
             unsupported = true;
         }
         if replacement != text[range.clone()] {
@@ -59,7 +60,7 @@ impl Qrow {
             formatted.replace_range(range.clone(), &replacement);
             // A selection can begin inside a quoted token. Check the surrounding
             // document too, so formatting cannot change a literal or identifier.
-            if !sql::same_tokens(&text, &formatted) {
+            if !sql::same_tokens_for(&text, &formatted, database_type) {
                 format_notice(
                     "Some SQL could not be formatted safely. That text was kept.",
                     window,

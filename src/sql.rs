@@ -1,5 +1,6 @@
 //! Small SQL lexer for statement ranges, single-statement validation, and
 //! checked formatting, not SQL parsing.
+use crate::model::DatabaseType;
 use serde::{Deserialize, Serialize};
 use sqlformat::{Dialect, FormatOptions, Indent, QueryParams};
 use std::ops::Range;
@@ -84,7 +85,15 @@ pub fn tokens_for(
             let (delimiter_end, string_end) = dollar_quote_end(sql, i).unwrap();
             i = string_end.unwrap_or(bytes.len()).max(delimiter_end);
             Kind::String
-        } else if matches!(bytes[i], b'\'' | b'"' | b'`') {
+        } else if matches!(bytes[i], b'\'' | b'"' | b'`')
+            || (database_type != DatabaseType::Kyuubi
+                && matches!(bytes[i], b'U' | b'u')
+                && bytes.get(i + 1) == Some(&b'&')
+                && matches!(bytes.get(i + 2), Some(b'\'' | b'"')))
+        {
+            if matches!(bytes[i], b'U' | b'u') {
+                i += 2;
+            }
             let quote = bytes[i];
             i += 1;
             while i < bytes.len() {
@@ -211,15 +220,24 @@ pub fn last_statement_range(sql: &str) -> Option<Range<usize>> {
 /// Finds the statement at a UTF-8 byte offset. Same-line whitespace beside
 /// a statement belongs to it; blank lines and comments between statements do not.
 pub fn statement_range_at(sql: &str, offset: usize) -> Option<Range<usize>> {
+    statement_range_at_for(sql, offset, DatabaseType::Kyuubi)
+}
+
+/// Finds the cursor statement using the connection's quoting rules.
+pub fn statement_range_at_for(
+    sql: &str,
+    offset: usize,
+    database_type: DatabaseType,
+) -> Option<Range<usize>> {
     if !sql.is_char_boundary(offset) {
         return None;
     }
-    let ranges = statement_ranges(sql);
+    let ranges = statement_ranges_for(sql, database_type);
     // Prefer the next statement's start over the previous statement's end.
     if let Some(range) = ranges.iter().find(|range| range.contains(&offset)) {
         return Some(range.clone());
     }
-    if tokens(sql)
+    if tokens_for(sql, database_type)
         .iter()
         .any(|(range, kind)| *kind == Kind::Comment && range.contains(&offset))
     {
@@ -294,11 +312,21 @@ pub enum FormatOutcome {
 }
 
 pub fn format_statement_with_mode(sql: &str, style: SqlStyle, mode: FormatMode) -> FormatOutcome {
+    format_statement_for(sql, style, mode, DatabaseType::Kyuubi)
+}
+
+/// Formats SQL with the connection's token and quoting rules.
+pub fn format_statement_for(
+    sql: &str,
+    style: SqlStyle,
+    mode: FormatMode,
+    database_type: DatabaseType,
+) -> FormatOutcome {
     const FORMATTABLE: [&str; 10] = [
         "SELECT", "WITH", "FROM", "VALUES", "INSERT", "CREATE", "EXPLAIN", "MERGE", "UPDATE",
         "DELETE",
     ];
-    let tokens = significant(sql);
+    let tokens = significant(sql, database_type);
     let chars: usize = tokens
         .iter()
         .map(|t| t.text.chars().count() + usize::from(t.space_before))
@@ -317,7 +345,7 @@ pub fn format_statement_with_mode(sql: &str, style: SqlStyle, mode: FormatMode) 
         // sqlformat changes only reserved keywords, not identifiers such as
         // `t.Date` or a column named `user`.
         uppercase: Some(style.keyword_case == KeywordCase::Uppercase),
-        // The PostgreSQL dialect keeps subscripts such as `items[0]` together.
+        // PostgreSQL layout keeps Spark, Postgres, and Trino subscripts together.
         dialect: Dialect::PostgreSql,
         max_inline_top_level: Some(60),
         // Without this limit, sqlformat 0.5 puts each item of an inline clause,
@@ -325,15 +353,55 @@ pub fn format_statement_with_mode(sql: &str, style: SqlStyle, mode: FormatMode) 
         max_inline_arguments: Some(60),
         ..FormatOptions::default()
     };
-    let formatted = sqlformat::format(sql, &QueryParams::None, &options);
-    let formatted = case_other_keywords(formatted.trim(), style.keyword_case);
-    if !same_tokens(sql, &formatted) {
+    let formatted = format_layout(sql, &options, database_type);
+    let formatted = case_other_keywords(formatted.trim(), style.keyword_case, database_type);
+    if !same_tokens_for(sql, &formatted, database_type) {
         FormatOutcome::Rejected
     } else if formatted == sql {
         FormatOutcome::Unchanged
     } else {
         FormatOutcome::Formatted(formatted)
     }
+}
+
+// sqlformat treats backslashes as escapes in every dialect and does not
+// recognize dollar quotes. Hide quoted tokens during layout, then restore
+// their exact text before the dialect-aware token check.
+fn format_layout(sql: &str, options: &FormatOptions<'_>, database_type: DatabaseType) -> String {
+    if database_type == DatabaseType::Kyuubi {
+        return sqlformat::format(sql, &QueryParams::None, options);
+    }
+    let mut prefix = "__qrow_format_token_".to_string();
+    while sql.contains(&prefix) {
+        prefix.push('_');
+    }
+    let mut protected = Vec::new();
+    let mut masked = String::new();
+    let mut end = 0;
+    for (mut range, kind) in tokens_for(sql, database_type) {
+        if matches!(kind, Kind::String | Kind::Identifier) {
+            if database_type == DatabaseType::Postgres
+                && sql[range.clone()].starts_with('\'')
+                && range.start > 0
+                && matches!(sql.as_bytes()[range.start - 1], b'E' | b'e')
+                && (range.start == 1
+                    || !sql[..range.start - 1].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+            {
+                range.start -= 1;
+            }
+            let marker = format!("'{prefix}{}'", protected.len());
+            masked.push_str(&sql[end..range.start]);
+            masked.push_str(&marker);
+            protected.push((marker, &sql[range.clone()]));
+            end = range.end;
+        }
+    }
+    masked.push_str(&sql[end..]);
+    let mut formatted = sqlformat::format(&masked, &QueryParams::None, options);
+    for (marker, original) in protected {
+        formatted = formatted.replace(&marker, original);
+    }
+    formatted
 }
 
 /// Spark built-in functions, and `OVER`, that Qrow writes in the keyword case
@@ -607,8 +675,8 @@ const LITERAL_PREFIXES: &[&str] = &[
 /// Writes in `case` the keywords that sqlformat keeps as written: built-in
 /// function names, cast types, typed literal prefixes, and `NULLS FIRST` or
 /// `NULLS LAST`. Words next to `.` keep their case.
-fn case_other_keywords(sql: &str, case: KeywordCase) -> String {
-    let words: Vec<_> = tokens(sql)
+fn case_other_keywords(sql: &str, case: KeywordCase, database_type: DatabaseType) -> String {
+    let words: Vec<_> = tokens_for(sql, database_type)
         .into_iter()
         .filter(|(range, _)| !sql[range.clone()].trim().is_empty())
         .collect();
@@ -674,22 +742,31 @@ struct Significant<'a> {
     kind: Kind,
     text: &'a str,
     space_before: bool,
+    line_break_before: bool,
 }
 
-fn significant(sql: &str) -> Vec<Significant<'_>> {
+fn significant(sql: &str, database_type: DatabaseType) -> Vec<Significant<'_>> {
     let mut result = vec![];
     let mut space_before = false;
-    for (range, kind) in tokens(sql) {
+    let mut line_break_before = false;
+    for (range, kind) in tokens_for(sql, database_type) {
         let text = &sql[range];
         if text.trim().is_empty() {
             space_before = true;
+            line_break_before |= text.contains(['\n', '\r']);
         } else {
             result.push(Significant {
                 kind,
                 text,
                 space_before,
+                line_break_before,
             });
             space_before = false;
+            if kind == Kind::Comment {
+                line_break_before |= text.contains(['\n', '\r']);
+            } else {
+                line_break_before = false;
+            }
         }
     }
     result
@@ -700,8 +777,20 @@ fn significant(sql: &str) -> Vec<Significant<'_>> {
 /// `${var}`, and `X'1F'` must stay together. Delimiters such as `,` and `(`
 /// never join with other symbols. Words can change letter case, except next to
 /// `.`, where they name a field, a column, or a table.
-pub(crate) fn same_tokens(original: &str, formatted: &str) -> bool {
-    let (original, formatted) = (significant(original), significant(formatted));
+#[cfg(test)]
+fn same_tokens(original: &str, formatted: &str) -> bool {
+    same_tokens_for(original, formatted, DatabaseType::Kyuubi)
+}
+
+pub(crate) fn same_tokens_for(
+    original: &str,
+    formatted: &str,
+    database_type: DatabaseType,
+) -> bool {
+    let (original, formatted) = (
+        significant(original, database_type),
+        significant(formatted, database_type),
+    );
     let starts_word = |t: &Significant| {
         t.text
             .starts_with(|c: char| c.is_alphanumeric() || c == '_')
@@ -720,7 +809,15 @@ pub(crate) fn same_tokens(original: &str, formatted: &str) -> bool {
                     .into_iter()
                     .flatten()
                     .any(|j| original.get(j).is_some_and(|t| t.text == "."));
+                let continued_string = database_type == DatabaseType::Postgres
+                    && a.kind == Kind::String
+                    && original[..i]
+                        .iter()
+                        .rev()
+                        .find(|t| t.kind != Kind::Comment)
+                        .is_some_and(|t| t.kind == Kind::String);
                 a.kind == b.kind
+                    && (!continued_string || a.line_break_before == b.line_break_before)
                     && (a.text == b.text
                         || is_word(a) && !qualified && a.text.eq_ignore_ascii_case(b.text))
                     && (i == 0
@@ -786,6 +883,111 @@ mod tests {
                 FormatOutcome::Rejected | FormatOutcome::Unchanged => {}
                 other => panic!("unexpected outcome: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn formats_each_dialect_without_changing_quoted_tokens() {
+        for (database_type, sql) in [
+            (
+                DatabaseType::Postgres,
+                r#"select $tag$select; 'Mixed' 日本語😀$tag$ as "Case Sensitive", e'it\'s;fine', E'escaped\\path', ARRAY[1,2][1]"#,
+            ),
+            (
+                DatabaseType::Postgres,
+                r#"select 'path\' as "name\", $$a; b$$::text, $1 as value"#,
+            ),
+            (
+                DatabaseType::Trino,
+                r#"select 'path\' as "name\", ARRAY[1,2][1] as "Mixed Case", 'it''s;fine'"#,
+            ),
+            (
+                DatabaseType::Postgres,
+                r#"select '__qrow_format_token_0', '日本語😀' as "a""b""#,
+            ),
+        ] {
+            let outcome =
+                format_statement_for(sql, SqlStyle::default(), FormatMode::Manual, database_type);
+            let FormatOutcome::Formatted(formatted) = outcome else {
+                panic!("Expected formatting for {database_type:?}: {sql}, got {outcome:?}");
+            };
+            assert!(formatted.starts_with("SELECT"), "{formatted}");
+            assert!(
+                same_tokens_for(sql, &formatted, database_type),
+                "{formatted}"
+            );
+            let quoted = |text: &str| {
+                tokens_for(text, database_type)
+                    .into_iter()
+                    .filter(|(_, kind)| matches!(kind, Kind::String | Kind::Identifier))
+                    .map(|(range, _)| text[range].to_string())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(quoted(sql), quoted(&formatted));
+        }
+    }
+
+    #[test]
+    fn dialect_formatting_keeps_unicode_prefixes_and_required_newlines() {
+        for database_type in [DatabaseType::Postgres, DatabaseType::Trino] {
+            for sql in [r#"select U&"d\0061t" from t"#, r"select U&'d\0061t'"] {
+                let FormatOutcome::Formatted(text) = format_statement_for(
+                    sql,
+                    SqlStyle::default(),
+                    FormatMode::Manual,
+                    database_type,
+                ) else {
+                    panic!("{sql}")
+                };
+                assert!(text.contains("U&"), "{text}");
+                assert!(!text.contains("U &"), "{text}");
+                assert!(same_tokens_for(sql, &text, database_type));
+            }
+        }
+        for sql in [
+            "select 'foo'\n'bar'",
+            "select E'foo'\n'bar'",
+            "select 'foo'\n/*keep*/ 'bar'",
+        ] {
+            let outcome = format_statement_for(
+                sql,
+                SqlStyle::default(),
+                FormatMode::Manual,
+                DatabaseType::Postgres,
+            );
+            if let FormatOutcome::Formatted(text) = outcome {
+                assert!(same_tokens_for(sql, &text, DatabaseType::Postgres));
+                assert!(text.contains('\n'), "{text}");
+            } else {
+                assert_eq!(outcome, FormatOutcome::Rejected);
+            }
+        }
+        assert!(!same_tokens_for(
+            "select 'foo'\n'bar'",
+            "SELECT 'foo' 'bar'",
+            DatabaseType::Postgres
+        ));
+    }
+
+    #[test]
+    fn dialect_cursor_ranges_keep_semicolons_inside_quoted_tokens() {
+        for (database_type, sql) in [
+            (
+                DatabaseType::Postgres,
+                "select $tag$one;two$tag$;\nselect 2;",
+            ),
+            (DatabaseType::Trino, r#"select 'path\', "a;b"; select 2;"#),
+        ] {
+            let ranges = statement_ranges_for(sql, database_type);
+            assert_eq!(ranges.len(), 2);
+            assert_eq!(
+                statement_range_at_for(sql, sql.find(';').unwrap(), database_type),
+                Some(ranges[0].clone())
+            );
+            assert_eq!(
+                statement_range_at_for(sql, sql.len(), database_type),
+                Some(ranges[1].clone())
+            );
         }
     }
 

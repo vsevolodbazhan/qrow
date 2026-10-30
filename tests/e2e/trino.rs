@@ -598,3 +598,30 @@ fn parallel_spooling_saves_all_rows_and_keeps_normal_queries_usable(cx: &mut Tes
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
+    let sql = r#"select '日本語😀; path\' as "Mixed Case""#;
+    let app = launch(cx, sql);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(
+        cx,
+        "formatted SQL",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql.starts_with("SELECT"),
+    );
+    app.press(cx, "cmd-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, r"日本語😀; path\");
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-z");
+    app.wait_until(
+        cx,
+        "format undo",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == sql,
+    );
+}
