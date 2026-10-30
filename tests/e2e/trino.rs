@@ -168,7 +168,7 @@ fn run_export_exceeds_the_preview_byte_limit(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run trino"]
-fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext) {
+fn run_again_uses_result_sql_after_disconnect_without_session_warning(cx: &mut TestAppContext) {
     let sql = "SELECT i AS value FROM UNNEST(sequence(1,2001)) t(i) ORDER BY i";
     let app = launch(cx, sql);
     app.click(cx, "run");
@@ -178,13 +178,7 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
     app.update(cx, |window, _| {
-        assert!(
-            window
-                .find("export-session-warning")
-                .label()
-                .unwrap()
-                .contains("temporary tables")
-        );
+        assert!(window.try_find("export-session-warning").is_none());
     });
     app.select_json(cx, "Lines");
     let directory = tempfile::tempdir().unwrap();

@@ -76,7 +76,6 @@ mod tests {
             profile: Profile::default(),
             sql: "SELECT 1".into(),
             expected: None,
-            warning: false,
         };
         assert!(
             notice(&intent)

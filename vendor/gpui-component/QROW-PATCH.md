@@ -5,6 +5,9 @@ source has an Apache 2.0 license. See `LICENSE-APACHE`.
 
 Qrow changes these files:
 
+- `src/form/form.rs`: forms apply caller styles after their default styles.
+  The export form uses a 16-point gap between columns.
+
 - `src/input/input.rs`: disabled inputs do not register a focusable frame.
   Before, clicking a disabled input moved keyboard focus to its frame.
   The sign-in UI and E2E tests check that the locked account field cannot

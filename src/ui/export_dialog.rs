@@ -1032,7 +1032,7 @@ impl Render for ExportDialog {
         ];
         let custom_null = format == Format::Csv && matches!(options.null, NullMarker::Custom(_));
         v_flex().id("export-form").gap_4().w_full()
-            .child(v_form().columns(2).children([4,0,1,2,3,5,9,6,7,8].into_iter()
+            .child(v_form().columns(2).gap_x_4().children([4,0,1,2,3,5,9,6,7,8].into_iter()
                 .filter(|index| *index == 4 || format == Format::Csv && (0..=3).contains(index) || format == Format::Markdown && *index == 5 || matches!(format, Format::Json | Format::JsonLines) && *index == 9 || format == Format::Parquet && (6..=8).contains(index))
                 .map(|index| field().label(labels[index]).child(
                     Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
@@ -1072,11 +1072,6 @@ impl Render for ExportDialog {
             .when(format == Format::Parquet && !self.source.table(None).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
                 .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
                 .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
-            .when(self.scope.executes(), |view| view
-                .when_some(self.run.as_ref(), |view, intent| view
-                    .when(intent.warning, |view| view.child(div().id("export-session-warning").test_support().role(Role::Alert)
-                        .aria_label("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")
-                        .text_sm().text_color(cx.theme().warning).child("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")))))
             .when(self.scope.executes(), |view| view.children(self.run.as_ref().and_then(transfer::notice).map(|text|
                 div().id("export-incremental-notice").test_support().role(Role::Label).aria_label(text.clone())
                     .text_sm().text_color(cx.theme().muted_foreground).child(text)))

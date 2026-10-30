@@ -509,7 +509,9 @@ fn failed_cursor_download_retry_offers_a_reviewed_rerun(cx: &mut TestAppContext)
     app.click(cx, "results-panel-tab");
     app.click_labelled(cx, "Retry…");
     app.wait_for(cx, "export-error");
-    app.wait_for(cx, "export-session-warning");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-session-warning").is_none());
+    });
     app.update(cx, |window, _| {
         assert!(window.find("export-error").bounds().size.height > window.rem_size() * 1.5);
         assert_eq!(window.find("export-save").label(), Some("Save"));
@@ -611,7 +613,9 @@ fn kyuubi_run_export_keeps_session_state_and_all_preview_pages(cx: &mut TestAppC
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
-fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext) {
+fn kyuubi_run_export_again_uses_result_sql_after_disconnect_without_session_warning(
+    cx: &mut TestAppContext,
+) {
     use gpui_kit::test::TestWindowExt;
     let sql = "SELECT id AS value FROM range(2123) ORDER BY id";
     let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
@@ -623,13 +627,7 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
     app.update(cx, |window, _| {
-        assert!(
-            window
-                .find("export-session-warning")
-                .label()
-                .unwrap()
-                .contains("temporary tables")
-        );
+        assert!(window.try_find("export-session-warning").is_none());
     });
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("again.jsonl");
@@ -677,7 +675,10 @@ fn kyuubi_run_export_rechecks_idle_disconnect_after_the_save_panel(cx: &mut Test
     let output = directory.path().join("reviewed.csv");
     std::fs::write(&output, "original").unwrap();
     cx.simulate_new_path_selection(|_| Some(output.clone()));
-    app.wait_for(cx, "export-session-warning");
+    app.wait_for(cx, "export-error");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-session-warning").is_none());
+    });
     assert_eq!(
         app.update(cx, |_, cx| app.status(cx)),
         "Disconnected: Idle timeout"
