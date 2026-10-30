@@ -2171,12 +2171,11 @@ fn tree_tooltip_view(tip: &TreeTip, window: &mut Window, cx: &mut App) -> AnyVie
                 h_flex()
                     .w_full()
                     .items_baseline()
-                    .gap_4()
+                    .gap_2()
                     .child(
                         div()
                             .id("catalog-tooltip-title")
                             .test_support()
-                            .flex_1()
                             .min_w_0()
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .child(tip.title.clone()),

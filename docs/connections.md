@@ -668,8 +668,8 @@ of the dbt description, cut to a few lines. The tooltip shows the Markdown of
 the description, for example code and bold text. A cut description has a
 small note below it that tells you to open the dbt details.
 
-Column tooltips show the column name at the left and the muted data type
-at the right. Below the heading, the tooltip shows the dbt column
+Column tooltips show the column name and then the muted data type.
+Below the heading, the tooltip shows the dbt column
 description with the same Markdown format and length limit. A database
 comment comes before the dbt description. If both have the same text, the
 tooltip shows the text once. Column names use the same letter case rules as
