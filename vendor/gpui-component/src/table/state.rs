@@ -1689,7 +1689,19 @@ where
         let available_width = (self.bounds.size.width - fixed_width).max(px(0.));
         // The scroll handle offset is negative when scrolled right; negate it
         // to obtain a positive distance from the left edge of the scroll area.
-        let scroll_x = (-self.horizontal_scroll_handle.offset().x).max(px(0.));
+        //
+        // Wheel handlers move the offset past the right edge, and only the
+        // prepaint of the scroll area clamps it, after this header is built.
+        // Clamp here as well, or the header skips the columns that the
+        // clamped offset shows. The last empty column and the row header
+        // make the true limit a little larger, so this can render one more
+        // column on the left, but never fewer.
+        let content_width: Pixels = self.col_groups[left_columns_count..]
+            .iter()
+            .map(|g| g.width)
+            .sum();
+        let max_scroll_x = (content_width - available_width).max(px(0.));
+        let scroll_x = (-self.horizontal_scroll_handle.offset().x).clamp(px(0.), max_scroll_x);
 
         // Walk left-to-right through non-fixed columns to find the first one
         // whose right edge enters the viewport. The accumulated width of the

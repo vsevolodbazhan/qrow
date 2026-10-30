@@ -25,19 +25,97 @@ model or the other. I bring in my direction, general coding expertise, and produ
 
 Qrow is heavily inspired by DataGrip and [Zed](https://zed.dev/). It's built using [GPUI](https://gpui.rs/), which is a UI framework by Zed's creators.
 
-## Assistant
+## Features
+
+### Connections
+
+Qrow connects directly to Kyuubi (Spark), Postgres, and Trino. It does not need
+a JVM, an ODBC driver, or a separately installed database driver.
+
+- **Kyuubi** uses HiveServer2 over SASL PLAIN, with a password or an OpenID
+  Connect access token.
+- **Postgres** uses password authentication with TLS encryption and optional
+  certificate verification.
+- **Trino** uses HTTP or HTTPS with a username, a password, or the browser
+  sign-in of the coordinator.
+
+Qrow keeps passwords in macOS Keychain. One OpenID Connect sign-in can
+authenticate several connections, and you can copy its settings to share them
+with a colleague. Drag connections to change their order. See
+[connections](docs/connections.md).
+
+### Queries and Results
+
+Each connection has its own query tabs, and each tab has its own session.
+Tabs run queries at the same time, also when you select another connection.
+Press **⌘Enter** to run the statement at the cursor or the selected SQL. A
+status dot on each tab and connection shows work, unread results, and errors.
+
+Results show in pages of 1,000 rows as they arrive. Copy a cell or a row with
+its full value. The Logs panel of each tab shows the SQL, the session events,
+and the errors. **Activity** (**⇧⌘U**) shows the background work of each
+connection: schema refreshes, keep-alives, sessions, and queries. See
+[queries](docs/queries.md), [results](docs/results.md), and
+[activity](docs/activity.md).
+
+### Schema Catalog
+
+The Connections sidebar is a tree of schemas, tables, views, and columns.
+Qrow keeps a copy of the catalog on your computer, so the tree shows it also
+when the connection has no session.
+
+- **Refresh** a connection, a schema, or a table manually, or automatically
+  after a period while the connection is connected. A refresh uses its own
+  session. The next refresh continues a refresh that stopped.
+- **Share** one catalog between connections that read the same database catalog.
+  A refresh of one connection fills the tree of all of them.
+- **Show or hide** schemas with glob patterns, for example `sales_*`.
+- **Search** tables and views in all connections, and copy or insert their
+  quoted names into the editor.
+
+See [browse schemas](docs/connections.md#browse-schemas).
+
+### Integrations with dbt
+
+Attach a dbt project to a connection. Qrow reads the `manifest.json` that dbt
+writes, and can read it again each time dbt changes it. Qrow does not run dbt.
+
+- Tables that dbt builds show their dbt kind in the schema tree, and their
+  description in a tooltip.
+- **Show dbt details** opens the description, columns, tests, lineage, and
+  the compiled and raw SQL of a model. Click a parent or a child to follow the
+  lineage.
+- A schema mapping, for example `dbt_dev_* = *`, matches development schemas
+  with catalog schemas. The form shows how many models match tables.
+
+See [attach a dbt project](docs/connections.md#attach-a-dbt-project).
+
+### Assistant
 
 Qrow can open an AI assistant beside your query tab. It runs on a separately
-installed Codex or Claude Code executable with your own sign-in, so you can use
-your OpenAI or Claude subscription.
+installed Codex or Claude Code executable with your own sign-in, so you can
+use your OpenAI or Claude subscription. The assistant is off by default.
+Enable it in **Qrow → Settings… → Assistant**, then press **⌘J**.
 
-The feature is off by default. Enable it in **Qrow → Settings… → Assistant**. Qrow can ask before an assistant
-query runs, or run assistant queries automatically. 
+- Each conversation writes SQL in its own query tab, so you can work on it
+  together. Several conversations can work at the same time.
+- The assistant looks up tables and columns in the schema catalog, and reads
+  descriptions, tests, lineage, and model SQL from the dbt project.
+- Write **Assistant Notes** for a connection to give the assistant facts
+  about its data.
+- Qrow asks before an assistant query runs, or runs assistant queries
+  automatically. You select the mode for each conversation.
+- Qrow keeps a copy of each conversation on your computer. You can read
+  earlier conversations before the harness starts.
 
-Each conversation writes SQL
-in its own query tab, so you can work on it together. Several conversations can
-work at the same time. See [assistant](docs/assistant.md)
-for setup, data sharing, and query safety.
+See [assistant](docs/assistant.md) for setup, data sharing, and query safety.
+
+### Workspace
+
+Qrow saves your connections, tabs, and SQL automatically. Restored tabs do
+not connect until you run SQL. Select the theme, the interface scale, and the
+fonts of the interface, the editor, the Logs, and the assistant. See
+[workspace](docs/workspace.md).
 
 ## Metrics
 
@@ -68,10 +146,10 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
   use these surfaces. OpenGL uses grayscale text antialiasing and limits its
   texture atlas to 128 MiB. An image must fit a 2046 by 2046 pixel atlas tile.
   The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
-  Other operating systems are not supported. The assistant also needs a compatible
-  Codex or Claude Code executable.
-- **Core functionality first.** 90% percent of the work I do in such an app is choosing a connection, writing a query, running it, and seeing results. That is what Qrow is focused on.
-- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is a mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap, and macOS may show a Gatekeeper warning on first launch.
+  Other operating systems are not supported.
+- **Bring your own assistant.** The assistant needs a separately installed Codex
+  or Claude Code executable and your own subscription or API key.
+- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap and GitHub releases, and macOS may show a Gatekeeper warning on first launch.
 
 ## Installation
 
