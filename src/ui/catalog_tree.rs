@@ -137,6 +137,8 @@ pub(super) enum Node {
         name: String,
         data_type: String,
         comment: Option<String>,
+        description: Option<String>,
+        description_cut: bool,
     },
     /// A row that explains the state of its parent, with an optional refresh.
     Notice {
@@ -650,21 +652,34 @@ impl Builder<'_> {
                 children.push(self.notice(id, profile, "No columns", Tone::Muted, None))
             }
             Some(columns) => {
+                let descriptions = self
+                    .dbt
+                    .get(&profile)
+                    .map(|lookup| lookup.column_descriptions(schema, relation, columns))
+                    .unwrap_or_default();
                 for (ix, column) in columns.iter().enumerate() {
                     let item_id = child_id(id, &format!("{ix}{SEPARATOR}{}", column.name));
                     let data_type = display_type(&column.data_type);
-                    children.push(self.add(
-                        item_id,
-                        format!("{} {data_type}", column.name),
-                        Node::Column {
-                            profile,
-                            schema: schema.into(),
-                            relation: relation.into(),
-                            name: column.name.clone(),
-                            data_type,
-                            comment: column.comment.clone(),
-                        },
-                    ));
+                    children.push(
+                        self.add(
+                            item_id,
+                            format!("{} {data_type}", column.name),
+                            Node::Column {
+                                profile,
+                                schema: schema.into(),
+                                relation: relation.into(),
+                                name: column.name.clone(),
+                                data_type,
+                                comment: column.comment.clone(),
+                                description: descriptions
+                                    .get(&column.name)
+                                    .and_then(|(text, _)| text.clone()),
+                                description_cut: descriptions
+                                    .get(&column.name)
+                                    .is_some_and(|(_, cut)| *cut),
+                            },
+                        ),
+                    );
                 }
             }
         }
@@ -1934,6 +1949,8 @@ fn render_entry(
             name,
             data_type,
             comment,
+            description,
+            description_cut,
             ..
         } => (
             Some(AssetIconName::Minus),
@@ -1941,7 +1958,11 @@ fn render_entry(
             Some(data_type.clone()),
             false,
             None,
-            row_tooltip(&format!("{name} {data_type}"), comment.as_deref(), None),
+            row_tooltip(name, comment.as_deref(), None).map(|mut tip| {
+                tip.data_type = Some(data_type.clone());
+                tip.description(description.clone())
+                    .hint(description_cut.then_some(DESCRIPTION_HINT))
+            }),
         ),
         Node::Notice {
             profile,
@@ -1995,7 +2016,11 @@ fn render_entry(
         Node::Relation { comment, dbt, .. } => {
             comment.is_some() || dbt.as_ref().is_some_and(|dbt| dbt.description.is_some())
         }
-        Node::Column { comment, .. } => comment.is_some(),
+        Node::Column {
+            comment,
+            description,
+            ..
+        } => comment.is_some() || description.is_some(),
         _ => false,
     };
     let truncation = (!has_comment && error.is_none()).then(|| Truncation {
@@ -2143,9 +2168,28 @@ fn tree_tooltip_view(tip: &TreeTip, window: &mut Window, cx: &mut App) -> AnyVie
             .aria_label(tip.text())
             .gap_0p5()
             .child(
-                div()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child(tip.title.clone()),
+                h_flex()
+                    .w_full()
+                    .items_baseline()
+                    .gap_4()
+                    .child(
+                        div()
+                            .id("catalog-tooltip-title")
+                            .test_support()
+                            .flex_1()
+                            .min_w_0()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .child(tip.title.clone()),
+                    )
+                    .when_some(tip.data_type.as_ref(), |header, data_type| {
+                        header.child(
+                            div()
+                                .id("catalog-tooltip-type")
+                                .test_support()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(data_type.clone()),
+                        )
+                    }),
             )
             .children(tip.comment.clone())
             .when_some(description.as_ref(), |tooltip, state| {
@@ -2250,6 +2294,7 @@ const DESCRIPTION_HINT: &str = "Open dbt details to see the full description.";
 struct TreeTip {
     /// The full name, which the row can truncate.
     title: String,
+    data_type: Option<String>,
     comment: Option<String>,
     /// The dbt description, in Markdown.
     description: Option<String>,
@@ -2270,8 +2315,12 @@ impl TreeTip {
 
     /// All the text, one part on each line.
     fn text(&self) -> String {
+        let title = match &self.data_type {
+            Some(data_type) => format!("{} {data_type}", self.title),
+            None => self.title.clone(),
+        };
         [
-            Some(self.title.as_str()),
+            Some(title.as_str()),
             self.comment.as_deref(),
             self.description.as_deref(),
             self.error.as_deref(),
@@ -2289,6 +2338,7 @@ impl TreeTip {
 fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option<TreeTip> {
     Some(TreeTip {
         title: name.to_owned(),
+        data_type: None,
         comment: comment.map(str::to_owned),
         description: None,
         error: error.map(error_summary),

@@ -1097,6 +1097,25 @@ impl TestApp {
         panic!("{target} did not scroll into view: {state:?}. Wheel positions: {positions:?}");
     }
 
+    /// Moves the pointer over an element with a stable ID.
+    pub fn hover(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.wait_for(cx, id.clone());
+        self.update(cx, |window, cx| {
+            let position = window.find(id).bounds().center();
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
     /// Moves the pointer over the element labelled exactly `text`, for
     /// controls that show on hover, like the close button of a tab.
     pub fn hover_labelled(&self, cx: &mut TestAppContext, text: &str) {

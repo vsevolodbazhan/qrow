@@ -618,27 +618,78 @@ impl DbtLookup {
         relation: &str,
         comment: Option<&str>,
     ) -> Option<DbtBadge> {
-        let key = if self.exact {
-            (schema.to_owned(), relation.to_owned())
-        } else {
-            (schema.to_lowercase(), relation.to_lowercase())
-        };
-        let entry = self.index.entry(*self.relations.get(&key)?);
+        let entry = self.relation(schema, relation)?;
         let detail = format!("dbt {}", resource_label(&self.index, entry));
-        let description = entry.description.trim();
-        let (description, description_cut) =
-            if description.is_empty() || comment.map(str::trim) == Some(description) {
-                (None, false)
-            } else {
-                let (summary, cut) = summary(description, TOOLTIP_DESCRIPTION_CHARS);
-                (Some(summary), cut)
-            };
+        let (description, description_cut) = tooltip_description(&entry.description, comment);
         Some(DbtBadge {
             unique_id: entry.unique_id.to_string(),
             detail,
             description,
             description_cut,
         })
+    }
+
+    fn relation(&self, schema: &str, relation: &str) -> Option<&Entry> {
+        let key = if self.exact {
+            (schema.to_owned(), relation.to_owned())
+        } else {
+            (schema.to_lowercase(), relation.to_lowercase())
+        };
+        Some(self.index.entry(*self.relations.get(&key)?))
+    }
+
+    /// Column descriptions, with the same letter case rules as relations.
+    pub(super) fn column_descriptions(
+        &self,
+        schema: &str,
+        relation: &str,
+        columns: &[crate::catalog::CatalogColumn],
+    ) -> HashMap<String, (Option<String>, bool)> {
+        let Some(entry) = self.relation(schema, relation) else {
+            return HashMap::new();
+        };
+        let key = |name: &str| {
+            if self.exact {
+                name.to_owned()
+            } else {
+                name.to_lowercase()
+            }
+        };
+        let mut descriptions = HashMap::new();
+        for column in &entry.columns {
+            descriptions
+                .entry(key(&column.name))
+                .and_modify(|description| *description = None)
+                .or_insert(Some(column.description.as_ref()));
+        }
+        let mut counts = HashMap::new();
+        for column in columns {
+            *counts.entry(key(&column.name)).or_insert(0) += 1;
+        }
+        columns
+            .iter()
+            .filter_map(|column| {
+                let name = key(&column.name);
+                if counts[&name] != 1 {
+                    return None;
+                }
+                let description = descriptions.get(&name).copied().flatten()?;
+                Some((
+                    column.name.clone(),
+                    tooltip_description(description, column.comment.as_deref()),
+                ))
+            })
+            .collect()
+    }
+}
+
+fn tooltip_description(description: &str, comment: Option<&str>) -> (Option<String>, bool) {
+    let description = description.trim();
+    if description.is_empty() || comment.map(str::trim) == Some(description) {
+        (None, false)
+    } else {
+        let (summary, cut) = summary(description, TOOLTIP_DESCRIPTION_CHARS);
+        (Some(summary), cut)
     }
 }
 
@@ -978,6 +1029,60 @@ mod tests {
         assert!(lookup.badge("CORE", "orders", None).is_none());
         assert_eq!(source.description, None);
         assert!(lookup.badge("dev_core", "orders", None).is_none());
+    }
+
+    #[test]
+    fn column_descriptions_follow_case_rules_and_exclude_ambiguous_names() {
+        let value = serde_json::json!({
+            "metadata": {"dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json"},
+            "nodes": {"model.lake.orders": {
+                "unique_id": "model.lake.orders", "resource_type": "model", "name": "orders",
+                "schema": "core", "alias": "orders", "relation_name": "core.orders",
+                "columns": {
+                    "id": {"name": "id", "description": "Identifier"},
+                    "cost": {"name": "cost", "description": "Cost"},
+                    "COST": {"name": "COST", "description": "Other cost"}
+                }
+            }}
+        });
+        let index = Arc::new(crate::dbt::parse(&serde_json::to_vec(&value).unwrap()).unwrap());
+        let mut lookup = DbtLookup {
+            relations: HashMap::from([(
+                ("core".into(), "orders".into()),
+                index.find("model.lake.orders").unwrap(),
+            )]),
+            index,
+            exact: false,
+        };
+        let column = |name: &str| crate::catalog::CatalogColumn {
+            name: name.into(),
+            data_type: "BIGINT".into(),
+            comment: None,
+        };
+        let columns = [column("ID"), column("cost"), column("missing")];
+        let descriptions = lookup.column_descriptions("CORE", "Orders", &columns);
+        assert_eq!(descriptions.len(), 1);
+        assert_eq!(descriptions["ID"], (Some("Identifier".into()), false));
+        assert!(
+            lookup
+                .column_descriptions("core", "orders", &[column("id"), column("ID")])
+                .is_empty()
+        );
+        assert!(
+            lookup
+                .column_descriptions("core", "missing", &columns)
+                .is_empty()
+        );
+        lookup.exact = true;
+        let descriptions = lookup.column_descriptions(
+            "core",
+            "orders",
+            &[column("id"), column("ID"), column("cost"), column("COST")],
+        );
+        assert_eq!(descriptions.len(), 3);
+        assert_eq!(descriptions["cost"].0.as_deref(), Some("Cost"));
+        assert_eq!(descriptions["COST"].0.as_deref(), Some("Other cost"));
+        assert!(!descriptions.contains_key("ID"));
     }
 
     #[test]
