@@ -10,9 +10,12 @@ on:
 permissions:
   contents: read
 
+# A new commit cancels the run of an older commit of the same pull request.
+# On main, a run finishes, so that it saves its build caches. A newer push
+# waits for it, and replaces a push that is still waiting.
 concurrency:
   group: test-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
@@ -24,11 +27,12 @@ jobs:
       ref: ${{ github.sha }}
 
   # A run on main can save new Rust caches next to the caches that they
-  # replace. Delete the replaced caches to stay inside the repository limit.
+  # replace. Delete the replaced caches to stay inside the repository limit,
+  # also after a failed or cancelled run.
   cache-cleanup:
     name: cache-cleanup
     needs: checks
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    if: ${{ always() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

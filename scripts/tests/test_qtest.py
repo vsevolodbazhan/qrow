@@ -92,13 +92,19 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNone(trino.fixture)
         self.assertIn("trino", catalog.CI_JOBS["backend"].suites)
 
-    def test_transfer_probes_keep_native_and_docker_ci_requirements_separate(self):
-        kyuubi = catalog.SUITES["perf-e2e"]
+    def test_transfer_probes_run_in_the_backend_job(self):
+        kyuubi = catalog.SUITES["perf-kyuubi"]
+        # Either runtime works on a computer. The backend job uses Docker.
         self.assertEqual(kyuubi.fixture, "any")
+        self.assertFalse(kyuubi.macos_only)
         self.assertNotIn("docker", kyuubi.requires)
-        self.assertIn("transfer_perf::kyuubi", kyuubi.steps[1].nextest_filter)
-        for step, binary in zip(kyuubi.steps, ("e2e", "integration")):
-            self.assertEqual(step.command[step.command.index("--test") + 1], binary)
+        self.assertIn("transfer_perf::kyuubi", kyuubi.steps[0].nextest_filter)
+        self.assertEqual(kyuubi.prepare, (catalog.TRANSFER_PERF_BUILD,))
+        self.assertIn("perf-kyuubi", catalog.CI_JOBS["backend"].report_only)
+        self.assertEqual(catalog.CI_JOBS["backend"].runtime, "docker")
+        # The macOS E2E jobs do not build the integration tests with the perf profile.
+        for step in (*catalog.SUITES["perf-e2e"].steps, *catalog.SUITES["perf-e2e"].prepare):
+            self.assertNotIn("integration", step.command)
         for engine in ("postgres", "trino"):
             name = "perf-" + engine
             suite = catalog.SUITES[name]
@@ -296,14 +302,33 @@ class RunTests(unittest.TestCase):
             cli.main(["ci", "e2e"])
         self.assertTrue(run.call_args.kwargs["require_all"])
 
-    def test_the_job_list_shows_the_jobs_that_pull_requests_skip(self):
+    def test_the_job_list_shows_the_manual_only_jobs(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             cli.main(["ci"])
         lines = {line.split()[0]: line for line in output.getvalue().splitlines()}
         for name, job in catalog.CI_JOBS.items():
             with self.subTest(job=name):
-                self.assertEqual(lines[name].endswith("not in pull requests"), not job.pull_requests)
+                self.assertEqual(lines[name].endswith("releases and manual runs only"), job.manual_only)
+
+    def test_plans_of_pushes_and_manual_runs(self):
+        for flag, expected in (("--push", catalog.ci_jobs_for_push()), ("--all", list(catalog.CI_JOBS))):
+            output = io.StringIO()
+            with self.subTest(flag=flag), contextlib.redirect_stdout(output):
+                cli.main(["ci", "plan", flag])
+                plan = json.loads(output.getvalue())
+                self.assertEqual([name for name, selected in plan.items() if selected], expected)
+
+    def test_a_ci_job_sets_its_environment_and_installs_its_rust_target(self):
+        commands = []
+        with patch.dict(os.environ, {}), patch.object(runner, "run", return_value={"exit_code": 0}), \
+                patch.object(cli, "install_tools", return_value=0), patch.object(cli, "print_summary"), \
+                patch.object(cli.subprocess, "run", side_effect=lambda command, **_: commands.append(command)
+                             or subprocess.CompletedProcess(command, 0)), \
+                contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["ci", "package-intel", "--install"])
+            self.assertEqual(os.environ["CARGO_BUILD_TARGET"], "x86_64-apple-darwin")
+        self.assertEqual(commands, [("rustup", "target", "add", "x86_64-apple-darwin")])
 
     def test_a_nextest_step_that_writes_no_report_does_not_report_old_failures(self):
         report = runner.junit_report()
@@ -442,8 +467,11 @@ class FixtureSessionTests(RunTests):
 
     def test_e2e_and_perf_e2e_share_the_build_of_the_test_binary(self):
         self.assertEqual(catalog.SUITES["e2e"].prepare, (catalog.E2E_BUILD,))
-        self.assertEqual(catalog.SUITES["perf-e2e"].prepare,
-                         (catalog.E2E_BUILD, catalog.TRANSFER_PERF_BUILD))
+        self.assertEqual(catalog.SUITES["perf-e2e"].prepare, (catalog.E2E_BUILD,))
+        # Without `--test e2e`, nextest builds every test binary again after the servers start.
+        for name in ("e2e", "perf-e2e"):
+            step = catalog.SUITES[name].steps[0]
+            self.assertEqual(step.command[step.command.index("--test") + 1], "e2e")
 
     def test_failed_preparation_starts_no_servers(self):
         events, patches = self.fake()

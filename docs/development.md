@@ -110,15 +110,17 @@ actions. Pull requests in a stack get checks before their base merges. The
 test workflow calls the [checks workflow](../.github/workflows/checks.yml),
 which has the check jobs. On `main`, the test workflow then deletes old Rust
 build caches. See [Testing](testing.md#hooks-and-continuous-integration). For a non-draft pull request, the `plan` job selects the
-jobs from the changed paths and always selects `static`. Pushes and manual
-runs start all jobs. [Testing](testing.md#hooks-and-continuous-integration)
+jobs from the changed paths and always selects `static`. Pushes start all
+jobs except the Intel jobs. Manual runs and releases start all jobs. [Testing](testing.md#hooks-and-continuous-integration)
 gives the paths that select each job. A draft pull request, including a
 `converted_to_draft` event, starts no jobs. To run the checks of a draft pull
 request, mark it as ready for review.
 
 Every job checks out the same commit: the pull request merge result, or the
-pushed commit. A newer run cancels an older run for the same pull request or
-branch, including manual runs.
+pushed commit. A newer run of a pull request cancels its older run. Other
+runs, like the runs on `main` and manual runs, do not stop: a newer run of the
+same branch waits, and it replaces an older run that also waits. A run that
+stops before its end saves no build caches.
 
 Configure these individual checks as required checks of the `main` ruleset:
 
@@ -133,8 +135,8 @@ checks / e2e
 checks / perf
 ```
 
-Do not require the Intel checks. Pull requests skip them, and the run on
-`main` after a merge reports their failures.
+Do not require the Intel checks. Pull requests and pushes skip them. A
+release or a manual run of the test workflow reports their failures.
 
 There is no aggregate CI gate. A skipped job counts as passed: a job that the
 plan does not select, and a server job of a fork pull request. The `plan`

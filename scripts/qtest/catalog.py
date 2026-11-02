@@ -206,19 +206,25 @@ SUITES = {
               prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "integration")),)),
         Suite("e2e", "The real Qrow window, headless, against the real servers.",
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/) & not test(/^trino::/)", "--run-ignored", "only"),),
+              # `--test e2e` builds only the binary of the prepare step.
+              (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/) & not test(/^trino::/)",
+                       "--test", "e2e", "--run-ignored", "only"),),
               macos_only=True, explicit_only=True, fixture="any",
               prepare=(E2E_BUILD,)),
         Suite("perf-ui", "Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build.",
               ("cargo", "cargo-nextest", "macos"),
               (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
               macos_only=True, explicit_only=True),
-        Suite("perf-e2e", "Window query latency and Kyuubi export transfer against the real servers.",
+        Suite("perf-e2e", "Window query latency against the real servers.",
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              (nextest("binary(e2e) & test(/^perf::/)", "--test", "e2e", "--run-ignored", "only", "--no-capture"),
-               nextest("binary(integration) & test(/^transfer_perf::kyuubi$/)", "--cargo-profile", "perf", "--no-default-features", "--test", "integration", "--run-ignored", "only", "--no-capture")),
+              (nextest("binary(e2e) & test(/^perf::/)", "--test", "e2e", "--run-ignored", "only", "--no-capture"),),
               macos_only=True, explicit_only=True, fixture="any",
-              prepare=(E2E_BUILD, TRANSFER_PERF_BUILD)),
+              prepare=(E2E_BUILD,)),
+        Suite("perf-kyuubi", "Kyuubi export transfer measurements against the real servers.",
+              ("cargo", "cargo-nextest", "fixture-runtime"),
+              (nextest("binary(integration) & test(/^transfer_perf::kyuubi$/)", "--cargo-profile", "perf",
+                       "--no-default-features", "--test", "integration", "--run-ignored", "only", "--no-capture"),),
+              explicit_only=True, fixture="any", prepare=(TRANSFER_PERF_BUILD,)),
         Suite("perf-postgres", "Postgres export transfer and COPY measurements against a disposable server.",
               ("cargo", "cargo-nextest", "docker"),
               (Step((PYTHON, "scripts/e2e/postgres.py", "--perf")),), explicit_only=True),
@@ -229,6 +235,11 @@ SUITES = {
               ("cargo", "uv", "macos"),
               (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
                Step((PYTHON, "scripts/perf/app.py"))),
+              macos_only=True, explicit_only=True),
+        # perf-app on a package from another job, without a release build.
+        Suite("perf-package", "Launch time, idle memory, and idle CPU of the packaged app on the desktop.",
+              ("macos",),
+              (Step((PYTHON, "scripts/perf/app.py", "--package")),),
               macos_only=True, explicit_only=True),
         Suite("package", "The release app package, built in the target directory, and its size budget.",
               ("cargo", "uv", "macos", "xcode"),
@@ -309,9 +320,11 @@ class CiJob:
     needs: tuple[str, ...] = ()
     # A pull request runs the job when it changes a path that matches.
     paths: str = r"^"
-    # False keeps the job out of pull requests. Pushes, manual runs, and releases run every job.
-    pull_requests: bool = True
+    # Only releases and manual runs start the job. Pull requests and pushes do not.
+    manual_only: bool = False
     runtime: str = "auto"
+    # Environment variables of the job, like CARGO_BUILD_TARGET for a cross build.
+    env: tuple[tuple[str, str], ...] = ()
 
 
 LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
@@ -325,25 +338,32 @@ CI_JOBS = {
         CiJob("package", MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
         CiJob("backend", LINUX, ("backend", "postgres", "trino"), needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}",
-              report_only=("perf-postgres", "perf-trino"), runtime="docker"),
+              report_only=("perf-postgres", "perf-trino", "perf-kyuubi"), runtime="docker"),
         CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
               paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
         CiJob("perf", MACOS_RUNNER, ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
-        # The Intel runners are slower, so pull requests do not use them.
-        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), needs=("core",), pull_requests=False),
-        CiJob("package-intel", "macos-15-intel", ("package",), report_only=("perf-app",), needs=("core",),
-              pull_requests=False),
-        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop"), report_only=("perf-e2e",),
-              needs=("package-intel",), runtime="native", pull_requests=False),
+        # The Intel runners are slow, and the account runs few macOS jobs at a
+        # time, so only releases and manual runs start the Intel jobs.
+        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), needs=("core",), manual_only=True),
+        # An ARM64 runner builds the Intel package in about half the time.
+        CiJob("package-intel", MACOS_RUNNER, ("package",), needs=("core",), manual_only=True,
+              env=(("CARGO_BUILD_TARGET", "x86_64-apple-darwin"),)),
+        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop"), report_only=("perf-e2e", "perf-package"),
+              needs=("package-intel",), runtime="native", manual_only=True),
     ]
 }
 # A change to these paths can change any job, so it runs all of them.
 CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest$|scripts/core/|pyproject\.toml$|uv\.lock$)"
 
 
+def ci_jobs_for_push():
+    """Return the jobs of a push: all jobs except the manual-only jobs."""
+    return [name for name, job in CI_JOBS.items() if not job.manual_only]
+
+
 def ci_jobs_for_changes(paths):
     """Return the pull request jobs for the changed paths, with the jobs that they wait for."""
-    jobs = {name: job for name, job in CI_JOBS.items() if job.pull_requests}
+    jobs = {name: job for name, job in CI_JOBS.items() if not job.manual_only}
     selected = {"static"}
     for path in paths:
         if re.search(CI_ALL_PATHS, path):

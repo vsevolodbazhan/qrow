@@ -66,8 +66,8 @@ class CatalogJobTests(unittest.TestCase):
             with self.subTest(job=name):
                 if name != "plan":
                     self.assertIn(f"\n| `{name}` | ", guide)
-                # A pull request never runs a main-only job, so it cannot be a required check.
-                required = name == "plan" or catalog.CI_JOBS[name].pull_requests
+                # A pull request never runs a manual-only job, so it cannot be a required check.
+                required = name == "plan" or not catalog.CI_JOBS[name].manual_only
                 self.assertEqual(f"\nchecks / {name}\n" in development, required)
 
     def test_ci_runs_every_suite(self):
@@ -96,19 +96,21 @@ class PlanTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(catalog.ci_jobs_for_changes([path]), expected)
 
-    def test_intel_jobs_run_outside_pull_requests_only(self):
-        main_only = [name for name, ci_job in catalog.CI_JOBS.items() if not ci_job.pull_requests]
-        self.assertEqual(main_only, ["ui-intel", "package-intel", "e2e-intel"])
-        # A pull request job that waited for one of them would never run.
+    def test_intel_jobs_run_in_releases_and_manual_runs_only(self):
+        manual_only = [name for name, ci_job in catalog.CI_JOBS.items() if ci_job.manual_only]
+        self.assertEqual(manual_only, ["ui-intel", "package-intel", "e2e-intel"])
+        self.assertEqual(catalog.ci_jobs_for_push(), ["static", "core", "ui", "package", "backend", "e2e", "perf"])
+        # A pull request or push job that waited for one of them would never run.
         for name, ci_job in catalog.CI_JOBS.items():
-            if ci_job.pull_requests:
-                self.assertFalse(set(ci_job.needs) & set(main_only), name)
+            if not ci_job.manual_only:
+                self.assertFalse(set(ci_job.needs) & set(manual_only), name)
 
-    def test_plan_job_selects_all_jobs_outside_pull_requests(self):
+    def test_plan_job_selects_the_jobs_of_each_event(self):
         body = job("plan")
         self.assertIn("fetch-depth: 2", body)
         self.assertIn('git diff --name-only HEAD^1 HEAD', body)
-        self.assertIn("./qtest ci plan --all", body)
+        self.assertIn("push) ./qtest ci plan --push", body)
+        self.assertIn("*) ./qtest ci plan --all", body)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -157,6 +159,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(needs(job("e2e-intel")), ["plan", "package-intel"])
         for name in ("package-intel", "e2e-intel"):
             self.assertIn("name: macos-package-x86_64\n", job(name))
+        # An ARM64 runner builds the Intel package. An Intel runner tests it.
+        self.assertEqual(dict(catalog.CI_JOBS["package-intel"].env), {"CARGO_BUILD_TARGET": "x86_64-apple-darwin"})
+        self.assertEqual(catalog.CI_JOBS["package-intel"].runner, catalog.MACOS_RUNNER)
+        self.assertEqual(catalog.CI_JOBS["e2e-intel"].runner, "macos-15-intel")
+        self.assertIn("perf-package", catalog.CI_JOBS["e2e-intel"].report_only)
         dmg = job("dmg", RELEASE)
         for arch, runner, artifact in (("arm64", "macos-15", "macos-package"),
                                        ("x86_64", "macos-15-intel", "macos-package-x86_64")):
@@ -190,14 +197,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(all(value in ("${{ github.ref == 'refs/heads/main' }}", "false") for value in caches))
 
     def test_runs_that_save_rust_caches_delete_the_replaced_caches(self):
-        cleanup = job("cache-cleanup", TEST)
-        self.assertEqual(needs(cleanup), ["checks"])
-        # The same condition as save-if, also after a failed check.
-        self.assertIn("if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}", cleanup)
-        self.assertIn("actions: write", cleanup)
-        self.assertIn("run: python3 scripts/ci/rust_caches.py\n", cleanup)
+        for path in (TEST, RELEASE):
+            with self.subTest(workflow=path):
+                cleanup = job("cache-cleanup", path)
+                self.assertEqual(needs(cleanup), ["checks"])
+                # The same condition as save-if, also after a failed or cancelled check.
+                self.assertIn("if: ${{ always() && github.ref == 'refs/heads/main' }}", cleanup)
+                self.assertIn("actions: write", cleanup)
+                self.assertIn("run: python3 scripts/ci/rust_caches.py\n", cleanup)
         # The checks run code from pull requests, so they must not delete caches.
         self.assertNotIn("actions: write", read(CHECKS))
+
+    def test_runs_on_main_finish_and_pull_request_runs_cancel(self):
+        # A cancelled run on main saves no build caches.
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n", read(TEST))
 
     def test_each_rust_cache_has_one_job_that_saves_it(self):
         caches = {}
@@ -229,7 +242,7 @@ class WorkflowTests(unittest.TestCase):
                     self.assertIn("perf.json", upload)
                 else:
                     self.assertIn("retention-days: 1\n", upload)
-        for name in ("package", "e2e", "perf"):
+        for name in ("package", "backend", "e2e", "perf"):
             self.assertIn(f"name: performance-{name}\n", job(name))
             self.assertIn("if: github.ref == 'refs/heads/main'", job(name))
 
