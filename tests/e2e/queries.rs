@@ -401,18 +401,12 @@ fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
     app.click(cx, "toggle-results");
     app.update(cx, |window, _| {
         assert!(window.find("sql-editor").bounds().size.height > height);
-        assert_eq!(
-            window.find("toggle-results").label(),
-            Some("Restore results")
-        );
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
     });
     app.click(cx, "run");
     app.wait_cell(cx, 0, 1, "233");
     app.update(cx, |window, _| {
-        assert_eq!(
-            window.find("toggle-results").label(),
-            Some("Minimize results")
-        );
+        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
         assert_eq!(window.find("sql-editor").bounds().size.height, height);
     });
     app.press(cx, "cmd-j");

@@ -324,11 +324,7 @@ impl Qrow {
 
     pub(super) fn results_toggle_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let minimized = self.settings.results_minimized;
-        let label = if minimized {
-            "Restore results"
-        } else {
-            "Minimize results"
-        };
+        let label = if minimized { "Expand" } else { "Collapse" };
         Button::new("toggle-results")
             .ghost()
             .small()

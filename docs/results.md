@@ -16,10 +16,10 @@ header. Column headers remain visible when a query returns columns but no rows.
 
 ## Minimize the panel
 
-Press **⌘J**, select **View → Toggle results**, or use **Minimize results**
+Press **⌘J**, select **View → Toggle results**, or use **Collapse**
 in the panel header. The editor fills the available height. The Results and
 Logs buttons remain visible. Selecting either button restores the panel.
-Use **Restore results** or **⌘J** to restore
+Use **Expand** or **⌘J** to restore
 the previous panel height.
 
 The minimized state applies to all query tabs and is saved after restart.
