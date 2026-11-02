@@ -196,6 +196,9 @@ fn delete_dialog_keeps_application_commands(cx: &mut TestAppContext, from_list: 
     app.send(cx, "Explain SELECT 1");
     app.wait_reply(cx, "I can help with this query");
     app.wait_idle(cx);
+    app.wait_saved(cx, "the saved conversation", |saved| {
+        saved.assistant.conversations.len() == 1
+    });
     if from_list {
         app.show_threads(cx);
     }

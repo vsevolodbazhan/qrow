@@ -231,6 +231,9 @@ fn a_conversation_of_the_other_harness_shows_its_saved_copy(cx: &mut TestAppCont
     );
     app.show_threads(cx);
     app.wait_label(cx, "Codex");
+    app.wait_saved(cx, "the saved conversation", |saved| {
+        !saved.assistant.conversations.is_empty()
+    });
     let thread = app.saved().assistant.conversations[0].thread_id.clone();
     assert_eq!(
         app.update(cx, |window, _| label(

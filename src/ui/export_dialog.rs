@@ -1913,6 +1913,8 @@ mod tests {
             assert!(window.try_find("keep-working").is_some());
             assert!(window.try_find("export-save").is_none());
             assert!(owner.upgrade().unwrap().read(cx).quit_warning_open);
+            // The alert slides in. A click while it moves can miss the button.
+            wait_until_still(window, "keep-working".into(), cx);
             window.click("keep-working", cx);
             window.render_frame(cx);
             assert!(!owner.upgrade().unwrap().read(cx).quit_warning_open);

@@ -1286,6 +1286,20 @@ impl TestApp {
         storage::load(&self.workspace).unwrap()
     }
 
+    /// Waits until the saved workspace matches `predicate`. Qrow writes the
+    /// workspace on a background thread, so a check right after an action
+    /// can still read the previous file.
+    pub fn wait_saved(
+        &self,
+        cx: &mut TestAppContext,
+        what: &str,
+        predicate: impl Fn(&Workspace) -> bool,
+    ) {
+        self.wait_until(cx, what, Duration::from_secs(10), |_, _| {
+            predicate(&self.saved())
+        });
+    }
+
     /// Polls `predicate` on fresh frames until it holds. Fails with the
     /// registered element paths after `timeout` of wall time.
     /// The status of the active tab, like "Complete" or
