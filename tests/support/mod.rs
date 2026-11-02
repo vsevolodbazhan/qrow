@@ -452,11 +452,11 @@ fn has_focus_outline(window: &Window, cx: &App, bounds: Bounds<Pixels>) -> bool 
     })
 }
 
-/// One painted dot in a region, in the expected theme color.
-fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
+/// The painted status dots in a region.
+fn dots_in(window: &Window, bounds: Bounds<Pixels>) -> Vec<gpui_kit::Quad> {
     let bounds = bounds.scale(window.scale_factor());
     let dot_size = px(6.).scale(window.scale_factor());
-    let dots: Vec<_> = window
+    window
         .painted_quads()
         .into_iter()
         .filter(|quad| {
@@ -465,25 +465,48 @@ fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_
                 && bounds.contains(&quad.bounds.center())
                 && quad.content_mask.bounds.contains(&quad.bounds.center())
         })
-        .collect();
+        .collect()
+}
+
+/// One painted dot in a region, in the expected theme color.
+fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
+    let dots = dots_in(window, bounds);
     assert_eq!(dots.len(), usize::from(expected.is_some()), "{dots:?}");
     if let Some(color) = expected {
         assert_eq!(dots[0].background, gpui_kit::Background::from(color));
     }
 }
 
-/// A tab paints one status dot and keeps its Close control visible.
-pub fn assert_tab_dot(window: &Window, tab: Uuid, expected: Option<gpui_kit::Hsla>) {
+/// The bounds of the tab with a visible Close control.
+fn tab_bounds(window: &Window, tab: Uuid) -> Bounds<Pixels> {
     let close = window.find(format!("close-tab-{tab}"));
     assert!(close.visible(), "The Close control is hidden");
-    let tab = elements(window)
+    elements(window)
         .into_iter()
         .find(|element| {
             element.role() == Some(gpui_kit::Role::Tab)
                 && element.bounds().contains(&close.bounds().center())
         })
-        .expect("The Close control is inside a tab");
-    assert_dot_in(window, tab.bounds(), expected);
+        .expect("The Close control is inside a tab")
+        .bounds()
+}
+
+/// A tab paints one status dot and keeps its Close control visible.
+pub fn assert_tab_dot(window: &Window, tab: Uuid, expected: Option<gpui_kit::Hsla>) {
+    assert_dot_in(window, tab_bounds(window, tab), expected);
+}
+
+/// Whether a tab paints the expected status dot. Use it to wait for a dot
+/// that background work, like a keep-alive, can change for a moment.
+pub fn shows_tab_dot(window: &Window, tab: Uuid, expected: Option<gpui_kit::Hsla>) -> bool {
+    let dots: Vec<_> = dots_in(window, tab_bounds(window, tab))
+        .into_iter()
+        .map(|quad| quad.background)
+        .collect();
+    dots == expected
+        .map(gpui_kit::Background::from)
+        .into_iter()
+        .collect::<Vec<_>>()
 }
 
 /// A connection row paints one dot in the expected theme color.
