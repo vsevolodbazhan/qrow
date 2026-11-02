@@ -1,6 +1,7 @@
 """Command line of qtest. Run `./qtest help` for the guide."""
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -155,11 +156,16 @@ def command_ci(args):
         for job in catalog.CI_JOBS.values():
             suites = ", ".join([*job.suites, *(f"{name} (report only)" for name in job.report_only)])
             needs = f"  waits for {', '.join(job.needs)}" if job.needs else ""
-            scope = "" if job.pull_requests else "  not in pull requests"
+            scope = "  releases and manual runs only" if job.manual_only else ""
             print(f"{job.name:<13} {job.runner:<14} {suites}{needs}{scope}")
         return EXIT_PASSED
     if args.job == "plan":
-        names = list(catalog.CI_JOBS) if args.all else catalog.ci_jobs_for_changes(runner.changed_paths_from_git())
+        if args.all:
+            names = list(catalog.CI_JOBS)
+        elif args.push:
+            names = catalog.ci_jobs_for_push()
+        else:
+            names = catalog.ci_jobs_for_changes(runner.changed_paths_from_git())
         plan = json.dumps({name: name in names for name in catalog.CI_JOBS})
         print(plan)
         if args.github_output:
@@ -168,9 +174,13 @@ def command_ci(args):
         return EXIT_PASSED
     job = catalog.CI_JOBS[args.job]
     names = [*job.suites, *job.report_only]
+    os.environ.update(job.env)
     if args.install:
         tools = [tool for tool in catalog.TOOLS if any(tool in catalog.SUITES[name].requires for name in names)]
         if install_tools(tools):
+            return EXIT_FAILED
+        target = dict(job.env).get("CARGO_BUILD_TARGET")
+        if target and subprocess.run(("rustup", "target", "add", target), cwd=ROOT).returncode:
             return EXIT_FAILED
     selected, _ = runner.resolve(names)
     output = runner.Output(quiet=False)
@@ -466,7 +476,9 @@ def parser():
         description="Without JOB, list the jobs of the checks workflow. `plan` prints the jobs that "
                     "the changed paths select, as JSON. JOB runs the suites of that job, as CI does.")
     ci.add_argument("job", nargs="?", choices=[*catalog.CI_JOBS, "plan"])
-    ci.add_argument("--all", action="store_true", help="plan: select every job.")
+    plan = ci.add_mutually_exclusive_group()
+    plan.add_argument("--all", action="store_true", help="plan: select every job, as releases and manual runs do.")
+    plan.add_argument("--push", action="store_true", help="plan: select the jobs of a push to main.")
     ci.add_argument("--github-output", metavar="FILE", help="plan: also write `jobs=JSON` to FILE.")
     ci.add_argument("--install", action="store_true", help="Install the pinned tools of the job first.")
 

@@ -40,10 +40,12 @@ accept a test filter.
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
 | `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
-| `perf-e2e` * | Window query latency and Kyuubi export transfer against the real servers. | macOS, Docker or Java 17 |
+| `perf-e2e` * | Window query latency against the real servers. | macOS, Docker or Java 17 |
+| `perf-kyuubi` * | Kyuubi export transfer measurements against the real servers. | Docker or Java 17 |
 | `perf-postgres` | Postgres export transfer and COPY measurements. | Docker, cargo-nextest |
 | `perf-trino` | Trino export transfer measurements. | Docker, cargo-nextest |
 | `perf-app` | Launch time, idle memory, and idle CPU of the release app on the desktop. | macOS desktop |
+| `perf-package` | Launch time, idle memory, and idle CPU of the packaged app on the desktop. | macOS desktop |
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
@@ -56,7 +58,7 @@ accept a test filter.
 
 On Linux, `unit` and `clippy` use only the core library. These suites need
 macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
-`perf-e2e`, `perf-app`, `package`, and `desktop`. `clippy-app` is the second
+`perf-e2e`, `perf-app`, `perf-package`, `package`, and `desktop`. `clippy-app` is the second
 pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
@@ -552,16 +554,19 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 | --- | --- |
 | `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding and CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
 | `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
-| `perf-e2e` | The time from **Run** to the first result row and to the next page. Kyuubi export throughput and peak memory for each preset. |
+| `perf-e2e` | The time from **Run** to the first result row and to the next page. |
+| `perf-kyuubi` | Kyuubi export throughput and peak memory for each preset. |
 | `perf-postgres` | Postgres export throughput and peak memory for each preset. Normal protocol and server CSV `COPY` comparison. |
 | `perf-trino` | Trino export throughput and peak memory for each preset. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 18 seconds before the measurement, so the caret no longer blinks and Qrow has returned its free memory to macOS. The first launch after a build warms up, and the median of the next three counts. |
+| `perf-package` | The `perf-app` probes on the app in a package zip, without a build. The zip is `QROW_MACOS_PACKAGE`, or `target/macos-package/Qrow-macos.zip`. |
 
 CI runs `perf` with its budgets. It runs the other probes as report-only
 suites, because the hosted runners are slower and less steady than a
 developer computer. Runs on `main` keep the measurements for 90 days. To get
 the measurements of a run, download its `performance-package`,
-`performance-e2e`, or `performance-perf` artifact, for example:
+`performance-backend`, `performance-e2e`, or `performance-perf` artifact,
+for example:
 
 ```sh
 gh run download RUN_ID -n performance-perf
@@ -615,7 +620,7 @@ normal Worker, spool, and CSV Save path on 50,000 rows with a different
 1 KiB text value in each row. Run all engines with:
 
 ```sh
-./qtest run perf-e2e perf-postgres perf-trino --runtime docker
+./qtest run perf-kyuubi perf-postgres perf-trino --runtime docker
 ```
 
 Each case uses a fresh client process and a warmed connection. One warm-up
@@ -663,9 +668,9 @@ These cases compare local CSV formatting with server CSV formatting. They do
 not measure the complete Worker and spool path. Production export continues
 to use the normal protocol.
 
-CI runs Kyuubi probes with `perf-e2e` on the macOS native fixture. It runs
-Postgres and Trino probes on the Linux Docker job. These probes report
-measurements without enforced throughput budgets.
+CI runs the Kyuubi, Postgres, and Trino probes in the Linux `backend` job
+with Docker. These probes report measurements without enforced throughput
+budgets.
 
 The [dbt benchmark](../benches/dbt.rs) makes synthetic manifests with the
 [generator](../tests/support/dbt_manifest.rs) and reports the median of 7
@@ -876,12 +881,12 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | |
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
-| `backend` | Linux | `backend`, `postgres`, `trino`, and `perf-postgres`, `perf-trino` (report only), with Docker | `core` |
+| `backend` | Linux | `backend`, `postgres`, `trino`, and `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | `core` |
 | `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
 | `perf` | macOS ARM64 | `perf`, and `perf-ui` (report only) | `core` |
 | `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |
-| `package-intel` | macOS x86_64 | `package`, and `perf-app` (report only) | `core` |
-| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, and `perf-e2e` (report only), with local Java servers | `package-intel` |
+| `package-intel` | macOS ARM64 | `package` for x86_64 | `core` |
+| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, and `perf-e2e`, `perf-package` (report only), with local Java servers | `package-intel` |
 
 The failures of `core` predict the failures of the macOS and server jobs, so
 these jobs wait for it. `e2e` also waits for the package that it tests. A
@@ -891,10 +896,14 @@ report-only suite runs, and its measurements go into the run summary. Its
 failure does not fail the job.
 
 A `plan` job selects the jobs of a pull request from its changed files.
-Pull requests do not run the Intel jobs, because the Intel runners are slower.
-Pushes, manual runs, and releases run all jobs, so the run on `main` after a
-merge finds Intel failures. To run the Intel jobs before a merge, start the
-test workflow manually on the branch.
+Pull requests and pushes do not run the Intel jobs. The Intel runners are
+slow, and GitHub runs only a small number of macOS jobs at the same time for
+the account. Manual runs and releases run all jobs, so a release finds Intel
+failures. To run the Intel jobs before a merge or a release, start the test
+workflow manually on the branch. `package-intel` builds the Intel package on
+an ARM64 runner with `CARGO_BUILD_TARGET=x86_64-apple-darwin`. This takes
+about half the time of a build on an Intel runner. `e2e-intel` tests the
+package on an Intel runner, and `perf-package` measures its launch there.
 
 For a pull request, the plan always selects `static`. Changes to Rust
 sources or `.cargo/config.toml` select all pull request jobs. Changes to the
@@ -908,8 +917,8 @@ changes, run `./qtest ci plan`.
 
 In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
-accessibility APIs. The ARM64 jobs use `macos-15`, and the Intel jobs use
-`macos-15-intel`.
+accessibility APIs. The ARM64 jobs and `package-intel` use `macos-15`. The
+other Intel jobs use `macos-15-intel`.
 Each E2E job tests the package for its architecture and shares one set of
 servers between its suites. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Each Rust build
@@ -918,13 +927,15 @@ restores the cache of its UI job, which builds the E2E test binary. Runs on
 `main` save the build caches. Other runs only restore them. A change to
 `Cargo.lock` or to the toolchain gives a cache a new name, and the old cache
 stays. After the checks of a run on `main`, the `cache-cleanup` job of the test
-workflow deletes the old caches. For each job, it keeps the newest cache. A
+workflow and of the release workflow deletes the old caches. It also runs
+after failed or cancelled checks. A cancelled job saves no cache, so a newer
+push to `main` does not cancel the run in progress. For each job, it keeps the newest cache. A
 release of an older commit with another `Cargo.lock` saves a newer cache that
 `main` does not use, so the next run on `main` builds the dependencies again.
 To see the caches that it deletes, run
 `python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`.
 CI keeps its artifacts for one day. Runs on `main` also keep the measurements of the
-package, E2E, and `perf` jobs for 90 days, in the `performance-JOB`
+package, backend, E2E, and `perf` jobs for 90 days, in the `performance-JOB`
 artifacts. See [Check performance](#check-performance). See
 [Development](development.md#hooks-and-continuous-integration) for workflow
 events, required checks, and releases.

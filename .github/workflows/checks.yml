@@ -38,19 +38,21 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
-      # A pull request runs the jobs that its changes select. Pushes, manual
-      # runs, and releases run every job.
+      # A pull request runs the jobs that its changes select. A push runs all
+      # jobs except the Intel jobs. Manual runs and releases run every job.
       - id: plan
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          if [ "$EVENT" = pull_request ]; then
-            QROW_CHANGED_FILES="$(git diff --name-only HEAD^1 HEAD)"
-            export QROW_CHANGED_FILES
-            ./qtest ci plan --github-output "$GITHUB_OUTPUT"
-          else
-            ./qtest ci plan --all --github-output "$GITHUB_OUTPUT"
-          fi
+          case "$EVENT" in
+            pull_request)
+              QROW_CHANGED_FILES="$(git diff --name-only HEAD^1 HEAD)"
+              export QROW_CHANGED_FILES
+              ./qtest ci plan --github-output "$GITHUB_OUTPUT"
+              ;;
+            push) ./qtest ci plan --push --github-output "$GITHUB_OUTPUT" ;;
+            *) ./qtest ci plan --all --github-output "$GITHUB_OUTPUT" ;;
+          esac
 
   static:
     name: static
@@ -215,6 +217,13 @@ jobs:
           path: target/qtest/runs/
           retention-days: 1
           if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: performance-backend
+          path: target/qtest/runs/latest/perf.json
+          retention-days: 90
+          if-no-files-found: warn
 
   e2e:
     name: e2e
@@ -332,15 +341,14 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # The catalog sets CARGO_BUILD_TARGET, so this ARM64 runner builds the Intel package.
   package-intel:
     name: package-intel
     needs: [plan, core]
     if: fromJSON(needs.plan.outputs.jobs)['package-intel']
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 40
     env:
-      # The package and the release build of perf-app use the same version,
-      # so perf-app does not build again.
       QROW_RELEASE_VERSION: ${{ inputs.release-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -370,13 +378,6 @@ jobs:
           path: target/qtest/runs/
           retention-days: 1
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.ref == 'refs/heads/main'
-        with:
-          name: performance-package-intel
-          path: target/qtest/runs/latest/perf.json
-          retention-days: 90
-          if-no-files-found: warn
 
   e2e-intel:
     name: e2e-intel
