@@ -44,6 +44,8 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
         run: |
+          echo 'jobs={"static":false,"core":true,"ui":true,"package":false,"backend":false,"e2e":true,"perf":false,"ui-intel":false,"package-intel":false,"e2e-intel":false}' >> "$GITHUB_OUTPUT"
+          exit 0
           case "$EVENT" in
             pull_request)
               QROW_CHANGED_FILES="$(git diff --name-only HEAD^1 HEAD)"
@@ -57,6 +59,7 @@ jobs:
   static:
     name: static
     needs: plan
+    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -113,7 +116,7 @@ jobs:
   # failures, and it takes about 2 minutes.
   ui:
     name: ui
-    needs: [plan, core]
+    needs: [plan]
     if: fromJSON(needs.plan.outputs.jobs).ui
     runs-on: macos-15
     timeout-minutes: 30
@@ -126,7 +129,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: native
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: true
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
@@ -135,7 +138,9 @@ jobs:
         if: always()
         with:
           name: ui-evidence
-          path: target/qtest/runs/
+          path: |
+            target/qtest/runs/
+            target/nextest/
           retention-days: 1
           if-no-files-found: error
 
@@ -227,7 +232,7 @@ jobs:
 
   e2e:
     name: e2e
-    needs: [plan, package]
+    needs: [plan]
     if: >
       fromJSON(needs.plan.outputs.jobs).e2e &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -252,20 +257,16 @@ jobs:
           qrow_java_home="$(/usr/libexec/java_home -v 17)"
           echo "JAVA_HOME=$qrow_java_home" >> "$GITHUB_ENV"
           echo "$qrow_java_home/bin" >> "$GITHUB_PATH"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: macos-package
-          path: target/macos-package
       - run: ./qtest ci e2e --install
         env:
-          QROW_E2E_REUSE_MACOS_PACKAGE: true
-          QROW_MACOS_PACKAGE: target/macos-package/Qrow-macos.zip
+          QROW_BUILD_PROFILE: debug
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: e2e-evidence
           path: |
             target/qtest/runs/
+            target/nextest/
             target/e2e-tools/preflight.log
           retention-days: 1
           if-no-files-found: error

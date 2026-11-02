@@ -105,6 +105,11 @@ gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 
 # Performance probes build like the release, without link-time optimization,
 # so that they compile faster.
+# EXPERIMENT: optimized dependencies for faster test runs.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
 [profile.perf]
 inherits = "release"
 lto = false
