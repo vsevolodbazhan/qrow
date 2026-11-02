@@ -180,7 +180,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(catalog.CI_JOBS["desktop-package"].suites, ("desktop",))
         # The e2e job tests a debug app from its own test build and does not wait for the package.
         self.assertNotIn("macos-package", job("e2e"))
-        self.assertEqual(dict(catalog.CI_JOBS["e2e"].env)["QROW_PACKAGE_EXECUTABLE"], "{target}/debug/qrow")
+        self.assertEqual(dict(catalog.CI_JOBS["e2e"].env),
+                         {"QROW_BUILD_PROFILE": "debug", "QROW_PACKAGE_PREBUILT": "true"})
         dmg = job("dmg", RELEASE)
         self.assertEqual(needs(dmg) or re.findall(r"^      - (\S+)$", dmg.split("strategy:")[0], re.MULTILINE),
                          ["resolve-target", "checks"])

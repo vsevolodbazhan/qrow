@@ -334,8 +334,7 @@ class CiJob:
     # "manual": manual runs and releases.
     scope: str = "pull_request"
     runtime: str = "auto"
-    # Environment variables of the job, like CARGO_BUILD_TARGET for a cross
-    # build. `{target}` is the Cargo target directory.
+    # Environment variables of the job, like CARGO_BUILD_TARGET for a cross build.
     env: tuple[tuple[str, str], ...] = ()
 
 
@@ -344,7 +343,7 @@ E2E_PATHS = r"^(tests/fixture/|scripts/e2e/)"
 # The desktop suite of the e2e job tests a debug app with the executable that
 # the E2E test build makes, so that the job does not wait for the release
 # package. The desktop-package job tests the release package.
-DEBUG_APP = (("QROW_BUILD_PROFILE", "debug"), ("QROW_PACKAGE_EXECUTABLE", "{target}/debug/qrow"))
+DEBUG_APP = (("QROW_BUILD_PROFILE", "debug"), ("QROW_PACKAGE_PREBUILT", "true"))
 CI_JOBS = {
     job.name: job
     for job in [

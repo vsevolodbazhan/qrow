@@ -19,13 +19,12 @@ QROW_MACOS_MINIMUM="$(uv run --locked python scripts/package/macos_platform.py m
 export MACOSX_DEPLOYMENT_TARGET="$QROW_MACOS_MINIMUM"
 qrow_executable="$(uv run --locked python scripts/package/macos_platform.py executable)"
 qrow_architecture="$(uv run --locked python scripts/package/macos_platform.py architecture)"
-if [ -n "${QROW_PACKAGE_EXECUTABLE:-}" ]; then
-    # Package an executable of another build, like the one that the E2E test
-    # build makes. A separate `cargo build` resolves other dependency features
-    # and compiles the dependencies again.
-    qrow_executable="$QROW_PACKAGE_EXECUTABLE"
+if [ "${QROW_PACKAGE_PREBUILT:-false}" = true ]; then
+    # Package the executable of an earlier build, like the one that the E2E
+    # test build makes. A separate `cargo build` resolves other dependency
+    # features and compiles the dependencies again.
     if [ ! -x "$qrow_executable" ]; then
-        echo "Missing executable for QROW_PACKAGE_EXECUTABLE: $qrow_executable" >&2
+        echo "Missing prebuilt executable: $qrow_executable. Build it first." >&2
         exit 1
     fi
 else

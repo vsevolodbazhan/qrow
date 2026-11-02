@@ -56,7 +56,7 @@ if [ "${1:-}" != --prepared ]; then
     else
         sh scripts/package/macos.sh
         # The size budget applies to the release build only.
-        if [ "${QROW_BUILD_PROFILE:-release}" = release ] && [ -z "${QROW_PACKAGE_EXECUTABLE:-}" ]; then
+        if [ "${QROW_BUILD_PROFILE:-release}" = release ] && [ "${QROW_PACKAGE_PREBUILT:-false}" != true ]; then
             uv run --locked python scripts/core/size.py
         fi
     fi

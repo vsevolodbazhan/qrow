@@ -179,7 +179,7 @@ def command_ci(args):
     measure = args.measure or os.environ.get("QROW_CI_MEASURE") == "true"
     report_only = job.report_only if measure else ()
     names = [*job.suites, *report_only]
-    os.environ.update({key: value.replace("{target}", str(runner.target_dir())) for key, value in job.env})
+    os.environ.update(job.env)
     if args.install:
         tools = [tool for tool in catalog.TOOLS if any(tool in catalog.SUITES[name].requires for name in names)]
         if install_tools(tools):

@@ -344,7 +344,7 @@ class RunTests(unittest.TestCase):
 
     def test_the_e2e_job_packages_the_executable_of_its_test_build(self):
         _, environment = self.run_ci("e2e")
-        self.assertEqual(environment["QROW_PACKAGE_EXECUTABLE"], str(runner.target_dir() / "debug/qrow"))
+        self.assertEqual(environment["QROW_PACKAGE_PREBUILT"], "true")
         self.assertEqual(environment["QROW_BUILD_PROFILE"], "debug")
 
     def test_a_slow_ci_job_warns_about_its_budget(self):
