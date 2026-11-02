@@ -118,8 +118,9 @@ actions. Pull requests in a stack get checks before their base merges. The
 test workflow calls the [checks workflow](../.github/workflows/checks.yml),
 which has the check jobs. On `main`, the test workflow then deletes old Rust
 build caches. See [Testing](testing.md#hooks-and-continuous-integration). For a non-draft pull request, the `plan` job selects the
-jobs from the changed paths and always selects `static`. Pushes start all
-jobs except the Intel jobs. Manual runs and releases start all jobs. [Testing](testing.md#hooks-and-continuous-integration)
+jobs from the changed paths and always selects `static`. Pushes start the
+pull request jobs and the measurement jobs. Manual runs and releases start
+all jobs. [Testing](testing.md#hooks-and-continuous-integration)
 gives the paths that select each job. A draft pull request, including a
 `converted_to_draft` event, starts no jobs. To run the checks of a draft pull
 request, mark it as ready for review.
@@ -143,8 +144,9 @@ checks / e2e
 checks / perf
 ```
 
-Do not require the Intel checks. Pull requests and pushes skip them. A
-release or a manual run of the test workflow reports their failures.
+Do not require the other checks. Pull requests skip them. A push reports
+the failures of the measurement jobs, and a release or a manual run of the
+test workflow reports the failures of the Intel jobs and `desktop-package`.
 
 There is no aggregate CI gate. A skipped job counts as passed: a job that the
 plan does not select, and a server job of a fork pull request. The `plan`
@@ -166,8 +168,8 @@ resolve-target -> checks -> dmg -> publish
 
 `resolve-target` finds the commit and the release version. `checks` is the
 checks workflow with all jobs. Its `package` job builds the package with the
-release version, and its `e2e` job tests that package. `package-intel` and
-`e2e-intel` do the same for Intel. `dmg` puts each tested package in a DMG
+release version, and its `desktop-package` job tests that package.
+`package-intel` and `e2e-intel` do the same for Intel. `dmg` puts each tested package in a DMG
 with `arm64` or `x86_64` in its name. It runs
 [`scripts/package/dmg.py`](../scripts/package/dmg.py). When the DMG mounts,
 Finder shows the app icon, an Applications shortcut, and an arrow between

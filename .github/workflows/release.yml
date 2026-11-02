@@ -99,7 +99,7 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
-  # The same checks as the test workflow. The E2E job tests the package that
+  # The same checks as the test workflow. desktop-package tests the package that
   # the release publishes.
   checks:
     needs: resolve-target

@@ -308,62 +308,86 @@ def suites_for_hook(hook, paths):
     return [name for name in suites_for_changes(paths) if name in HOOKS[hook][1]]
 
 
+# The events that start a CI job. Each scope includes the events of the scopes
+# before it: a push runs the pull request jobs too.
+SCOPES = ("pull_request", "push", "manual")
+
+
 @dataclass(frozen=True)
 class CiJob:
     """One job of the checks workflow. `./qtest ci NAME` runs its suites."""
     name: str
     runner: str
     suites: tuple[str, ...]
-    # Suites that run and report their measurements, but do not fail the job.
+    # The minutes that the suites of the job may take, without the runner
+    # setup. A slower run shows a warning. Most jobs stay under 10 minutes.
+    budget: int
+    # Suites that measure and do not fail the job. They run only when the run
+    # measures: on pushes, manual runs, and releases. Pull request measurements
+    # are not kept, so pull requests skip them.
     report_only: tuple[str, ...] = ()
-    # Jobs whose failure predicts a failure of this job, or whose output it uses.
+    # Jobs whose output this job uses. The other jobs start at once.
     needs: tuple[str, ...] = ()
     # A pull request runs the job when it changes a path that matches.
     paths: str = r"^"
-    # Only releases and manual runs start the job. Pull requests and pushes do not.
-    manual_only: bool = False
+    # "pull_request": every run. "push": pushes, manual runs, and releases.
+    # "manual": manual runs and releases.
+    scope: str = "pull_request"
     runtime: str = "auto"
-    # Environment variables of the job, like CARGO_BUILD_TARGET for a cross build.
+    # Environment variables of the job, like CARGO_BUILD_TARGET for a cross
+    # build. `{target}` is the Cargo target directory.
     env: tuple[tuple[str, str], ...] = ()
 
 
 LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
 E2E_PATHS = r"^(tests/fixture/|scripts/e2e/)"
+# The desktop suite of the e2e job tests a debug app with the executable that
+# the E2E test build makes, so that the job does not wait for the release
+# package. The desktop-package job tests the release package.
+DEBUG_APP = (("QROW_BUILD_PROFILE", "debug"), ("QROW_PACKAGE_EXECUTABLE", "{target}/debug/qrow"))
 CI_JOBS = {
     job.name: job
     for job in [
-        CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc")),
-        CiJob("core", LINUX, ("coverage",), paths=RUST_PATHS),
-        CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
-        CiJob("package", MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
+        CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc"), budget=3),
+        CiJob("core", LINUX, ("coverage",), budget=5, paths=RUST_PATHS),
+        CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), budget=7, paths=RUST_PATHS),
+        CiJob("package", MACOS_RUNNER, ("package",), budget=8, report_only=("perf-app",),
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
-        CiJob("backend", LINUX, ("backend", "postgres", "trino"), needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}",
-              report_only=("perf-postgres", "perf-trino", "perf-kyuubi"), runtime="docker"),
-        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
-              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
-        CiJob("perf", MACOS_RUNNER, ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
+        CiJob("backend", LINUX, ("backend", "postgres", "trino"), budget=8, paths=rf"{RUST_PATHS}|{E2E_PATHS}",
+              runtime="docker"),
+        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), budget=8, report_only=("perf-e2e",),
+              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/|^scripts/package/", runtime="native",
+              env=DEBUG_APP),
+        # The benchmarks need no Mac, and Linux runners are not limited to a few at a time.
+        CiJob("perf", LINUX, ("perf",), budget=5, paths=RUST_PATHS),
+        CiJob("perf-ui", MACOS_RUNNER, (), budget=8, report_only=("perf-ui",), scope="push"),
+        CiJob("perf-backend", LINUX, (), budget=14, report_only=("perf-postgres", "perf-trino", "perf-kyuubi"),
+              scope="push", runtime="docker"),
+        CiJob("desktop-package", MACOS_RUNNER, ("desktop",), budget=5, needs=("package",), scope="manual",
+              runtime="native"),
         # The Intel runners are slow, and the account runs few macOS jobs at a
         # time, so only releases and manual runs start the Intel jobs.
-        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), needs=("core",), manual_only=True),
+        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), budget=15, scope="manual"),
         # An ARM64 runner builds the Intel package in about half the time.
-        CiJob("package-intel", MACOS_RUNNER, ("package",), needs=("core",), manual_only=True,
+        CiJob("package-intel", MACOS_RUNNER, ("package",), budget=10, scope="manual",
               env=(("CARGO_BUILD_TARGET", "x86_64-apple-darwin"),)),
-        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop"), report_only=("perf-e2e", "perf-package"),
-              needs=("package-intel",), runtime="native", manual_only=True),
+        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop"), budget=15, report_only=("perf-e2e", "perf-package"),
+              needs=("package-intel",), runtime="native", scope="manual"),
     ]
 }
 # A change to these paths can change any job, so it runs all of them.
 CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest$|scripts/core/|pyproject\.toml$|uv\.lock$)"
 
 
-def ci_jobs_for_push():
-    """Return the jobs of a push: all jobs except the manual-only jobs."""
-    return [name for name, job in CI_JOBS.items() if not job.manual_only]
+def ci_jobs_for_event(event):
+    """Return the jobs that an event starts: "pull_request" (all paths), "push", or "manual"."""
+    events = SCOPES[:SCOPES.index(event) + 1]
+    return [name for name, job in CI_JOBS.items() if job.scope in events]
 
 
 def ci_jobs_for_changes(paths):
     """Return the pull request jobs for the changed paths, with the jobs that they wait for."""
-    jobs = {name: job for name, job in CI_JOBS.items() if not job.manual_only}
+    jobs = {name: CI_JOBS[name] for name in ci_jobs_for_event("pull_request")}
     selected = {"static"}
     for path in paths:
         if re.search(CI_ALL_PATHS, path):
