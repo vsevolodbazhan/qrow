@@ -1,3 +1,4 @@
+use gpui_base::input::InputContextMenuCapabilities;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
@@ -136,7 +137,9 @@ pub struct Input {
     /// An optional context menu builder to allow a custom context menu on the input.
     ///
     /// If set, this overrides the built-in context menu.
-    context_menu_builder: Option<Rc<dyn Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu>>,
+    context_menu_builder: Option<
+        Rc<dyn Fn(NativeMenu, InputContextMenuCapabilities, &mut Window, &mut App) -> NativeMenu>,
+    >,
 
     /// An optional paste handler. If set, it is invoked with the clipboard item
     /// before the default text insertion. Return `true` if handled.
@@ -341,6 +344,19 @@ impl Input {
     pub fn context_menu(
         mut self,
         f: impl Fn(NativeMenu, &mut Window, &mut App) -> NativeMenu + 'static,
+    ) -> Self {
+        self.context_menu_builder = Some(Rc::new(move |menu, _, window, cx| f(menu, window, cx)));
+        self
+    }
+
+    /// Replace the context menu using the current input capabilities.
+    ///
+    /// The input is borrowed while this callback runs. Use the supplied
+    /// capabilities instead of reading the input entity from the callback.
+    pub fn context_menu_with_capabilities(
+        mut self,
+        f: impl Fn(NativeMenu, InputContextMenuCapabilities, &mut Window, &mut App) -> NativeMenu
+        + 'static,
     ) -> Self {
         self.context_menu_builder = Some(Rc::new(f));
         self
@@ -555,7 +571,7 @@ impl RenderOnce for Input {
         state.on_context_menu(
             Rc::new(move |_, capabilities, position, window, cx| {
                 let menu = if let Some(custom) = custom.as_ref() {
-                    custom(NativeMenu::new(), window, cx)
+                    custom(NativeMenu::new(), capabilities, window, cx)
                 } else {
                     let enabled = !capabilities.is_disabled();
                     // A read-only input can still navigate the code, it only

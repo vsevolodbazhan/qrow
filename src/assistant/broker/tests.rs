@@ -878,3 +878,100 @@ fn sql_window_keeps_the_focus_within_the_limit_on_character_boundaries() {
     // A stale focus past the end shows the end.
     assert_eq!(sql_window(&sql, &(500..600), 20), 180..200);
 }
+
+#[test]
+fn assistant_append_and_edit_use_connection_dialect_and_keep_minimum() {
+    use crate::model::DatabaseType;
+    for (database_type, quoted) in [
+        (DatabaseType::Postgres, "$body$select; '日本語😀'$body$"),
+        (DatabaseType::Trino, r"'日本語😀; path\'"),
+    ] {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        let mut doc = document(tab, connection, "");
+        doc.database_type = database_type;
+        let long = format!(
+            "select {quoted} as value, count(*) as total_count from some_table group by value having count(*) >= 1"
+        );
+        let appended = broker
+            .plan_append(call(), &append_request(tab, connection, &long), &doc)
+            .unwrap();
+        assert!(appended.formatted, "{database_type:?}: {}", appended.sql);
+        assert!(appended.sql.starts_with("SELECT"));
+        assert!(appended.sql.contains(quoted));
+        assert!(appended.sql.contains('\n'));
+        let edited = broker
+            .plan_edit(
+                call(),
+                &edit_request(
+                    tab,
+                    connection,
+                    vec![TextEdit {
+                        start: 0,
+                        end: 0,
+                        replacement: long,
+                    }],
+                ),
+                &doc,
+            )
+            .unwrap();
+        assert!(edited.formatted, "{database_type:?}: {}", edited.sql);
+        assert!(edited.sql.starts_with("SELECT"));
+        assert!(edited.sql.contains(quoted));
+        for short in ["select 1", "select 'tiny;' as value"] {
+            let appended = broker
+                .plan_append(call(), &append_request(tab, connection, short), &doc)
+                .unwrap();
+            assert!(!appended.formatted);
+            assert_eq!(appended.sql, short);
+            let edited = broker
+                .plan_edit(
+                    call(),
+                    &edit_request(
+                        tab,
+                        connection,
+                        vec![TextEdit {
+                            start: 0,
+                            end: 0,
+                            replacement: short.into(),
+                        }],
+                    ),
+                    &doc,
+                )
+                .unwrap();
+            assert!(!edited.formatted);
+            assert_eq!(edited.sql, short);
+        }
+    }
+}
+
+#[test]
+fn assistant_keeps_postgres_continued_string_newlines() {
+    let (tab, connection) = ids();
+    let broker = ToolBroker::new(Some(target(tab, connection)));
+    let mut doc = document(tab, connection, "");
+    doc.database_type = crate::model::DatabaseType::Postgres;
+    let long = format!("select 'foo'\n'{}' as value", "x".repeat(100));
+    let appended = broker
+        .plan_append(call(), &append_request(tab, connection, &long), &doc)
+        .unwrap();
+    assert_eq!(appended.sql, long);
+    assert!(!appended.formatted);
+    let edited = broker
+        .plan_edit(
+            call(),
+            &edit_request(
+                tab,
+                connection,
+                vec![TextEdit {
+                    start: 0,
+                    end: 0,
+                    replacement: long.clone(),
+                }],
+            ),
+            &doc,
+        )
+        .unwrap();
+    assert_eq!(edited.sql, long);
+    assert!(!edited.formatted);
+}

@@ -5,6 +5,11 @@ source has an Apache 2.0 license. See `LICENSE-APACHE`.
 
 Qrow changes these files:
 
+- `src/input/input.rs` and `src/input/editor.rs`: `context_menu_with_capabilities`
+  passes the current selection and edit state to a custom context menu.
+  The input entity is borrowed during the callback, so the callback cannot
+  read that entity. The editor uses this snapshot for Format SQL and the
+  clipboard commands. The Qrow UI test checks the callback after a right-click.
 - `src/form/form.rs`: forms apply caller styles after their default styles.
   The export form uses a 16-point gap between columns.
 

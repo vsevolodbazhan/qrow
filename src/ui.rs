@@ -10,6 +10,7 @@ mod dbt_details;
 mod demo;
 mod environment;
 mod export_dialog;
+mod format_sql;
 mod output;
 mod profile_view;
 mod result_toolbar;
@@ -69,6 +70,7 @@ actions!(
     qrow,
     [
         RunQuery,
+        FormatSql,
         RunAndExport,
         SendAssistantMessage,
         NewTab,
@@ -115,6 +117,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(results::bindings());
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
+        KeyBinding::new("alt-cmd-l", FormatSql, None),
         KeyBinding::new(
             "cmd-enter",
             SendAssistantMessage,
@@ -197,11 +200,6 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                     OsAction::SelectAll,
                 ),
             ],
-        },
-        Menu {
-            disabled: false,
-            name: "Query".into(),
-            items: vec![MenuItem::action("Run query", RunQuery)],
         },
     ];
     let mut view = vec![

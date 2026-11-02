@@ -636,3 +636,213 @@ fn a_tab_without_a_dot_shows_only_its_connection_state_in_its_tooltip(cx: &mut T
         assert!(window.try_find("status-tooltip-detail").is_none());
     });
 }
+
+#[gpui_kit::test]
+fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    let sql = "select '日本語😀;' as value from t;\n\n-- between;\nselect 2 from t;";
+    app.type_sql(cx, sql);
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    let formatted = "SELECT '日本語😀;' AS value\nFROM t;\n\n-- between;\nSELECT 2\nFROM t;";
+    app.wait_until(
+        cx,
+        "formatted selection",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == formatted,
+    );
+    app.press(cx, "cmd-z");
+    app.wait_until(cx, "format undo", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.press(cx, "left");
+    app.press(cx, "alt-cmd-l");
+    let first_only = "SELECT '日本語😀;' AS value\nFROM t;\n\n-- between;\nselect 2 from t;";
+    app.wait_until(
+        cx,
+        "cursor statement only",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == first_only,
+    );
+    assert_eq!(app.credentials.reads(), 0);
+
+    app.type_sql(cx, "SET x=1");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_label(
+        cx,
+        "Some SQL statements are not supported by the formatter.",
+    );
+    assert_eq!(app.saved().tabs[0].sql, "SET x=1");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("format-sql-notice").role(),
+            Some(gpui_kit::Role::Alert)
+        );
+    });
+    app.type_sql(cx, "select ${hivevar:dt}");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_label(cx, "Some SQL could not be formatted safely.");
+    assert_eq!(app.saved().tabs[0].sql, "select ${hivevar:dt}");
+}
+
+#[gpui_kit::test]
+fn format_sql_keeps_selections_inside_quoted_tokens(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    for sql in [
+        "SELECT 'select 1' AS value",
+        "SELECT `select 1` FROM t",
+        "SELECT 1 /*select 1*/",
+    ] {
+        app.type_sql(cx, sql);
+        app.press(cx, "cmd-a");
+        app.press(cx, "left");
+        for _ in 0..sql.find("select 1").unwrap() {
+            app.press(cx, "right");
+        }
+        for _ in 0..8 {
+            app.press(cx, "shift-right");
+        }
+        app.press(cx, "alt-cmd-l");
+        app.wait_label(cx, "Some SQL could not be formatted safely.");
+        assert_eq!(app.saved().tabs[0].sql, sql);
+    }
+}
+
+#[gpui_kit::test]
+fn format_sql_uses_editor_style(cx: &mut TestAppContext) {
+    let mut workspace = Workspace::default();
+    workspace.settings.assistant.sql_keyword_case = qrow::sql::KeywordCase::Lowercase;
+    workspace.settings.editor_tab_size = 4;
+    let app = TestApp::launch(cx, workspace);
+    app.type_sql(cx, "SELECT a FROM t WHERE x=1 AND y=2");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(
+        cx,
+        "editor format style",
+        Duration::from_secs(10),
+        |_, _| {
+            let text = &app.saved().tabs[0].sql;
+            text.starts_with("select a\nfrom t\nwhere") && !text.contains("SELECT")
+        },
+    );
+    app.type_sql(cx, "select 1;\n\nselect 2;");
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    app.press(cx, "down");
+    app.press(cx, "alt-cmd-l");
+    app.wait_label(
+        cx,
+        "Move the cursor into a SQL statement or select SQL to format.",
+    );
+    assert_eq!(app.saved().tabs[0].sql, "select 1;\n\nselect 2;");
+}
+
+#[gpui_kit::test]
+fn format_real_trino_queries_and_undo(cx: &mut TestAppContext) {
+    let sql = include_str!("../fixtures/trino-format.sql");
+    let profile = Profile {
+        database_type: qrow::model::DatabaseType::Trino,
+        ..Profile::default()
+    };
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = sql.into();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(
+        cx,
+        "formatted Trino cost queries",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql.matches("SELECT").count() == 3,
+    );
+    let formatted = app.saved().tabs[0].sql.clone();
+    assert_eq!(formatted.matches("DATE'2026-10-").count(), 5);
+    assert!(formatted.contains("SUM(unused_cost_usd) / NULLIF("));
+    assert!(formatted.contains("\n\nSELECT"));
+    app.update(cx, |window, _| {
+        assert!(window.try_find("format-sql-notice").is_none())
+    });
+    app.press(cx, "cmd-z");
+    app.wait_until(
+        cx,
+        "undo Trino cost formatting",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == sql,
+    );
+    assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+fn format_sql_uses_each_connections_quoting_rules(cx: &mut TestAppContext) {
+    use qrow::model::DatabaseType;
+    for (database_type, sql, expected) in [
+        (
+            DatabaseType::Postgres,
+            r#"select $body$select; '日本語😀'$body$ as "Mixed Case";"#,
+            r#"SELECT $body$select; '日本語😀'$body$ AS "Mixed Case";"#,
+        ),
+        (
+            DatabaseType::Trino,
+            r#"select '日本語😀;' as "Mixed Case";"#,
+            r#"SELECT '日本語😀;' AS "Mixed Case";"#,
+        ),
+        (
+            DatabaseType::Kyuubi,
+            "select '日本語😀;' as `Mixed Case`;",
+            "SELECT '日本語😀;' AS `Mixed Case`;",
+        ),
+    ] {
+        let profile = Profile {
+            database_type,
+            ..Profile::default()
+        };
+        let mut tab = SavedTab::new(1, Some(profile.id));
+        tab.sql = format!("{sql}\n\nselect 2;");
+        let original = tab.sql.clone();
+        let app = TestApp::launch(
+            cx,
+            Workspace {
+                profiles: vec![profile],
+                tabs: vec![tab],
+                ..Workspace::default()
+            },
+        );
+        app.click(cx, "sql-editor");
+        app.press(cx, "cmd-a");
+        app.press(cx, "left");
+        app.press(cx, "alt-cmd-l");
+        app.wait_until(
+            cx,
+            "dialect cursor formatting",
+            Duration::from_secs(10),
+            |_, _| app.saved().tabs[0].sql == format!("{expected}\n\nselect 2;"),
+        );
+        app.press(cx, "cmd-z");
+        app.wait_until(
+            cx,
+            "dialect format undo",
+            Duration::from_secs(10),
+            |_, _| app.saved().tabs[0].sql == original,
+        );
+        app.press(cx, "cmd-a");
+        app.press(cx, "alt-cmd-l");
+        app.wait_until(
+            cx,
+            "dialect selection formatting",
+            Duration::from_secs(10),
+            |_, _| app.saved().tabs[0].sql == format!("{expected}\n\nSELECT 2;"),
+        );
+        assert_eq!(app.credentials.reads(), 0);
+    }
+}
