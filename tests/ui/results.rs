@@ -723,3 +723,82 @@ fn dragging_after_column_resize_uses_the_new_cell_bounds(cx: &mut TestAppContext
         (1..=3).map(first_columns).collect::<Vec<_>>().join("\n")
     );
 }
+
+#[gpui_kit::test]
+fn results_minimize_restores_height_and_applies_to_all_tabs(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    let original = app.update(cx, |window, _| {
+        window.find("sql-editor").bounds().size.height
+    });
+    app.update(cx, |window, cx| {
+        let start = window.find("editor-splitter").bounds().center();
+        window.drag(start, start + point(px(0.), px(-40.)), cx);
+    });
+    app.settle(cx);
+    let height = app.update(cx, |window, _| {
+        window.find("sql-editor").bounds().size.height
+    });
+    assert!(height < original);
+    app.click(cx, "toggle-results");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert!(window.find("sql-editor").bounds().size.height > height);
+        assert!(window.try_find("editor-splitter").is_none());
+        assert!(window.find("results-panel-tab").visible());
+    });
+    app.press(cx, "cmd-t");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+    });
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-j");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
+        assert_eq!(window.find("sql-editor").bounds().size.height, height);
+        assert!(window.find("editor-splitter").visible());
+    });
+    app.click(cx, "output-panel-tab");
+    app.click(cx, "toggle-results");
+    app.click(cx, "toggle-results");
+    app.update(cx, |window, _| {
+        assert!(window.find("output-copy-all").visible());
+        assert_eq!(window.find("sql-editor").bounds().size.height, height);
+    });
+}
+
+#[gpui_kit::test]
+fn results_minimized_state_survives_restart(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, qrow::model::Workspace::default());
+    app.press(cx, "cmd-j");
+    app.wait_until(
+        cx,
+        "saved minimized state",
+        Duration::from_secs(10),
+        |_, _| app.saved().settings.results_minimized,
+    );
+    app.update(cx, |window, _| window.remove_window());
+    cx.run_until_parked();
+    let reopened = TestApp::launch(cx, app.saved());
+    reopened.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert!(window.try_find("editor-splitter").is_none());
+    });
+    reopened.click(cx, "toggle-results");
+    reopened.wait_until(
+        cx,
+        "saved restored state",
+        Duration::from_secs(10),
+        |_, _| !reopened.saved().settings.results_minimized,
+    );
+}
+
+#[gpui_kit::test]
+fn results_toggle_does_not_change_layout_behind_settings(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    app.dispatch(cx, OpenSettings);
+    app.press(cx, "cmd-j");
+    app.press(cx, "escape");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
+    });
+}

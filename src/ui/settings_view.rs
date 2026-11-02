@@ -1005,7 +1005,7 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                 .title("General")
                 .item(setting_item(
                     "Enabled",
-                    "Shows the assistant button and turns on ⌘J.",
+                    "Shows the assistant button and turns on ⌘R.",
                     &["assistant", "enable", "codex", "claude", "ai"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();

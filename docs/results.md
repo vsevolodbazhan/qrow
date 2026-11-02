@@ -14,6 +14,18 @@ page describes the Logs panel.
 If a result has no columns, the panel shows a status message without a table
 header. Column headers remain visible when a query returns columns but no rows.
 
+## Minimize the panel
+
+Press **⌘J**, select **View → Toggle results**, or use **Collapse**
+in the panel header. The editor fills the available height. The Results and
+Logs buttons remain visible. Selecting either button restores the panel.
+Use **Expand** or **⌘J** to restore
+the previous panel height.
+
+The minimized state applies to all query tabs and is saved after restart.
+Running a query restores the panel. Minimizing the panel keeps its results
+and logs and does not stop a running query.
+
 ## Browse and copy
 
 Each page contains up to 1,000 rows. **Next page** fetches another page when needed.

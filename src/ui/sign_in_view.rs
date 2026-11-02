@@ -853,7 +853,9 @@ impl Qrow {
             })
             .collect();
         for index in waiting {
-            let active = index == self.active && !self.activity.read(cx).is_open();
+            let active = index == self.active
+                && !self.activity.read(cx).is_open()
+                && !self.settings.results_minimized;
             let tab = &mut self.tabs[index];
             let Some(wait) = tab.sign_in_wait.take() else {
                 continue;
