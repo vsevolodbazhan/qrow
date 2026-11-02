@@ -130,6 +130,7 @@ jobs:
         with:
           shared-key: native
           save-if: true
+          cache-on-failure: true
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"

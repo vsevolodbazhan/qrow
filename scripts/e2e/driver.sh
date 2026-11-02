@@ -55,7 +55,10 @@ if [ "${1:-}" != --prepared ]; then
         ditto -x -k "$QROW_MACOS_PACKAGE" "$QROW_DIST_DIR"
     else
         sh scripts/package/macos.sh
-        uv run --locked python scripts/core/size.py
+        # The size budget applies to release builds only.
+        if [ "${QROW_BUILD_PROFILE:-release}" = release ]; then
+            uv run --locked python scripts/core/size.py
+        fi
     fi
 fi
 if [ ! -d "$QROW_E2E_BUNDLE" ] || [ ! -f "$QROW_E2E_BUNDLE/Contents/Info.plist" ] || [ ! -x "$QROW_E2E_BUNDLE/Contents/MacOS/qrow" ]; then
