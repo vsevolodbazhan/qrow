@@ -1,8 +1,9 @@
 use super::setting_row::Rows;
+use super::unit_input::unit_input;
 use super::*;
 use crate::model::{
-    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, AssistantHarness, MAX_TAB_SIZE,
-    MIN_TAB_SIZE,
+    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, AssistantHarness, CopyFormat,
+    MAX_TAB_SIZE, MIN_TAB_SIZE,
 };
 use crate::sql::KeywordCase;
 use crate::themes;
@@ -30,9 +31,8 @@ const CONTROL_REMS: f32 = 16.;
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
 const SYSTEM_FONT_LABEL: &str = "System Font";
 
-/// A setting the dialog edits with a stepper. The variants carry their own
-/// units, bounds, and formatting so that one control and one commit path serve
-/// all of them.
+/// A setting the dialog edits as a number. The variants carry their own
+/// units, bounds, and formatting so that one commit path serves all of them.
 #[derive(Clone, Copy, PartialEq)]
 enum NumberSetting {
     ExportReplayLimit,
@@ -78,7 +78,7 @@ impl NumberSetting {
     /// Minimum, maximum, and step, in the displayed unit.
     fn range(self) -> (f32, f32, f32) {
         match self {
-            Self::ExportReplayLimit => (0., 1024. * 1024., 256.),
+            Self::ExportReplayLimit => (0., 1024. * 1024., 1.),
             Self::Scale => (
                 MIN_UI_SCALE * 100.,
                 MAX_UI_SCALE * 100.,
@@ -108,6 +108,11 @@ impl NumberSetting {
         } else {
             format!("{value:.0}")
         }
+    }
+
+    /// Sizes span too wide a range for a stepper, so they use a text field.
+    fn stepped(self) -> bool {
+        self != Self::ExportReplayLimit
     }
 
     fn unit(self) -> &'static str {
@@ -199,7 +204,7 @@ fn font_family_for_selection(value: String) -> String {
 
 pub(super) struct SettingsForm {
     theme: SettingSelect,
-    /// Each stepper with the value it last displayed, so that a change made
+    /// Each number field with the value it last displayed, so that a change made
     /// outside the dialog can be pushed back into the input.
     numbers: Vec<(NumberSetting, Entity<InputState>, Cell<f32>)>,
     /// The last value sent from Qrow to each picker. Search and keyboard
@@ -210,6 +215,7 @@ pub(super) struct SettingsForm {
     assistant_harness: SettingSelect,
     assistant_executable: Entity<InputState>,
     claude_executable: Entity<InputState>,
+    copy_format: SettingSelect,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -439,6 +445,34 @@ impl Qrow {
                 }
             },
         ));
+        let copy_format = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    CopyFormat::ALL
+                        .map(|format| format.label().to_owned())
+                        .to_vec(),
+                ),
+                CopyFormat::ALL
+                    .iter()
+                    .position(|format| *format == self.settings.copy_format)
+                    .map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &copy_format,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && let Some(format) = CopyFormat::ALL
+                        .into_iter()
+                        .find(|format| format.label() == value)
+                {
+                    this.set_copy_format(format, cx);
+                }
+            },
+        ));
         self.settings_form = Some(SettingsForm {
             theme,
             numbers,
@@ -448,8 +482,22 @@ impl Qrow {
             assistant_harness: harness,
             assistant_executable: executable,
             claude_executable,
+            copy_format,
             _subscriptions: subscriptions,
         });
+    }
+
+    fn set_copy_format(&mut self, format: CopyFormat, cx: &mut Context<Self>) {
+        if self.settings.copy_format == format {
+            return;
+        }
+        self.settings.copy_format = format;
+        for tab in &self.tabs {
+            tab.table.update(cx, |table, _| {
+                table.delegate_mut().copy_format = format;
+            });
+        }
+        self.changed(cx);
     }
 
     fn commit_number_setting(
@@ -754,14 +802,22 @@ impl Qrow {
             .child(
                 settings_panel("settings", window, cx)
                     .page(appearance_page(form))
-                    .page(SettingPage::new("Export").resettable(false).group(
-                        SettingGroup::new().title("Replay").item(setting_item(
-                            "Replay Limit",
-                            "Keep completed downloads up to this size. Zero turns retention off.",
-                            &["export", "replay", "spool", "disk"],
-                            number_field(form, NumberSetting::ExportReplayLimit),
-                        )),
-                    ))
+                    .page(
+                        SettingPage::new("Export")
+                            .resettable(false)
+                            .group(SettingGroup::new().title("Copy").item(setting_item(
+                                "Copy Format",
+                                "Format of ⌘C and Copy cell, selection, or row in results.",
+                                &["copy", "clipboard", "markdown", "plain", "csv", "tsv", "json"],
+                                select_field(&form.copy_format, "Copy Format"),
+                            )))
+                            .group(SettingGroup::new().title("Replay").item(setting_item(
+                                "Replay Limit",
+                                "Keep completed downloads up to this size. Zero turns retention off.",
+                                &["export", "replay", "spool", "disk"],
+                                number_field(form, NumberSetting::ExportReplayLimit),
+                            ))),
+                    )
                     .page(assistant_page(
                         form,
                         cx.weak_entity(),
@@ -949,7 +1005,7 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                 .title("General")
                 .item(setting_item(
                     "Enabled",
-                    "Shows the assistant button and turns on ⌘J.",
+                    "Shows the assistant button and turns on ⌘R.",
                     &["assistant", "enable", "codex", "claude", "ai"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();
@@ -1103,7 +1159,21 @@ fn number_field(
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     let input = form.number(setting).clone();
     move |window: &mut Window, cx: &mut App| {
-        setting_stepper(&input, setting.unit(), setting.label(), window, cx).into_any_element()
+        if setting.stepped() {
+            setting_stepper(&input, setting.unit(), setting.label(), window, cx).into_any_element()
+        } else {
+            let id = setting_id(setting.label());
+            let unit_id = SharedString::from(format!("{id}-unit"));
+            unit_input(
+                &input,
+                id,
+                setting.label(),
+                (setting.unit(), unit_id),
+                false,
+                window,
+                cx,
+            )
+        }
     }
 }
 

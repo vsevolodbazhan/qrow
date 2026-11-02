@@ -138,7 +138,8 @@ impl Qrow {
                             .label("Clear")
                             .accessibility_label("Clear logs history")
                             .on_click(cx.listener(|this, _, _, cx| this.clear_output(cx))),
-                    ),
+                    )
+                    .child(self.results_toggle_button(cx)),
             )
             .child(
                 div()

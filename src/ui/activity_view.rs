@@ -760,7 +760,9 @@ impl Qrow {
                 self.activate(index, window, cx);
             }
             ActivityViewEvent::Closed => {
-                self.tabs[self.active].panel.content_visible();
+                if !self.settings.results_minimized {
+                    self.tabs[self.active].panel.content_visible();
+                }
                 if self.assistant_transcript_visible(window, cx)
                     && let Some(thread) = self.displayed_thread()
                 {

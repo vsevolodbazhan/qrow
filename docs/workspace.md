@@ -27,6 +27,10 @@ CM Twilight, and the themes bundled from GPUI Kit. CM Twilight is darker than
 One Dark. It uses the navy and orange colors of twilight in Chiang Mai. A
 selected theme takes effect immediately.
 
+The Export page has the **Copy** and **Replay** sections. See
+[Select and copy cells](results.md#select-and-copy-cells) for Copy Format and
+[Export all rows](results.md#export-all-rows-and-reuse-a-download) for Replay Limit.
+
 The Assistant page has the **General**, **Codex**, and **Claude Code** sections. See
 [AI assistant](assistant.md#set-up-the-assistant) for these settings.
 

@@ -72,7 +72,7 @@ Claude Code works as Codex does, with these differences:
 ## Work with SQL
 
 Select a query tab. Click the assistant button near the right end of the
-status bar, select **Toggle assistant** in the **View** menu, or press **⌘J**. Write a message and press **Enter** or
+status bar, select **Toggle assistant** in the **View** menu, or press **⌘R**. Write a message and press **Enter** or
 **⌘Enter** to send it. Press **Shift-Enter** to start a new line. While the assistant works, the Send button becomes
 **Cancel**. While the harness starts a new conversation after its first message, you
 cannot send or cancel. Type a follow-up and press **Enter** to steer the current

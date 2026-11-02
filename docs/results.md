@@ -14,6 +14,18 @@ page describes the Logs panel.
 If a result has no columns, the panel shows a status message without a table
 header. Column headers remain visible when a query returns columns but no rows.
 
+## Minimize the panel
+
+Press **⌘J**, select **View → Toggle results**, or use **Collapse**
+in the panel header. The editor fills the available height. The Results and
+Logs buttons remain visible. Selecting either button restores the panel.
+Use **Expand** or **⌘J** to restore
+the previous panel height.
+
+The minimized state applies to all query tabs and is saved after restart.
+Running a query restores the panel. Minimizing the panel keeps its results
+and logs and does not stop a running query.
+
 ## Browse and copy
 
 Each page contains up to 1,000 rows. **Next page** fetches another page when needed.
@@ -72,15 +84,23 @@ During a drag, keep the pointer at an edge to scroll rows or columns.
 Release the mouse button to finish the selection, including outside the table.
 The rectangle stays on the current page and excludes the row numbers.
 
-⌘C copies the selected cells as a pretty-formatted Markdown table with column
-names. It aligns the columns and escapes Markdown characters in cell values.
-The copy runs in the background. For Markdown over 40,000 characters, confirm
-the copy. Text above 10 MiB must be saved to a file.
+⌘C copies the selected cells in the copy format. Right-click a cell for
+**Copy cell**, **Copy selection**, or **Copy row**. These commands also use
+the copy format. A right-click inside the selection keeps it. A right-click
+outside selects that cell. **Copy row** copies the whole row, even when the
+selection is narrower.
 
-Right-click a cell for **Copy cell**, **Copy selection**, or **Copy row**. These
-commands copy plain text, with tabs between columns. A right-click inside the
-selection keeps it. A right-click outside selects that
-cell. **Copy row** copies the whole row, even when the selection is narrower.
+Select the copy format in **Settings → Export → Copy Format**:
+
+| Copy format | Copies |
+| --- | --- |
+| Markdown (default) | A Markdown table with column names. It aligns the columns and escapes Markdown characters in cell values. |
+| Plain text | Tab-separated values without column names. One cell copies its value. Values with a tab, a line break, or a quote are quoted. |
+| CSV, TSV, JSON | The same text as the **Copy as** command of that format. |
+
+Plain text copies immediately. The other formats copy in the background.
+For Markdown over 40,000 characters, confirm the copy. Text above 10 MiB
+must be saved to a file.
 
 Copy actions use full stored values from the displayed page. Long cells show
 a shortened preview, but their stored and copied values are not shortened.
@@ -88,7 +108,8 @@ Use **Copy as → CSV** to copy the selection with column names and the saved
 CSV options. A saved tab separator changes to a comma for this action.
 Use **Copy as → TSV** to copy it with tab separators and column names.
 Use **Copy as → Markdown** or **Copy as → JSON** for the other text formats.
-These actions run in the background. Text above 10 MiB must be saved to a file.
+**Copy as → Markdown** uses the saved Markdown options of the export. The copy
+format does not change **Copy as**. These actions run in the background. Text above 10 MiB must be saved to a file.
 
 ## Export results
 
@@ -178,11 +199,12 @@ sets that alignment in Markdown.
 The writer escapes pipes and backslashes. It changes line breaks to `<br>`.
 Null values use `NULL`. Empty strings stay empty.
 
-Enable **Pretty output** to align the pipes in the Markdown source.
+**Pretty output** aligns the pipes in the Markdown source.
 Each column uses the widest escaped value from the complete result.
 The writer adds spaces without shortening values. Tabs use `&#9;` so their
-source width is fixed. This option is off by default and stays saved after
-a successful export. It does not apply to **Code block**, which is always padded.
+source width is fixed. This option is on by default and stays saved after
+a successful export. A workspace that was saved before this default keeps
+its saved value. It does not apply to **Code block**, which is always padded.
 
 Choose **Code block** for a padded text table in a fence. Set **Maximum Cell
 Width** from 1 to 1000 display columns. Longer cells end with an ellipsis. Line
@@ -315,10 +337,11 @@ The grid keeps up to 100,000 rows and 64 MiB. You can navigate between its
 pages after the download. The spool and file receive all rows from the same
 fetch sequence. The preview is complete only when the whole result fits in it.
 
-If the original session ended or its connection changed, the form explains
-that its settings, temporary tables, and open transaction are gone. The form
-checks the session again after the save panel and browser sign-in. A change
-during that time stops submission. Choose **Copy** or **Save** again.
+If the original session ended or its connection changed, the export uses the
+current session. The original settings, temporary tables, and open transaction
+do not apply. The form checks the session again after the save panel and
+browser sign-in. A change during that time stops submission. Choose **Copy**
+or **Save** again.
 
 For Trino transfer modes and storage limits, see [Trino export spooling](connections.md#trino-export-spooling).
 

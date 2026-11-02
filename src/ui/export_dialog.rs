@@ -1032,7 +1032,7 @@ impl Render for ExportDialog {
         ];
         let custom_null = format == Format::Csv && matches!(options.null, NullMarker::Custom(_));
         v_flex().id("export-form").gap_4().w_full()
-            .child(v_form().columns(2).children([4,0,1,2,3,5,9,6,7,8].into_iter()
+            .child(v_form().columns(2).gap_x_4().children([4,0,1,2,3,5,9,6,7,8].into_iter()
                 .filter(|index| *index == 4 || format == Format::Csv && (0..=3).contains(index) || format == Format::Markdown && *index == 5 || matches!(format, Format::Json | Format::JsonLines) && *index == 9 || format == Format::Parquet && (6..=8).contains(index))
                 .map(|index| field().label(labels[index]).child(
                     Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
@@ -1072,11 +1072,6 @@ impl Render for ExportDialog {
             .when(format == Format::Parquet && !self.source.table(None).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
                 .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
                 .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
-            .when(self.scope.executes(), |view| view
-                .when_some(self.run.as_ref(), |view, intent| view
-                    .when(intent.warning, |view| view.child(div().id("export-session-warning").test_support().role(Role::Alert)
-                        .aria_label("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")
-                        .text_sm().text_color(cx.theme().warning).child("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")))))
             .when(self.scope.executes(), |view| view.children(self.run.as_ref().and_then(transfer::notice).map(|text|
                 div().id("export-incremental-notice").test_support().role(Role::Label).aria_label(text.clone())
                     .text_sm().text_color(cx.theme().muted_foreground).child(text)))
@@ -1294,6 +1289,29 @@ pub(super) fn copy_text(text: String, cx: &mut App) {
 mod tests {
     use super::{CopyRequest, copy_text};
     use gpui_kit::{ClipboardItem, Image, ImageFormat, TestAppContext};
+
+    /// Notifications slide in on the real clock, and a click renders between
+    /// the press and the release. Wait until `id` stops moving, so that the
+    /// press and the release land on it.
+    pub(super) fn wait_until_still(
+        window: &mut gpui_kit::Window,
+        id: gpui_kit::SharedString,
+        cx: &mut gpui_kit::App,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = None;
+        loop {
+            window.render_frame(cx);
+            let bounds = window.find(id.clone()).bounds();
+            if last == Some(bounds) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "{id} kept moving");
+            last = Some(bounds);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 
     #[gpui_kit::test]
     fn replay_publication_holds_the_profile_slot_and_retry_keeps_it_after_tab_close(
@@ -1673,7 +1691,9 @@ mod tests {
         cx.update_window(window.into(), |_, window, cx| {
             window.render_frame(cx);
             let id = notice_id.unwrap();
-            window.click(SharedString::from(format!("export-stop-{id}")), cx);
+            let stop = SharedString::from(format!("export-stop-{id}"));
+            wait_until_still(window, stop.clone(), cx);
+            window.click(stop, cx);
             assert!(owner.upgrade().unwrap().read(cx).exports.is_empty());
         })
         .unwrap();

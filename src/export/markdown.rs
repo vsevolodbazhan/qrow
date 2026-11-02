@@ -20,6 +20,8 @@ pub struct Options {
     pub style: Style,
     pub max_cell_width: usize,
     pub row_numbers: bool,
+    /// On by default. Saved options from before this field stay compact.
+    #[serde(default)]
     pub pretty: bool,
 }
 impl Default for Options {
@@ -28,7 +30,7 @@ impl Default for Options {
             style: Style::Table,
             max_cell_width: 40,
             row_numbers: false,
-            pretty: false,
+            pretty: true,
         }
     }
 }
@@ -327,6 +329,19 @@ fn grapheme_width(text: &str) -> usize {
 /// Keep complete graphemes within the display width. The ellipsis uses one
 /// column. Stop scanning as soon as the width is full, including for wide cells.
 fn clipped(value: &str, cap: usize) -> (&str, usize, bool) {
+    // ASCII characters, including controls replaced by spaces, use one column.
+    // One extra byte proves truncation without scanning the rest of a wide cell.
+    if value.as_bytes()[..value.len().min(cap.saturating_add(1))].is_ascii() {
+        if value.len() <= cap {
+            return (value, value.len(), false);
+        }
+        let mut end = cap.saturating_sub(1);
+        // CRLF is one grapheme, even though it occupies two output columns.
+        if end > 0 && &value.as_bytes()[end - 1..=end] == b"\r\n" {
+            end -= 1;
+        }
+        return (&value[..end], end + 1, true);
+    }
     let mut width = 0;
     let mut truncated = false;
     for grapheme in value.graphemes(true) {
@@ -399,6 +414,24 @@ mod tests {
     use super::*;
     use crate::{export::Rows, model::Column};
     #[test]
+    fn code_block_clipping_keeps_ascii_controls_and_unicode_boundaries() {
+        for (text, cap, expected) in [
+            ("", 0, ("", 0, false)),
+            ("abc", 0, ("", 1, true)),
+            ("abc", 1, ("", 1, true)),
+            ("abc", 3, ("abc", 3, false)),
+            ("abcd", 3, ("ab", 3, true)),
+            ("a\r\nb\t\x7f", 6, ("a\r\nb\t\x7f", 6, false)),
+            ("a\r\nb", 3, ("a", 2, true)),
+            ("abe\u{301}x", 3, ("ab", 3, true)),
+            ("abc😀", 3, ("ab", 3, true)),
+            ("abcde😀", 3, ("ab", 3, true)),
+            ("ab😀", 3, ("ab", 3, true)),
+        ] {
+            assert_eq!(clipped(text, cap), expected, "{text:?}, cap {cap}");
+        }
+    }
+    #[test]
     fn tables_escape_pipes_backslashes_and_crlf_and_align_numbers() {
         let columns = vec![
             Column {
@@ -430,6 +463,7 @@ mod tests {
             &table,
             &Options {
                 row_numbers: true,
+                pretty: false,
                 ..Options::default()
             },
             &AtomicBool::new(false),
@@ -548,6 +582,7 @@ mod tests {
 
     #[test]
     fn old_markdown_settings_keep_compact_tables() {
+        assert!(Options::default().pretty);
         let options: Options =
             serde_json::from_str(r#"{"style":"Table","row_numbers":true}"#).unwrap();
         assert!(!options.pretty);

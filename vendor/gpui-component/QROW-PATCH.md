@@ -10,6 +10,8 @@ Qrow changes these files:
   The input entity is borrowed during the callback, so the callback cannot
   read that entity. The editor uses this snapshot for Format SQL and the
   clipboard commands. The Qrow UI test checks the callback after a right-click.
+- `src/form/form.rs`: forms apply caller styles after their default styles.
+  The export form uses a 16-point gap between columns.
 
 - `src/input/input.rs`: disabled inputs do not register a focusable frame.
   Before, clicking a disabled input moved keyboard focus to its frame.

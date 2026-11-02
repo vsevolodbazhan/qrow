@@ -21,6 +21,7 @@ mod sign_in_view;
 mod status_dot;
 mod status_tooltip;
 mod tab_view;
+mod unit_input;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
@@ -78,6 +79,7 @@ actions!(
         ShowConnections,
         ShowSignIns,
         ToggleAssistant,
+        ToggleResults,
         ToggleActivity,
         OpenAbout,
         OpenSettings,
@@ -124,7 +126,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ShowConnections, None),
-        KeyBinding::new("cmd-j", ToggleAssistant, None),
+        KeyBinding::new("cmd-r", ToggleAssistant, None),
+        KeyBinding::new("cmd-j", ToggleResults, None),
         KeyBinding::new("cmd-shift-u", ToggleActivity, None),
         KeyBinding::new(
             "escape",
@@ -203,6 +206,7 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         MenuItem::action("Connections", ShowConnections),
         MenuItem::action("Sign-Ins", ShowSignIns),
         MenuItem::action("Toggle sidebar", ToggleSidebar),
+        MenuItem::action("Toggle results", ToggleResults),
         MenuItem::separator(),
     ];
     if assistant_enabled {
@@ -908,6 +912,7 @@ impl Qrow {
             let mut results = Results::default();
             results.set_ui_scale(scale, cx);
             results.export = self.settings.export.clone();
+            results.copy_format = self.settings.copy_format;
             if let Some(profile) = self
                 .profiles
                 .iter()
@@ -1241,6 +1246,7 @@ impl Qrow {
         tab.panel.failure(active);
     }
     fn select_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
+        self.restore_results(cx);
         self.tabs[self.active].panel.user_select(panel);
         cx.notify();
     }
@@ -1298,7 +1304,8 @@ impl Qrow {
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let mut activity = Vec::new();
-        let workspace_visible = !self.activity.read(cx).is_open();
+        let workspace_visible =
+            !self.activity.read(cx).is_open() && !self.settings.results_minimized;
         let mut waits = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let events: Vec<_> = tab
@@ -1831,7 +1838,9 @@ impl Qrow {
             self.tab_scroll.scroll_to_item(position);
         }
         if !self.activity.read(cx).is_open() {
-            self.tabs[index].panel.content_visible();
+            if !self.settings.results_minimized {
+                self.tabs[index].panel.content_visible();
+            }
             if focus_editor {
                 self.tabs[index]
                     .input
@@ -2010,6 +2019,7 @@ impl Qrow {
         if self.tabs.get(index).is_none_or(|tab| tab.busy) {
             return false;
         }
+        self.restore_results(cx);
         if self.demo {
             return self.run_tab_sql(index, String::new(), false, cx);
         }
@@ -2074,6 +2084,7 @@ impl Qrow {
         if self.tabs.get(index).is_none_or(|tab| tab.busy) {
             return false;
         }
+        self.restore_results(cx);
         if self.demo {
             self.seed_demo(index, cx);
             cx.notify();

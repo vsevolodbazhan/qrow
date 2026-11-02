@@ -1,4 +1,8 @@
-use crate::{model::Column as DataColumn, pagination::Pagination, worker::Event};
+use crate::{
+    model::{Column as DataColumn, CopyFormat},
+    pagination::Pagination,
+    worker::Event,
+};
 use gpui_kit::base::actions::{
     Cancel, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown, SelectPageUp,
     SelectPrevColumn, SelectUp,
@@ -11,7 +15,12 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::{borrow::Cow, ops::RangeInclusive, time::Duration};
+use std::{
+    borrow::Cow,
+    ops::{Range, RangeInclusive},
+    sync::Arc,
+    time::Duration,
+};
 
 actions!(
     qrow_results,
@@ -70,11 +79,47 @@ impl Selection {
     }
 }
 
+/// A copy command with the data that it copies. A menu command copies the
+/// cells that were selected when the menu opened.
+#[derive(Clone)]
+enum ClipboardCopy {
+    Text(String),
+    Export {
+        source: Arc<crate::export::Snapshot>,
+        range: (Range<usize>, RangeInclusive<usize>),
+        options: crate::export::Settings,
+        profile: Option<(uuid::Uuid, u8)>,
+    },
+    Failed(String),
+}
+impl ClipboardCopy {
+    fn run(&self, window: &mut Window, cx: &mut App) {
+        match self {
+            Self::Text(text) => super::export_dialog::copy_text(text.clone(), cx),
+            Self::Export {
+                source,
+                range,
+                options,
+                profile,
+            } => super::export_dialog::copy_format(
+                source.clone(),
+                Some(range.clone()),
+                options.clone(),
+                *profile,
+                window,
+                cx,
+            ),
+            Self::Failed(error) => window.push_notification(error.clone(), cx),
+        }
+    }
+}
+
 pub struct Results {
     pub columns: Vec<DataColumn>,
     pub rows: crate::export::Rows,
     pub pagination: Pagination,
     pub export: crate::export::Settings,
+    pub copy_format: CopyFormat,
     export_profile: Option<(uuid::Uuid, u8)>,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
@@ -91,6 +136,7 @@ impl Default for Results {
             rows: crate::export::Rows::default(),
             pagination: Pagination::default(),
             export: crate::export::Settings::default(),
+            copy_format: CopyFormat::default(),
             export_profile: None,
             empty_message: None,
             headers: vec![],
@@ -175,6 +221,7 @@ impl Results {
         *self = Self {
             ui_scale: self.ui_scale,
             export: self.export.clone(),
+            copy_format: self.copy_format,
             export_profile: self.export_profile,
             drag_task,
             ..Self::default()
@@ -276,27 +323,104 @@ impl Results {
             .and_then(|value| value.as_deref())
     }
 
-    /// The text that Copy puts on the clipboard. One cell copies its value.
-    /// A range copies tab-separated values without a header, which pastes
-    /// into a spreadsheet as cells. Values with a tab, a line break, or a
-    /// quote are quoted, as spreadsheets expect.
-    pub fn selection_text(&self) -> Option<String> {
-        let selection = self.selection?;
+    /// The plain text of a rectangle. One cell copies its value. A range
+    /// copies tab-separated values without a header, which pastes into a
+    /// spreadsheet as cells. Values with a tab, a line break, or a quote are
+    /// quoted, as spreadsheets expect. The text has the clipboard limit of
+    /// the other formats.
+    pub fn plain_text(&self, selection: Selection) -> std::io::Result<String> {
+        use std::io::Write as _;
+        let mut out = crate::export::LimitedWriter::new(crate::export::CLIPBOARD_BYTES);
         if selection.is_cell() {
             let (row, column) = selection.focus;
-            return Some(self.value(row, column).unwrap_or("NULL").to_owned());
+            out.write_all(self.value(row, column).unwrap_or("NULL").as_bytes())?;
+        } else {
+            for row in selection.rows() {
+                if row != *selection.rows().start() {
+                    out.write_all(b"\n")?;
+                }
+                for column in selection.columns() {
+                    if column != *selection.columns().start() {
+                        out.write_all(b"\t")?;
+                    }
+                    let value = tsv_field(self.value(row, column).unwrap_or("NULL"));
+                    out.write_all(value.as_bytes())?;
+                }
+            }
         }
-        let lines: Vec<String> = selection
-            .rows()
-            .map(|row| {
-                selection
-                    .columns()
-                    .map(|column| tsv_field(self.value(row, column).unwrap_or("NULL")))
-                    .collect::<Vec<_>>()
-                    .join("\t")
-            })
-            .collect();
-        Some(lines.join("\n"))
+        Ok(out.into_text()?.into_string())
+    }
+
+    /// The options of **Copy as** in `format`, or `None` for plain text.
+    fn copy_as_options(&self, format: CopyFormat) -> Option<crate::export::Settings> {
+        use crate::export::{Format, Settings, csv};
+        Some(match format {
+            CopyFormat::PlainText => return None,
+            // The saved CSV options, with column names and a separator that
+            // differs from TSV.
+            CopyFormat::Csv => {
+                let mut csv = self.export.csv.clone();
+                csv.header = true;
+                if csv.separator == csv::Separator::Tab {
+                    csv.separator = csv::Separator::Comma;
+                }
+                Settings {
+                    format: Format::Csv,
+                    csv,
+                    ..self.export.clone()
+                }
+            }
+            CopyFormat::Tsv => Settings {
+                csv: csv::Preset::Tsv.options(),
+                ..Settings::default()
+            },
+            CopyFormat::Markdown => Settings {
+                format: Format::Markdown,
+                ..self.export.clone()
+            },
+            CopyFormat::Json => Settings {
+                format: Format::Json,
+                ..self.export.clone()
+            },
+        })
+    }
+
+    /// The options of ⌘C and the Copy commands of the menu. Markdown is an
+    /// aligned table, independent of the saved Markdown options.
+    fn copy_options(&self) -> Option<crate::export::Settings> {
+        match self.copy_format {
+            CopyFormat::Markdown => Some(crate::export::Settings {
+                format: crate::export::Format::Markdown,
+                markdown: crate::export::markdown::Options {
+                    pretty: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            format => self.copy_as_options(format),
+        }
+    }
+
+    /// Copy `selection` in the copy format.
+    fn clipboard_copy(&self, selection: Selection) -> ClipboardCopy {
+        let Some(options) = self.copy_options() else {
+            return match self.plain_text(selection) {
+                Ok(text) => ClipboardCopy::Text(text),
+                Err(error) => ClipboardCopy::Failed(error.to_string()),
+            };
+        };
+        match crate::export::Snapshot::new(&self.columns, &self.rows) {
+            Ok(source) => ClipboardCopy::Export {
+                source: Arc::new(source),
+                range: (
+                    *selection.rows().start()..selection.rows().end() + 1,
+                    selection.columns(),
+                ),
+                options,
+                profile: self.export_profile,
+            },
+            Err(error) => ClipboardCopy::Failed(error.to_string()),
+        }
     }
 
     fn empty_state(&self, cx: &App) -> Div {
@@ -509,12 +633,15 @@ impl TableDelegate for Results {
             }
             _ => "",
         };
-        let selection = self.selection_text().filter(|_| !label.is_empty());
-        let text = self.rows[row]
-            .iter()
-            .map(|v| v.as_deref().unwrap_or("NULL"))
-            .collect::<Vec<_>>()
-            .join("\t");
+        let selection = self
+            .selection
+            .filter(|_| !label.is_empty())
+            .map(|selection| self.clipboard_copy(selection));
+        let last = self.columns.len().saturating_sub(1);
+        let row_copy = self.clipboard_copy(Selection {
+            anchor: (row, 0),
+            focus: (row, last),
+        });
         let source =
             crate::export::Snapshot::new(&self.columns, &self.rows).map(std::sync::Arc::new);
         let range = self.selection.map(|selection| {
@@ -523,75 +650,43 @@ impl TableDelegate for Results {
                 selection.columns(),
             )
         });
-        let mut csv = self.export.csv.clone();
-        csv.header = true;
-        if csv.separator == crate::export::csv::Separator::Tab {
-            csv.separator = crate::export::csv::Separator::Comma;
-        }
-        let settings = self.export.clone();
+        let formats = [
+            CopyFormat::Csv,
+            CopyFormat::Tsv,
+            CopyFormat::Markdown,
+            CopyFormat::Json,
+        ]
+        .map(|format| (format.label(), self.copy_as_options(format)));
         let export_profile = self.export_profile;
         let menu = if let Ok(source) = source {
             let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
-                [
-                    (
-                        "CSV",
-                        crate::export::Settings {
-                            format: crate::export::Format::Csv,
-                            csv: csv.clone(),
-                            ..settings.clone()
-                        },
-                    ),
-                    (
-                        "TSV",
-                        crate::export::Settings {
-                            csv: crate::export::csv::Preset::Tsv.options(),
-                            ..crate::export::Settings::default()
-                        },
-                    ),
-                    (
-                        "Markdown",
-                        crate::export::Settings {
-                            format: crate::export::Format::Markdown,
-                            ..settings.clone()
-                        },
-                    ),
-                    (
-                        "JSON",
-                        crate::export::Settings {
-                            format: crate::export::Format::Json,
-                            ..settings.clone()
-                        },
-                    ),
-                ]
-                .into_iter()
-                .fold(menu, |menu, (label, options)| {
-                    let source = source.clone();
-                    let range = range.clone();
-                    menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                        super::export_dialog::copy_format(
-                            source.clone(),
-                            range.clone(),
-                            options.clone(),
-                            export_profile,
-                            window,
-                            cx,
-                        );
-                    }))
-                })
+                formats
+                    .iter()
+                    .filter_map(|(label, options)| Some((*label, options.clone()?)))
+                    .fold(menu, |menu, (label, options)| {
+                        let source = source.clone();
+                        let range = range.clone();
+                        menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                            super::export_dialog::copy_format(
+                                source.clone(),
+                                range.clone(),
+                                options.clone(),
+                                export_profile,
+                                window,
+                                cx,
+                            );
+                        }))
+                    })
             });
             menu.item(PopupMenuItem::submenu("Copy as", submenu))
         } else {
             menu
         };
-        menu.when_some(selection, |menu, text| {
-            menu.item(
-                PopupMenuItem::new(label)
-                    .on_click(move |_, _, cx| super::export_dialog::copy_text(text.clone(), cx)),
-            )
+        menu.when_some(selection, |menu, copy| {
+            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| copy.run(window, cx)))
         })
         .item(
-            PopupMenuItem::new("Copy row")
-                .on_click(move |_, _, cx| super::export_dialog::copy_text(text.clone(), cx)),
+            PopupMenuItem::new("Copy row").on_click(move |_, window, cx| row_copy.run(window, cx)),
         )
     }
     fn render_empty(
@@ -929,34 +1024,9 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
             let Some(selection) = data.selection else {
                 return;
             };
-            let source = crate::export::Snapshot::new(&data.columns, &data.rows);
-            let profile = data.export_profile;
-            let range = Some((
-                *selection.rows().start()..selection.rows().end() + 1,
-                selection.columns(),
-            ));
+            let copy = data.clipboard_copy(selection);
             cx.stop_propagation();
-            match source {
-                Ok(source) => {
-                    let options = crate::export::Settings {
-                        format: crate::export::Format::Markdown,
-                        markdown: crate::export::markdown::Options {
-                            pretty: true,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    };
-                    super::export_dialog::copy_format(
-                        std::sync::Arc::new(source),
-                        range,
-                        options,
-                        profile,
-                        window,
-                        cx,
-                    );
-                }
-                Err(error) => window.push_notification(error.to_string(), cx),
-            }
+            copy.run(window, cx);
         })
         .on_action(move |_: &SelectAll, window, cx| {
             if !table_keys(window) {
@@ -1015,8 +1085,10 @@ mod tests {
             );
             assert_eq!(results.px(48.), px(72.));
 
+            results.copy_format = crate::model::CopyFormat::PlainText;
             results.clear();
             assert_eq!(results.ui_scale, 1.5);
+            assert_eq!(results.copy_format, crate::model::CopyFormat::PlainText);
             assert_eq!(results.pagination.page(), 0);
             assert!(results.rows.is_empty());
             assert!(results.empty_message.is_none());
@@ -1057,8 +1129,8 @@ mod tests {
             assert_eq!(selection.rows(), 1001..=1002);
             assert_eq!(selection.columns(), 0..=1);
             assert_eq!(
-                results.selection_text().as_deref(),
-                Some("a1001\tNULL\na1002\tb1002")
+                results.plain_text(results.selection.unwrap()).unwrap(),
+                "a1001\tNULL\na1002\tb1002"
             );
 
             // Whole columns and the page stay within the current page.
@@ -1072,11 +1144,29 @@ mod tests {
             assert_eq!(selection.rows(), 1003..=1005);
             assert_eq!(selection.columns(), 0..=1);
             results.select_page();
-            assert_eq!(results.selection_text().unwrap().lines().count(), 250);
+            assert_eq!(
+                results
+                    .plain_text(results.selection.unwrap())
+                    .unwrap()
+                    .lines()
+                    .count(),
+                250
+            );
 
             // One cell copies its raw value, and a null copies NULL.
             results.select_cell(1001, 1, false);
-            assert_eq!(results.selection_text().as_deref(), Some("NULL"));
+            assert_eq!(
+                results.plain_text(results.selection.unwrap()).unwrap(),
+                "NULL"
+            );
+
+            // Plain text has the clipboard limit.
+            results.rows = vec![vec![
+                Some("x".repeat(crate::export::CLIPBOARD_BYTES + 1)),
+                None,
+            ]]
+            .into();
+            assert!(results.plain_text(super::Selection::cell(0, 0)).is_err());
         });
     }
 

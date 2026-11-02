@@ -101,7 +101,6 @@ fn copy_downloads_all_rows_and_reuses_the_spool(cx: &mut TestAppContext) {
     app.wait_status(cx, "Preview: More rows available");
     app.click(cx, "export-results");
     app.select(cx, "export-format", "Markdown");
-    app.click(cx, "export-markdown-pretty");
     cx.write_to_clipboard(ClipboardItem::new_string("preserve this".into()));
     app.click(cx, "export-copy");
     app.wait_until(
@@ -251,11 +250,7 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     assert_eq!(json[0]["amount"].as_number().unwrap().to_string(), "123.45");
     app.click(cx, "export-results");
     app.select(cx, "export-format", "Markdown");
-    let text = copy_query(cx, app);
-    assert!(text.contains("a\\|b | NULL |  | 123.45 |"), "{text}");
-    assert_eq!(text.lines().count(), 3);
-    app.click(cx, "export-results");
-    app.click(cx, "export-markdown-pretty");
+    // Pretty output is on by default.
     let pretty = copy_query(cx, app);
     use unicode_width::UnicodeWidthStr as _;
     let widths: Vec<_> = pretty.lines().map(|line| line.width()).collect();
@@ -263,15 +258,23 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     assert!(widths.iter().all(|width| *width == widths[0]), "{pretty}");
     assert!(pretty.contains("a\\|b"));
     app.click(cx, "export-results");
+    app.click(cx, "export-markdown-pretty");
+    let text = copy_query(cx, app);
+    assert!(text.contains("a\\|b | NULL |  | 123.45 |"), "{text}");
+    assert_eq!(text.lines().count(), 3);
+    app.click(cx, "export-results");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("export-markdown-pretty").checked(), Some(true))
+        assert_eq!(window.find("export-markdown-pretty").checked(), Some(false))
     });
     app.click(cx, "export-cancel");
     app.click(cx, "export-results");
     app.select(cx, "export-markdown-style", "Code block");
+    app.fill(cx, "export-cell-width", "4");
     let text = copy_query(cx, app);
     assert!(text.starts_with("```\n"));
     assert!(text.ends_with("```\n"));
+    assert!(text.contains("| a|b "), "{text}");
+    assert!(text.contains("| 123… |"), "{text}");
     assert_parquet(cx, app);
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
 }
@@ -506,7 +509,9 @@ fn failed_cursor_download_retry_offers_a_reviewed_rerun(cx: &mut TestAppContext)
     app.click(cx, "results-panel-tab");
     app.click_labelled(cx, "Retry…");
     app.wait_for(cx, "export-error");
-    app.wait_for(cx, "export-session-warning");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-session-warning").is_none());
+    });
     app.update(cx, |window, _| {
         assert!(window.find("export-error").bounds().size.height > window.rem_size() * 1.5);
         assert_eq!(window.find("export-save").label(), Some("Save"));
@@ -608,7 +613,9 @@ fn kyuubi_run_export_keeps_session_state_and_all_preview_pages(cx: &mut TestAppC
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
-fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext) {
+fn kyuubi_run_export_again_uses_result_sql_after_disconnect_without_session_warning(
+    cx: &mut TestAppContext,
+) {
     use gpui_kit::test::TestWindowExt;
     let sql = "SELECT id AS value FROM range(2123) ORDER BY id";
     let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
@@ -620,13 +627,7 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
     app.update(cx, |window, _| {
-        assert!(
-            window
-                .find("export-session-warning")
-                .label()
-                .unwrap()
-                .contains("temporary tables")
-        );
+        assert!(window.try_find("export-session-warning").is_none());
     });
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("again.jsonl");
@@ -674,7 +675,10 @@ fn kyuubi_run_export_rechecks_idle_disconnect_after_the_save_panel(cx: &mut Test
     let output = directory.path().join("reviewed.csv");
     std::fs::write(&output, "original").unwrap();
     cx.simulate_new_path_selection(|_| Some(output.clone()));
-    app.wait_for(cx, "export-session-warning");
+    app.wait_for(cx, "export-error");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-session-warning").is_none());
+    });
     assert_eq!(
         app.update(cx, |_, cx| app.status(cx)),
         "Disconnected: Idle timeout"
