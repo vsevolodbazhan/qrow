@@ -412,12 +412,14 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # After a dependency change, the Intel runner compiles the optimized
+  # dependencies two times, for Clippy and for the tests: about an hour.
   ui-intel:
     name: ui-intel
     needs: plan
     if: fromJSON(needs.plan.outputs.jobs)['ui-intel']
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
