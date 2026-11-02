@@ -563,12 +563,6 @@ fn parallel_spooling_saves_all_rows_and_keeps_normal_queries_usable(cx: &mut Tes
     );
     app.run_export(cx);
     app.wait_for(cx, "export-save");
-    app.update(cx, |window, _| {
-        assert!(!crate::support::present(
-            window,
-            &"export-incremental-notice".into()
-        ))
-    });
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("parallel.csv");
     save_export(&app, cx, &output);

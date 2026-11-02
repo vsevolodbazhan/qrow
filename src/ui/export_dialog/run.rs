@@ -21,20 +21,23 @@ impl Qrow {
             .find(|profile| Some(profile.id) == self.tabs[index].saved.profile)
             .cloned()
         else {
-            window.push_notification("Choose a connection before running SQL.", cx);
+            window.push_notification(
+                Notification::error("Choose a connection before running SQL."),
+                cx,
+            );
             return;
         };
         let sql = match self.selected_tab_sql(index, window, cx) {
             Ok(sql) => sql,
             Err(message) => {
-                window.push_notification(message, cx);
+                window.push_notification(Notification::error(message), cx);
                 return;
             }
         };
         if let Err(error) = crate::sql::validate_single_for(&sql, profile.database_type)
             .and_then(|_| profile.validate())
         {
-            window.push_notification(error.to_string(), cx);
+            window.push_notification(Notification::error(error.to_string()), cx);
             return;
         }
         let tab = &self.tabs[index];
@@ -54,7 +57,7 @@ impl Qrow {
         } {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                window.push_notification(error.to_string(), cx);
+                window.push_notification(Notification::error(error.to_string()), cx);
                 return;
             }
         };

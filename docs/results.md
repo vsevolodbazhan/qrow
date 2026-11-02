@@ -267,7 +267,7 @@ column types to keep such values without rounding.
 For Postgres results, the connector records DateStyle, IntervalStyle, and
 TimeZone before execution. It does not change those settings. When the result
 uses a non-ISO DateStyle, dates and timestamps remain text. The export form
-shows this condition.
+shows a warning for this condition.
 
 The writer uses Parquet 1.0 data pages, dictionaries, and statistics. It
 limits each row group to approximately 64 MiB of source values. A group can
