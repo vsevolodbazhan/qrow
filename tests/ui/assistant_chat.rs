@@ -379,3 +379,33 @@ fn a_message_that_codex_does_not_take_stays_in_the_message_field(cx: &mut TestAp
         assert_eq!(composer_text(window).as_deref(), Some(long.as_str()));
     });
 }
+
+#[gpui_kit::test]
+fn command_r_toggles_assistant_and_command_j_toggles_results(cx: &mut TestAppContext) {
+    let (app, _codex) = launch(cx, with_connection());
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-r");
+    app.wait_for(cx, "assistant-composer");
+    app.click(cx, "assistant-composer");
+    app.press(cx, "cmd-j");
+    app.update(cx, |window, _| {
+        assert!(window.find("assistant-composer").visible());
+
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Restore results")
+        );
+    });
+    app.update(cx, |window, cx| window.input("Focus stays here", cx));
+    app.update(cx, |window, _| {
+        assert_eq!(composer_text(window).as_deref(), Some("Focus stays here"));
+    });
+    app.press(cx, "cmd-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Restore results")
+        );
+    });
+}

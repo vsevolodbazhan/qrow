@@ -303,7 +303,62 @@ impl Qrow {
             .child(div().flex_1())
     }
 
+    fn toggle_results(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            return;
+        }
+        self.settings.results_minimized = !self.settings.results_minimized;
+        self.resize = None;
+        if !self.settings.results_minimized {
+            self.tabs[self.active].panel.content_visible();
+        }
+        self.changed(cx);
+    }
+
+    pub(super) fn restore_results(&mut self, cx: &mut Context<Self>) {
+        if self.settings.results_minimized {
+            self.settings.results_minimized = false;
+            self.changed(cx);
+        }
+    }
+
+    pub(super) fn results_toggle_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let minimized = self.settings.results_minimized;
+        let label = if minimized {
+            "Restore results"
+        } else {
+            "Minimize results"
+        };
+        Button::new("toggle-results")
+            .ghost()
+            .small()
+            .icon(if minimized {
+                IconName::ChevronUp
+            } else {
+                IconName::ChevronDown
+            })
+            .accessibility_label(label)
+            .map(|mut button| {
+                button
+                    .interactivity()
+                    .tooltip(StatusTooltip::new(label, "").for_action(&ToggleResults, None));
+                button
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_results(window, cx)))
+    }
+
     fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.settings.results_minimized {
+            return h_flex()
+                .w_full()
+                .h_10()
+                .px_3()
+                .gap_2()
+                .child(self.panel_switcher(cx))
+                .child(div().flex_1())
+                .child(self.results_toggle_button(cx))
+                .into_any_element();
+        }
         if self.tabs[self.active].panel.selected == Panel::Output {
             return self.output_panel(cx);
         }
@@ -782,6 +837,9 @@ impl Qrow {
             .on_action(cx.listener(|this, _: &ShowSignIns, window, cx| {
                 this.show_sidebar_panel(SidebarPanel::SignIns, window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &ToggleResults, window, cx| this.toggle_results(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
             }))
@@ -958,8 +1016,10 @@ impl Render for Qrow {
                         div()
                             .id("sql-editor")
                             .test_support()
-                            .h(editor_height)
-                            .flex_shrink_0()
+                            .when(self.settings.results_minimized, |el| el.flex_1().min_h_0())
+                            .when(!self.settings.results_minimized, |el| {
+                                el.h(editor_height).flex_shrink_0()
+                            })
                             .min_w_0()
                             .line_height(relative(self.settings.editor_line_height))
                             .child(
@@ -971,8 +1031,20 @@ impl Render for Qrow {
                                     .aria_label("SQL Editor"),
                             ),
                     )
-                    .child(self.splitter(false, cx))
-                    .child(div().flex_1().min_h_0().child(self.query_panel(cx))),
+                    .when(!self.settings.results_minimized, |el| {
+                        el.child(self.splitter(false, cx))
+                    })
+                    .when(self.settings.results_minimized, |el| {
+                        el.child(div().h(self.ui_px(1.)).bg(cx.theme().border))
+                    })
+                    .child(
+                        div()
+                            .when(self.settings.results_minimized, |el| {
+                                el.h_10().flex_shrink_0()
+                            })
+                            .when(!self.settings.results_minimized, |el| el.flex_1().min_h_0())
+                            .child(self.query_panel(cx)),
+                    ),
             )
     }
 }

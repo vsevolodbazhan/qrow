@@ -322,3 +322,26 @@ fn cancel_stops_spark_and_keeps_the_partial_preview(cx: &mut TestAppContext) {
     app.run_sql(cx, "SELECT 'reconnect-works' AS result");
     app.wait_cell(cx, 0, 1, "reconnect-works");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn minimized_results_keep_completion_unread_until_restored(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, &["Minimized results"]);
+    app.run_complete(cx, REGISTER_BLOCKING);
+    let query = token("minimized-results");
+    app.run_sql(cx, &blocking(&query, 1500));
+    app.wait_evidence(cx, &query, "started", QUERY_TIMEOUT);
+    app.click(cx, "toggle-results");
+    wait_tab(&app, cx, "Query 1, unread query result");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Restore results")
+        );
+    });
+    app.click(cx, "toggle-results");
+    wait_tab(&app, cx, "Query 1");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "Query 1, unread query result").is_none());
+    });
+}

@@ -95,7 +95,7 @@ See [attach a dbt project](docs/connections.md#attach-a-dbt-project).
 Qrow can open an AI assistant beside your query tab. It runs on a separately
 installed Codex or Claude Code executable with your own sign-in, so you can
 use your OpenAI or Claude subscription. The assistant is off by default.
-Enable it in **Qrow → Settings… → Assistant**, then press **⌘J**.
+Enable it in **Qrow → Settings… → Assistant**, then press **⌘R**.
 
 - Each conversation writes SQL in its own query tab, so you can work on it
   together. Several conversations can work at the same time.

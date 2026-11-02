@@ -24,6 +24,7 @@ fn assert_toolbar_fits(app: &TestApp, cx: &mut TestAppContext) {
             "page-label",
             "previous-page",
             "next-page",
+            "toggle-results",
         ] {
             if window.try_find(id).is_none() {
                 continue;
@@ -56,7 +57,13 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
             cx.simulate_window_resize(app.window, size(px(width * scale), px(650. * scale)));
             app.settle(cx);
             assert_toolbar_fits(&app, cx);
-            app.update(cx, |window, _| {
+            let compact = app.update(cx, |window, _| {
+                let compact = window.try_find("result-details").is_some();
+                if width == 1900. {
+                    assert!(!compact, "A wide panel shows all result metadata");
+                } else if width <= 700. {
+                    assert!(compact, "A narrow panel uses the details popover");
+                }
                 let current_width = bounds_of(window, "next-page").right()
                     - bounds_of(window, "previous-page").left();
                 let expected_width = *pagination_width.get_or_insert(current_width);
@@ -70,8 +77,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                 ] {
                     assert_eq!(label(window, id).as_deref(), Some(name));
                 }
-                if width >= 850. {
-                    assert!(window.try_find("result-details").is_none());
+                if !compact {
                     assert_eq!(
                         label(window, "result-range").as_deref(),
                         Some("Rows 1–1000")
@@ -101,8 +107,9 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                         assert!(window.try_find("result-range").is_none());
                     }
                 }
+                compact
             });
-            if width < 850. {
+            if compact {
                 app.click(cx, "result-details");
                 app.update(cx, |window, _| {
                     assert_eq!(

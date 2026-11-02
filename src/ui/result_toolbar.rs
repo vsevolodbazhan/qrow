@@ -263,6 +263,7 @@ impl Qrow {
                         cx,
                     )),
             )
+            .child(self.results_toggle_button(cx))
             .into_any_element()
     }
 }

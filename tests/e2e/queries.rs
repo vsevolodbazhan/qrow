@@ -389,3 +389,39 @@ fn a_query_result_hidden_by_activity_stays_unread(cx: &mut TestAppContext) {
     app.click_labelled(cx, "Query 1, unread query result");
     app.wait_cell(cx, 0, 1, "42");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    let height = app.update(cx, |window, _| {
+        window.find("sql-editor").bounds().size.height
+    });
+    app.click(cx, "toggle-results");
+    app.update(cx, |window, _| {
+        assert!(window.find("sql-editor").bounds().size.height > height);
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Restore results")
+        );
+    });
+    app.click(cx, "run");
+    app.wait_cell(cx, 0, 1, "233");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Minimize results")
+        );
+        assert_eq!(window.find("sql-editor").bounds().size.height, height);
+    });
+    app.press(cx, "cmd-j");
+    app.press(cx, "cmd-j");
+    app.wait_cell(cx, 0, 1, "233");
+    app.wait_until(
+        cx,
+        "saved restored results",
+        Duration::from_secs(10),
+        |_, _| !app.saved().settings.results_minimized,
+    );
+}
