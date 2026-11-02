@@ -93,7 +93,15 @@ restage, or modify working files. They do not package the application.
 
 The release profile uses one code generation unit to keep the macOS package
 within its size budget. The `perf` profile uses 16 units and no link-time
-optimization to reduce build time.
+optimization to reduce build time. Debug and test builds optimize the
+dependencies, like GPUI, but not Qrow. The UI tests run about 5 times faster
+and the E2E tests 3 times faster. The first build after a dependency change
+takes longer. Later builds compile only Qrow, as before.
+
+Optimized dependencies also make the app react faster in tests. A test must
+not depend on slow work: wait for the condition that it checks. For example,
+wait for the saved workspace with `wait_saved`, and wait for an animated
+element to stop before you click it.
 
 Stage required code and configuration together. A passing working-copy check
 does not prove that the staged snapshot passes. Changes under `scripts/`
