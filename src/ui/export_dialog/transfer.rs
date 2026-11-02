@@ -16,12 +16,6 @@ impl ExportDialog {
 }
 
 pub(super) fn notice(intent: &run::Intent) -> Option<String> {
-    if intent.profile.database_type == crate::model::DatabaseType::Trino {
-        return Some(format!(
-            "Trino spooling: {}. The server can return classic results.",
-            intent.profile.transfer.settings().trino_spooling.label()
-        ));
-    }
     if intent.profile.database_type != crate::model::DatabaseType::Kyuubi {
         return None;
     }
@@ -102,6 +96,8 @@ mod tests {
             .parameters
             .insert(SAVE_TO_FILE_KEY.into(), "true".into());
         assert!(save_to_file(&intent));
+        intent.profile.database_type = crate::model::DatabaseType::Trino;
+        assert!(notice(&intent).is_none());
         intent.profile.database_type = crate::model::DatabaseType::Postgres;
         assert!(notice(&intent).is_none());
         assert!(!save_to_file(&intent));
