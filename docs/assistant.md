@@ -183,6 +183,7 @@ each message, and the assistant writes SQL in it. A change applies to the next
 message, also in a conversation that already exists. The keyword case does not
 change SQL that you write.
 
+The formatter uses the quoting rules of the connection type.
 Qrow formats a statement from the assistant when the statement is longer than 80
 characters, also when the assistant wrote it on more than one line. This applies
 to a new query and to a statement that the assistant writes again completely. A

@@ -389,3 +389,25 @@ fn a_query_result_hidden_by_activity_stays_unread(cx: &mut TestAppContext) {
     app.click_labelled(cx, "Query 1, unread query result");
     app.wait_cell(cx, 0, 1, "42");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
+    let sql = "select '日本語😀;' as value";
+    let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(cx, "formatted query", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == "SELECT '日本語😀;' AS value"
+    });
+    app.press(cx, "cmd-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀;");
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-z");
+    app.wait_until(cx, "original SQL", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+}

@@ -505,3 +505,31 @@ fn parquet_non_iso_dates_remain_text_and_keep_the_session_setting(cx: &mut TestA
     app.run_complete(cx, "SELECT current_setting('DateStyle') AS style");
     app.wait_cell(cx, 0, 1, "SQL, DMY");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
+    let sql = r#"select $body$日本語😀; select$body$ as "Mixed Case""#;
+    let (workspace, credentials) = workspace(sql);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(
+        cx,
+        "formatted SQL",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql.starts_with("SELECT"),
+    );
+    app.press(cx, "cmd-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀; select");
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-z");
+    app.wait_until(
+        cx,
+        "format undo",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == sql,
+    );
+}
