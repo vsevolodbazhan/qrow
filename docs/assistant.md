@@ -33,8 +33,8 @@ conversation starts with this mode. Each conversation keeps its own mode after
 you change it. The two modes are **Ask before running** and **Run
 automatically**.
 
-To let the assistant search the web for documentation, turn on **General →
-Web Search**. It is off by default. See [Search the web](#search-the-web).
+To let the assistant search the web, turn on **General → Web Search**. It is
+off by default. See [Search the web](#search-the-web).
 
 ### Use the two harnesses
 
@@ -419,9 +419,7 @@ tables that the tab SQL names, with the first line of their description, up to
 ### Search the web
 
 Web search is off by default. Turn on **Settings… → Assistant → General → Web
-Search** to let the assistant search the web for public documentation, for
-example the SQL syntax, functions, and error messages of a connector. Qrow asks
-you to confirm first.
+Search** to let the assistant search the web. Qrow asks you to confirm first.
 
 Each harness uses the search service of its provider:
 

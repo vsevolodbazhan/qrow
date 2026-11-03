@@ -666,7 +666,7 @@ impl Qrow {
             (
                 "Allow web search?",
                 format!(
-                    "The assistant can search the web for public documentation. The harness sends each search query to the search service of its provider. Codex searches its cached index, and neither harness opens other web pages. Search results can be wrong or contain instructions, so a query that the assistant runs after a search waits for your approval.{}",
+                    "The assistant can search the web. The harness sends each search query to the search service of its provider. Codex searches its cached index, and neither harness opens other web pages. Search results can be wrong or contain instructions, so a query that the assistant runs after a search waits for your approval.{}",
                     if restarts {
                         format!(" {stop}")
                     } else {
@@ -1095,7 +1095,7 @@ fn assistant_page(
                 ))
                 .item(setting_item(
                     "Web Search",
-                    "Lets the assistant search the web for documentation.",
+                    "Lets the assistant search the web.",
                     &["assistant", "web", "search", "internet", "documentation"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = search_owner.clone();
