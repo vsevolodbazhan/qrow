@@ -565,6 +565,16 @@ impl AssistantPane {
                                     .overflow_y_scroll()
                                     .child(pending.sql.clone()),
                             )
+                            .when(pending.held_after_web_search, |card| {
+                                card.child(
+                                    div()
+                                        .id("assistant-approval-web-search")
+                                        .test_support()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("The assistant searched the web in this turn, so this query waits for you."),
+                                )
+                            })
                             .child(
                                 div()
                                     .text_xs()

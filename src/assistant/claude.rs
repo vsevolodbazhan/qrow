@@ -11,16 +11,17 @@
 //! Anthropic's own flow, and Claude Code keeps the credentials.
 
 use super::{
-    AccountKind, AccountStatus, AssistantEvent, BASE_INSTRUCTIONS, Conversation,
-    ConversationHistory, ConversationPage, HarnessFeatures, HarnessSnapshot, LoginStart,
-    MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, Model, ReasoningEffort, TitleRequest, ToolCall,
-    ToolDefinition, ToolResult, Turn, TurnRequest, WORKSPACE_CONTEXT_SEPARATOR,
+    AccountKind, AccountStatus, AssistantEvent, Conversation, ConversationHistory,
+    ConversationPage, HarnessFeatures, HarnessSnapshot, LoginStart, MAX_CONTEXT_BYTES,
+    MAX_MESSAGE_BYTES, Model, ReasoningEffort, TitleRequest, ToolCall, ToolDefinition, ToolResult,
+    Turn, TurnRequest, WORKSPACE_CONTEXT_SEPARATOR, WebSearch, WebSearchStatus,
     codex::{
         Input, LaunchChild, WriteCommand, clean_title, kill_process_tree, read_stderr_tail,
         write_protocol_stream,
     },
     inbox::{Inbox, Message, ProcessSender, SendError},
     service::ProcessIds,
+    web,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -63,6 +64,9 @@ const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(200);
 /// The name of the SDK MCP server that gives the Qrow tools.
 const MCP_SERVER: &str = "qrow";
+/// The only built-in tool that Qrow can allow. It searches through
+/// Anthropic's service and cannot open other URLs.
+const WEB_SEARCH_TOOL: &str = "WebSearch";
 /// The reasoning level that leaves the choice to Claude Code.
 pub const DEFAULT_EFFORT: &str = "default";
 #[cfg(not(test))]
@@ -98,6 +102,9 @@ struct Session {
     /// stops only sessions that have one.
     started: bool,
     last_used: Instant,
+    /// The web searches of the turn that wait for their results, by tool
+    /// use ID, with their search text.
+    searches: BTreeMap<String, String>,
 }
 
 /// A title request on the control process.
@@ -126,15 +133,22 @@ pub struct ClaudeHarness {
     session_idle_timeout: Duration,
     /// The configuration folder of Claude Code, where it saves sessions.
     config_dir: Option<PathBuf>,
+    web_search: bool,
+    /// Events that one message gave in addition to the event that
+    /// `next_input` returned for it.
+    queued: VecDeque<AssistantEvent>,
 }
 
 impl ClaudeHarness {
     /// Checks the version of Claude Code and starts the control process.
+    /// With `web_search`, conversations can use the web search tool of
+    /// Claude Code.
     pub(crate) fn launch_with_inbox(
         executable: &Path,
         cwd: &Path,
         mut inbox: Inbox,
         pids: ProcessIds,
+        web_search: bool,
     ) -> Result<Self> {
         anyhow::ensure!(cwd.is_dir(), "Claude Code working directory does not exist");
         check_version(executable)?;
@@ -155,15 +169,17 @@ impl ClaudeHarness {
             title_timeout: TITLE_TIMEOUT,
             session_idle_timeout: SESSION_IDLE_TIMEOUT,
             config_dir,
+            web_search,
+            queued: VecDeque::new(),
         };
         harness.start_control()?;
         Ok(harness)
     }
 
     /// The arguments of every Claude Code process: the stream-json protocol,
-    /// no built-in tools, and no user settings, hooks, plugins, or MCP
-    /// servers.
-    fn common_arguments() -> Vec<OsString> {
+    /// the built-in `tools` (empty for none), and no user settings, hooks,
+    /// plugins, or MCP servers.
+    fn common_arguments(tools: &str) -> Vec<OsString> {
         [
             "-p",
             "--input-format",
@@ -175,7 +191,7 @@ impl ClaudeHarness {
             "",
             "--strict-mcp-config",
             "--tools",
-            "",
+            tools,
             "--permission-mode",
             "dontAsk",
             "--permission-prompts",
@@ -263,7 +279,7 @@ impl ClaudeHarness {
             // fails at the next input.
             self.expire_all_titles();
         }
-        let mut arguments = Self::common_arguments();
+        let mut arguments = Self::common_arguments("");
         arguments.push("--no-session-persistence".into());
         let mut process = self.spawn(arguments)?;
         let response = self.request(
@@ -302,17 +318,26 @@ impl ClaudeHarness {
         model: Option<&str>,
         effort: Option<&str>,
     ) -> Vec<OsString> {
-        let mut arguments = Self::common_arguments();
+        let builtin = if self.web_search { WEB_SEARCH_TOOL } else { "" };
+        let mut arguments = Self::common_arguments(builtin);
         let mcp = json!({ "mcpServers": { MCP_SERVER: { "type": "sdk", "name": MCP_SERVER } } });
+        let qrow_tools = format!("mcp__{MCP_SERVER}__*");
+        let mut allowed = vec![qrow_tools.as_str()];
+        allowed.extend((!builtin.is_empty()).then_some(builtin));
         arguments.extend(
             [
                 "--include-partial-messages",
                 "--mcp-config",
                 &mcp.to_string(),
-                "--allowedTools",
-                &format!("mcp__{MCP_SERVER}__*"),
+            ]
+            .map(OsString::from),
+        );
+        arguments.push("--allowedTools".into());
+        arguments.extend(allowed.into_iter().map(OsString::from));
+        arguments.extend(
+            [
                 "--system-prompt",
-                BASE_INSTRUCTIONS,
+                &super::instructions(self.web_search),
                 flag,
                 session_id,
             ]
@@ -363,6 +388,7 @@ impl ClaudeHarness {
                 streaming: None,
                 started: resume,
                 last_used: Instant::now(),
+                searches: BTreeMap::new(),
             },
         );
         Ok(())
@@ -924,6 +950,9 @@ impl ClaudeHarness {
     /// an error; the other conversations continue.
     pub(crate) fn next_input(&mut self, deadline: Option<Instant>) -> Result<Option<Input>> {
         loop {
+            if let Some(event) = self.queued.pop_front() {
+                return Ok(Some(Input::Event(event)));
+            }
             let now = Instant::now();
             if let Some(event) = self.expire_title_jobs(now) {
                 return Ok(Some(Input::Event(event)));
@@ -1157,7 +1186,14 @@ impl ClaudeHarness {
                     _ => Ok(None),
                 }
             }
+            Some("assistant") if message.get("parent_tool_use_id").is_none_or(Value::is_null) => {
+                Ok(self.queue_events(started_searches(thread, &turn, session, message)))
+            }
+            Some("user") if message.get("parent_tool_use_id").is_none_or(Value::is_null) => {
+                Ok(self.queue_events(ended_searches(thread, &turn, session, message)))
+            }
             Some("result") => {
+                session.searches.clear();
                 let completed = Self::complete_message(thread, session);
                 let turn = message
                     .get("user_message_uuid")
@@ -1195,6 +1231,14 @@ impl ClaudeHarness {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Returns the first event and keeps the others for `next_input`.
+    fn queue_events(&mut self, events: Vec<AssistantEvent>) -> Option<AssistantEvent> {
+        let mut events = events.into_iter();
+        let first = events.next();
+        self.queued.extend(events);
+        first
     }
 
     /// The full text of the reply message that ended.
@@ -1265,6 +1309,134 @@ fn read_lines(mut stdout: impl BufRead, sender: &ProcessSender, closing: &Atomic
             }
         }
     }
+}
+
+/// The web searches that an assistant message starts. Each one waits in the
+/// session for its result.
+fn started_searches(
+    thread: &str,
+    turn: &str,
+    session: &mut Session,
+    message: &Value,
+) -> Vec<AssistantEvent> {
+    if session.turn.is_none() {
+        return Vec::new();
+    }
+    let blocks = message
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    blocks
+        .iter()
+        .filter(|block| {
+            block.get("type").and_then(Value::as_str) == Some("tool_use")
+                && block.get("name").and_then(Value::as_str) == Some(WEB_SEARCH_TOOL)
+        })
+        .filter_map(|block| {
+            let id = block.get("id").and_then(Value::as_str)?.to_owned();
+            let query = web::clean_text(
+                block
+                    .pointer("/input/query")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            session.searches.insert(id.clone(), query.clone());
+            Some(AssistantEvent::WebSearch(WebSearch {
+                thread_id: thread.to_owned(),
+                turn_id: turn.to_owned(),
+                id,
+                query,
+                status: WebSearchStatus::Running,
+            }))
+        })
+        .collect()
+}
+
+/// The web searches that the tool results of a user message end.
+fn ended_searches(
+    thread: &str,
+    turn: &str,
+    session: &mut Session,
+    message: &Value,
+) -> Vec<AssistantEvent> {
+    let blocks = message
+        .pointer("/message/content")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    let results: Vec<_> = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        .collect();
+    // Claude Code adds the structured result of a single tool result.
+    let structured = (results.len() == 1)
+        .then(|| message.get("tool_use_result"))
+        .flatten()
+        .filter(|result| result.get("results").is_some());
+    results
+        .into_iter()
+        .filter_map(|block| {
+            let id = block.get("tool_use_id").and_then(Value::as_str)?;
+            let query = session.searches.remove(id)?;
+            let status = if block.get("is_error").and_then(Value::as_bool) == Some(true) {
+                let text = tool_result_text(block);
+                WebSearchStatus::Failed(web::clean_text(if text.is_empty() {
+                    "The web search failed."
+                } else {
+                    &text
+                }))
+            } else {
+                WebSearchStatus::Completed(match structured {
+                    Some(result) => structured_links(result),
+                    None => text_links(&tool_result_text(block)),
+                })
+            };
+            Some(AssistantEvent::WebSearch(WebSearch {
+                thread_id: thread.to_owned(),
+                turn_id: turn.to_owned(),
+                id: id.to_owned(),
+                query,
+                status,
+            }))
+        })
+        .collect()
+}
+
+/// The text of a tool result: a string, or text parts.
+fn tool_result_text(block: &Value) -> String {
+    match block.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// The links of the structured result of the web search tool: hits with a
+/// title and a URL, between text parts.
+fn structured_links(result: &Value) -> Vec<super::WebLink> {
+    let hits = result
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("content").and_then(Value::as_array))
+        .flatten();
+    web::collect_links(hits)
+}
+
+/// The links of the text result of the web search tool, from its lines
+/// that start with `Links: ` and a JSON array.
+fn text_links(text: &str) -> Vec<super::WebLink> {
+    let hits: Vec<Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("Links: "))
+        .filter_map(|json| serde_json::from_str::<Vec<Value>>(json).ok())
+        .flatten()
+        .collect();
+    web::collect_links(hits.iter())
 }
 
 fn diagnostic_suffix(process: &Process) -> String {

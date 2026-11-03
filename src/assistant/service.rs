@@ -284,6 +284,8 @@ pub struct Launch {
     /// folder. Claude Code files its sessions by working folder, so a stable
     /// folder keeps them together.
     pub working_directory: Option<PathBuf>,
+    /// Lets the harness search the web.
+    pub web_search: bool,
 }
 
 impl Service {
@@ -294,6 +296,7 @@ impl Service {
                 harness: AssistantHarness::Codex,
                 executable,
                 working_directory: None,
+                web_search: false,
             },
             wake,
         )
@@ -307,6 +310,7 @@ impl Service {
             harness: kind,
             executable,
             working_directory,
+            web_search,
         } = launch;
         let (commands, inbox) = Inbox::channel(COMMAND_CAPACITY);
         let (event_tx, events) = mpsc::sync_channel(EVENT_CAPACITY);
@@ -381,17 +385,20 @@ impl Service {
                     (None, None) => return,
                 };
                 let launched = match kind {
-                    AssistantHarness::Codex => {
-                        CodexHarness::launch_with_inbox(&executable, &directory, inbox, move |id| {
-                            thread_pids.replace(id)
-                        })
-                        .map(Harness::Codex)
-                    }
+                    AssistantHarness::Codex => CodexHarness::launch_with_inbox(
+                        &executable,
+                        &directory,
+                        inbox,
+                        web_search,
+                        move |id| thread_pids.replace(id),
+                    )
+                    .map(Harness::Codex),
                     AssistantHarness::Claude => ClaudeHarness::launch_with_inbox(
                         &executable,
                         &directory,
                         inbox,
                         thread_pids,
+                        web_search,
                     )
                     .map(Harness::Claude),
                 };

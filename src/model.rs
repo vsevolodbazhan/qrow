@@ -390,6 +390,9 @@ pub struct AssistantSettings {
     pub codex: AssistantModelChoice,
     pub claude: AssistantModelChoice,
     pub sql_keyword_case: KeywordCase,
+    /// Lets the harness search the web. Codex uses its cached index, and
+    /// Claude Code uses its search tool. Neither can open other URLs.
+    pub web_search: bool,
 }
 
 impl Default for AssistantSettings {
@@ -405,6 +408,7 @@ impl Default for AssistantSettings {
             codex: AssistantModelChoice::default(),
             claude: AssistantModelChoice::default(),
             sql_keyword_case: KeywordCase::default(),
+            web_search: false,
         }
     }
 }

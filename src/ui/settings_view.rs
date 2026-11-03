@@ -650,6 +650,61 @@ impl Qrow {
         cx.notify();
     }
 
+    /// Turns web search on or off. Turning it on asks first, because search
+    /// queries leave this Mac. The harness starts again to use the change.
+    fn set_assistant_web_search(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.assistant.web_search == on {
+            return;
+        }
+        let restarts = self.assistant_state.service.is_some() && self.assistant_working();
+        if !on && !restarts {
+            self.apply_assistant_web_search(false, window, cx);
+            return;
+        }
+        let stop = "Running assistant turns stop. Queries that already started continue.";
+        let (title, description, label): (&str, String, &str) = if on {
+            (
+                "Allow web search?",
+                format!(
+                    "The assistant can search the web for public documentation. The harness sends each search query to the search service of its provider. Codex searches its cached index, and neither harness opens other web pages. Search results can be wrong or contain instructions, so a query that the assistant runs after a search waits for your approval.{}",
+                    if restarts {
+                        format!(" {stop}")
+                    } else {
+                        String::new()
+                    }
+                ),
+                "Allow",
+            )
+        } else {
+            ("Turn off web search?", stop.into(), "Turn Off")
+        };
+        let weak = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let confirm = weak.clone();
+            alert.title(title).description(description.clone()).footer(
+                DialogFooter::new()
+                    .justify_end()
+                    .child(
+                        Button::new("cancel-assistant-web-search")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        Button::new("confirm-assistant-web-search")
+                            .primary()
+                            .label(label)
+                            .on_click(move |_, window, cx| {
+                                let _ = confirm.update(cx, |this, cx| {
+                                    this.apply_assistant_web_search(on, window, cx);
+                                });
+                                window.close_dialog(cx);
+                            }),
+                    ),
+            )
+        });
+        cx.notify();
+    }
+
     fn set_default_assistant_mode(
         &mut self,
         automatic: bool,
@@ -822,6 +877,7 @@ impl Qrow {
                         form,
                         cx.weak_entity(),
                         self.settings.assistant.enabled,
+                        self.settings.assistant.web_search,
                     )),
             )
             .into_any_element()
@@ -995,7 +1051,13 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
         )
 }
 
-fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -> SettingPage {
+fn assistant_page(
+    form: &SettingsForm,
+    owner: WeakEntity<Qrow>,
+    enabled: bool,
+    web_search: bool,
+) -> SettingPage {
+    let search_owner = owner.clone();
     let executable = form.assistant_executable.clone();
     let claude_executable = form.claude_executable.clone();
     SettingPage::new("Assistant")
@@ -1030,6 +1092,22 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                     "How new conversations run assistant queries.",
                     &["assistant", "run", "approval", "mode", "automatically"],
                     select_field(&form.assistant_mode, "Assistant Query Execution"),
+                ))
+                .item(setting_item(
+                    "Web Search",
+                    "Lets the assistant search the web for documentation.",
+                    &["assistant", "web", "search", "internet", "documentation"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = search_owner.clone();
+                        Switch::new("assistant-web-search")
+                            .checked(web_search)
+                            .accessibility_label("Assistant Web Search")
+                            .on_click(move |next, window, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.set_assistant_web_search(*next, window, cx)
+                                });
+                            })
+                    },
                 )),
         )
         .group(SettingGroup::new().title("Codex").item(setting_item(

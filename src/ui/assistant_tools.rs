@@ -879,19 +879,28 @@ impl Qrow {
                 .find(|conversation| conversation.thread_id == call.thread_id)
                 .map(|conversation| conversation.execution_mode)
                 .unwrap_or_default();
+            let automatic = mode == crate::model::AssistantExecutionMode::RunAutomatically;
+            // Web results can tell the assistant to run SQL, so a query after
+            // a search in the same turn always waits for approval.
+            let searched = self
+                .thread_run(&call.thread_id)
+                .and_then(|run| run.web_search_turn.as_deref())
+                == Some(call.turn_id.as_str());
+            let approved = automatic && !searched;
             self.thread_run_mut(&call.thread_id).pending_query = Some(PendingQuery {
                 call: call.clone(),
                 tab_id: plan.tab_id,
                 revision: plan.expected_revision,
                 sql: plan.sql,
-                approved: mode == crate::model::AssistantExecutionMode::RunAutomatically,
+                approved,
                 started: false,
                 kind: PendingQueryKind::Run,
                 activity_index: None,
                 detached: false,
                 first_row: 0,
+                held_after_web_search: automatic && searched,
             });
-            if mode == crate::model::AssistantExecutionMode::RunAutomatically {
+            if approved {
                 self.begin_assistant_query(&call.thread_id, cx);
             }
             Ok(())
@@ -1343,6 +1352,7 @@ impl Qrow {
                 activity_index: None,
                 detached: false,
                 first_row,
+                held_after_web_search: false,
             };
             self.thread_run_mut(&call.thread_id).pending_query = Some(pending);
             self.record_assistant_query_started(&call.thread_id, cx);

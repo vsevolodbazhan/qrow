@@ -47,15 +47,27 @@ impl Fixture {
     }
 
     fn launch(&self) -> (CommandSender, ClaudeHarness) {
+        self.launch_with(false)
+    }
+
+    fn launch_with(&self, web_search: bool) -> (CommandSender, ClaudeHarness) {
         let (commands, inbox) = Inbox::channel(16);
         let harness = ClaudeHarness::launch_with_inbox(
             &self.executable,
             &self.cwd,
             inbox,
             ProcessIds::default(),
+            web_search,
         )
         .unwrap();
         (commands, harness)
+    }
+
+    /// The command-line arguments of the process of `name`: a session ID,
+    /// or `control`.
+    fn arguments(&self, name: &str) -> Vec<String> {
+        let text = std::fs::read_to_string(self.state.join(format!("arguments-{name}"))).unwrap();
+        serde_json::from_str(&text).unwrap()
     }
 }
 
@@ -158,6 +170,7 @@ fn an_old_claude_code_does_not_start() {
         &fixture.cwd,
         inbox,
         ProcessIds::default(),
+        false,
     ) {
         Ok(_) => panic!("an old version started"),
         Err(error) => error.to_string(),
@@ -480,4 +493,144 @@ fn the_output_reader_waits_for_room_until_its_process_closes() {
         thread::sleep(Duration::from_millis(10));
     }
     reader.join().unwrap();
+}
+
+/// The value that follows `flag`, and the values up to the next flag.
+fn flag_values<'a>(arguments: &'a [String], flag: &str) -> Vec<&'a str> {
+    let start = arguments
+        .iter()
+        .position(|argument| argument == flag)
+        .unwrap_or_else(|| panic!("{flag} is missing from {arguments:?}"));
+    let first = arguments[start + 1].as_str();
+    std::iter::once(first)
+        .chain(
+            arguments[start + 2..]
+                .iter()
+                .map(String::as_str)
+                .take_while(|argument| !argument.starts_with("--")),
+        )
+        .collect()
+}
+
+#[test]
+fn web_search_is_the_only_built_in_tool_and_only_when_allowed() {
+    for web_search in [false, true] {
+        let fixture = Fixture::new();
+        let (_commands, mut harness) = fixture.launch_with(web_search);
+        let conversation = harness
+            .create_conversation(&crate::assistant::tools::definitions())
+            .unwrap();
+        let arguments = fixture.arguments(&conversation.id);
+        let expected = if web_search { "WebSearch" } else { "" };
+        assert_eq!(flag_values(&arguments, "--tools")[0], expected);
+        let mut allowed = vec!["mcp__qrow__*"];
+        allowed.extend(web_search.then_some("WebSearch"));
+        assert_eq!(flag_values(&arguments, "--allowedTools"), allowed);
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.contains("WebFetch")),
+            "{arguments:?}"
+        );
+        assert_eq!(
+            flag_values(&arguments, "--system-prompt")[0],
+            crate::assistant::instructions(web_search)
+        );
+        // Titles never search.
+        assert_eq!(flag_values(&fixture.arguments("control"), "--tools")[0], "");
+        harness.shutdown().unwrap();
+    }
+}
+
+#[test]
+fn a_web_search_shows_its_query_and_links() {
+    let fixture = Fixture::new();
+    let (_commands, mut harness) = fixture.launch_with(true);
+    let conversation = harness
+        .create_conversation(&crate::assistant::tools::definitions())
+        .unwrap();
+    let turn = harness
+        .start_turn(request(
+            &conversation.id,
+            "Search the web for generate_series",
+        ))
+        .unwrap();
+    let events = turn_events(&mut harness);
+    let searches: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AssistantEvent::WebSearch(search) => Some(search.clone()),
+            _ => None,
+        })
+        .collect();
+    let search = |status| WebSearch {
+        thread_id: conversation.id.clone(),
+        turn_id: turn.id.clone(),
+        id: "toolu_search_1".into(),
+        query: "postgres generate_series".into(),
+        status,
+    };
+    assert_eq!(
+        searches,
+        [
+            search(WebSearchStatus::Running),
+            search(WebSearchStatus::Completed(vec![
+                crate::assistant::WebLink {
+                    title: "Set Returning Functions".into(),
+                    url: "https://www.postgresql.org/docs/current/functions-srf.html".into(),
+                },
+                crate::assistant::WebLink {
+                    title: "Generate series".into(),
+                    url: "https://example.com/generate-series".into(),
+                },
+            ])),
+        ]
+    );
+    assert_eq!(
+        reply_text(&events),
+        "Searching the documentation.|See https://www.postgresql.org/docs/current/functions-srf.html"
+    );
+}
+
+#[test]
+fn a_failed_web_search_gives_its_error() {
+    let fixture = Fixture::new();
+    let (_commands, mut harness) = fixture.launch_with(true);
+    let conversation = harness
+        .create_conversation(&crate::assistant::tools::definitions())
+        .unwrap();
+    harness
+        .start_turn(request(&conversation.id, "Search the web and fail"))
+        .unwrap();
+    let ended = turn_events(&mut harness)
+        .into_iter()
+        .filter_map(|event| match event {
+            AssistantEvent::WebSearch(search) => Some(search.status),
+            _ => None,
+        })
+        .next_back();
+    assert_eq!(
+        ended,
+        Some(WebSearchStatus::Failed(
+            "Web search error: unavailable".into()
+        ))
+    );
+}
+
+#[test]
+fn search_links_come_from_the_result_text_when_needed() {
+    let text = "Web search results for query: \"trino unnest\"\n\nLinks: [{\"title\":\"UNNEST\",\"url\":\"https://trino.io/docs/current/sql/select.html\"},{\"title\":\"Bad\",\"url\":\"file:///etc/passwd\"}]\n\nSome text\nLinks: [{\"title\":\"\",\"url\":\"https://trino.io/docs/current/functions/array.html\"}]\nLinks: not json";
+    assert_eq!(
+        text_links(text),
+        [
+            crate::assistant::WebLink {
+                title: "UNNEST".into(),
+                url: "https://trino.io/docs/current/sql/select.html".into(),
+            },
+            crate::assistant::WebLink {
+                title: "https://trino.io/docs/current/functions/array.html".into(),
+                url: "https://trino.io/docs/current/functions/array.html".into(),
+            },
+        ]
+    );
 }
