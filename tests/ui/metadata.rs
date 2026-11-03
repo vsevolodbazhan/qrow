@@ -21,6 +21,7 @@ fn assert_toolbar_fits(app: &TestApp, cx: &mut TestAppContext) {
             "result-count",
             "result-details",
             "result-partial",
+            "export-results",
             "copy-result-query",
             "pin-result",
             "page-label",

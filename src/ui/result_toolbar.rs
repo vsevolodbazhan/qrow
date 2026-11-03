@@ -222,69 +222,82 @@ impl Qrow {
                     }),
                 )
             })
+            // The tag stays at every toolbar width: it changes what the rows mean.
+            .when(result.unfetched, |row| {
+                row.child(
+                    div()
+                        .id("result-partial")
+                        .test_support()
+                        .role(Role::Label)
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .aria_label("Partial result")
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(
+                                "The result does not hold all rows of the query.",
+                            )
+                            .build(window, cx)
+                        })
+                        .child(ResultSummary::neutral_tag(cx).child("Partial")),
+                )
+            })
             .child(div().flex_1().min_w_0())
-            .child(
-                Button::new("export-results")
-                    .small()
-                    .ghost()
-                    .icon(gpui_kit::assets::IconName::Download)
-                    .tooltip("Export results…")
-                    .accessibility_label("Export results…")
-                    .disabled(export_disabled || draining)
-                    .on_click(cx.listener(|this, _, window, cx| this.open_export(window, cx))),
-            )
             .child(
                 h_flex()
                     .flex_shrink_0()
                     .gap_2()
-                    .when(result.unfetched, |row| {
-                        row.child(
-                            div()
-                                .id("result-partial")
-                                .test_support()
-                                .role(Role::Label)
-                                .whitespace_nowrap()
-                                .aria_label("Partial result")
-                                .tooltip(|window, cx| {
-                                    StatusTooltip::new("Partial Result", "")
-                                        .detail("The result does not hold all rows of the query.")
-                                        .build(None, window, cx)
-                                })
-                                .child(ResultSummary::neutral_tag(cx).child("Partial")),
-                        )
-                    })
+                    // Related icon buttons sit closer than the page controls.
                     .child(
-                        Button::new("copy-result-query")
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(AssetIconName::FileCode))
-                            .tooltip("Copy query")
-                            .accessibility_label("Copy query")
-                            .disabled(result.sql.is_none())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.copy_result_query(tab_id, result_id, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("pin-result")
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(AssetIconName::Pin))
-                            .selected(result.pinned)
-                            .tooltip(if result.pinned {
-                                "Unpin result"
-                            } else {
-                                "Pin result"
-                            })
-                            .accessibility_label(if result.pinned {
-                                "Unpin result"
-                            } else {
-                                "Pin result"
-                            })
-                            .disabled(!result.pinned && tab.pinned_results() >= MAX_PINNED_RESULTS)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.toggle_result_pin(tab_id, result_id, window, cx)
-                            })),
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new("export-results")
+                                    .small()
+                                    .ghost()
+                                    .icon(gpui_kit::assets::IconName::Download)
+                                    .tooltip("Export results…")
+                                    .accessibility_label("Export results…")
+                                    .disabled(export_disabled || draining)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_export(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("copy-result-query")
+                                    .ghost()
+                                    .small()
+                                    .icon(Icon::new(AssetIconName::FileCode))
+                                    .tooltip("Copy query")
+                                    .accessibility_label("Copy query")
+                                    .disabled(result.sql.is_none())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.copy_result_query(tab_id, result_id, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("pin-result")
+                                    .ghost()
+                                    .small()
+                                    .icon(Icon::new(AssetIconName::Pin))
+                                    .selected(result.pinned)
+                                    .tooltip(if result.pinned {
+                                        "Unpin result"
+                                    } else {
+                                        "Pin result"
+                                    })
+                                    .accessibility_label(if result.pinned {
+                                        "Unpin result"
+                                    } else {
+                                        "Pin result"
+                                    })
+                                    .disabled(
+                                        !result.pinned
+                                            && tab.pinned_results() >= MAX_PINNED_RESULTS,
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.toggle_result_pin(tab_id, result_id, window, cx)
+                                    })),
+                            ),
                     )
                     .child(
                         div()

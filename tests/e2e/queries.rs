@@ -428,6 +428,15 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
             Some("Rows 1–1000")
         );
     });
+    // A narrow toolbar hides result metadata, but not the Partial tag.
+    cx.simulate_window_resize(app.window, size(px(500.), px(650.)));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-range").is_none());
+        let toolbar = bounds_of(window, "query-footer");
+        let partial = bounds_of(window, "result-partial");
+        assert!(partial.left() >= toolbar.left() && partial.right() <= toolbar.right());
+    });
     app.click(cx, "copy-result-query");
     assert_eq!(
         cx.read_from_clipboard()
