@@ -13,8 +13,8 @@ use gpui::{
 };
 use ropey::Rope;
 use smallvec::SmallVec;
-use sum_tree::Bias;
 use std::{ops::Range, rc::Rc};
+use sum_tree::Bias;
 
 use crate::{
     Scrollbar,
@@ -28,7 +28,7 @@ use super::{
 };
 
 /// The opacity of the selection color that tints an emphasized range.
-pub const EMPHASIS_OPACITY: f32 = 0.2;
+pub const EMPHASIS_OPACITY: f32 = 0.10;
 
 fn diagnostic_highlight_style(
     severity: crate::input::DiagnosticSeverity,
@@ -858,7 +858,9 @@ impl<M: InputModeKind> TextElement<M> {
         if state.masked {
             return vec![];
         }
-        let end = state.text.clip_offset(range.end.min(state.text.len()), Bias::Right);
+        let end = state
+            .text
+            .clip_offset(range.end.min(state.text.len()), Bias::Right);
         let start = state.text.clip_offset(range.start.min(end), Bias::Left);
         let start = start.max(last_layout.visible_range_offset.start);
         let end = end.min(last_layout.visible_range_offset.end);
