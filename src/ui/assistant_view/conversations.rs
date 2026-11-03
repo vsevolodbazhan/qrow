@@ -187,6 +187,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let mut searches = Vec::new();
         for (thread_id, run) in &mut self.assistant_state.runs {
             // Codex may not have the tool results of an active turn, with
             // their notes.
@@ -205,6 +206,11 @@ impl Qrow {
             // messages send the notes.
             run.pending_notes.clear();
             run.notes_read_while_pending = false;
+            run.web_search_turn = None;
+            searches.push((thread_id.clone(), std::mem::take(&mut run.web_searches)));
+        }
+        for (thread_id, cards) in searches {
+            self.cancel_web_search_cards(&thread_id, &cards);
         }
         self.assistant_state.loaded_threads.clear();
         self.assistant_state.pending_titles.clear();

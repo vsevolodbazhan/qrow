@@ -33,6 +33,9 @@ conversation starts with this mode. Each conversation keeps its own mode after
 you change it. The two modes are **Ask before running** and **Run
 automatically**.
 
+To let the assistant search the web for documentation, turn on **General →
+Web Search**. It is off by default. See [Search the web](#search-the-web).
+
 ### Use the two harnesses
 
 The harness that you select runs new conversations. Each conversation keeps
@@ -62,8 +65,9 @@ Claude Code works as Codex does, with these differences:
   files do not apply to the assistant. Managed settings of your organization
   apply. Thus a provider that you set up in your settings files, for example
   Amazon Bedrock or Google Vertex AI in `env`, does not apply either.
-- **Tools**: Claude Code can use only the Qrow tools. It cannot run commands
-  or read and write files.
+- **Tools**: Claude Code can use only the Qrow tools, and its web search tool
+  when you turn on [web search](#search-the-web). It cannot open web pages,
+  run commands, or read and write files.
 - **History**: Claude Code keeps each conversation in its own data folder
   (`~/.claude`, or `CLAUDE_CONFIG_DIR`). Qrow shows a conversation only from
   its saved copy, and it never reads Claude Code history. When you delete a
@@ -125,7 +129,8 @@ The card is collapsed. It shows the tool icon, the tool name, for example
   you cancel it.
 
 Select the card to show or hide the query tab, the tool arguments, and the
-result. The arguments and result are plain text.
+result. The arguments and result are plain text. A web search of the harness
+also shows as a card. See [Search the web](#search-the-web).
 
 Use **Settings… → Appearance → Assistant** to change the message font family,
 font size, and line height. These settings do not change the message field or
@@ -289,7 +294,9 @@ an assistant query starts. The request shows in the pane of its conversation.
 Select **Run** or **Cancel**. An SQL edit does not
 need approval. In **Run automatically**, assistant queries start without this
 card. SQL can change or delete data and schema. Qrow cannot prove that SQL is
-read-only. Select **Run automatically** only if you accept this risk.
+read-only. Select **Run automatically** only if you accept this risk. After the
+assistant searches the web in a turn, the queries of that turn always wait for
+your approval.
 
 Use the thread list to change conversations. The list is to the right of the current
 conversation when the pane is wide. Qrow lists recent conversations first.
@@ -408,6 +415,40 @@ Each message tells the assistant when dbt wrote the manifest, the dbt version,
 and the numbers of models, sources, and tests. It also lists the models of the
 tables that the tab SQL names, with the first line of their description, up to
 8 KB.
+
+### Search the web
+
+Web search is off by default. Turn on **Settings… → Assistant → General → Web
+Search** to let the assistant search the web for public documentation, for
+example the SQL syntax, functions, and error messages of a connector. Qrow asks
+you to confirm first.
+
+Each harness uses the search service of its provider:
+
+- **Codex** searches the cached web index of OpenAI. It does not open live
+  pages.
+- **Claude Code** uses its web search tool. Qrow does not allow its web fetch
+  tool, so Claude Code cannot open web pages.
+
+The harness sends each search text to its provider. The instructions of the
+assistant tell it to search only for general terms, and not to put SQL, query
+results, connection details, notes, or the names of schemas, tables, columns,
+or dbt models in a search. Qrow cannot examine a search before the harness
+sends it.
+
+Each search shows as a **Search the web** card. The card shows **Searching**
+while the search runs, and the number of links when it ends. Select the card
+to show the search text and the links. The links are plain text: copy a link
+to open it in your browser. Codex does not always send links. For a page action
+of Codex, the card shows the page, for example **Open** and its URL.
+
+Search results are untrusted data. A page can contain wrong text or
+instructions. Thus, after a search, each query of the same turn waits for your
+approval, also in **Run automatically**. The approval tells you that the
+assistant searched the web.
+
+When you change the setting, Qrow starts the harness again. If a turn runs,
+Qrow asks first, because the running turns stop.
 
 ### Saved conversations
 

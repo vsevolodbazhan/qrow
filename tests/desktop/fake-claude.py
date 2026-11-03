@@ -158,6 +158,9 @@ def run_turn(turn, text):
         send({"type": "assistant", "parent_tool_use_id": None, "session_id": session_id, "message": {
             "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_search_1", "name": "WebSearch",
                                               "input": {"query": query, "mode": "standard"}}]}})
+        if message.startswith("Search the web and hold"):
+            # The search waits until the test releases it or Qrow stops the process.
+            wait_for("release")
         failed = message.startswith("Search the web and fail")
         result_block = {"tool_use_id": "toolu_search_1", "type": "tool_result"}
         if failed:

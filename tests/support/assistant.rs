@@ -162,6 +162,24 @@ impl FakeClaude {
             .collect()
     }
 
+    /// The command-line arguments of each conversation process that started.
+    pub fn session_arguments(&self) -> Vec<Vec<String>> {
+        let mut arguments: Vec<Vec<String>> = std::fs::read_dir(&self.state)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("arguments-") && name != "arguments-control"
+            })
+            .map(|entry| {
+                serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap()
+            })
+            .collect();
+        arguments.sort();
+        arguments
+    }
+
     /// `settings` with this Claude Code as the selected harness.
     pub fn select(&self, mut settings: Settings) -> Settings {
         settings.assistant.harness = AssistantHarness::Claude;

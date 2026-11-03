@@ -75,6 +75,27 @@ impl Qrow {
         cx.notify();
     }
 
+    /// Shows the web searches in `cards` as cancelled. Their turn ended or
+    /// their harness stopped before they gave a result.
+    pub(super) fn cancel_web_search_cards(
+        &mut self,
+        thread_id: &str,
+        cards: &BTreeMap<String, Uuid>,
+    ) {
+        if cards.is_empty() {
+            return;
+        }
+        if let Some(entries) = self.assistant_state.transcripts.get_mut(thread_id) {
+            for entry in entries
+                .iter_mut()
+                .filter(|entry| cards.values().any(|id| *id == entry.id))
+            {
+                entry.set_tool_state(ToolState::Cancelled);
+            }
+        }
+        self.save_transcripts(Some(thread_id));
+    }
+
     /// Gives a conversation the title that the user chose.
     pub(super) fn apply_assistant_rename(&mut self, id: &str, title: &str, cx: &mut Context<Self>) {
         let Some(conversation) = self
@@ -460,15 +481,7 @@ impl Qrow {
                         "The turn ended before the query ran.",
                     );
                 }
-                // A search without a result did not end in this turn.
-                if let Some(entries) = self.assistant_state.transcripts.get_mut(&thread_id) {
-                    for entry in entries
-                        .iter_mut()
-                        .filter(|entry| searches.values().any(|id| *id == entry.id))
-                    {
-                        entry.set_tool_state(ToolState::Cancelled);
-                    }
-                }
+                self.cancel_web_search_cards(&thread_id, &searches);
                 // The final text of a reply can be longer than the streamed text.
                 if self.harness_features().history {
                     self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
