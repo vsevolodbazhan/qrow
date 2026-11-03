@@ -264,7 +264,9 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                 wait_shows(&app, cx, "daily");
                 app.click_labelled(cx, "daily");
             }
-            app.wait_for(cx, format!("{}\u{1f}notice\u{1f}label", parents[depth]));
+            // The notice says "Loading…" until the catalog cache loads in the
+            // background. Only the "Not loaded" notice has Refresh.
+            app.wait_for(cx, format!("{}\u{1f}notice\u{1f}refresh", parents[depth]));
             assert_notice_alignment(&app, cx, &parents[depth]);
             app.update(cx, |window, _| {
                 let lane = bounds_of(window, "add-connection").center().x;

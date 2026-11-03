@@ -710,6 +710,8 @@ mod tests {
             window.render_frame(cx);
             let oldest = SharedString::from(format!("export-list-stop-{}", first_id.unwrap()));
             assert!(window.find(oldest.clone()).visible());
+            // The list opens with an animation. A click while it moves can miss.
+            super::super::tests::wait_until_still(window, oldest.clone(), cx);
             window.click(oldest, cx);
             assert_eq!(owner.upgrade().unwrap().read(cx).exports.len(), 7);
         })

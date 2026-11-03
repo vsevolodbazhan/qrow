@@ -561,11 +561,12 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 18 seconds before the measurement, so the caret no longer blinks and Qrow has returned its free memory to macOS. The first launch after a build warms up, and the median of the next three counts. |
 | `perf-package` | The `perf-app` probes on the app in a package zip, without a build. The zip is `QROW_MACOS_PACKAGE`, or `target/macos-package/Qrow-macos.zip`. |
 
-CI runs `perf` with its budgets. It runs the other probes as report-only
-suites, because the hosted runners are slower and less steady than a
-developer computer. Runs on `main` keep the measurements for 90 days. To get
-the measurements of a run, download its `performance-package`,
-`performance-backend`, `performance-e2e`, or `performance-perf` artifact,
+CI runs `perf` with its budgets on Linux. It runs the other probes as
+report-only suites, because the hosted runners are slower and less steady
+than a developer computer. Pull requests skip the report-only suites. Runs
+on `main` keep the measurements for 90 days. To get the measurements of a
+run, download its `performance-package`, `performance-backend`,
+`performance-e2e`, `performance-perf`, or `performance-perf-ui` artifact,
 for example:
 
 ```sh
@@ -668,8 +669,8 @@ These cases compare local CSV formatting with server CSV formatting. They do
 not measure the complete Worker and spool path. Production export continues
 to use the normal protocol.
 
-CI runs the Kyuubi, Postgres, and Trino probes in the Linux `backend` job
-with Docker. These probes report measurements without enforced throughput
+CI runs the Kyuubi, Postgres, and Trino probes in the Linux `perf-backend`
+job with Docker. These probes report measurements without enforced throughput
 budgets.
 
 The [dbt benchmark](../benches/dbt.rs) makes synthetic manifests with the
@@ -870,30 +871,46 @@ disk space back. The next hook then builds the dependencies again.
 The [checks workflow](../.github/workflows/checks.yml) checks one commit. The
 [test workflow](../.github/workflows/test.yml) and the
 [release workflow](../.github/workflows/release.yml) call it. The qtest
-catalog defines its jobs: the suites of each job, the jobs that it waits
-for, and the paths that select it. The workflow prepares each runner and runs
-`./qtest ci JOB`. To run the suites of a job on your computer, run the same
-command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
+catalog defines its jobs: the suites of each job, its time budget, the jobs
+that it waits for, the events that start it, and the paths that select it.
+The workflow prepares each runner and runs `./qtest ci JOB`. To run the
+suites of a job on your computer, run the same command, for example
+`./qtest ci ui`. Add `--measure` to also run its report-only suites.
+`./qtest ci` lists the jobs:
 
-| Job | Runner | Suites | Waits for |
+| Job | Runner | Suites | Runs in |
 | --- | --- | --- | --- |
-| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | |
-| `core` | Linux | `coverage`, which runs the unit tests of the core library | |
-| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
-| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
-| `backend` | Linux | `backend`, `postgres`, `trino`, and `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | `core` |
-| `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
-| `perf` | macOS ARM64 | `perf`, and `perf-ui` (report only) | `core` |
-| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |
-| `package-intel` | macOS ARM64 | `package` for x86_64 | `core` |
-| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, and `perf-e2e`, `perf-package` (report only), with local Java servers | `package-intel` |
+| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | all runs |
+| `core` | Linux | `coverage`, which runs the unit tests of the core library | all runs |
+| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | all runs |
+| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
+| `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
+| `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, and `perf-e2e` (report only), with local Java servers | all runs |
+| `perf` | Linux | `perf` | all runs |
+| `perf-ui` | macOS ARM64 | `perf-ui` (report only) | pushes, manual runs, releases |
+| `perf-backend` | Linux | `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | pushes, manual runs, releases |
+| `desktop-package` | macOS ARM64 | `desktop` on the package of `package` | manual runs, releases |
+| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | manual runs, releases |
+| `package-intel` | macOS ARM64 | `package` for x86_64 | manual runs, releases |
+| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package of `package-intel`, and `perf-e2e`, `perf-package` (report only), with local Java servers | manual runs, releases |
 
-The failures of `core` predict the failures of the macOS and server jobs, so
-these jobs wait for it. `e2e` also waits for the package that it tests. A
-failed job skips the jobs that wait for it. `static` lints the core library,
-and the two `ui` jobs lint the application on their Mac architecture. A
-report-only suite runs, and its measurements go into the run summary. Its
-failure does not fail the job.
+A pull request run takes about 10 minutes. To keep it there, the jobs start
+at once and run in parallel. Only `desktop-package` and `e2e-intel` wait,
+for the package that they test. A failed job skips the jobs that wait for
+it. Each job has a time budget for its suites, most of them 8 minutes or
+less. When the suites take longer, the job shows a warning. Find the cause
+before you raise the budget. `static` lints the core library, and the two
+`ui` jobs lint the application on their Mac architecture.
+
+A report-only suite runs, and its measurements go into the run summary. Its
+failure does not fail the job. Pull requests do not keep measurements, so
+they skip the report-only suites and the measurement jobs `perf-ui` and
+`perf-backend`. Pushes, manual runs, and releases run them.
+
+The `desktop` suite of the `e2e` job tests a debug app. The app contains
+the executable that the E2E test build makes, so the job does not wait for
+the release package and does not compile again. `desktop-package` tests the
+release package that a release publishes.
 
 A `plan` job selects the jobs of a pull request from its changed files.
 Pull requests and pushes do not run the Intel jobs. The Intel runners are
@@ -909,7 +926,8 @@ For a pull request, the plan always selects `static`. Changes to Rust
 sources or `.cargo/config.toml` select all pull request jobs. Changes to the
 server fixture or the E2E scripts select `backend` and `e2e`. Changes under
 `tests/desktop/` select `e2e`. Changes to the packaging or probe scripts,
-`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the
+`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the packaging
+scripts also select `e2e`, because it packages its debug app. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
 pull request jobs. A selected job also selects the jobs that it waits for. A
 job that the plan does not select shows as skipped. To see the plan of your
@@ -919,11 +937,10 @@ In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
 accessibility APIs. The ARM64 jobs and `package-intel` use `macos-15`. The
 other Intel jobs use `macos-15-intel`.
-Each E2E job tests the package for its architecture and shares one set of
-servers between its suites. The native archives download from the
+Each E2E job shares one set of servers between its suites. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Each Rust build
 cache belongs to one job, and only that job saves it. Each E2E job also
-restores the cache of its UI job, which builds the E2E test binary. Runs on
+restores the cache of its UI job, which builds the same dependencies. Runs on
 `main` save the build caches. Other runs only restore them. A change to
 `Cargo.lock` or to the toolchain gives a cache a new name, and the old cache
 stays. After the checks of a run on `main`, the `cache-cleanup` job of the test
@@ -935,8 +952,8 @@ release of an older commit with another `Cargo.lock` saves a newer cache that
 To see the caches that it deletes, run
 `python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`.
 CI keeps its artifacts for one day. Runs on `main` also keep the measurements of the
-package, backend, E2E, and `perf` jobs for 90 days, in the `performance-JOB`
-artifacts. See [Check performance](#check-performance). See
+package, E2E, `perf`, `perf-ui`, and `perf-backend` jobs for 90 days, in
+the `performance-NAME` artifacts. See [Check performance](#check-performance). See
 [Development](development.md#hooks-and-continuous-integration) for workflow
 events, required checks, and releases.
 

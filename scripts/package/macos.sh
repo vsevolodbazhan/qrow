@@ -19,11 +19,21 @@ QROW_MACOS_MINIMUM="$(uv run --locked python scripts/package/macos_platform.py m
 export MACOSX_DEPLOYMENT_TARGET="$QROW_MACOS_MINIMUM"
 qrow_executable="$(uv run --locked python scripts/package/macos_platform.py executable)"
 qrow_architecture="$(uv run --locked python scripts/package/macos_platform.py architecture)"
-case "$QROW_BUILD_PROFILE" in
-    release) cargo build --locked --release --bin qrow ;;
-    debug) cargo build --locked --bin qrow ;;
-    *) echo "Use release or debug for QROW_BUILD_PROFILE." >&2; exit 1 ;;
-esac
+if [ "${QROW_PACKAGE_PREBUILT:-false}" = true ]; then
+    # Package the executable of an earlier build, like the one that the E2E
+    # test build makes. A separate `cargo build` resolves other dependency
+    # features and compiles the dependencies again.
+    if [ ! -x "$qrow_executable" ]; then
+        echo "Missing prebuilt executable: $qrow_executable. Build it first." >&2
+        exit 1
+    fi
+else
+    case "$QROW_BUILD_PROFILE" in
+        release) cargo build --locked --release --bin qrow ;;
+        debug) cargo build --locked --bin qrow ;;
+        *) echo "Use release or debug for QROW_BUILD_PROFILE." >&2; exit 1 ;;
+    esac
+fi
 QROW_DIST_DIR="${QROW_DIST_DIR:-dist}"
 if [ "$(lipo -archs "$qrow_executable")" != "$qrow_architecture" ]; then
     echo "Cargo executable does not match the package architecture: $qrow_architecture" >&2
