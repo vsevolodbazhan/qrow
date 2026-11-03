@@ -257,7 +257,7 @@ impl Qrow {
                         Button::new("copy-result-query")
                             .ghost()
                             .small()
-                            .icon(IconName::Copy)
+                            .icon(Icon::new(AssetIconName::FileCode))
                             .tooltip("Copy query")
                             .accessibility_label("Copy query")
                             .disabled(result.sql.is_none())

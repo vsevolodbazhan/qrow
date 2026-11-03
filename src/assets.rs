@@ -29,7 +29,7 @@ const STATUS_BAR_ICONS: [&str; 4] = [
 // Icons outside the GPUI Kit default set. The assistant tool call cards use
 // the icons after `Send`. The status bar uses `Activity`, `Plug`, and
 // `KeyRound`, and the Sign-ins sidebar uses `KeyRound` and `ClipboardPaste`.
-// Pinned result tabs show `Pin`.
+// The result toolbar uses `FileCode` for Copy query and `Pin`.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
