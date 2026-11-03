@@ -150,6 +150,16 @@ fn a_rename_pins_the_result_and_rejects_taken_names(cx: &mut TestAppContext) {
     app.click(cx, "cancel-result");
     app.wait_gone(cx, "rename-result-name");
     assert_eq!(result_tabs(&app, cx), ["Routes", "Result 2"]);
+
+    // A new result tab skips a name that a renamed result tab took.
+    app.context_menu_labelled(cx, "Result 2");
+    app.choose(cx, "popup-menu", "Rename…");
+    app.wait_for(cx, "rename-result-name");
+    app.fill(cx, "rename-result-name", "Result 3");
+    app.click(cx, "rename-result");
+    app.wait_gone(cx, "rename-result-name");
+    run(&app, cx);
+    assert_eq!(result_tabs(&app, cx), ["Routes", "Result 3", "Result 4"]);
 }
 
 #[gpui_kit::test]

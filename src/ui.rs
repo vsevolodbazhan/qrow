@@ -411,14 +411,33 @@ impl Tab {
         }
     }
 
-    /// The session released the cursor. Rows that the live result did not
-    /// fetch stay on the server.
-    fn close_cursor(&mut self) {
-        if self.more
-            && let Some(id) = self.live
+    /// Adds an empty result tab. Its name skips the names that renamed
+    /// result tabs took.
+    fn add_result(&mut self, table: Entity<TableState<Results>>) -> u64 {
+        let id = self.next_result;
+        self.next_result += 1;
+        let title = (id..)
+            .map(|number| format!("Result {number}"))
+            .find(|title| self.results.iter().all(|result| &result.title != title))
+            .expect("an unused result name exists");
+        self.results.push(ResultTab::new(id, title, table));
+        id
+    }
+
+    /// Marks the live result as partial when its cursor stops early.
+    fn mark_partial(&mut self) {
+        if let Some(id) = self.live
             && let Some(result) = self.result_mut(id)
         {
             result.unfetched = true;
+        }
+    }
+
+    /// The session released the cursor. Rows that the live result did not
+    /// fetch stay on the server.
+    fn close_cursor(&mut self) {
+        if self.more {
+            self.mark_partial();
         }
         self.more = false;
         self.pending_page = None;
@@ -443,10 +462,10 @@ struct ResultTab {
 }
 
 impl ResultTab {
-    fn new(id: u64, table: Entity<TableState<Results>>) -> Self {
+    fn new(id: u64, title: String, table: Entity<TableState<Results>>) -> Self {
         Self {
             id,
-            title: format!("Result {id}"),
+            title,
             pinned: false,
             sql: None,
             table,
@@ -972,7 +991,7 @@ impl Qrow {
             revision: 0,
             pending_assistant_edit: None,
             input,
-            results: vec![ResultTab::new(1, table)],
+            results: vec![ResultTab::new(1, "Result 1".into(), table)],
             active_result: 1,
             live: None,
             next_result: 2,
@@ -1421,6 +1440,12 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) {
         let live = tab.live_result().map(|result| result.table.clone());
+        // A fetch that stops early after rows arrived leaves a partial result.
+        let fetching = tab.started.is_some() && tab.sign_in_wait.is_none();
+        let has_rows = |cx: &App| {
+            live.as_ref()
+                .is_some_and(|table| !table.read(cx).delegate().rows.is_empty())
+        };
         if tab.started.is_some()
             && let Some(table) = &live
         {
@@ -1485,6 +1510,9 @@ impl Qrow {
                 tab.busy = false;
                 tab.cancelling = false;
                 tab.stop_timing();
+                if limited || was_cancelling && has_rows(cx) {
+                    tab.mark_partial();
+                }
                 if limited {
                     tab.set_status_detail("Preview", "Limit reached");
                 } else if more {
@@ -1493,12 +1521,20 @@ impl Qrow {
                     tab.set_status("Complete");
                 }
                 if !was_cancelling {
+                    // The finished result shows, even if another result tab
+                    // was selected while it ran.
+                    if let Some(id) = tab.live {
+                        tab.active_result = id;
+                    }
                     tab.panel.success(active);
                 }
             }
             Event::Cancelled => {
                 tab.busy = false;
                 tab.cancelling = false;
+                if fetching && has_rows(cx) {
+                    tab.mark_partial();
+                }
                 tab.close_cursor();
                 tab.stop_timing();
                 tab.set_status_detail("Cancelled", "Partial preview retained");
@@ -1510,6 +1546,9 @@ impl Qrow {
             } => {
                 tab.busy = false;
                 tab.cancelling = false;
+                if fetching && has_rows(cx) {
+                    tab.mark_partial();
+                }
                 tab.close_cursor();
                 // A session that never opened failed to connect; it was not lost.
                 let was_connected = tab.connected;
@@ -2060,10 +2099,7 @@ impl Qrow {
             debug_assert!(false, "all result tabs are pinned without a spare table");
             return tab.shown_result().id;
         };
-        let id = tab.next_result;
-        tab.next_result += 1;
-        tab.results.push(ResultTab::new(id, table));
-        id
+        tab.add_result(table)
     }
     /// Empties the result tab of a new run and shows it. The new operation
     /// closes the cursor of the previous result.
@@ -2101,7 +2137,9 @@ impl Qrow {
         let data = table.read(cx).delegate();
         let page = data.pagination.page() + 1;
         if page < data.pagination.pages(data.rows.len()) {
-            tab.pending_page = None;
+            if tab.live == Some(id) {
+                tab.pending_page = None;
+            }
             results::select_page(&table, page, cx);
         } else if !tab.busy
             && tab.can_fetch(id)

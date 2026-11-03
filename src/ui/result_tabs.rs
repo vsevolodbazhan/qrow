@@ -291,10 +291,7 @@ impl Qrow {
                 Some(table) => table,
                 None => self.result_table(window, cx),
             };
-            let tab = &mut self.tabs[index];
-            let id = tab.next_result;
-            tab.next_result += 1;
-            tab.results.push(ResultTab::new(id, table));
+            self.tabs[index].add_result(table);
         }
         let tab = &mut self.tabs[index];
         if tab.active_result == id {
