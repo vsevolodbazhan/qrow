@@ -2,9 +2,9 @@ use crate::support::{
     MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot,
     assert_tooltip_header_center, bounds_of, connection_row, label, labelled,
 };
-use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::{ActiveTheme, input::EMPHASIS_OPACITY};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{TestAppContext, px};
+use gpui_kit::{Bounds, ScaledPixels, TestAppContext, px};
 use qrow::{
     activity::ActivityEntry,
     logs::Severity,
@@ -107,6 +107,87 @@ fn run_uses_a_multiline_cursor_statement_and_rejects_gaps(cx: &mut TestAppContex
         assert!(!app.logs(cx).contains("SELECT 3;"));
     }
     assert_eq!(app.saved().tabs[0].sql, sql);
+}
+
+#[gpui_kit::test]
+fn the_editor_tints_the_statement_that_run_uses(cx: &mut TestAppContext) {
+    let sql =
+        "SELECT 1; SELECT 2; -- note\n\nSELECT\n  '日本😀' AS v\nFROM t;\n-- between\nSELECT 4;";
+    let mut tab = SavedTab::new(1, None);
+    tab.sql = sql.into();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+
+    // Statements that share a line tint only their own text.
+    let first = run_tint(&app, cx);
+    assert_eq!(first.len(), 1, "{first:?}");
+    for _ in 0.."SELECT 1; ".len() {
+        app.press(cx, "right");
+    }
+    let second = run_tint(&app, cx);
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert_eq!(second[0].top(), first[0].top());
+    assert!(second[0].left() > first[0].right());
+
+    // A statement on its own lines tints each line to the right edge.
+    app.press(cx, "down");
+    app.press(cx, "down");
+    let rows = run_tint(&app, cx);
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert!(rows[0].top() > second[0].bottom());
+    for row in &rows {
+        assert_eq!(row.left(), first[0].left());
+        assert_eq!(row.right(), rows[0].right());
+        assert!(row.right() > second[0].right());
+    }
+    for pair in rows.windows(2) {
+        assert_eq!(pair[0].bottom(), pair[1].top());
+    }
+
+    // A comment between statements, a blank line, and a selection run nothing,
+    // so they show no tint.
+    for _ in 0..3 {
+        app.press(cx, "down");
+    }
+    assert_eq!(run_tint(&app, cx), vec![]);
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    app.press(cx, "down");
+    assert_eq!(run_tint(&app, cx), vec![]);
+    app.press(cx, "up");
+    assert_eq!(run_tint(&app, cx).len(), 1);
+    app.press(cx, "shift-right");
+    assert_eq!(run_tint(&app, cx), vec![]);
+
+    // The tint follows edits.
+    app.type_sql(cx, "SELECT 9;\nSELECT 10;");
+    let last = run_tint(&app, cx);
+    assert_eq!(last.len(), 1, "{last:?}");
+    assert_eq!(last[0].top(), first[0].top() + first[0].size.height);
+}
+
+/// The rows that the run tint paints in the SQL editor, top to bottom.
+fn run_tint(app: &TestApp, cx: &mut TestAppContext) -> Vec<Bounds<ScaledPixels>> {
+    app.update(cx, |window, cx| {
+        let tint = gpui_kit::Background::from(cx.theme().selection.opacity(EMPHASIS_OPACITY));
+        let editor = bounds_of(window, "sql-editor").scale(window.scale_factor());
+        let mut rows: Vec<_> = window
+            .painted_quads()
+            .into_iter()
+            .filter(|quad| quad.background == tint && editor.contains(&quad.bounds.center()))
+            .map(|quad| quad.bounds)
+            .collect();
+        rows.sort_by(|a, b| a.top().0.total_cmp(&b.top().0));
+        rows
+    })
 }
 
 #[gpui_kit::test]

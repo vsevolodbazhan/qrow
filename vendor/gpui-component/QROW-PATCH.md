@@ -17,6 +17,8 @@ Qrow changes these files:
   Before, clicking a disabled input moved keyboard focus to its frame.
   The sign-in UI and E2E tests check that the locked account field cannot
   receive keyboard focus.
+- `src/input/mod.rs`: exports `EMPHASIS_OPACITY` of the GPUI Base patch, so
+  Qrow tests can find the tint of the SQL editor.
 - `src/menu/popup_menu.rs` and `src/menu/menu_item.rs`: standard menu items
   accept a tooltip, including when disabled. Dismissing a menu hides the
   tooltip. This gives a disabled Delete action a reason without an extra row.
