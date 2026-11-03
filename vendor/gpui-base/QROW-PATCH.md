@@ -64,6 +64,14 @@ Qrow changes these files:
   a measured session. `retained_layout_count`, for tests only, gives the
   number of entries. The Qrow UI test
   `replaced_paragraphs_release_their_shaped_text` is the regression test.
+- `src/input/base/state.rs`, `src/input/base/element.rs`, and
+  `src/input/mod.rs`: `set_emphasized_range` tints one byte range of the text
+  with the selection color at `EMPHASIS_OPACITY`. Qrow uses it to show the
+  statement that Run uses. A row that the range fills to its line end gets
+  the tint to the right edge. The element paints the tint as one quad for
+  each row, not as a path, because a path keeps a window-size texture in GPU
+  memory, and the tint shows most of the time. The Qrow UI test
+  `the_editor_tints_the_statement_that_run_uses` is the regression test.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.

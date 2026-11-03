@@ -25,6 +25,12 @@ If you select text, Qrow runs that text. Each execution must contain one SQL
 statement. Qrow rejects a selection with multiple statements before it sends
 SQL to the server.
 
+The editor shows the statement that **Run** uses with a light tint. On a line
+that contains only that statement, the tint goes across the full width. When
+the cursor is on a blank line or a comment between statements, there is no
+tint. When you select text, the selection shows the SQL to run, and there is
+no tint.
+
 After a query finishes, use **Export results…** in Results to save all rows.
 If the result cursor is unavailable, review the original SQL before an export
 rerun. See [Rerun for export](results.md#rerun-for-export) for session checks
@@ -200,6 +206,8 @@ The [UI](../src/ui.rs) reads selected text through the native input handler.
 Native selection ranges use UTF-16 offsets. Rust string offsets use bytes.
 Using the input handler preserves selections that contain emoji or non-Latin
 text. The [SQL validator](../src/sql.rs) checks statement boundaries locally.
+The tint and **Run** use the same statement search, so the tint shows the SQL
+that **Run** sends.
 
 The [worker](../src/worker.rs) runs connection, execution, and fetch work outside
 the UI thread. The [connector](../src/connector/hive.rs) sends cancellation over

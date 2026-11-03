@@ -15,6 +15,7 @@ mod output;
 mod profile_view;
 mod result_toolbar;
 mod results;
+mod run_highlight;
 mod setting_row;
 mod settings_view;
 mod sign_in_view;
@@ -234,6 +235,7 @@ struct Tab {
     input: Entity<EditorState>,
     table: Entity<TableState<Results>>,
     _subscription: Subscription,
+    _run_highlight: Subscription,
     worker: Option<Worker>,
     // The last Run target can differ from the profile selected for the next Run.
     worker_profile: Option<Uuid>,
@@ -907,6 +909,7 @@ impl Qrow {
                 this.changed(cx);
             }
         });
+        let run_highlight = run_highlight::track(&input, cx);
         let scale = self.settings.ui_scale;
         let table = cx.new(|cx| {
             let mut results = Results::default();
@@ -932,6 +935,7 @@ impl Qrow {
             input,
             table,
             _subscription: subscription,
+            _run_highlight: run_highlight,
             worker: None,
             worker_profile: None,
             busy: false,

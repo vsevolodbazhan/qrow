@@ -191,10 +191,14 @@ pub fn statement_ranges_for(
     sql: &str,
     database_type: crate::model::DatabaseType,
 ) -> Vec<Range<usize>> {
+    statement_ranges_in(sql, tokens_for(sql, database_type))
+}
+
+fn statement_ranges_in(sql: &str, tokens: Vec<(Range<usize>, Kind)>) -> Vec<Range<usize>> {
     let mut start = None;
     let mut end = 0;
     let mut ranges = vec![];
-    for (range, kind) in tokens_for(sql, database_type) {
+    for (range, kind) in tokens {
         if kind == Kind::Comment || sql[range.clone()].trim().is_empty() {
             continue;
         }
@@ -229,30 +233,92 @@ pub fn statement_range_at_for(
     offset: usize,
     database_type: DatabaseType,
 ) -> Option<Range<usize>> {
-    if !sql.is_char_boundary(offset) {
-        return None;
+    StatementIndex::new_for(sql, database_type).range_at(sql, offset)
+}
+
+/// The statements and comments of one SQL text, from one pass of the tokenizer.
+/// Keep it while the text does not change, to find statements at many offsets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StatementIndex {
+    statements: Vec<Range<usize>>,
+    comments: Vec<Range<usize>>,
+}
+
+impl StatementIndex {
+    pub fn new(sql: &str) -> Self {
+        Self::new_for(sql, DatabaseType::Kyuubi)
     }
-    let ranges = statement_ranges_for(sql, database_type);
-    // Prefer the next statement's start over the previous statement's end.
-    if let Some(range) = ranges.iter().find(|range| range.contains(&offset)) {
-        return Some(range.clone());
+
+    /// Indexes `sql` using the connection's quoting rules.
+    pub fn new_for(sql: &str, database_type: DatabaseType) -> Self {
+        let tokens = tokens_for(sql, database_type);
+        let comments = tokens
+            .iter()
+            .filter(|(_, kind)| *kind == Kind::Comment)
+            .map(|(range, _)| range.clone())
+            .collect();
+        Self {
+            statements: statement_ranges_in(sql, tokens),
+            comments,
+        }
     }
-    if tokens_for(sql, database_type)
-        .iter()
-        .any(|(range, kind)| *kind == Kind::Comment && range.contains(&offset))
-    {
-        return None;
+
+    pub fn statements(&self) -> &[Range<usize>] {
+        &self.statements
     }
-    ranges.into_iter().find(|range| {
-        let gap = if offset < range.start {
-            offset..range.start
+
+    /// The statement that a run without a selection uses, as
+    /// [`statement_range_at`] describes. `sql` is the text of the index.
+    pub fn range_at(&self, sql: &str, offset: usize) -> Option<Range<usize>> {
+        if !sql.is_char_boundary(offset) {
+            return None;
+        }
+        // Prefer the next statement's start over the previous statement's end.
+        if let Some(range) = self.statements.iter().find(|range| range.contains(&offset)) {
+            return Some(range.clone());
+        }
+        if self.comments.iter().any(|range| range.contains(&offset)) {
+            return None;
+        }
+        self.statements
+            .iter()
+            .find(|range| {
+                let gap = if offset < range.start {
+                    offset..range.start
+                } else {
+                    range.end..offset
+                };
+                same_line_space(&sql[gap])
+            })
+            .cloned()
+    }
+
+    /// The range to highlight for a run at `offset`: the statement, extended
+    /// over the whitespace before it and after it on its first and last line.
+    /// A line that only the statement uses then shows from edge to edge.
+    pub fn run_highlight(&self, sql: &str, offset: usize) -> Option<Range<usize>> {
+        let range = self.range_at(sql, offset)?;
+        let line_start = sql[..range.start].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = sql[range.end..]
+            .find(['\r', '\n'])
+            .map_or(sql.len(), |i| range.end + i);
+        let start = if same_line_space(&sql[line_start..range.start]) {
+            line_start
         } else {
-            range.end..offset
+            range.start
         };
-        sql[gap]
-            .chars()
-            .all(|c| c.is_whitespace() && !matches!(c, '\n' | '\r'))
-    })
+        let end = if same_line_space(&sql[range.end..line_end]) {
+            line_end
+        } else {
+            range.end
+        };
+        Some(start..end)
+    }
+}
+
+fn same_line_space(text: &str) -> bool {
+    text.chars()
+        .all(|c| c.is_whitespace() && !matches!(c, '\n' | '\r'))
 }
 
 pub fn validate_single(sql: &str) -> anyhow::Result<()> {
@@ -1367,6 +1433,37 @@ where pdate >= date '2026-09-26' and pdate < date '2026-09-28';"
         }
         let sql = "SELECT 1;";
         assert_eq!(statement_range_at(sql, sql.len()), Some(0..sql.len()));
+    }
+
+    #[test]
+    fn run_highlight_fills_lines_that_only_the_statement_uses() {
+        let sql = "  SELECT 1;  \n\nSELECT 2; SELECT 3; -- note\nSELECT\n  '日本😀'\r\nFROM t;\n";
+        let index = StatementIndex::new(sql);
+        let highlight = |marker: &str| {
+            let range = index.run_highlight(sql, sql.find(marker).unwrap()).unwrap();
+            &sql[range]
+        };
+        assert_eq!(highlight("SELECT 1"), "  SELECT 1;  ");
+        // Statements that share a line keep their own extent.
+        assert_eq!(highlight("SELECT 2"), "SELECT 2;");
+        assert_eq!(highlight("SELECT 3"), "SELECT 3;");
+        assert_eq!(highlight("SELECT\n"), "SELECT\n  '日本😀'\r\nFROM t;");
+        assert_eq!(
+            index.run_highlight(sql, sql.find("\n\n").unwrap() + 1),
+            None
+        );
+        assert_eq!(index.run_highlight(sql, sql.find("-- note").unwrap()), None);
+        assert_eq!(index.run_highlight(sql, sql.find('😀').unwrap() + 1), None);
+    }
+
+    #[test]
+    fn statement_index_finds_the_same_statements_as_each_lookup() {
+        let sql = "SELECT 1;SELECT 2;-- between\nSELECT 3;/* between */SELECT 4;\n\n  SELECT 5  ";
+        let index = StatementIndex::new(sql);
+        assert_eq!(index.statements(), statement_ranges(sql));
+        for offset in 0..=sql.len() {
+            assert_eq!(index.range_at(sql, offset), statement_range_at(sql, offset));
+        }
     }
 }
 

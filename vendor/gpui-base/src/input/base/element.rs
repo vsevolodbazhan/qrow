@@ -13,6 +13,7 @@ use gpui::{
 };
 use ropey::Rope;
 use smallvec::SmallVec;
+use sum_tree::Bias;
 use std::{ops::Range, rc::Rc};
 
 use crate::{
@@ -25,6 +26,9 @@ use super::{
     layout::{LastLayout, WhitespaceIndicators},
     mode::LayoutMode,
 };
+
+/// The opacity of the selection color that tints an emphasized range.
+pub const EMPHASIS_OPACITY: f32 = 0.2;
 
 fn diagnostic_highlight_style(
     severity: crate::input::DiagnosticSeverity,
@@ -830,6 +834,92 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         builder.build().ok()
+    }
+
+    /// Lay out the emphasized range as one quad per visual row.
+    ///
+    /// Quads, not a path: a path in a frame makes GPUI keep a window-size
+    /// intermediate texture in GPU memory, and this tint shows most of the
+    /// time. A row that the range fills to its line end extends to
+    /// `full_right`. Quads start no further left than `text_left`, so a
+    /// horizontally scrolled band does not cover the gutter.
+    fn layout_emphasis(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        text_left: Pixels,
+        full_right: Pixels,
+        cx: &App,
+    ) -> Vec<Bounds<Pixels>> {
+        let state = self.state.read(cx);
+        let Some(range) = state.emphasized_range.clone() else {
+            return vec![];
+        };
+        if state.masked {
+            return vec![];
+        }
+        let end = state.text.clip_offset(range.end.min(state.text.len()), Bias::Right);
+        let start = state.text.clip_offset(range.start.min(end), Bias::Left);
+        let start = start.max(last_layout.visible_range_offset.start);
+        let end = end.min(last_layout.visible_range_offset.end);
+        if start >= end {
+            return vec![];
+        }
+
+        let line_height = last_layout.line_height;
+        let origin_x = bounds.origin.x + last_layout.line_number_width;
+        let mut offset_y = last_layout.visible_top;
+        let mut quads = vec![];
+        for (&line_start, line) in last_layout
+            .visible_line_byte_offsets
+            .iter()
+            .zip(last_layout.lines.iter())
+        {
+            let line_end = line_start + line.len();
+            let height = line.size(line_height).height;
+            if line_end < start {
+                offset_y += height;
+                continue;
+            }
+            if line_start >= end {
+                break;
+            }
+            let local_start = start.saturating_sub(line_start);
+            let local_end = end.min(line_end) - line_start;
+            let fills_end = end >= line_end;
+            let (Some(first), Some(last)) = (
+                line.position_for_index(local_start, last_layout, false),
+                line.position_for_index(local_end, last_layout, true),
+            ) else {
+                offset_y += height;
+                continue;
+            };
+            let first_row = (first.y / line_height).round() as usize;
+            let last_row = (last.y / line_height).round() as usize;
+            for row in first_row..=last_row {
+                let left = if row == first_row {
+                    origin_x + first.x
+                } else {
+                    origin_x + line.wrap_indent
+                };
+                let right = if row == last_row && !fills_end {
+                    origin_x + last.x
+                } else {
+                    full_right
+                };
+                let left = left.max(text_left);
+                if right <= left {
+                    continue;
+                }
+                let top = bounds.origin.y + offset_y + line_height * row as f32;
+                quads.push(Bounds::from_corners(
+                    point(left, top),
+                    point(right, top + line_height),
+                ));
+            }
+            offset_y += height;
+        }
+        quads
     }
 
     fn layout_search_matches(
@@ -1674,6 +1764,7 @@ pub(super) struct PrepaintState {
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides: Vec<Bounds<Pixels>>,
+    emphasis_rows: Vec<Bounds<Pixels>>,
     /// The whole input, for deciding whether a long press started in it.
     hitbox: Hitbox,
     bounds: Bounds<Pixels>,
@@ -2108,6 +2199,13 @@ impl<M: InputModeKind> Element for TextElement<M> {
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
         let document_color_paths =
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
+        let emphasis_rows = self.layout_emphasis(
+            &last_layout,
+            &bounds,
+            original_x + last_layout.line_number_width,
+            input_bounds.right() + self.state.read(cx).editor_paddings.right,
+            cx,
+        );
 
         let state = self.state.read(cx);
         let line_numbers = if state.mode.line_number() {
@@ -2191,6 +2289,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             hover_definition_hitbox,
             document_color_paths,
             indent_guides,
+            emphasis_rows,
             fold_icon_layout,
             ghost_first_line,
             ghost_lines,
@@ -2270,6 +2369,17 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 }
                 offset_y += height;
             }
+        }
+
+        // Paint the emphasized range over the opaque active line, and under
+        // glyph backgrounds, indent guides, selections, and text.
+        let emphasis_color = editor_style.selection.opacity(if disabled {
+            EMPHASIS_OPACITY / 2.
+        } else {
+            EMPHASIS_OPACITY
+        });
+        for row in prepaint.emphasis_rows.drain(..) {
+            window.paint_quad(fill(row, emphasis_color));
         }
 
         // Keep scrollbar offset always be positive，Start from the left position

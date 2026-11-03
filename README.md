@@ -48,7 +48,7 @@ with a colleague. Drag connections to change their order. See
 
 Each connection has its own query tabs, and each tab has its own session.
 Tabs run queries at the same time, also when you select another connection.
-Press **⌘Enter** to run the statement at the cursor or the selected SQL. A
+Press **⌘Enter** to run the statement at the cursor or the selected SQL. A light tint shows the statement that runs. A
 status dot on each tab and connection shows work, unread results, and errors.
 
 Results show in pages of 1,000 rows as they arrive. Copy a cell or a row with

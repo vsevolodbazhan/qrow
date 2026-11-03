@@ -18,10 +18,21 @@ proptest! {
         // Validation must also be total for malformed and incomplete editor text.
         let _ = sql::validate_single(&source);
         let _ = sql::format_statement(&format!("SELECT {}", source.replace('\n', " ")), sql::SqlStyle::default());
+        let index = sql::StatementIndex::new(&source);
         for caret in [0, source.len() / 2, source.len(), usize::MAX] {
+            let highlight = index.run_highlight(&source, caret);
             if let Some(range) = sql::statement_range_at(&source, caret) {
-                let statement = source.get(range).expect("caret statement is on UTF-8 boundaries");
+                let statement = source.get(range.clone()).expect("caret statement is on UTF-8 boundaries");
                 prop_assert!(sql::validate_single(statement).is_ok());
+                // The highlight is the statement and same-line whitespace beside it.
+                let highlight = highlight.expect("a run target has a highlight");
+                prop_assert!(highlight.start <= range.start && range.end <= highlight.end);
+                let beside = source.get(highlight.start..range.start).zip(source.get(range.end..highlight.end));
+                let (before, after) = beside.expect("the highlight is on UTF-8 boundaries");
+                let beside = [before, after].concat();
+                prop_assert!(beside.chars().all(|c| c.is_whitespace() && c != '\n' && c != '\r'));
+            } else {
+                prop_assert_eq!(highlight, None);
             }
         }
         let mut previous_end = 0;

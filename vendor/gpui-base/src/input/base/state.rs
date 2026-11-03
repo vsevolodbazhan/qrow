@@ -381,6 +381,9 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) clean_on_escape: bool,
     pub(super) submit_on_enter: bool,
     pub(super) show_whitespaces: bool,
+    /// A byte range that the editor tints under the text, for example the
+    /// statement that a run command uses.
+    pub(super) emphasized_range: Option<Range<usize>>,
     /// This flag tells the renderer to prefer the end of the current visual line.
     pub(crate) cursor_line_end_affinity: bool,
     pub(super) pattern: Option<regex::Regex>,
@@ -705,6 +708,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             clean_on_escape: false,
             submit_on_enter: false,
             show_whitespaces: false,
+            emphasized_range: None,
             loading: false,
             pattern: None,
             validate: None,
@@ -1118,6 +1122,23 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub fn set_show_whitespaces(&mut self, show: bool, _: &mut Window, cx: &mut Context<Self>) {
         self.show_whitespaces = show;
         cx.notify();
+    }
+
+    /// Tint a byte range under the text, or remove the tint with `None`.
+    ///
+    /// A row that the range fills to its line end gets a band to the right
+    /// edge. The owner updates the range after edits; the editor clips a stale
+    /// range to the text.
+    pub fn set_emphasized_range(&mut self, range: Option<Range<usize>>, cx: &mut Context<Self>) {
+        if self.emphasized_range != range {
+            self.emphasized_range = range;
+            cx.notify();
+        }
+    }
+
+    /// The byte range that [`Self::set_emphasized_range`] set.
+    pub fn emphasized_range(&self) -> Option<Range<usize>> {
+        self.emphasized_range.clone()
     }
 
     /// Empty rows reserved below the last line of content ("scroll
