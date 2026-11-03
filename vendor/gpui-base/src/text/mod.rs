@@ -17,6 +17,8 @@ mod text_view;
 mod utils;
 
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window};
+#[cfg(any(test, feature = "test-support"))]
+pub use inline::retained_layout_count;
 pub use inline_element::*;
 pub use markdown_ext::*;
 pub use node::{CodeBlock, TableData};

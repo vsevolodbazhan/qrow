@@ -87,7 +87,7 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
 fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
     let mut workspace = codex.workspace(Workspace::default());
-    workspace.settings.assistant.service_tier = Some("retired".into());
+    workspace.settings.assistant.codex.service_tier = Some("retired".into());
     let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
     app.open_assistant(cx);
     // Codex no longer offers the saved tier, so its default replaces it.
@@ -102,7 +102,8 @@ fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
     });
     app.wait_until(cx, "the replaced tier", Duration::from_secs(10), |_, _| {
         let saved = app.saved().settings.assistant;
-        saved.model.as_deref() == Some("synthetic-model") && saved.service_tier.is_none()
+        saved.codex.model.as_deref() == Some("synthetic-model")
+            && saved.codex.service_tier.is_none()
     });
     app.click(cx, "assistant-tier");
     app.choose(cx, "popup-menu", "Fast");
@@ -110,7 +111,7 @@ fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
         label(window, "assistant-tier").as_deref() == Some("Service Tier: Fast")
     });
     app.wait_until(cx, "the saved tier", Duration::from_secs(10), |_, _| {
-        app.saved().settings.assistant.service_tier.as_deref() == Some("fast")
+        app.saved().settings.assistant.codex.service_tier.as_deref() == Some("fast")
     });
     app.update(cx, |window, _| {
         assert_eq!(
@@ -376,5 +377,29 @@ fn a_message_that_codex_does_not_take_stays_in_the_message_field(cx: &mut TestAp
     });
     app.update(cx, |window, _| {
         assert_eq!(composer_text(window).as_deref(), Some(long.as_str()));
+    });
+}
+
+#[gpui_kit::test]
+fn command_r_toggles_assistant_and_command_j_toggles_results(cx: &mut TestAppContext) {
+    let (app, _codex) = launch(cx, with_connection());
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-r");
+    app.wait_for(cx, "assistant-composer");
+    app.click(cx, "assistant-composer");
+    app.press(cx, "cmd-j");
+    app.update(cx, |window, _| {
+        assert!(window.find("assistant-composer").visible());
+
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+    });
+    app.update(cx, |window, cx| window.input("Focus stays here", cx));
+    app.update(cx, |window, _| {
+        assert_eq!(composer_text(window).as_deref(), Some("Focus stays here"));
+    });
+    app.press(cx, "cmd-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
     });
 }

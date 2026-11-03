@@ -27,6 +27,9 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+#[cfg(test)]
+mod tests;
+
 /// How long a manifest must stay unchanged before an automatic refresh.
 pub const SETTLE: Duration = Duration::from_secs(2);
 

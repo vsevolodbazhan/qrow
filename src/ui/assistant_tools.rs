@@ -9,7 +9,7 @@ use crate::assistant::{
     broker::{
         AppendRequest, CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES,
         MAX_SQL_PAGE_BYTES, MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker,
-        bound_rows_after, bound_text, context_statement_ranges, preview_rows, sql_page,
+        bound_rows_after, bound_text, context_statement_ranges_for, preview_rows, sql_page,
     },
     catalog,
     service::Command as AssistantCommand,
@@ -22,16 +22,23 @@ fn remap_selection(
     selection: Range<usize>,
     edits: &[crate::assistant::broker::TextEdit],
 ) -> Option<Range<usize>> {
-    let mut shift = 0_i64;
+    let (mut start_shift, mut end_shift) = (0_i64, 0_i64);
     for edit in edits {
+        let shift = edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
         if edit.end <= selection.start {
-            shift += edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
-        } else if edit.start < selection.end {
+            start_shift += shift;
+            end_shift += shift;
+        } else if edit.start >= selection.end {
+            continue;
+        } else if edit.start >= selection.start && edit.end <= selection.end {
+            // An edit inside the selection keeps the changed text selected.
+            end_shift += shift;
+        } else {
             return None;
         }
     }
-    let start = (selection.start as i64).checked_add(shift)?;
-    let end = (selection.end as i64).checked_add(shift)?;
+    let start = (selection.start as i64).checked_add(start_shift)?;
+    let end = (selection.end as i64).checked_add(end_shift)?;
     Some(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
 }
 
@@ -639,8 +646,11 @@ impl Qrow {
                     "The offset is past the end of the SQL or inside a character. Use 0 or next_offset.",
                 )
             })?;
-            let (statement_ranges, statement_ranges_truncated) =
-                context_statement_ranges(&sql, &page);
+            let (statement_ranges, statement_ranges_truncated) = context_statement_ranges_for(
+                &sql,
+                &page,
+                self.tab_database_type(tab.saved.profile),
+            );
             let next_offset = (page.end < sql.len()).then_some(page.end);
             let value = json!({"version": 1, "tab_id": args.tab_id,
                 "connection_id": tab.saved.profile, "editor_revision": tab.revision,
@@ -671,6 +681,7 @@ impl Qrow {
         let sql = tab.input.read(cx).value().to_string();
         let selected = tab.input.read(cx).selected_range();
         let document = EditorDocument {
+            database_type: self.tab_database_type(tab.saved.profile),
             tab_id: tab.saved.id,
             connection_id: tab.saved.profile,
             revision: tab.revision,
@@ -692,6 +703,7 @@ impl Qrow {
                 success: false,
                 content: json!({"version": 1, "error": error}),
             })?;
+        let selected_before = document.selected_range;
         let editor = tab.input.clone();
         let appended_range = plan
             .edits
@@ -701,7 +713,7 @@ impl Qrow {
                     && edit.end == sql.len()
                     && !edit.replacement.trim().is_empty()
             })
-            .then(|| crate::sql::last_statement_range(&plan.sql))
+            .then(|| crate::sql::statement_ranges_for(&plan.sql, document.database_type).pop())
             .flatten()
             .filter(|range| range.start >= sql.len());
         let mapped = appended_range
@@ -717,19 +729,22 @@ impl Qrow {
             }
             editor.set_scroll_offset(scroll, cx);
         });
-        if let Some(range) = appended_range
-            && let Some(target) = &mut self.thread_run_mut(&call.thread_id).target
+        let selected = editor.read(cx).selected_range();
+        let selected = (!selected.is_empty()).then_some(selected);
+        // The edit moves the selection, and the target moves with it. A
+        // selection that the user changed during the turn stays stale.
+        if let Some(target) = &mut self.thread_run_mut(&call.thread_id).target
+            && (appended_range.is_some() || target.selected_range == selected_before)
         {
-            target.selected_range = Some(range);
+            target.selected_range = selected.clone();
         }
         let revision = self.tabs[index].revision;
-        let selected = editor.read(cx).selected_range();
         self.changed(cx);
         // A run without statement_range uses this selection, so the model does not read it back.
         Ok(success(
             json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
                 "sql_bytes": plan.sql.len(), "formatted": plan.formatted,
-                "selected_range": (!selected.is_empty()).then_some(selected)}),
+                "selected_range": selected}),
         ))
     }
 
@@ -746,6 +761,7 @@ impl Qrow {
         args.connection_id = tab.saved.profile;
         let sql = tab.input.read(cx).value().to_string();
         let document = EditorDocument {
+            database_type: self.tab_database_type(tab.saved.profile),
             tab_id: tab.saved.id,
             connection_id: tab.saved.profile,
             revision: tab.revision,
@@ -806,6 +822,7 @@ impl Qrow {
             let sql = tab.input.read(cx).value().to_string();
             let selected = tab.input.read(cx).selected_range();
             let document = EditorDocument {
+                database_type: self.tab_database_type(tab.saved.profile),
                 tab_id: tab.saved.id,
                 connection_id: tab.saved.profile,
                 revision: tab.revision,
@@ -1107,7 +1124,7 @@ impl Qrow {
             && !tab.status.starts_with("Cancelled");
         let mut content = json!({"version": 1, "tab_id": tab.saved.id, "status": tab.status_label(),
             "columns": columns,
-            "downloaded_rows": rows.len(), "more_rows_available": tab.more,
+            "downloaded_rows": rows.row_count(), "more_rows_available": tab.more,
             "duration_seconds": elapsed.map(|duration| duration.as_secs_f64())});
         if ok {
             // Returning the first rows saves a query-read-results call and a model turn.
@@ -1116,14 +1133,14 @@ impl Qrow {
             let preview = preview_rows(rows, pending.first_row, used);
             content["rows"] = json!(preview.rows);
             content["next_offset"] = json!(preview.next_offset);
-            content["more_downloaded_rows"] = json!(preview.next_offset < rows.len());
+            content["more_downloaded_rows"] = json!(preview.next_offset < rows.row_count());
             if !preview.omitted_row_offsets.is_empty() {
                 content["omitted_row_offsets"] = json!(preview.omitted_row_offsets);
             }
         }
         let state = if ok {
             ToolState::QueryResult {
-                rows: rows.len(),
+                rows: rows.row_count(),
                 more: tab.more,
                 elapsed,
             }
@@ -1217,7 +1234,7 @@ impl Qrow {
             json!({"version": 1, "tab_id": args.tab_id, "status": tab.status_label(),
             "running": tab.busy, "cancelling": tab.cancelling,
             "columns": columns,
-            "downloaded_rows": rows.len(), "more_rows_available": tab.more,
+            "downloaded_rows": rows.row_count(), "more_rows_available": tab.more,
             "latest_error": tab.output.latest_error().map(|entry| bound_text(&entry.text).0)}),
         ))
     }
@@ -1237,7 +1254,7 @@ impl Qrow {
         let (columns, rows) = tab.live_rows(cx);
         let mut content = json!({"version": 1, "tab_id": args.tab_id,
             "columns": columns,
-            "downloaded_rows": rows.len(), "rows": [], "next_offset": args.offset,
+            "downloaded_rows": rows.row_count(), "rows": [], "next_offset": args.offset,
             "more_downloaded_rows": false, "truncated": false, "omitted_row_offsets": []});
         let used = serde_json::to_vec(&content).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
         let bounded =
@@ -1247,7 +1264,7 @@ impl Qrow {
             })?;
         content["rows"] = json!(bounded.rows);
         content["next_offset"] = json!(bounded.next_offset);
-        content["more_downloaded_rows"] = json!(bounded.next_offset < rows.len());
+        content["more_downloaded_rows"] = json!(bounded.next_offset < rows.row_count());
         content["truncated"] = json!(bounded.truncated);
         content["omitted_row_offsets"] = json!(bounded.omitted_row_offsets);
         Ok(success(content))
@@ -1384,7 +1401,7 @@ impl Qrow {
         if !profile.catalog.browses() {
             return CatalogStep::Done(failure(
                 "schema_browsing_off",
-                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema refresh in the connection settings, or run SHOW and DESCRIBE with query-run.",
+                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema Refresh in the connection settings, or query the system catalog with SQL for this connector with query-run.",
             ));
         }
         let settings = crate::model::effective_catalog(profile, &self.shared_catalogs);
@@ -1677,7 +1694,7 @@ impl Qrow {
                     }
                     CatalogStep::Wait { .. } => failure(
                         "not_cached",
-                        "Qrow is still reading the schema catalog. Try again later, or run SHOW or DESCRIBE with query-run.",
+                        "Qrow is still reading the schema catalog. Try again later, or query the system catalog with SQL for this connector with query-run.",
                     ),
                 };
                 self.finish_assistant_tool(pending.call, result, cx);
@@ -1731,9 +1748,34 @@ impl Qrow {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppendedQuery, EditorDocument, RunInput, resolve_tab_id, run_request};
+    use super::{
+        AppendedQuery, EditorDocument, RunInput, remap_selection, resolve_tab_id, run_request,
+    };
+    use crate::assistant::broker::TextEdit;
     use serde_json::json;
     use uuid::Uuid;
+
+    #[test]
+    fn an_edit_keeps_the_selection_on_the_same_text() {
+        let edit = |start, end, replacement: &str| TextEdit {
+            start,
+            end,
+            replacement: replacement.into(),
+        };
+        // Before, after, inside, and around the selection.
+        assert_eq!(remap_selection(10..20, &[edit(0, 2, "abcd")]), Some(12..22));
+        assert_eq!(remap_selection(10..20, &[edit(20, 20, "x")]), Some(10..20));
+        assert_eq!(
+            remap_selection(10..20, &[edit(10, 20, "abc")]),
+            Some(10..13)
+        );
+        assert_eq!(
+            remap_selection(10..20, &[edit(0, 1, ""), edit(12, 14, "xyz")]),
+            Some(9..20)
+        );
+        assert_eq!(remap_selection(10..20, &[edit(5, 15, "")]), None);
+        assert_eq!(remap_selection(10..20, &[edit(15, 25, "")]), None);
+    }
 
     #[gpui_kit::test]
     fn approved_demo_sql_keeps_execution_synthetic(cx: &mut gpui_kit::TestAppContext) {
@@ -1909,6 +1951,7 @@ mod tests {
         let connection_id = Uuid::new_v4();
         let sql = "SELECT 0;\n\nSELECT 1";
         let document = EditorDocument {
+            database_type: crate::model::DatabaseType::Kyuubi,
             tab_id,
             connection_id: Some(connection_id),
             revision: 8,
@@ -1943,6 +1986,7 @@ mod tests {
                 Some(&appended),
                 "turn",
                 &EditorDocument {
+                    database_type: crate::model::DatabaseType::Kyuubi,
                     revision: 9,
                     ..document.clone()
                 }
@@ -1955,6 +1999,7 @@ mod tests {
                 Some(&appended),
                 "turn",
                 &EditorDocument {
+                    database_type: crate::model::DatabaseType::Kyuubi,
                     selected_range: Some(0..9),
                     ..document.clone()
                 }
@@ -1967,6 +2012,7 @@ mod tests {
                 Some(&appended),
                 "turn",
                 &EditorDocument {
+                    database_type: crate::model::DatabaseType::Kyuubi,
                     tab_id: Uuid::new_v4(),
                     ..document.clone()
                 }

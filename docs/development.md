@@ -91,8 +91,17 @@ each hook and each CI job. Hooks export snapshots into temporary directories
 and share a build cache under `target/hook-checks`. They do not stash,
 restage, or modify working files. They do not package the application.
 
-The release profile favors size so the optional assistant stays within the
-macOS package budget.
+The release profile uses one code generation unit to keep the macOS package
+within its size budget. The `perf` profile uses 16 units and no link-time
+optimization to reduce build time. Debug and test builds optimize the
+dependencies, like GPUI, but not Qrow. The UI tests run about 5 times faster
+and the E2E tests 3 times faster. The first build after a dependency change
+takes longer. Later builds compile only Qrow, as before.
+
+Optimized dependencies also make the app react faster in tests. A test must
+not depend on slow work: wait for the condition that it checks. For example,
+wait for the saved workspace with `wait_saved`, and wait for an animated
+element to stop before you click it.
 
 Stage required code and configuration together. A passing working-copy check
 does not prove that the staged snapshot passes. Changes under `scripts/`
@@ -109,15 +118,18 @@ actions. Pull requests in a stack get checks before their base merges. The
 test workflow calls the [checks workflow](../.github/workflows/checks.yml),
 which has the check jobs. On `main`, the test workflow then deletes old Rust
 build caches. See [Testing](testing.md#hooks-and-continuous-integration). For a non-draft pull request, the `plan` job selects the
-jobs from the changed paths and always selects `static`. Pushes and manual
-runs start all jobs. [Testing](testing.md#hooks-and-continuous-integration)
+jobs from the changed paths and always selects `static`. Pushes start the
+pull request jobs and the measurement jobs. Manual runs and releases start
+all jobs. [Testing](testing.md#hooks-and-continuous-integration)
 gives the paths that select each job. A draft pull request, including a
 `converted_to_draft` event, starts no jobs. To run the checks of a draft pull
 request, mark it as ready for review.
 
 Every job checks out the same commit: the pull request merge result, or the
-pushed commit. A newer run cancels an older run for the same pull request or
-branch, including manual runs.
+pushed commit. A newer run of a pull request cancels its older run. Other
+runs, like the runs on `main` and manual runs, do not stop: a newer run of the
+same branch waits, and it replaces an older run that also waits. A run that
+stops before its end saves no build caches.
 
 Configure these individual checks as required checks of the `main` ruleset:
 
@@ -132,8 +144,9 @@ checks / e2e
 checks / perf
 ```
 
-Do not require the Intel checks. Pull requests skip them, and the run on
-`main` after a merge reports their failures.
+Do not require the other checks. Pull requests skip them. A push reports
+the failures of the measurement jobs, and a release or a manual run of the
+test workflow reports the failures of the Intel jobs and `desktop-package`.
 
 There is no aggregate CI gate. A skipped job counts as passed: a job that the
 plan does not select, and a server job of a fork pull request. The `plan`
@@ -155,14 +168,19 @@ resolve-target -> checks -> dmg -> publish
 
 `resolve-target` finds the commit and the release version. `checks` is the
 checks workflow with all jobs. Its `package` job builds the package with the
-release version, and its `e2e` job tests that package. `package-intel` and
-`e2e-intel` do the same for Intel. `dmg` puts each tested package in a DMG
+release version, and its `desktop-package` job tests that package.
+`package-intel` and `e2e-intel` do the same for Intel. `dmg` puts each tested package in a DMG
 with `arm64` or `x86_64` in its name. It runs
 [`scripts/package/dmg.py`](../scripts/package/dmg.py). When the DMG mounts,
 Finder shows the app icon, an Applications shortcut, and an arrow between
 them. The background is light because Finder draws the icon labels in black on
 a background picture, also in the dark appearance. The background has a 1x and
 a 2x version, so it stays sharp on Retina displays.
+During packaging, the writable image uses a temporary mount that Finder does
+not show. The script ejects the image before it creates the compressed DMG.
+If macOS reports that the image is busy, the script makes at most 10 eject
+attempts. After three attempts, it uses forced ejection. A persistent error
+fails packaging.
 The publish job creates the release
 tag, and then the GitHub Release with both DMGs as its assets. It also
 keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
@@ -219,10 +237,15 @@ Packaging includes third-party license notices. Upgrade GPUI Kit and its
 framework components as a compatible set. Preserve runtime Metal shaders unless
 the build requirements deliberately change.
 
-`vendor/` contains patched copies of some GPUI crates, and
+`vendor/` contains patched copies of some GPUI crates, tokio-postgres and reqwest.
+
 [Cargo.toml](../Cargo.toml) uses them in place of the crates.io releases. The
-`QROW-PATCH.md` file of each crate lists the changes. When you upgrade GPUI Kit,
-apply the changes to the new release again, or remove a patch when the release
+`QROW-PATCH.md` file of each crate lists the changes. The
+[Postgres patch](../vendor/tokio-postgres/QROW-PATCH.md) adds bounded schema
+metadata and an ordered buffer reset. The
+[HTTP patch](../vendor/reqwest/QROW-PATCH.md) adds TCP ownership before TLS and
+an HTTP/1 read-buffer limit. When you upgrade a patched dependency,
+apply its changes to the new release again, or remove the patch when the release
 includes its fix.
 
 ## Build identity

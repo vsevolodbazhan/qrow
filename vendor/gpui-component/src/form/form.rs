@@ -4,7 +4,7 @@ use gpui::{
 };
 
 use crate::{
-    Sizable, Size,
+    Sizable, Size, StyledExt as _,
     form::{Field, FieldProps},
     h_flex, v_flex,
 };
@@ -132,6 +132,7 @@ impl RenderOnce for Form {
             .gap_y(gap)
             .grid()
             .grid_cols(props.columns as u16)
+            .refine_style(&self.style)
             .children(
                 self.fields
                     .into_iter()

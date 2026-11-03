@@ -60,6 +60,30 @@ impl ToolKind {
         }
     }
 
+    /// The canonical Qrow tool name. `Other` has no Qrow tool.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace-read-context",
+            Self::ReadQuery => "tab-read-sql",
+            Self::AppendQuery => "tab-append-sql",
+            Self::EditQuery => "tab-edit-sql",
+            Self::RunQuery => "query-run",
+            Self::CancelQuery => "query-cancel",
+            Self::QueryStatus => "query-read-status",
+            Self::ReadResults => "query-read-results",
+            Self::FetchRows => "query-fetch-results",
+            Self::ReadLogs => "query-read-logs",
+            Self::ListSchemas => "catalog-list-schemas",
+            Self::ListRelations => "catalog-list-relations",
+            Self::DescribeRelation => "catalog-describe-relation",
+            Self::SearchModels => "dbt-search-models",
+            Self::DescribeModel => "dbt-describe-model",
+            Self::ReadLineage => "dbt-read-lineage",
+            Self::ReadModelSql => "dbt-read-sql",
+            Self::Other => "other",
+        }
+    }
+
     pub(super) fn title(self) -> &'static str {
         match self {
             Self::Workspace => "Read workspace",

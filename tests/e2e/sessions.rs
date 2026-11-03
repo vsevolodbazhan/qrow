@@ -137,6 +137,7 @@ fn disconnect_and_connection_edits_act_on_their_own_session(cx: &mut TestAppCont
     // A new password closes Beta's session, also while Alpha is selected.
     app.select_connection(cx, alpha);
     edit(&app, cx, beta);
+    app.scroll_to(cx, "connection-password");
     app.fill(cx, "connection-password", crate::support::fixture::PASSWORD);
     idle_behavior(&app, cx, "Disconnect after");
     save_form(&app, cx);

@@ -359,6 +359,15 @@ fn launch_project(
     bytes: &[u8],
     refresh: DbtRefresh,
 ) -> (TestApp, PathBuf, uuid::Uuid) {
+    launch_project_with_columns(cx, bytes, refresh, vec![])
+}
+
+fn launch_project_with_columns(
+    cx: &mut TestAppContext,
+    bytes: &[u8],
+    refresh: DbtRefresh,
+    columns: Vec<qrow::catalog::CatalogColumn>,
+) -> (TestApp, PathBuf, uuid::Uuid) {
     let directory = tempfile::tempdir().unwrap();
     let manifest = project(&directory, bytes);
     let mut profile = offline_profile("Lake");
@@ -372,6 +381,19 @@ fn launch_project(
         }],
     });
     cache(&directory, &profile);
+    if !columns.is_empty() {
+        let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+        let mut catalog = storage::load_catalog(&path).unwrap();
+        let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
+        let alias = dbt_manifest::model_alias(1);
+        catalog.apply_columns(
+            &schema,
+            Some(&alias),
+            std::collections::BTreeMap::from([(alias.clone(), columns)]),
+            1,
+        );
+        storage::save_catalog(&path, &catalog).unwrap();
+    }
     let saved = directory.path().join("dbt");
     let id = profile.id;
     let app = launch(cx, directory, profile);
@@ -394,6 +416,96 @@ fn show_model_table(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid) -> S
         crate::support::labelled(window, &alias).is_some()
     });
     alias
+}
+
+#[gpui_kit::test]
+fn column_tooltips_show_dbt_descriptions_and_database_comments(cx: &mut TestAppContext) {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&dbt_manifest::generate(&shape())).unwrap();
+    let descriptions = [
+        ("id", "A **booking** identifier.".to_owned()),
+        ("col_001", "The `cost` of a booking. ".repeat(40)),
+        ("col_002", "Same description".to_owned()),
+    ];
+    for (name, description) in &descriptions {
+        value["nodes"][dbt_manifest::model_id(1)]["columns"][name]["description"] =
+            description.clone().into();
+    }
+    let columns = [
+        ("ID", None),
+        ("col_001", Some("Database comment")),
+        ("col_002", Some("Same description")),
+        ("unmatched", Some("Only a database comment")),
+        ("empty", None),
+    ]
+    .into_iter()
+    .map(|(name, comment)| qrow::catalog::CatalogColumn {
+        name: name.into(),
+        data_type: "BIGINT".into(),
+        comment: comment.map(str::to_owned),
+    })
+    .collect();
+    let (app, _, id) = launch_project_with_columns(
+        cx,
+        &serde_json::to_vec(&value).unwrap(),
+        DbtRefresh::Manual,
+        columns,
+    );
+    let alias = show_model_table(&app, cx, id);
+    app.click_labelled(cx, &alias);
+    let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
+    for (ix, name, expected) in [
+        (0, "ID", "ID bigint\nA **booking** identifier."),
+        (
+            1,
+            "col_001",
+            "col_001 bigint\nDatabase comment\nThe `cost` of a booking.",
+        ),
+        (2, "col_002", "col_002 bigint\nSame description"),
+        (3, "unmatched", "unmatched bigint\nOnly a database comment"),
+    ] {
+        let row =
+            format!("r\u{1f}{id}\u{1f}{schema}\u{1f}{alias}\u{1f}{ix}\u{1f}{name}\u{1f}label");
+        app.wait_for(cx, row.clone());
+        app.hover(cx, row);
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            let text = label(window, "catalog-tooltip").unwrap();
+            let title = window.find("catalog-tooltip-title").bounds();
+            let data_type = window.find("catalog-tooltip-type").bounds();
+            // The type follows the name, not the right edge of the tooltip.
+            assert!(title.right() < data_type.left());
+            assert!(data_type.left() - title.right() <= gpui_kit::px(8.));
+
+            if ix == 1 {
+                assert!(text.starts_with(expected), "{text}");
+                assert!(
+                    text.ends_with("…\nOpen dbt details to see the full description."),
+                    "{text}"
+                );
+                assert!(crate::support::present(
+                    window,
+                    &"catalog-tooltip-description".into()
+                ));
+            } else {
+                assert_eq!(text, expected);
+                assert!(!crate::support::present(
+                    window,
+                    &"catalog-tooltip-hint".into()
+                ));
+            }
+        });
+    }
+    app.hover(
+        cx,
+        format!("r\u{1f}{id}\u{1f}{schema}\u{1f}{alias}\u{1f}4\u{1f}empty\u{1f}label"),
+    );
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(label(window, "catalog-tooltip").is_none())
+    });
 }
 
 #[gpui_kit::test]
@@ -1048,4 +1160,30 @@ fn the_demo_opens_a_catalog_and_a_complete_dbt_project(cx: &mut TestAppContext) 
         !path.exists(),
         "closing the demo removes its temporary manifest"
     );
+}
+
+#[gpui_kit::test]
+fn the_dbt_details_close_after_the_focused_filter_leaves(cx: &mut TestAppContext) {
+    let bytes = dbt_manifest::generate(&shape());
+    let (app, _manifest, id) = launch_project(cx, &bytes, DbtRefresh::Manual);
+    let alias = show_model_table(&app, cx, id);
+    // The focused column filter leaves the sheet with its closed part. The
+    // close button and Escape still close the sheet.
+    for close in ["button", "escape"] {
+        app.context_menu_labelled(cx, &alias);
+        app.choose(cx, "popup-menu", "Show dbt details");
+        app.wait_for(cx, "dbt-details-columns-toggle");
+        app.click(cx, "dbt-details-columns-toggle");
+        app.fill(cx, "dbt-details-filter", "col_001");
+        app.click(cx, "dbt-details-columns-toggle");
+        app.wait_gone(cx, "dbt-details-filter");
+        if close == "button" {
+            app.click(cx, "close");
+        } else {
+            app.press(cx, "escape");
+        }
+        app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
+            !crate::support::present(window, &"dbt-details".into())
+        });
+    }
 }

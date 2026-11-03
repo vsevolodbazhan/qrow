@@ -1,7 +1,8 @@
 # Architecture
 
-The application connects directly to Kyuubi through HiveServer2 Thrift. It does
-not need a local JVM, webview, or separately installed database driver. Java in
+The application connects directly to Kyuubi through HiveServer2 Thrift, or to
+Postgres through its native protocol, or Trino through HTTP or HTTPS. It does not need a local JVM, webview,
+or separately installed database driver. Java in
 the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture.
 
 ## Main components
@@ -12,6 +13,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [UI entry points](../src/ui.rs) | Initialize GPUI Kit, themes, the SQL language, key bindings, and menus. Wrap the root view. |
 | [UI environment](../src/ui/environment.rs) | Select the workspace file, the password and token stores, and the trusted certificate authorities of a window. |
 | [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, Logs history, and commands. |
+| [Export](../src/export.rs) | Keep shared preview snapshots, write CSV, and publish complete files. |
 | [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
 | [Logs model](../src/logs.rs) | Group Logs entries, apply retention, and define panel transitions. |
 | [Activity model](../src/activity.rs) | Keep the Activity log of each connection, choose what goes to tab Logs, and count unseen errors. |
@@ -20,6 +22,9 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [dbt index](../src/dbt.rs) | Read a dbt `manifest.json` into a compact index of models, sources, tests, lineage, and metrics, and save the index in a [binary form](../src/dbt/saved.rs). The index keeps the position of each SQL text in the manifest, not the SQL. |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
+| [Postgres connector](../src/connector/postgres.rs) | Implement password authentication, TLS modes, cancellation, and text results for Postgres. |
+| [External authentication](../src/external_auth.rs) | Share in-memory tokens and cancellable browser work; let each connector implement its challenge protocol. |
+| [Trino connector](../src/connector/trino.rs) | Implement HTTP statements, session headers, cancellation, metadata, and bounded temporary results. |
 | [SASL transport](../src/connector/sasl.rs) | Open plain or TLS transports and send the SASL PLAIN password or access token. |
 | [TLS](../src/tls.rs) | Verify servers against the macOS trust store, or a synthetic authority in tests. |
 | [Sign-ins](../src/oidc/) | Run the OpenID Connect browser sign-in, validate ID tokens, and give access tokens to connections. |
@@ -38,8 +43,12 @@ synthetic passwords, and a mock sign-in provider.
 ```mermaid
 flowchart LR
     Editor[Editor and workspace] -->|Validated SQL| Worker[Per-tab worker]
-    Worker -->|Session operations| Connector[HiveServer2 connector]
+    Worker -->|Session operations| Connector[Database connector]
     Connector --> Kyuubi[Kyuubi and Spark]
+    Connector --> Postgres[Postgres]
+    Connector --> Trino[Trino]
+    Trino -->|Status and rows| Connector
+    Postgres -->|Status and rows| Connector
     Kyuubi -->|Status and rows| Connector
     Connector --> Worker
     Worker -->|Events and bounded batches| Results[Results UI]
@@ -84,20 +93,41 @@ input, focus, or window activation. Then the caret stays visible and does not
 blink, because each blink repaints the window. There is no continuous idle
 repaint loop.
 
-The assistant worker thread owns the Codex process. Window commands and Codex
-output arrive on one channel. The worker sleeps until a command or a Codex
-message arrives, or until a title request reaches its time limit. It does not
-poll while the assistant is idle. The window thread
-does not wait for Codex. **Reconnect**, the **Enabled** setting, and the
-[idle stop](assistant.md#pane-and-connection-state) stop Codex on a separate
-thread. That thread kills the Codex process group if Codex does not stop in
-1.5 seconds. Quit waits up to 2 seconds for these threads. The idle stop uses
+A [transcript writer](../src/assistant/transcripts.rs) thread saves the
+[copies of assistant conversations](assistant.md#saved-conversations). It
+writes each file atomically, and it writes only the last version when several
+saves of one file wait. A conversation that you open reads its file on a
+background thread.
+
+The assistant worker thread owns the harness: the Codex process, or the
+Claude Code processes. Codex runs all conversations in one process. Claude
+Code runs one process for each active conversation, and one short control
+process for the models, the account, and titles. Window commands and harness
+output arrive on one channel. The worker sleeps until a command or a harness
+message arrives, or until a title request or an idle conversation process
+reaches its time limit. It does not poll while the assistant is idle. When
+the channel is full, the Claude Code output readers wait, and Claude Code
+waits for them. The window thread does not wait for the harness. **Reconnect**, the
+**Enabled** setting, a harness switch, and the
+[idle stop](assistant.md#pane-and-connection-state) stop the harness on a
+separate thread. That thread kills the process groups of the harness if it
+does not stop in 1.5 seconds.
+
+Claude Code calls the Qrow tools through an MCP server that Qrow declares in
+the launch arguments. Claude Code sends the MCP messages to Qrow on the same
+stream-json connection, so Qrow does not open a port or a socket. The
+[Claude Code harness](../src/assistant/claude.rs) keeps all Claude Code
+message shapes in one module. Quit waits up to 2 seconds for these threads. The idle stop uses
 one window timer, and it does not poll.
 
 A window gets display refresh ticks only while GPUI requests frames. It stops
 its display link 1 second after the last frame request, so an idle window does
-not wake the main thread at the refresh rate of the display. See the
-[macOS platform patch](../vendor/gpui-pre-macos/QROW-PATCH.md).
+not wake the main thread at the refresh rate of the display. When no window
+has drawn for 5 seconds, a background thread tells the macOS allocator to
+return its free pages one time. Thus memory that work freed, for example
+the memory of long results, does not stay in the footprint that Activity
+Monitor shows.
+See the [macOS platform patch](../vendor/gpui-pre-macos/QROW-PATCH.md).
 
 The assistant pane is a separate view. Typing in its message field or a
 streamed reply renders the pane again, but not the workspace. The transcript
@@ -128,12 +158,14 @@ out of the root render method.
 The connector interface covers session lifecycle, execution, catalog requests,
 status, cancellation, and batched results. A catalog request returns a result
 set with the JDBC `DatabaseMetaData` column names, so the catalog code does not
-depend on HiveServer2. Only HiveServer2 is implemented. Another connector should
-use this boundary without changing editor behavior. Qrow has no dynamic driver
+depend on HiveServer2. The database type selects the HiveServer2, Postgres, or Trino
+connector. Another connector should use this boundary without changing editor
+behavior. Qrow has no dynamic driver
 plugin system.
 
-Cancellation uses a separate authenticated transport because the query transport
-can block during fetching. SQL is never automatically retried after a transport
+HiveServer2 cancellation uses a separate authenticated transport. Postgres
+uses a separate connection with the cancellation key of the session. Trino
+sends an HTTP DELETE request to the current query cursor. SQL is never automatically retried after a transport
 failure because the statement can already have changed data.
 
 GPUI Kit supplies a compatible framework, component, asset, and platform set.

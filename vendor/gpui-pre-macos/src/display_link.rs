@@ -197,6 +197,7 @@ fn subscribe(
             }
             return Err(error);
         }
+        crate::memory_relief::set_drawing(true);
     }
 
     Ok(subscriber_id)
@@ -205,7 +206,7 @@ fn subscribe(
 fn unsubscribe(display_id: CGDirectDisplayID, subscriber_id: SubscriberId) {
     debug_assert_main_thread();
 
-    let link_to_stop = {
+    let (link_to_stop, idle) = {
         let mut registry = lock_registry();
         let Some(entry) = registry.displays.get_mut(&display_id) else {
             return;
@@ -213,9 +214,11 @@ fn unsubscribe(display_id: CGDirectDisplayID, subscriber_id: SubscriberId) {
         entry.subscribers.retain(|(id, _)| *id != subscriber_id);
         if entry.subscribers.is_empty() && entry.running {
             entry.running = false;
-            Some(entry.link.clone())
+            let link = entry.link.clone();
+            let idle = !registry.displays.values().any(|entry| entry.running);
+            (Some(link), idle)
         } else {
-            None
+            (None, false)
         }
     };
 
@@ -223,6 +226,9 @@ fn unsubscribe(display_id: CGDirectDisplayID, subscriber_id: SubscriberId) {
         // A final output callback can still fire after this returns; it finds
         // no subscribers for this display and does nothing.
         unsafe { link.stop().log_err() };
+    }
+    if idle {
+        crate::memory_relief::set_drawing(false);
     }
 }
 

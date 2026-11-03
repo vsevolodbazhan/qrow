@@ -121,6 +121,7 @@ impl Qrow {
         let qrow = cx.weak_entity();
         let panel = settings_panel("connection-settings", window, cx)
             .page(self.general_page(form, &qrow, cx))
+            .page(connection_form::transfer::page(form, &qrow, cx))
             .page(connection_form::catalog_page(form, &qrow, cx))
             .page(self.dbt_page(form, &qrow, cx))
             .pages(
@@ -150,13 +151,21 @@ impl Qrow {
         qrow: &WeakEntity<Qrow>,
         cx: &mut Context<Self>,
     ) -> SettingPage {
-        let uses_sign_in = connection_form::uses_sign_in(&form.authentication, cx);
+        let database_type = connection_form::chosen(
+            &form.database_type,
+            &connection_form::database_type_choices(),
+            cx,
+        );
+        let postgres = database_type == crate::model::DatabaseType::Postgres;
+        let trino = database_type == crate::model::DatabaseType::Trino;
+        let uses_external = trino && connection_form::uses_external(&form.authentication, cx);
+        let uses_sign_in = !postgres && connection_form::uses_sign_in(&form.authentication, cx);
         let chosen_sign_in =
             connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
         let sign_in_description = chosen_sign_in
             .map(|id| match self.oidc.identity(id) {
                 Some(identity) => format!("Signed in as {}.", identity.display()),
-                None => "Not signed in. Sign in from the Sign-ins sidebar.".to_owned(),
+                None => "The browser opens when a connection needs sign-in.".to_owned(),
             })
             .unwrap_or_else(|| {
                 if form.sign_in_choices.is_empty() {
@@ -169,6 +178,22 @@ impl Qrow {
         let fields = SettingGroup::new()
             .item(connection_row(
                 qrow,
+                "Connection Type",
+                "The database engine of the server.",
+                &["connector", "type"],
+                false,
+                |_, form, _, _| {
+                    Select::new(&form.database_type)
+                        .focus_ring(false)
+                        .id("connection-database-type")
+                        .w_full()
+                        .disabled(form.saving.is_some())
+                        .accessibility_label("Connection Type")
+                        .into_any_element()
+                },
+            ))
+            .item(connection_row(
+                qrow,
                 "Name",
                 "Shown in the connections sidebar.",
                 &["connection"],
@@ -178,7 +203,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Host",
-                "Hostname of the Kyuubi or HiveServer2 endpoint.",
+                "Hostname or IP address of the server.",
                 &["server", "address", "kyuubi"],
                 false,
                 |_, form, _, _| form_input(form, 1, "Host"),
@@ -186,51 +211,89 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Port",
-                "Thrift port on that host.",
+                "Port on that host.",
                 &["server"],
                 false,
                 |_, form, _, _| form_input(form, 2, "Port"),
             ))
-            .item(connection_row(
-                qrow,
-                "TLS",
-                if uses_sign_in && !form.tls {
-                    "Without TLS, others on the network can read and use the access token."
-                } else {
-                    "Encrypts the connection. The server must accept TLS on this port."
-                },
-                &["ssl", "encryption", "security"],
-                false,
-                |_, form, _, cx| {
-                    Switch::new("connection-tls")
-                        .checked(form.tls)
-                        .disabled(form.saving.is_some())
-                        .accessibility_label("TLS")
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            if let Some(form) = &mut this.form {
-                                form.tls = *checked;
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                },
-            ))
-            .item(connection_row(
-                qrow,
-                "Authentication",
-                "Several connections can share one sign-in, each with its own username.",
-                &["sign-in", "ldap", "password", "oidc"],
-                false,
-                |_, form, _, _| {
-                    Select::new(&form.authentication)
-                        .focus_ring(false)
-                        .id("connection-authentication")
-                        .w_full()
-                        .disabled(form.saving.is_some())
-                        .accessibility_label("Authentication")
-                        .into_any_element()
-                },
-            ))
+            .items(postgres.then(|| {
+                connection_row(
+                    qrow,
+                    "TLS Mode",
+                    match connection_form::chosen(
+                        &form.postgres_ssl_mode,
+                        &connection_form::postgres_ssl_mode_choices(),
+                        cx,
+                    ) {
+                        crate::model::PostgresSslMode::Disable => "Connects without encryption.",
+                        crate::model::PostgresSslMode::Require => {
+                            "Encrypts without checking the server certificate."
+                        }
+                        crate::model::PostgresSslMode::VerifyFull => {
+                            "Checks the server certificate and hostname."
+                        }
+                    },
+                    &["ssl", "encryption", "security"],
+                    false,
+                    |_, form, _, _| {
+                        Select::new(&form.postgres_ssl_mode)
+                            .focus_ring(false)
+                            .id("connection-postgres-ssl-mode")
+                            .w_full()
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("TLS Mode")
+                            .into_any_element()
+                    },
+                )
+            }))
+            .items((!postgres).then(|| {
+                connection_row(
+                    qrow,
+                    "TLS",
+                    if (uses_sign_in || uses_external) && !form.tls {
+                        "Without TLS, others on the network can read and use the access token."
+                    } else {
+                        "Encrypts the connection. The server must accept TLS on this port."
+                    },
+                    &["ssl", "encryption", "security"],
+                    false,
+                    |_, form, _, cx| {
+                        Switch::new("connection-tls")
+                            .checked(form.tls)
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("TLS")
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                if let Some(form) = &mut this.form {
+                                    form.tls = *checked;
+                                }
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    },
+                )
+            }))
+            .items((!postgres).then(|| {
+                connection_row(
+                    qrow,
+                    "Authentication",
+                    if trino {
+                        "Use a password or browser sign-in."
+                    } else {
+                        "Use a password or a saved sign-in."
+                    },
+                    &["sign-in", "ldap", "password", "oidc"],
+                    false,
+                    |_, form, _, _| {
+                        Select::new(&form.authentication)
+                            .focus_ring(false)
+                            .id("connection-authentication")
+                            .w_full()
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("Authentication")
+                            .into_any_element()
+                    },
+                )
+            }))
             .items(uses_sign_in.then(|| {
                 connection_row(
                     qrow,
@@ -244,20 +307,20 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Username",
-                if uses_sign_in {
-                    "The database account. Kyuubi checks that the signed-in identity can use it."
-                } else {
-                    "The database account for LDAP authentication."
-                },
+                "The database account used to connect.",
                 &["user", "account", "login"],
                 false,
                 |_, form, _, _| form_input(form, 3, "Username"),
             ))
-            .items((!uses_sign_in).then(|| {
+            .items((!uses_sign_in && !uses_external).then(|| {
                 connection_row(
                     qrow,
                     "Password",
-                    "Used for LDAP authentication.",
+                    if trino {
+                        "Leave blank if the server needs only a username."
+                    } else {
+                        "The password for this account."
+                    },
                     &["ldap", "secret"],
                     false,
                     |_, form, _, _| form_input(form, 4, "Password"),
@@ -265,16 +328,40 @@ impl Qrow {
             }))
             .item(connection_row(
                 qrow,
-                "Initial Database",
+                if trino {
+                    "Initial Catalog"
+                } else {
+                    "Initial Database"
+                },
                 "Selected when the session opens.",
                 &["schema", "database", "use"],
                 false,
-                |_, form, _, _| form_input(form, 5, "Initial Database"),
+                move |_, form, _, _| {
+                    form_input(
+                        form,
+                        5,
+                        if trino {
+                            "Initial Catalog"
+                        } else {
+                            "Initial Database"
+                        },
+                    )
+                },
             ))
+            .items(trino.then(|| {
+                connection_row(
+                    qrow,
+                    "Initial Schema",
+                    "Optional schema in the initial catalog.",
+                    &["schema", "trino"],
+                    false,
+                    |_, form, _, _| form_input(form, 15, "Initial Schema"),
+                )
+            }))
             .item(connection_row(
                 qrow,
                 "Session Parameters",
-                "JSON object with string values.",
+                "JSON object with setting names and string values.",
                 &["spark", "conf", "configuration", "json"],
                 true,
                 |_, form, _, _| {
@@ -290,7 +377,11 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Response Timeout",
-                "Seconds to wait for a server response, from 10 to 3600.",
+                if postgres {
+                    "Seconds to wait for setup and cancellation, from 10 to 3600."
+                } else {
+                    "Seconds to wait for a server response, from 10 to 3600."
+                },
                 &["timeout", "seconds"],
                 false,
                 |_, form, _, _| form_input(form, 14, "Response Timeout in Seconds"),
@@ -344,7 +435,9 @@ impl Qrow {
                 vec![]
             });
         SettingPage::new("General")
-            .description("Spark (HiveServer2)")
+            .description(database_type.label())
+            // Space the engine name like the help text under a field.
+            .header_style(&StyleRefinement::default().gap_0())
             .default_open(true)
             .resettable(false)
             .group(fields)

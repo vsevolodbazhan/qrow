@@ -38,13 +38,19 @@ accept a test filter.
 | `unit` * | Rust unit and integration tests that need no UI and no servers. | Rust, cargo-nextest |
 | `ui` * | Headless tests of the real Qrow window, without servers. | macOS, cargo-nextest |
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
-| `perf` | SQL validation and dbt manifest benchmarks with enforced budgets. | Rust |
+| `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
-| `perf-e2e` * | Query and page latency of the real window against the real servers. | macOS, Docker or Java 17 |
+| `perf-e2e` * | Window query latency against the real servers. | macOS, Docker or Java 17 |
+| `perf-kyuubi` * | Kyuubi export transfer measurements against the real servers. | Docker or Java 17 |
+| `perf-postgres` | Postgres export transfer and COPY measurements. | Docker, cargo-nextest |
+| `perf-trino` | Trino export transfer measurements. | Docker, cargo-nextest |
 | `perf-app` | Launch time, idle memory, and idle CPU of the release app on the desktop. | macOS desktop |
+| `perf-package` | Launch time, idle memory, and idle CPU of the packaged app on the desktop. | macOS desktop |
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
+| `postgres` | Postgres connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
+| `trino` | Trino connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
 | `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
@@ -52,7 +58,7 @@ accept a test filter.
 
 On Linux, `unit` and `clippy` use only the core library. These suites need
 macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
-`perf-e2e`, `perf-app`, `package`, and `desktop`. `clippy-app` is the second
+`perf-e2e`, `perf-app`, `perf-package`, `package`, and `desktop`. `clippy-app` is the second
 pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
@@ -87,12 +93,56 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   They verify client messages, but they cannot show how a real server
   responds. The `backend` suite does that.
 - Worker tests check session coordination and bounded fetching.
+  Transfer tests check captured fetch overrides, normal preview request sizes,
+  and connection limits that stay active through file publication.
+  Window tests check preset persistence, engine-specific controls, validation,
+  rejection before sign-in or SQL, and Retry after the result tab closes.
+- Postgres tests check first-page display before server completion, direct
+  reads above both preview limits, cancellation of a blocked row consumer,
+  and temporary tables, settings, and uncommitted data in the same session.
+  They check bounded custom-type descriptions and writer failure before
+  stalled cancellation cleanup. Synthetic driver tests check an ordered
+  buffer reset behind a partial frame and block later requests until it ends.
+- Postgres transport tests use synthetic peers. They check cancellation during
+  SSL negotiation, the TLS handshake, authentication, and socket registration.
+  They check fragmented messages, rejection of a large declared message before
+  body allocation, cancellation deadlines for both sockets, and the server's
+  ReadyForQuery confirmation before session reuse after a SQL error.
 - Property tests check SQL validation with arbitrary Unicode and quoting.
   Keep the Proptest regression seeds that a fixed failure adds.
+- Export tests use the `csv` crate to check text syntax. The Kyuubi,
+  Postgres, and Trino suites also read exported text with the pinned DuckDB
+  Python package. CSV checks use `allow_quoted_nulls=false` to distinguish
+  nulls from empty strings and literal null markers. Parquet checks cover all
+  three compression choices and typed decimals, binary values, dates, and
+  timestamps. Run them through
+  `./qtest` to use the Python dependencies in `uv.lock`.
+- Export core tests check concurrent spool readers, cancellation wakeups,
+  typed record replay, malformed records, and end row counts. Disk tests
+  check reservations shared by output files and spools on one volume.
+- Worker tests check cursor overflow, stale drain requests, and cancellation
+  bound to the captured query. UI tests check background export ownership,
+  Retry, and replay settings. Kyuubi Docker tests export the live cursor and
+  retry a failed save after another query without submitting the old SQL.
+  The cancellation test pauses server responses before the Cancel click, then
+  releases them for protocol cleanup. The copy-limit test uses cells below
+  8 MiB whose combined CSV output exceeds 10 MiB.
+  Direct export tests check first-page retention, original-session temporary
+  views, original result SQL after editor changes, and reruns after
+  disconnect without a session warning. Wire tests cancel before SASL, the
+  operation handle, and the schema arrive, and while a previous session closes. UI tests check that
+  cancelling the save panel submits no SQL and reads no credentials.
+  Export tests wait for the preview update after the file appears. File
+  completion and window updates can arrive at different times.
+  Wire tests check that completed queries close without another status request.
 - Storage tests check competing processes, and the release of the workspace
   lock after a process is killed.
 - The core library must build with `--no-default-features`. `coverage`
   excludes the GPUI frontend and the generated bindings.
+  Coverage runs one top-level test at a time in each test binary. Export tests
+  share the production memory budget in that process. This setting prevents
+  unrelated tests from exhausting the shared budget. Tests that start competing
+  threads still check concurrent work. Other suites keep their test parallelism.
 - Qrow forbids unsafe code in its own sources, including the generated
   bindings. Third-party dependencies can contain unsafe code.
 
@@ -101,6 +151,82 @@ They check token removal when another executable created the item. They do not
 change the default keychain or its search list. A separate password test uses
 the real macOS Keychain, so no suite runs it. Run that test with
 `cargo test --test integration keychain:: -- --ignored`.
+
+Kyuubi transfer tests check adaptive request counts and normal preview
+limits on the wire. Worker tests check session reuse after a preset change,
+first-page retention, rejection before SQL, slot ownership through file
+publication, and terminal failure without fetch retry. Registry tests check
+cancellation before the download callback attaches and during shutdown.
+Worker tests pause the completion notification before the worker can continue.
+They check immediate export admission after producer cleanup. The file writer
+must keep its slot until publication. These checks cover successful downloads,
+commands without results, failures, and successful or rejected cursor drains.
+A Docker backend test checks actual Spark collection behavior with executor
+evidence before the first fetch. It also checks restoration for explicit
+and absent settings, and the collection mode of the next normal query.
+
+## Trino tests
+
+Local wire tests check raw socket closure during TLS, request headers and
+response bodies. They cover POST, GET, HEAD and DELETE, pooled connection
+reuse, late connection rejection, and the cleanup deadline. A heartbeat's
+transport can close while the primary transport stays open.
+The tests also check a stalled primary body after a successful cancel response,
+cancellation before GET admission, and old cancellation after session handoff.
+Closed query pools must release their memory reservation before the next query.
+These tests keep the old cancellation handle and session alive.
+Repeated cancellation sends one `DELETE` and uses the first cleanup result.
+Raw JSON tests check exact decimal text, row and schema limits, and decoding
+on demand. Session tests reject cumulative header limits without partial
+updates. Preview tests check positional reads while the prefix writer stays
+open.
+Wire tests also check the heartbeat timer while a primary response body
+stops. A stalled HEAD request can stop without closing the primary socket.
+Wide-row tests check the fetch byte limit and the order of a pending row.
+SQL error tests check transaction-header updates before the next statement.
+
+Run `./qtest run trino --runtime docker` to test the connector and, on macOS,
+the real window against a disposable Trino 483 coordinator. The suite uses
+synthetic credentials, a temporary certificate authority, and a loopback HTTPS
+port. A pinned Adobe S3Mock 5.2.3 container supplies HTTPS storage. It shares
+a network namespace with Trino, so presigned loopback URLs work from both
+the coordinator and client. The fixture removes both containers after the run.
+S3Mock does not check presigned signatures or expiry and does not encrypt stored
+objects. Fake HTTPS peers check expiry and storage encryption headers.
+The suite checks password authentication, certificate checks, types, pagination,
+session changes, transactions, prepared statements, metadata, cancellation,
+and result limits.
+The fixture sets the client timeout to five seconds. A direct-export test
+commits a spool batch, stops result reads for 12 seconds, then continues the
+download. It checks repeated HEAD requests in the fixture request log and
+session reuse after cancellation. Serial and parallel export tests validate and
+replay 50,000 rows with Bangkok and New York session time zones. They compare
+storage request logs before and after each execution. Each remote GET must
+have a matching DELETE after the client commits its segment. Connector tests
+run one at a time to keep this trace specific to the execution.
+Fake peers check offset-bearing expiry before a GET. Offsetless expiry uses
+terminal storage responses, with no retry or ACK after HTTP 403 or 410.
+Other direct tests exceed both preview limits and check settings, prepared statements, transactions, and empty results.
+Window tests save large direct exports, keep prepared statements and session
+settings, and reuse completed spools. They check original SQL after editor
+changes, warnings after disconnect, retry after tab closure, cancellation,
+empty results, and preservation of an existing file for a statement with no
+result set. Offline window tests cancel the save panel without SQL or credentials.
+Worker tests publish query progress before the schema arrives. A window test
+checks the full status in Details, including text wrapping for a long filename.
+The suite then runs the same disposable coordinator with OAuth2
+and a synthetic confidential client. An injectable browser follows the
+coordinator and provider redirects over verified HTTPS. Tests check that connection selection does not start
+sign-in. A query starts sign-in when necessary. Tests also check browser
+progress and cancellation in the connection toolbar, token reuse without a
+saved sign-in, and renewal without another browser login.
+The fixture provider uses only synthetic accounts and an HTTPS callback at
+Trino. The storage namespace stays alive during the OAuth2 restart.
+
+The suite needs Docker and OpenSSL. It builds the tests before the server
+starts. The Linux backend CI job runs its connector tests. The real-window
+Trino tests run locally on macOS with Docker. The Kyuubi `e2e` suite excludes
+Postgres and Trino tests because each connector has its own fixture.
 
 ## Groups
 
@@ -264,6 +390,10 @@ and TLS:
   database usernames of its identity, and gives other passwords to LDAP.
 - A new certificate authority and server certificate for each start.
 
+Run `./qtest run e2e/sign_ins backend/oidc --runtime docker` to check browser
+sign-in, token refresh, and connection authorization. The E2E tests also change
+the host of a saved OIDC connection and run a query immediately after saving.
+
 | User | Database usernames |
 | --- | --- |
 | `alice` | `qrow` |
@@ -305,6 +435,31 @@ below 256 KiB/s for 60 seconds, the download continues from the next source.
 The last source has no speed limit. To change an archive version, add the new
 archive to the mirror first, as its README tells.
 
+## Test Postgres
+
+Run `./qtest run postgres`. This suite starts a separate disposable Postgres 17
+container with a synthetic password and a temporary TLS certificate. It tests
+connector results, SQL errors, cancellation, session settings, schema metadata,
+TLS encryption without a trusted certificate, and certificate verification.
+On macOS, it also tests encrypted queries, result pages, and cancellation
+through the real Qrow window. The unit suite includes a protocol test that
+checks that required TLS cannot fall back to plaintext.
+
+Cancellation tests check the result of a new query after each cancelled query.
+They also check that an old cancellation handle cannot cancel new work.
+Protocol tests hold the cancellation socket open to check that cleanup waits
+for server closure. A cancellation timeout must prevent session reuse.
+Use `./qtest run postgres --runtime docker --repeat 5` to check these timing paths.
+
+The suite requires Docker. It does not use the Spark fixture or a native server
+runtime. It removes the container, its volumes, and certificates after the run.
+The backend CI job includes the connector tests. The Postgres UI tests require
+a local macOS run with Docker.
+
+The `e2e` suite selects tests for the Kyuubi fixture. The `postgres` suite
+selects the Postgres tests from the same test binary and supplies their server.
+Postgres tests fail if their fixture settings are missing.
+
 ## Run the desktop suite
 
 The `desktop` suite operates the packaged app with real keyboard and pointer
@@ -313,7 +468,9 @@ events. It checks only what needs the real operating system:
 1. **About Qrow** and **Settings…** open from the menu bar.
 2. A connection that you add through the form keeps its password in the real
    Keychain, and a real query reads it.
-3. When the workspace cannot be saved, **⌘Q** keeps the editor open with its
+3. Pixels of the selected connection row: when the pointer is on the status
+   dot, the focus outline stays above the hover fill of the dot.
+4. When the workspace cannot be saved, **⌘Q** keeps the editor open with its
    SQL. **Keep editing** returns to it, and **Retry save and quit** saves and
    quits.
 
@@ -395,16 +552,22 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 
 | Suite | Probes |
 | --- | --- |
-| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. |
-| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. It builds with the `perf` Cargo profile, which optimizes like the release build. |
-| `perf-e2e` | The time from **Run** to the first result row, and to the next page of a long result. |
-| `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 12 seconds before the measurement, so the caret no longer blinks. The first launch after a build warms up, and the median of the next three counts. |
+| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding and CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
+| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
+| `perf-e2e` | The time from **Run** to the first result row and to the next page. |
+| `perf-kyuubi` | Kyuubi export throughput and peak memory for each preset. |
+| `perf-postgres` | Postgres export throughput and peak memory for each preset. Normal protocol and server CSV `COPY` comparison. |
+| `perf-trino` | Trino export throughput and peak memory for each preset. |
+| `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 18 seconds before the measurement, so the caret no longer blinks and Qrow has returned its free memory to macOS. The first launch after a build warms up, and the median of the next three counts. |
+| `perf-package` | The `perf-app` probes on the app in a package zip, without a build. The zip is `QROW_MACOS_PACKAGE`, or `target/macos-package/Qrow-macos.zip`. |
 
-CI runs `perf` with its budgets. It runs the other probes as report-only
-suites, because the hosted runners are slower and less steady than a
-developer computer. Runs on `main` keep the measurements for 90 days. To get
-the measurements of a run, download its `performance-package`,
-`performance-e2e`, or `performance-perf` artifact, for example:
+CI runs `perf` with its budgets on Linux. It runs the other probes as
+report-only suites, because the hosted runners are slower and less steady
+than a developer computer. Pull requests skip the report-only suites. Runs
+on `main` keep the measurements for 90 days. To get the measurements of a
+run, download its `performance-package`, `performance-backend`,
+`performance-e2e`, `performance-perf`, or `performance-perf-ui` artifact,
+for example:
 
 ```sh
 gh run download RUN_ID -n performance-perf
@@ -436,6 +599,80 @@ after a warm-up. Its budgets are 5 ms at 10 KB, 25 ms at 100 KB, and 250 ms at
 1 MB. The release profile favors a small size, so run `perf` after you change
 it.
 
+The [export benchmark](../benches/export.rs) runs one spool producer and one
+CSV or Parquet writer in each fresh process. It checks the full row count
+and publishes the file with the normal atomic Save procedure. It reports
+the median of three measured samples after one warm-up. Latency is per MiB
+of cell payload. The memory probe uses the largest operating-system peak
+resident set size of the three samples. The CSV cases also report the
+spool-to-CSV size ratio. The decoder cases use the same narrow, wide, and
+null-heavy schemas and exclude input cloning from their timed interval.
+
+Export budgets allow large regressions before failure. Integer decoding
+must stay below 400 ns per cell. Wide and null-heavy decoding must stay below
+50 ns per cell. Writer latency limits are 400 ms/MiB for narrow data and
+800 ms/MiB for null-heavy data. Wide CSV and Parquet limits are 20 and
+10 ms/MiB. Each process must stay below 384 MiB peak resident set size.
+The spool-to-CSV ratio limits are 3 for narrow data, 1.25 for wide data,
+and 2 for null-heavy data.
+
+The [transfer probes](../tests/integration/transfer_perf.rs) measure the
+normal Worker, spool, and CSV Save path on 50,000 rows with a different
+1 KiB text value in each row. Run all engines with:
+
+```sh
+./qtest run perf-kyuubi perf-postgres perf-trino --runtime docker
+```
+
+Each case uses a fresh client process and a warmed connection. One warm-up
+precedes three measured samples. The report gives median milliseconds per MiB
+of published file and the largest client peak resident set size. Raw samples include file bytes
+and elapsed seconds for throughput calculations. A complete probe has a
+20-minute deadline. It checks every exported row and each unique ID.
+Trino selects an ordered, bounded key range from TPCH sf1 orders. The range
+keeps the server sort within the fixture memory limit. Conservative uses
+classic paging. Balanced uses Serial spooling. Fast uses Parallel spooling.
+The Custom case uses Serial spooling. The historical baseline uses classic
+paging. The spooling cases use the fixture's TLS storage. The corpus contains
+repeated text. These
+results do not predict performance with incompressible data or remote storage.
+Each sample runs one export. Separate tests check the parallel segment limit.
+With Docker, Kyuubi uses a separate CONNECTION engine and an in-memory catalog
+for each sample. The corpus does not need a persistent metastore. Before each
+sample, the probe stops engines within its disposable fixture. This releases
+the two worker cores held by the readiness engine.
+With the native runtime, each sample opens a new session on the readiness USER
+engine. This engine holds both worker cores. The native fixture cannot stop
+engines safely. Native samples share JVM warm-up and report client memory only.
+Do not compare native measurements with the Docker measurements.
+Raw samples record the runtime and engine share level.
+The profile starts with incremental collect off. Conservative and Custom
+change it to on. With Docker, the probe also reads the driver's peak resident
+set size before the session closes. This peak includes JVM startup and warm-up.
+
+The default comparison case is `legacy_policy`. It uses the current code
+with fixed 1,000-row Kyuubi requests and no collection override. It is not a
+measurement of an older source revision. To compare an older executable,
+set `QROW_TRANSFER_BASELINE_BIN` to an integration-test executable with
+`transfer_perf::sample`. Use the same corpus, validation, and test harness.
+For historical Kyuubi comparisons, use Docker. The native probe uses
+`legacy_policy` as its comparison case. An older executable can request a
+separate engine and wait for worker cores that the native readiness engine holds.
+The sample must print `QROW_TRANSFER_SAMPLE` JSON. Set
+`QROW_TRANSFER_BASELINE_REVISION` to its full commit ID. The case then has
+the name `baseline`. Raw samples record that commit ID.
+
+The Postgres protocol and `COPY` cases use the same ordered query and atomic
+file publication. Both use unencrypted transport to the disposable local
+server. They check row order, NULLs, commas, quotes, line breaks, and Unicode.
+These cases compare local CSV formatting with server CSV formatting. They do
+not measure the complete Worker and spool path. Production export continues
+to use the normal protocol.
+
+CI runs the Kyuubi, Postgres, and Trino probes in the Linux `perf-backend`
+job with Docker. These probes report measurements without enforced throughput
+budgets.
+
 The [dbt benchmark](../benches/dbt.rs) makes synthetic manifests with the
 [generator](../tests/support/dbt_manifest.rs) and reports the median of 7
 samples. Its budgets are about 10 times the values on an M3: for 70 MB, the
@@ -457,7 +694,7 @@ After you package the app, check its size:
 uv run --locked python scripts/core/size.py
 ```
 
-The [size check](../scripts/core/size.py) allows 30 MiB for the executable
+The [size check](../scripts/core/size.py) allows 40 MiB for the executable
 and 12 MiB for the zipped bundle. Find the cause of an increase before you
 change a budget.
 
@@ -519,6 +756,16 @@ forward, for example for the idle stop of Codex. Codex itself uses wall time.
 Idle-stop tests wait for Qrow to process the history response after a reply.
 Codex events restart the idle period, so process them before you advance the
 test clock.
+
+The synthetic Claude Code in
+[`tests/desktop/fake-claude.py`](../tests/desktop/fake-claude.py) speaks the
+stream-json protocol of `claude -p`. `FakeClaude::beside(&directory)` puts its
+executable in the workspace directory of a `FakeCodex`, so a test can use
+both harnesses. `claude.select(settings)` selects Claude Code. Its marker
+files work as the Codex markers do, for example `signed-out` and `release`.
+`claude.turns()` lists the messages of the turns that it ran. The unit tests
+of the [Claude Code harness](../src/assistant/claude/tests.rs) use the same
+script.
 
 Follow these rules:
 
@@ -624,42 +871,63 @@ disk space back. The next hook then builds the dependencies again.
 The [checks workflow](../.github/workflows/checks.yml) checks one commit. The
 [test workflow](../.github/workflows/test.yml) and the
 [release workflow](../.github/workflows/release.yml) call it. The qtest
-catalog defines its jobs: the suites of each job, the jobs that it waits
-for, and the paths that select it. The workflow prepares each runner and runs
-`./qtest ci JOB`. To run the suites of a job on your computer, run the same
-command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
+catalog defines its jobs: the suites of each job, its time budget, the jobs
+that it waits for, the events that start it, and the paths that select it.
+The workflow prepares each runner and runs `./qtest ci JOB`. To run the
+suites of a job on your computer, run the same command, for example
+`./qtest ci ui`. Add `--measure` to also run its report-only suites.
+`./qtest ci` lists the jobs:
 
-| Job | Runner | Suites | Waits for |
+| Job | Runner | Suites | Runs in |
 | --- | --- | --- | --- |
-| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | |
-| `core` | Linux | `coverage`, which runs the unit tests of the core library | |
-| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
-| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
-| `backend` | Linux | `backend` with Docker | `core` |
-| `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
-| `perf` | macOS ARM64 | `perf`, and `perf-ui` (report only) | `core` |
-| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |
-| `package-intel` | macOS x86_64 | `package`, and `perf-app` (report only) | `core` |
-| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, and `perf-e2e` (report only), with local Java servers | `package-intel` |
+| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | all runs |
+| `core` | Linux | `coverage`, which runs the unit tests of the core library | all runs |
+| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | all runs |
+| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
+| `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
+| `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, and `perf-e2e` (report only), with local Java servers | all runs |
+| `perf` | Linux | `perf` | all runs |
+| `perf-ui` | macOS ARM64 | `perf-ui` (report only) | pushes, manual runs, releases |
+| `perf-backend` | Linux | `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | pushes, manual runs, releases |
+| `desktop-package` | macOS ARM64 | `desktop` on the package of `package` | manual runs, releases |
+| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | manual runs, releases |
+| `package-intel` | macOS ARM64 | `package` for x86_64 | manual runs, releases |
+| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package of `package-intel`, and `perf-e2e`, `perf-package` (report only), with local Java servers | manual runs, releases |
 
-The failures of `core` predict the failures of the macOS and server jobs, so
-these jobs wait for it. `e2e` also waits for the package that it tests. A
-failed job skips the jobs that wait for it. `static` lints the core library,
-and the two `ui` jobs lint the application on their Mac architecture. A
-report-only suite runs, and its measurements go into the run summary. Its
-failure does not fail the job.
+A pull request run takes about 10 minutes. To keep it there, the jobs start
+at once and run in parallel. Only `desktop-package` and `e2e-intel` wait,
+for the package that they test. A failed job skips the jobs that wait for
+it. Each job has a time budget for its suites, most of them 8 minutes or
+less. When the suites take longer, the job shows a warning. Find the cause
+before you raise the budget. `static` lints the core library, and the two
+`ui` jobs lint the application on their Mac architecture.
+
+A report-only suite runs, and its measurements go into the run summary. Its
+failure does not fail the job. Pull requests do not keep measurements, so
+they skip the report-only suites and the measurement jobs `perf-ui` and
+`perf-backend`. Pushes, manual runs, and releases run them.
+
+The `desktop` suite of the `e2e` job tests a debug app. The app contains
+the executable that the E2E test build makes, so the job does not wait for
+the release package and does not compile again. `desktop-package` tests the
+release package that a release publishes.
 
 A `plan` job selects the jobs of a pull request from its changed files.
-Pull requests do not run the Intel jobs, because the Intel runners are slower.
-Pushes, manual runs, and releases run all jobs, so the run on `main` after a
-merge finds Intel failures. To run the Intel jobs before a merge, start the
-test workflow manually on the branch.
+Pull requests and pushes do not run the Intel jobs. The Intel runners are
+slow, and GitHub runs only a small number of macOS jobs at the same time for
+the account. Manual runs and releases run all jobs, so a release finds Intel
+failures. To run the Intel jobs before a merge or a release, start the test
+workflow manually on the branch. `package-intel` builds the Intel package on
+an ARM64 runner with `CARGO_BUILD_TARGET=x86_64-apple-darwin`. This takes
+about half the time of a build on an Intel runner. `e2e-intel` tests the
+package on an Intel runner, and `perf-package` measures its launch there.
 
 For a pull request, the plan always selects `static`. Changes to Rust
 sources or `.cargo/config.toml` select all pull request jobs. Changes to the
 server fixture or the E2E scripts select `backend` and `e2e`. Changes under
 `tests/desktop/` select `e2e`. Changes to the packaging or probe scripts,
-`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the
+`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the packaging
+scripts also select `e2e`, because it packages its debug app. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
 pull request jobs. A selected job also selects the jobs that it waits for. A
 job that the plan does not select shows as skipped. To see the plan of your
@@ -667,24 +935,25 @@ changes, run `./qtest ci plan`.
 
 In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
-accessibility APIs. The ARM64 jobs use `macos-15`, and the Intel jobs use
-`macos-15-intel`.
-Each E2E job tests the package for its architecture and shares one set of
-servers between its suites. The native archives download from the
+accessibility APIs. The ARM64 jobs and `package-intel` use `macos-15`. The
+other Intel jobs use `macos-15-intel`.
+Each E2E job shares one set of servers between its suites. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Each Rust build
 cache belongs to one job, and only that job saves it. Each E2E job also
-restores the cache of its UI job, which builds the E2E test binary. Runs on
+restores the cache of its UI job, which builds the same dependencies. Runs on
 `main` save the build caches. Other runs only restore them. A change to
 `Cargo.lock` or to the toolchain gives a cache a new name, and the old cache
 stays. After the checks of a run on `main`, the `cache-cleanup` job of the test
-workflow deletes the old caches. For each job, it keeps the newest cache. A
+workflow and of the release workflow deletes the old caches. It also runs
+after failed or cancelled checks. A cancelled job saves no cache, so a newer
+push to `main` does not cancel the run in progress. For each job, it keeps the newest cache. A
 release of an older commit with another `Cargo.lock` saves a newer cache that
 `main` does not use, so the next run on `main` builds the dependencies again.
 To see the caches that it deletes, run
 `python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`.
 CI keeps its artifacts for one day. Runs on `main` also keep the measurements of the
-package, E2E, and `perf` jobs for 90 days, in the `performance-JOB`
-artifacts. See [Check performance](#check-performance). See
+package, E2E, `perf`, `perf-ui`, and `perf-backend` jobs for 90 days, in
+the `performance-NAME` artifacts. See [Check performance](#check-performance). See
 [Development](development.md#hooks-and-continuous-integration) for workflow
 events, required checks, and releases.
 
@@ -704,8 +973,9 @@ events, required checks, and releases.
   frames without the GPU. They do not measure Metal rendering. `perf-app`
   measures the time until Qrow reports a ready UI, not until the first frame
   is on the screen.
-- Performance on an M1 Mac with 8 GB of memory is not verified. A pass on a
-  larger machine does not show performance on that machine.
+- Synthetic export and Docker transfer probes have local measurements on an
+  M1 Mac with 8 GB of memory. These probes do not establish Metal frame times
+  or performance for every query, server, or concurrent export.
 - The pixel checks of `desktop` depend on the main display and its scale.
 - In CI, only `perf` has enforced budgets. The other probes are report-only,
   so a slower probe does not fail CI. Compare their history on `main`.

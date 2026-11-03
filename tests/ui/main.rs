@@ -3,6 +3,7 @@
 mod support;
 
 mod assistant_chat;
+mod assistant_harness;
 mod assistant_idle;
 mod assistant_layout;
 mod assistant_notes;
@@ -16,8 +17,11 @@ mod dbt;
 #[path = "../support/dbt_manifest.rs"]
 mod dbt_manifest;
 mod dialogs;
+mod editor_menu;
+mod export;
 mod metadata;
 mod queries;
+mod result_tabs;
 mod results;
 mod sign_ins;
 mod tabs;

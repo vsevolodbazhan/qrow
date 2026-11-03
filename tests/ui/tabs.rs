@@ -29,6 +29,12 @@ fn sidebar_headers_align_with_query_tabs_at_each_scale_and_width(cx: &mut TestAp
                 app.update(cx, |window, cx| {
                     assert_workspace_header_alignment(window, "add-connection");
                     assert_workspace_divider_alignment(window, cx);
+                    let search = bounds_of(window, "Search tables");
+                    let run = bounds_of(window, "run");
+                    assert!(
+                        (search.center().y - run.center().y).abs() <= gpui_kit::px(0.5),
+                        "The table search {search:?} must share the Run button centerline {run:?}"
+                    );
                 });
                 app.click(cx, "show-sign-ins");
                 app.update(cx, |window, cx| {

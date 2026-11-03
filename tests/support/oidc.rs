@@ -167,14 +167,13 @@ impl Provider {
         Self { issuer, state }
     }
 
-    /// A sign-in configuration for this provider. Tokens can go to 127.0.0.1.
+    /// A sign-in configuration for this provider.
     pub fn sign_in(&self, name: &str) -> SignIn {
         SignIn {
             name: name.into(),
             issuer: self.issuer.clone(),
             client_id: CLIENT_ID.into(),
             scopes: vec!["kyuubi".into()],
-            allowed_hosts: vec!["127.0.0.1".into()],
             ..SignIn::default()
         }
     }
@@ -500,14 +499,13 @@ impl FixtureProvider {
         }
     }
 
-    /// A sign-in for the fixture provider. Tokens can go to 127.0.0.1.
+    /// A sign-in for the fixture provider.
     pub fn sign_in(&self, name: &str) -> SignIn {
         SignIn {
             name: name.into(),
             issuer: self.issuer.clone(),
             client_id: CLIENT_ID.into(),
             scopes: vec!["kyuubi".into()],
-            allowed_hosts: vec!["127.0.0.1".into()],
             ..SignIn::default()
         }
     }

@@ -1,4 +1,4 @@
-//! The assistant state of a window: the Codex service, the live state of
+//! The assistant state of a window: the harness service, the live state of
 //! each conversation, and the drafts of the message field.
 use super::*;
 
@@ -122,6 +122,33 @@ pub(in crate::ui) struct ThreadRun {
     pub notes_read_while_pending: bool,
     /// Catalog tool calls that wait for the cache or for a refresh.
     pub catalog_calls: Vec<super::super::assistant_tools::PendingCatalogCall>,
+    /// Messages that wait for the running turn to end, oldest first. A
+    /// harness that cannot add a message to a running turn gets each one as
+    /// a new turn. The transcript already shows them.
+    pub queued_messages: VecDeque<QueuedMessage>,
+    /// The transcript entry of the queued message whose turn starts next.
+    pub starting_entry: Option<Uuid>,
+    /// The reply message that streams into the last reply entry. A turn of
+    /// Claude Code can have several reply messages in one entry.
+    pub reply_message: Option<ReplyMessage>,
+}
+
+/// A message that waits for the end of the running turn, with the
+/// transcript entry that shows it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::ui) struct QueuedMessage {
+    pub entry: Uuid,
+    pub text: String,
+}
+
+/// Where a reply message starts in its transcript entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::ui) struct ReplyMessage {
+    pub entry: Uuid,
+    /// The byte offset of the message in the text of the entry.
+    pub start: usize,
+    /// Whether the harness sent the full text of the message.
+    pub completed: bool,
 }
 
 /// The conversation state that the thread list and the assistant toggle show.
@@ -228,6 +255,8 @@ pub(in crate::ui) struct AssistantState {
     pub open: bool,
     pub status: Status,
     pub service: Option<Service>,
+    /// The harness that `service` runs.
+    pub harness: Option<AssistantHarness>,
     pub snapshot: Option<HarnessSnapshot>,
     /// A closed conversation shown without opening a query tab.
     pub browsed_thread: Option<String>,
@@ -268,6 +297,12 @@ pub(in crate::ui) struct AssistantState {
     pub idle_since: Instant,
     /// The steps that show streamed replies run.
     pub revealing: bool,
+    /// Saves transcripts next to the workspace. `None` in the demo.
+    pub store: Option<crate::assistant::transcripts::TranscriptStore>,
+    /// What Qrow knows about the saved transcript of each conversation.
+    pub local: BTreeMap<String, LocalTranscript>,
+    /// Saves the changed transcripts after a short delay.
+    pub save_transcripts: Option<Task<()>>,
 }
 
 impl AssistantState {
@@ -276,6 +311,7 @@ impl AssistantState {
             open: false,
             status: Status::Idle,
             service: None,
+            harness: None,
             snapshot: None,
             browsed_thread: None,
             transcripts: BTreeMap::new(),
@@ -301,12 +337,16 @@ impl AssistantState {
             idle_stop: None,
             idle_since: cx.background_executor().now(),
             revealing: false,
+            store: None,
+            local: BTreeMap::new(),
+            save_transcripts: None,
         }
     }
 
     /// Stops Codex in the background. The window does not wait.
     pub fn stop(&mut self) {
         self.idle_stop = None;
+        self.harness = None;
         if let Some(mut service) = self.service.take() {
             service.stop();
         }
@@ -537,6 +577,39 @@ impl Qrow {
             .values()
             .map(ThreadStatus::of)
             .fold(first, Ord::max)
+    }
+
+    /// The harness of a conversation. A tab without one uses the selected
+    /// harness.
+    pub(in crate::ui) fn conversation_harness(&self, thread_id: &str) -> AssistantHarness {
+        self.assistant
+            .conversation(thread_id)
+            .map_or(self.settings.assistant.harness, |conversation| {
+                conversation.harness
+            })
+    }
+
+    /// Whether the selected harness keeps the conversation, so that Qrow can
+    /// send its next message. The others show only their saved copy.
+    pub(in crate::ui) fn conversation_runs(&self, thread_id: &str) -> bool {
+        self.conversation_harness(thread_id) == self.settings.assistant.harness
+    }
+
+    /// What the running harness can do. Before its first snapshot, the
+    /// features follow the kind of harness.
+    pub(in crate::ui) fn harness_features(&self) -> crate::assistant::HarnessFeatures {
+        self.assistant_state
+            .snapshot
+            .as_ref()
+            .map(HarnessSnapshot::features)
+            .unwrap_or_else(|| {
+                let codex = self.settings.assistant.harness == AssistantHarness::Codex;
+                crate::assistant::HarnessFeatures {
+                    steer: codex,
+                    history: codex,
+                    sign_in: codex,
+                }
+            })
     }
 
     pub(super) fn mode_target(&self) -> Option<ModeTarget> {

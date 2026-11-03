@@ -1,10 +1,22 @@
 # Connections
 
-A connection profile stores the settings for a Kyuubi endpoint. Each connection
+A connection profile stores the settings for a Kyuubi, Postgres, or Trino server. Each connection
 owns one or more query tabs. Select a profile in the Connections sidebar to show
 its tabs. Qrow restores the last tab selected for that connection. To show the
 Connections sidebar, click the plug button at the left end of the status
 bar, press **⌘B**, or select **View → Connections**.
+
+The connection icon identifies the connection type. Kyuubi connections use the
+Spark icon. Postgres connections use the elephant icon. Trino connections use the rabbit icon.
+
+Drag a connection name to change the order of the connections. Drop above or
+below the center of another connection row. A line shows the new position.
+Qrow saves the order and restores it at the next start. Reordering keeps the
+current connection, query tabs, sessions, and expanded schemas.
+
+You can also select **Move up** or **Move down** in the connection context
+menu. With a connection row selected in the tree, press **⌥↑** or **⌥↓**.
+Schema, table, and column rows cannot be reordered.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
@@ -40,14 +52,17 @@ and **Assistant**. The **Assistant** page shows only while the
 search field above the pages to find a field.
 
 1. Click **+** beside Connections.
-2. On the **General** page, enter a name for the profile.
-3. Enter the Kyuubi host and port.
-4. Turn on **TLS** if the server accepts TLS on this port.
-5. Select the authentication:
+2. On the **General** page, select **Connection Type**.
+3. Enter a name, the server hostname or IP address, and the port.
+4. For Kyuubi or Trino, turn on **TLS** if the server accepts TLS on this port.
+   For Postgres, select a [TLS Mode](#use-postgres).
+5. For Kyuubi, select the authentication:
    - **Password**: enter your LDAP username and password.
-   - **Sign-in (OpenID Connect)**: select a
+   - **Sign-in**: select a
      [sign-in](#sign-in-with-openid-connect) and enter the database username.
-6. Enter the initial database.
+
+   For Postgres, enter the role name and password. For Trino, see [Use Trino](#use-trino).
+6. Enter the initial database. For Trino, enter the initial catalog and optional schema.
 7. Enter session parameters as a JSON object with string values.
 8. Optional: To [browse the schemas](#browse-schemas) of the connection, go
    to the **Catalog** page and set **Schema Refresh** to **Manual** or **While
@@ -70,6 +85,306 @@ For example, a session parameter can select an engine-sharing subdomain:
 
 macOS can request Keychain access when you save the password.
 
+## Export transfer policy
+
+Open **Connection Settings → Export** to choose a transfer preset for Kyuubi
+or Trino. Existing profiles use **Balanced**. For Postgres, choose the number
+of exports that can run at the same time.
+Preset values stay visible in read-only fields. Choose **Custom** to edit
+the values. A preset change keeps unsaved Custom values in the open form.
+Transfer-policy changes do not reconnect an otherwise unchanged session.
+
+| Setting | Conservative | Balanced | Fast |
+| --- | --- | --- | --- |
+| Kyuubi incremental collect | On | Inherit | Inherit |
+| Estimated Kyuubi data per request | 4 MiB | 16 MiB | 32 MiB |
+| Kyuubi speed limit | 20 MB/s | Off | Off |
+| Trino spooled results | Off | Serial | Parallel |
+| Exports at the same time per connection | 1 | 1 | 2 |
+
+**Custom** can select incremental collect as **Inherit**, **On**, or **Off**.
+Its Kyuubi request estimate is from 1 to 32 MiB. Its speed limit is from 0 to
+1000 MB/s. The fields show the units as you edit the values. Zero disables the
+speed limit. For Trino, select **Spooled Results**
+as **Off**, **Serial**, or **Parallel**. Set the export count from 0 to 255
+for each connection. Zero disables the count limit. The shared memory budget
+can admit fewer exports than this count. The count covers downloads, snapshot exports, retained-result
+exports, and **Copy as**. A file export holds its slot until publication or
+temporary-file cleanup ends. Admission occurs after you choose a file and
+before sign-in or SQL submission.
+
+Kyuubi export requests use the widest owned row seen so far and a 25 percent
+margin. Later rows can be wider. The 64 MiB response and allocation limits
+still apply. Normal preview requests remain limited to 1000 rows.
+The speed limit measures newly committed spool bytes in decimal MB per
+second. It excludes query execution time and rows already in the preview.
+A request can exceed the rate briefly. Cancellation interrupts the wait.
+
+An explicit incremental-collect choice changes the setting in the current
+session for one new export. Qrow restores and checks the previous setting
+after it submits the statement. If restoration fails, the export stops and
+the session reconnects on the next explicit Run. SQL does not run again
+automatically. The override supports up to 4096 explicit session settings
+and 1 MiB of decoded configuration text.
+**Inherit** makes no configuration requests. SET, RESET, and SQL with
+`${...}` substitution also inherit, to preserve their session behavior.
+An **All rows** export of a live cursor keeps the execution strategy that
+was selected when the original query started. The download uses the
+connection's transfer settings.
+
+Incremental collect can reduce Spark driver result memory. It can also
+increase execution time. Server policy can override profile settings.
+`kyuubi.engine.spark.operation.incremental.collect` takes precedence over
+`kyuubi.operation.incremental.collect`. The administrator's
+`kyuubi.operation.result.saveToFile.enabled` option conflicts with
+incremental collect. It needs shared staging storage and server cleanup.
+Qrow does not configure result staging or Arrow results.
+
+## Use Postgres
+
+Select **Postgres** in **Connection Type**. The default port is 5432. The initial
+database is the database that Postgres opens for the session. Existing profiles
+without a connection type continue to use Kyuubi.
+
+Enter session settings as a JSON object with string values. For example:
+
+```json
+{"search_path": "public", "TimeZone": "UTC"}
+```
+
+Postgres checks each setting when the session opens. If a setting is invalid,
+the connection fails and names the setting. Passwords use macOS Keychain.
+Postgres connections do not use OpenID Connect sign-ins.
+
+Select a **TLS Mode**:
+
+- **Require TLS** encrypts the connection without a certificate or hostname
+  check. New Postgres connections use this mode. It does not check the server
+  identity. You do not need to add a certificate authority to Keychain.
+- **Verify certificate** encrypts the connection and checks the certificate
+  and hostname against the system trust store.
+- **Disabled** connects without encryption. A server that requires TLS rejects
+  this mode.
+
+Both TLS Modes fail if the server does not accept encryption. They do not
+retry without TLS. Existing Postgres profiles keep their earlier choice.
+Profiles with the old TLS checkbox enabled use **Verify certificate**.
+
+Each tab has a separate Postgres session. Temporary tables and transaction
+state stay with that tab until the session closes. Cancel stops a query before
+submission, or sends a Postgres cancellation request for active work. Qrow waits
+for the cancellation socket to close and for the server to report that it is
+ready for the next command before it reuses the session. If that
+request fails or times out, reconnect before you run another query.
+SQL errors usually keep the session connected. After an
+error in an explicit transaction, run `ROLLBACK` before other work.
+
+Each Postgres server message has a 128 MiB transport limit. Qrow checks its
+declared length before the driver reads the body. A message above this limit
+closes the session. Reconnect before you run another query. The preview limits
+in [results](results.md) still apply to rows that Qrow keeps.
+
+The schema browser shows user schemas, tables, partitioned tables, views,
+materialized views, and foreign tables. It reads column types and comments.
+Names inserted into SQL use double quotes. The assistant receives `postgres`
+as the connector type in its connection context.
+For automatic relation context, the assistant uses `public` for unqualified
+names. Use qualified names when a different `search_path` applies.
+
+Result column types keep numeric precision, numeric scale, and timestamp
+precision from the server. Before a query with result columns executes,
+Qrow reads DateStyle, IntervalStyle, and TimeZone for [Parquet export](results.md#parquet).
+These read requests do not change the session settings. Commands without
+result columns do not need these requests.
+
+### Postgres limits
+
+- Query results use the server's text format, including arrays, JSON, and dates.
+- Qrow shows the first page while it reads the result stream. The tab stays
+  busy until the server finishes. It keeps up to the result limits in a
+  temporary file and checks row sizes before retention. Later pages read that
+  file. It reads and discards rows beyond the limits without cancelling SQL.
+- The client library can buffer one row before Qrow checks the row's cell
+  sizes. The transport ceiling applies before this allocation. The preview
+  retention limit does not limit the memory for one accepted server message.
+- Direct exports limit SQL text to 1 MiB. Schema descriptions have at most
+  4,096 columns and 1,024 bytes for each name. Qrow reads custom type names
+  without collecting enum labels or composite members. It clears retained
+  protocol buffers before the export starts. This keeps the same session
+  and transaction.
+  Export data frames have a 16 MiB ceiling. Diagnostic, authentication,
+  notification, and session-status frames have a 1 MiB ceiling before decoding.
+- **Response Timeout** bounds connection setup, session settings, and cancellation.
+  It does not set a query execution timeout. Use the `statement_timeout` session
+  setting when you need one.
+- A SQL error in an explicit transaction keeps that transaction in the failed
+  state. Qrow does not run `ROLLBACK` automatically.
+
+## Use Trino
+
+Select **Trino** in **Connection Type**. Enter the hostname and port of the
+coordinator. The default port is 8080. **TLS** selects HTTPS and checks the
+server certificate and hostname against the system trust store.
+
+Enter **Initial Catalog**, for example `tpch`. Enter **Initial Schema** if you
+want to use unqualified table names, for example `tiny`. The schema is optional.
+The schema browser reads the initial catalog. SQL names from the browser include
+the catalog, schema, and table, with double quotes.
+
+For **Password** authentication, enter the username. Leave the password blank
+if the server accepts a username without a password. Turn on **TLS** when you
+enter a password. Passwords use macOS Keychain.
+
+For **External** authentication, enter the Trino username and turn on **TLS**.
+The connection's host is the coordinator. You do not need a saved sign-in or
+an allowed-host list. This uses the coordinator's existing OAuth2 configuration,
+like DBeaver or DataGrip. See [Trino browser sign-in](#trino-browser-sign-in).
+
+Existing Trino connections that use direct OpenID Connect keep their saved
+**Sign-in** option. The coordinator must accept that provider's access token.
+New Trino connections offer **Password** and **External**.
+
+Enter session properties as a JSON object with string values. For example:
+
+```json
+{"query_max_run_time": "10m", "join_distribution_type": "AUTOMATIC"}
+```
+
+Each tab has separate session settings. `USE`, `SET SESSION`, `RESET SESSION`,
+prepared statements, roles, and transaction commands update that tab. A
+keep-alive does not replace its result cursor. Disconnect cancels an active
+query and sends `ROLLBACK` for an open transaction. The assistant receives
+`trino` as the connector type and the initial catalog and schema as context.
+
+Trino result text keeps the server's timestamp precision. Qrow declares
+support for variable-precision date and time types in the client protocol.
+For Parquet timestamp limits, see [Parquet](results.md#parquet).
+
+### Trino export spooling
+
+For an export rerun, Trino can send encoded result segments from storage.
+Set **Transfer Preset** on the connection. Conservative uses classic results.
+Balanced downloads one segment at a time. Fast can download the next segment
+while Qrow reads the current segment. Normal Run and schema queries keep
+classic results. If the server returns classic rows, the same export continues.
+Qrow does not submit the SQL again.
+
+Qrow supports `json` and `json+lz4`. Each segment has a 32 MiB limit for both
+received and decoded bytes. Parallel transfer keeps at most two segments.
+Qrow checks row offsets, row counts and the result schema. It acknowledges a
+segment only after the local spool accepts all its rows. Failed acknowledgements
+add a warning to the query log. They do not fail an export whose rows are safe.
+
+Storage requests use a separate HTTPS client. It has no coordinator password,
+sign-in token or session headers. Qrow permits at most two storage redirects.
+It removes storage headers when a redirect changes origin. HTTP downgrade,
+user information in URLs and credential headers are rejected. A failed segment
+GET can have three attempts. Trino 483 sends expiry without a time-zone
+offset. For those values, Qrow uses storage or coordinator rejection to detect
+expiry. It checks expiry with an explicit offset before a request. Invalid metadata, JSON,
+LZ4 or byte sizes stop the export. Qrow never retries the SQL submission.
+
+Spooling reserves 512 MiB of transport memory before SQL starts. Classic
+transfer reserves 192 MiB. The producer reserves another 128 MiB. The shared
+1 GiB export memory limit can reject another export even when the profile
+permits two. Cancellation closes storage requests and joins the segment
+threads within the same cleanup deadline. A thread that ends later keeps its
+memory reservation until it stops. Failed cleanup closes the session.
+
+### Trino limits
+
+- The schema browser reads one catalog. It shows schemas, tables, views, and
+  column types. It does not read table or column comments.
+- Qrow shows the first page before the query ends. Normal Run keeps up to
+  100,000 rows or approximately 64 MiB in a temporary file. It reads later rows
+  without keeping them before the tab becomes ready. The result limits do not
+  reduce server work. Direct export reads all rows into the export spool.
+- Each coordinator HTTP response has a 16 MiB limit before JSON decoding. The HTTP/1 read
+  buffer has a 1 MiB limit. Qrow keeps a raw JSON page and decodes one row at a
+  time. Decoding and one response page use memory in addition to the retained
+  result limits. Direct fetches contain at most 1,000 rows and 48 MiB, with one
+  pending row of up to 16 MiB. See [Export downloaded rows](results.md#export-downloaded-rows).
+- A schema can have 4,096 columns. Column names have a 1 KiB limit, type names
+  have a 4 KiB limit, and their combined text has a 1 MiB limit. Session state
+  can have 1,024 settings and 256 KiB of text. Each setting or encoded prepared
+  statement has a 64 KiB limit. Catalog, schema and transaction names have a
+  1 KiB limit. Expanded request session headers have a 512 KiB limit. Rejected
+  session updates do not change the saved client state.
+- Direct-export SQL has a 1 MiB limit. User names have a 1 KiB limit and
+  credentials have a 64 KiB limit.
+- Nested values use JSON text. Binary and temporal values use the server's
+  JSON representation. Nulls remain distinct from empty strings.
+- **Response Timeout** bounds each HTTP request. It does not bound total query
+  time. Use the `query_max_run_time` session property for that limit.
+- After the first executing GET, a separate task sends `HEAD` heartbeats while
+  result reads or spool writes pause. It does not fetch rows or apply session
+  updates from HEAD. The task stops before the session runs another statement.
+  Heartbeats use cached credentials. Unsupported HEAD requests or an expired
+  credential can let the server's client timeout expire during a pause.
+- Qrow retries a coordinator request only after an explicit authentication rejection. It
+  does not retry an uncertain network failure or follow HTTP redirects. A result URL
+  must use the same scheme, hostname, and port as the coordinator. Configure
+  reverse proxies to return URLs for that origin.
+- Cancellation sends HTTP `DELETE` to the captured query cursor. Cleanup uses
+  the established coordinator address and cached credentials. It does not
+  refresh tokens or start browser sign-in. Cleanup waits for the current
+  response read to stop, even when `DELETE` succeeds. Repeated cancellation
+  uses the same cleanup result and deadline. If cleanup cannot finish within
+  two seconds, Qrow closes the session and the next Run reconnects.
+- Cancellation closes raw sockets during TLS or a stalled response. It cannot
+  stop a system DNS lookup that has already started. A late connection is
+  rejected before TLS or authentication.
+- If submission succeeds but no query URL arrives, Qrow cannot send the server
+  cancel. The statement can continue until its server timeout. Run does not
+  repeat the SQL automatically. Cancellation cannot undo completed SQL.
+- Client certificates and Kerberos are not supported. Trino spooling supports
+  JSON and LZ4 only. Zstandard is not supported.
+- Automatic assistant relation context uses the initial schema. It does not
+  track `USE` commands. Use qualified names after a schema change.
+
+### Trino browser sign-in
+
+Use **External** when the Trino coordinator already has OAuth2 authentication.
+The coordinator sends the browser to the identity provider, handles its
+callback, and exchanges the authorization code. The coordinator keeps its
+client secret. You do not need a new identity-provider client, issuer URL,
+client ID, client secret, local callback listener, or saved sign-in.
+
+1. In a Trino connection, select **External** in **Authentication**.
+2. Enter the coordinator hostname, HTTPS port, and database username. Turn on
+   **TLS**, then save.
+3. Select the connection in **Connections**. Selection does not start sign-in.
+4. Run a query. If Trino requires authentication, complete sign-in in the browser.
+   A schema refresh also starts sign-in when necessary.
+
+Other connection types cannot use **External**.
+
+The query toolbar shows **Waiting for Trino authentication…** while a query
+or schema refresh waits for sign-in. Queries show **Waiting for browser sign-in…**.
+Click **Cancel** to stop the active query's wait, even before a query cursor exists;
+other requests for the connection can continue their shared authentication.
+A red connection dot opens Activity for that connection when authentication fails.
+
+Trino tokens are opaque. Qrow keeps them only in memory. Sessions of the same
+connection and username share tokens. Different connection IDs, endpoints,
+usernames, and authentication settings use separate caches. A change to these
+settings discards the affected tokens. Restarting Qrow also clears this cache.
+Trino external authentication does not add an entry to **Sign-Ins**.
+Saved connections from the earlier Trino sign-in setup keep external authentication;
+the next save removes the obsolete shared Trino sign-in records.
+
+Trino can renew authentication without opening the browser. The sign-in has
+a two-minute deadline, separate from **Response Timeout**. Temporary polling
+failures can retry within this deadline. Rejected replacement tokens have a
+bounded retry count. Query cancellation, disconnection, and transaction
+cleanup do not start browser sign-in.
+
+Challenge and polling URLs must use the configured coordinator's HTTPS
+scheme, hostname, and port. URLs with credentials or fragments are rejected.
+Each polling continuation has the same checks. Configure a gateway to return
+URLs for that origin. Browser navigation can continue to the identity
+provider; the database HTTP client sends no credentials to it.
+
 ## Sign in with OpenID Connect
 
 A sign-in lets connections authenticate with an access token from an OpenID
@@ -78,7 +393,12 @@ browser. Several connections can use the same sign-in. Each connection keeps
 its own host, database username, and session settings. Kyuubi checks that the
 signed-in identity can use the database username of the connection.
 
-The **Sign-Ins** sidebar shows each sign-in with its account. To open it,
+The **Sign-Ins** sidebar shows each saved sign-in with its type, **OIDC**.
+Select a connection to start its sign-in when necessary. A query also starts
+sign-in when it needs authentication. The sidebar has no **Sign in…** button.
+Click a sign-in row to see its account and settings. Its status dot is part
+of the row. In **Connections**, click a red error dot to open **Activity**
+for the connection whose sign-in failed. To open the sidebar,
 click the key button at the left end of the status bar, or select
 **View → Sign-Ins**. Click the button again to hide the sidebar. The button
 shows a yellow dot when sign-ins need attention: a connection uses a sign-in
@@ -91,16 +411,17 @@ sign-ins need attention.
 1. Open the **Sign-Ins** sidebar and click **+**. In Connection Settings, you
    can also click **New sign-in…** at the bottom of the **Sign-In** list. The
    connection then uses the new sign-in.
-2. Enter a name, the issuer URL, and the client ID.
+2. Select **OpenID Connect** in **Provider**. Enter a name, the issuer URL,
+   and the client ID.
 3. Enter other scopes if the server requires them. Qrow always requests
    `openid`, `profile`, and `email`.
-4. Enter the database hosts that can receive the access tokens.
-5. Click **Save**, or press **Enter** or **⌘Enter**.
+4. Click **Save**, or press **Enter** or **⌘Enter**.
 
 The provider must register Qrow as a public client without a client secret.
 The client must accept the redirect URI `http://127.0.0.1:PORT/callback`. By
 default, Qrow uses an available port. If the provider accepts only some ports,
-enter them in **Callback Ports**. Qrow tries them in order and uses the first
+enter them in **Callback Ports**, separated by commas, for example `8765, 8766`.
+Qrow also accepts spaces. It tries the ports in order and uses the first
 port that no other program uses. The provider must support the
 authorization-code flow with PKCE (`S256`). Add the `offline_access` scope if
 the provider issues refresh tokens only with it. Use **Resource** only if the
@@ -114,7 +435,7 @@ To give a sign-in to a colleague, for example in a Slack message:
 2. Paste the text into the message.
 
 The text contains the name, the issuer, the client ID, the scopes, the
-resource, the database hosts, and the callback ports. It does not contain
+resource, and the callback ports. It does not contain
 your account or your tokens.
 
 To add a sign-in that a colleague sent to you:
@@ -122,8 +443,8 @@ To add a sign-in that a colleague sent to you:
 1. Copy the text of the message.
 2. Open the **Sign-Ins** sidebar and click the paste button beside **+**.
 3. Sign-in Settings opens with the values. Make sure that you trust the
-   issuer and the database hosts. Qrow sends your access tokens to these
-   hosts.
+   issuer. Qrow sends access tokens only to connections where you select this
+   sign-in.
 4. Click **Save**.
 
 Qrow ignores other text of the message around the settings. If a sign-in
@@ -134,13 +455,17 @@ database username, so a colleague must add their own connections.
 
 ### Sign in and use a sign-in
 
-Click **Sign in…** on the row of the sign-in. Qrow opens the default browser.
-Finish the sign-in there. Qrow waits up to five minutes. Click **Cancel** to
-stop. The row then shows the email or name of the account.
+Select a connection that uses the sign-in. Qrow opens the default browser
+when authentication is necessary. Finish the sign-in there. Qrow waits up
+to five minutes. Click **Cancel** to stop. The sidebar keeps the type **OIDC**.
 
-Click a row to open **Sign-In Settings**. The **Account** field shows the
-status and the actions for the account on the same row. The actions are on
-the right. Right-click a row for **Sign in…**,
+Click a row, including its status dot, to open **Sign-In Settings**.
+The dot has no separate action. The disabled **Account** field shows
+the account value or the sign-in status, such as **Not signed in**.
+You cannot edit or focus the field. Waiting and error details appear below it.
+Click **Sign out** beside the field to unlock the authentication settings.
+When signed out, click **Sign in…** beside the field to open the browser.
+Right-click a row for **Sign in…**,
 **Cancel sign-in**, **Sign out**, or **Retry**, and for **Edit**,
 **Copy settings**, and **Delete**.
 
@@ -148,21 +473,25 @@ The **Connections** field shows the number of connections that use the
 sign-in. Neutral tags show the names below the heading. The tags wrap when
 they do not fit on one line.
 
-To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
-**Authentication**, and select the sign-in in the **Sign-In** list. The host of the connection must be
-one of the database hosts of the sign-in. Qrow does not send a token to
-another host. Turn on **TLS** when the server accepts it. Without TLS, anyone
+To use a sign-in, edit a connection, select **Sign-in** in
+**Authentication**, and select the sign-in in the **Sign-In** list. The list
+shows the type beside each name in smaller, muted text.
+Selecting the sign-in authorizes the connection host to receive its access
+tokens. Qrow rejects requests from an unconfigured connection or old connection
+settings after a host change. Turn on **TLS** when the server accepts it. Without TLS, anyone
 on the network path can read the access token and use it until it expires, so
 use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 
+Sign-In Settings shows these account states:
+
 | State | Recovery |
 | --- | --- |
-| **Not signed in** | Click **Sign in…**. |
+| **Not signed in** | Select the connection or run a query. |
 | **Waiting for the browser…** | Finish the sign-in in the browser, or click **Cancel**. |
 | The account email or name | No action. |
-| **Expired · Sign in again** | Click **Sign in…**. |
+| **Expired · Sign in again** | Select the connection or run a query. |
 | **Cannot reach the provider** | Select **Retry**. Qrow keeps the account. |
-| **The last action failed** | Open Sign-in Settings to read the error, then try again. |
+| **The last action failed** | Click the red dot to read the connection error in Activity, then try again. |
 
 When you run a query and its connection needs a new sign-in, Qrow opens the
 browser sign-in. This occurs when the sign-in is not signed in, when it has
@@ -204,7 +533,11 @@ access token expires.
 
 An open session continues after its access token expires, if the server
 permits it. Cancellation opens a second transport, so it gets a new access
-token for the account that opened the session.
+token for the account that opened the session. All-row export cancellation
+has a cleanup deadline. It uses the credential that authenticated the
+session, so it does not wait for a token refresh. If that token has expired
+and cancellation fails, the worker interrupts the transport and discards
+the session. The server can continue work that it did not cancel.
 
 **Sign out** deletes the tokens from Keychain. It does not end the session at
 the provider, and it does not revoke the tokens. Sign out is disabled while a
@@ -253,7 +586,7 @@ Settings. The page shows only while the assistant is on.
 
 The notes can have up to 16 KB. Near the limit, the help text below the field
 shows the number of bytes. Qrow saves the notes as plain text in the
-workspace and sends them to Codex. Do not put passwords, tokens, or other
+workspace and sends them to the assistant harness. Do not put passwords, tokens, or other
 secrets in them. [Assistant](assistant.md#connection-notes) tells when Qrow
 sends the notes.
 
@@ -316,8 +649,7 @@ When the connection [shows schemas](#browse-schemas), the form shows below
 the schema mapping how many dbt models, seeds, snapshots, and sources match
 tables in the catalog. A bar shows the percentage, so that rules that find
 almost no tables are easy to see. A match has the mapped schema and the alias
-or identifier of the model. Qrow does not use the database of a model,
-because Spark has no level above schemas. Ephemeral models do not count. The
+or identifier of the model. Qrow does not use the database of a model. Ephemeral models do not count. The
 summary follows the rules as you type them. An incorrect rule shows its error
 in the place of the summary.
 
@@ -332,6 +664,13 @@ source builds shows its kind after its name, for example `dbt incremental` or
 of the dbt description, cut to a few lines. The tooltip shows the Markdown of
 the description, for example code and bold text. A cut description has a
 small note below it that tells you to open the dbt details.
+
+Column tooltips show the column name and then the muted data type.
+Below the heading, the tooltip shows the dbt column
+description with the same Markdown format and length limit. A database
+comment comes before the dbt description. If both have the same text, the
+tooltip shows the text once. Column names use the same letter case rules as
+relation names. Ambiguous matches show no dbt description.
 
 To read the full description, right-click the table and select **Show dbt
 details**. A panel opens at the right side of the window. It shows:
@@ -379,6 +718,10 @@ read long text more easily.
 ### dbt limitations
 
 - A connection can have only one dbt project.
+- Catalog matching ignores letter case. Ambiguous matches with names that differ
+  only by letter case are omitted. Postgres SQL context keeps the case of quoted names
+  and converts unquoted names to lowercase. Its default schema is `public`;
+  use qualified names when another `search_path` applies.
 - Qrow reads only the manifest. It does not resolve Jinja, run dbt, or read
   the YAML or SQL files of the project.
 - Two paths to the same manifest, for example through a symbolic link to its
@@ -438,21 +781,21 @@ connection settings and set **Schema Refresh**, the first field of the
 
 To use the tree:
 
-- Click a connection to select it. This does not expand the connection.
-  The current query's connection stays highlighted.
+- Click a connection to show its query tabs. The tree selects the row
+  and keeps the focus. This does not expand the connection. An accent fill
+  shows the connection of the current query.
 - Click the arrow before a connection to expand or collapse it.
-  This does not select the connection for the query. An outline shows
-  the keyboard position without a second connection highlight.
+  This does not change the connection of the query.
 - Click a schema, a table, or a view to expand or collapse it.
 - To collapse all rows below a connection or a schema, right-click it and
   select **Collapse**. The connection or the schema stays expanded. During
   a search, **Collapse** on a connection also collapses the schemas that
   the search expanded.
-- After you click an arrow or a row below a connection, use the arrow keys to
-  move through the tree, expand rows, and collapse rows. A click on a
-  connection puts the cursor in the SQL editor. The tree highlights a selected
-  schema, table, view, or column only while the tree has the focus.
-  If you collapse a connection, the previous row highlight disappears.
+- After you click a row or an arrow, use the arrow keys to move through the
+  tree, expand rows, and collapse rows. The arrow keys do not change the
+  connection of the query. An outline shows the selected row only while the
+  tree has the focus. Click the SQL editor to type.
+  If you collapse a connection, the previous row outline disappears.
   If you hide the Connections panel, the tree clears its row selection.
 - Point to a row to see its full name when the sidebar cuts it. A tooltip
   also shows the comment of a table, a view, or a column, and the first line
@@ -497,7 +840,10 @@ Per-relation reads can take longer because they send more requests. The same
 setting was added also use **One relation at a time**.
 
 A connection refresh starts with the schemas that Qrow read longest ago.
-The progress row shows the number of schemas that are done. A connection
+The progress row shows the number of schemas that are done. The row is removed
+when the refresh ends, before the session closes. An expanded schema without
+a table list shows **Loading relations…** while Qrow reads its tables and
+views. A schema's loading spinner replaces its relation count. A connection
 with many schemas or tables can need many minutes. To make it faster, hide
 the schemas that you do not use.
 
@@ -534,13 +880,17 @@ had before the refresh. The error shows on the row of the refreshed part:
 
 - A connection: the connection row shows a red dot, also when the
   connection is collapsed. Point to the row to see **Unread error** beside
-  the connection name. The first row under the expanded
-  connection shows the error with **Refresh**. The dot goes away when you view
-  the Activity of the connection. The error text stays until the next refresh
-  starts.
-- A schema, a table, or a view: the row shows a warning icon. Point to the row
-  to read the first line of the error. The first row under the expanded row
-  shows the error with **Refresh**.
+  the connection name. Click the dot to open Activity and read the error.
+  The expanded connection keeps its schemas and has no error or progress row
+  after the refresh ends. The dot goes away when you view Activity.
+  Select **Refresh** from the connection menu to try again.
+- A schema, a table, or a view: the row shows a red status dot. Point to
+  the dot to read the first line of the error. Click it to open Activity for
+  that connection. The dot replaces the schema's relation count while the
+  error is unread. When you view Activity, the dot goes away and the count
+  returns. A later failure shows a new dot. The expanded row
+  keeps its cached data and has no error row. Select **Refresh** from the
+  schema, table, or view menu to try again.
 
 [Activity](activity.md) shows the full error. Click the status dot or select
 **Show activity** from the connection menu to open it. The connection row uses
@@ -587,8 +937,8 @@ Set these fields on the **Catalog** page of the connection settings:
 
 ### Share schemas
 
-Connections that read the same metastore, for example through different
-users or Spark clusters, can share one schema catalog. Qrow then keeps one
+Connections that read the same database catalog, for example through different
+users, can share one schema catalog. Qrow then keeps one
 copy of the schemas for all of them, and a refresh of one connection fills the
 tree of each connection.
 
@@ -602,8 +952,9 @@ To share a catalog:
 4. Open the settings of each other connection, select the shared catalog in
    **Schema Catalog**, then select **Save**.
 
-The connections of a shared catalog must read the same metastore with the
-same permissions and the same Spark catalog. Qrow cannot check this.
+The connections of a shared catalog must use the same connection type and read
+the same schemas with the same permissions. Kyuubi connections must also use
+the same metastore and Spark catalog. Qrow cannot check this.
 
 For a connection that uses a shared catalog:
 
@@ -694,8 +1045,8 @@ not matter.
 - If **Visible Schemas** is empty, the tree shows all schemas.
 - **Hidden Schemas** hides a schema also when **Visible Schemas** matches it.
 
-For example, `sales_*, ops` in **Visible Schemas** and `*_tmp` in **Hide
-schemas** show `sales_eu` and `ops`, but not `sales_tmp`.
+For example, `sales_*, ops` in **Visible Schemas** and `*_tmp` in **Hidden
+Schemas** show `sales_eu` and `ops`, but not `sales_tmp`.
 
 When you save new patterns, the tree hides schemas at once. A connection
 refresh skips hidden schemas that it has not started to read. A schema that you
@@ -713,14 +1064,16 @@ use.
 - The tree does not show which columns are partition columns. HiveServer2 does
   not report this.
 - Qrow does not save which rows are expanded.
-- Qrow cannot stop a refresh while it opens its session or sends a request to
+- For Kyuubi, Qrow cannot stop a refresh while it opens its session or sends a request to
   the server. A wait for a server answer uses the connection's **Response
-  timeout**. Thus, a refresh can take longer than its **Refresh Timeout**.
-- One catalog request can return at most 200,000 rows or 64 MB. If a schema
+  Timeout**. Thus, a refresh can take longer than its **Refresh Timeout**.
+- One Kyuubi catalog request can return at most 200,000 rows or 64 MB. If a schema
   exceeds this limit with **Whole schema**, use **One relation at a time**.
   The limit still applies to each table request. These limits apply after
   the server creates its result. They do not limit Spark driver memory.
-- Per-relation reads reduce the column result size. The table list still reads a
+- A Postgres catalog request uses the [Postgres result limits](#postgres-limits).
+  If a request exceeds a limit, the refresh fails and keeps the previous catalog.
+- Per-relation reads reduce the column result size. For Kyuubi, the table list still reads a
   whole schema. Server patterns can also match extra names, for example when
   a name contains `_`. Thus, a refresh can still exhaust driver memory.
 - The keyboard cannot reach **New shared catalog…** below the **Schema
@@ -821,7 +1174,7 @@ Passwords are stored in macOS Keychain. They are not part of the
 [workspace file](workspace.md#saved-state). If Qrow cannot read a password,
 edit the connection to save a password again.
 
-Each attempt to connect to one address of the host has a 10-second timeout.
+For Kyuubi, each attempt to connect to one address of the host has a 10-second timeout.
 If the host has more than one address, Qrow tries the next address after a
 failure. Each network write has a 15-second timeout.
 
@@ -854,6 +1207,8 @@ The [worker](../src/worker.rs) owns session work for each tab. Credential access
 and network calls run on background threads. The
 [HiveServer2 connector](../src/connector/hive.rs) sends profile parameters when
 opening a session, then selects the initial database.
+The [Postgres connector](../src/connector/postgres.rs) opens the specified
+database, then applies the session settings.
 
 [Idle maintenance](../src/worker/lifecycle.rs) waits for a command or the next
 session deadline. A lifecycle update wakes the worker so it can recalculate the
@@ -877,11 +1232,11 @@ replace the file, and it does not poll. See the
 
 [Credential storage](../src/storage.rs) uses Keychain service
 `io.qrow.connection`, keyed by profile UUID. Keeping that identifier stable
-preserves access to existing passwords. Sign-in tokens use the separate
+preserves access to existing passwords. Direct OpenID Connect tokens use the separate
 service `io.qrow.sign-in`, keyed by sign-in UUID. Each record holds the
 issuer, client, subject, and token requirements of its tokens.
 
-The [sign-in service](../src/oidc/service.rs) is shared by all tabs. It runs
+The [direct OpenID Connect service](../src/oidc/service.rs) is shared by all tabs. It runs
 one refresh at a time for each sign-in, and discards a result that arrives
 after a sign-out or removal. The [browser flow](../src/oidc/flow.rs) uses
 discovery, PKCE with `S256`, a new `state` and `nonce` for each attempt, and a
@@ -889,3 +1244,8 @@ callback listener bound to `127.0.0.1` that closes after the attempt. The
 [ID token check](../src/oidc/jwt.rs) verifies the signature (RS256, PS256, or
 ES256), issuer, audience, expiry, and nonce. The worker asks for credentials
 before each new session.
+
+The [external authentication service](../src/external_auth.rs) shares in-memory
+tokens and authentication work for Trino connections. The
+[Trino challenge adapter](../src/connector/trino/external.rs) follows the
+[upstream Trino client protocol](https://github.com/trinodb/trino/tree/483/client/trino-client/src/main/java/io/trino/client/auth/external).

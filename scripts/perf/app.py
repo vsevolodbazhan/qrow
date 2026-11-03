@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Launch time, idle memory, and idle CPU of the release app.
 
-Starts target/release/qrow with a temporary workspace that has one synthetic
+Starts target/release/qrow, or with --package the app in the package zip of
+QROW_MACOS_PACKAGE (default: target/macos-package/Qrow-macos.zip), with a temporary workspace that has one synthetic
 connection and an indented query, waits until it reports that its UI is ready,
-lets it idle until the caret of the focused editor stops blinking, and samples
-it with ps and footprint. The physical footprint is the memory that Activity
-Monitor shows. The first launch after a build is slower while macOS checks the
-new executable, so one launch warms up and the median of the next launches
-counts. Prints one QROW_PERF line for each measurement and exits with 1 above a
-budget.
+lets it idle until the caret of the focused editor stops blinking and Qrow
+returns its free memory, and samples it with ps and footprint. The physical
+footprint is the memory that Activity Monitor shows. The first launch after a
+build is slower while macOS checks the new executable, so one launch warms up
+and the median of the next launches counts. Prints one QROW_PERF line for each
+measurement and exits with 1 above a budget.
 """
 import json
 import os
@@ -25,8 +26,9 @@ from environment import target_dir  # noqa: E402
 
 READY = "Qrow GPUI initialized"
 # The caret blinks for 10 seconds after the editor gets focus, and each blink
-# repaints the window.
-IDLE_SECONDS = 12
+# repaints the window. 5 seconds after the window stops drawing, Qrow returns
+# free malloc pages to macOS one time.
+IDLE_SECONDS = 18
 SAMPLE_SECONDS = 5
 # Large regressions only; `./qtest compare` measures small ones.
 BUDGETS = {"app.launch_to_ui": 1500, "app.idle_rss": 400, "app.idle_footprint": 400, "app.idle_cpu": 5}
@@ -104,9 +106,17 @@ def measure(executable):
 
 
 def main():
-    executable = target_dir() / "release/qrow"
-    measure(executable)
-    runs = [measure(executable) for _ in range(LAUNCHES)]
+    with tempfile.TemporaryDirectory() as directory:
+        if sys.argv[1:] == ["--package"]:
+            package = os.environ.get("QROW_MACOS_PACKAGE") or target_dir() / "macos-package/Qrow-macos.zip"
+            subprocess.run(["ditto", "-x", "-k", str(package), directory], check=True)
+            executable = Path(directory) / "Qrow.app/Contents/MacOS/qrow"
+        elif sys.argv[1:]:
+            sys.exit("Usage: app.py [--package]")
+        else:
+            executable = target_dir() / "release/qrow"
+        measure(executable)
+        runs = [measure(executable) for _ in range(LAUNCHES)]
     over = []
     for probe, (_, unit) in runs[0].items():
         value = statistics.median(run[probe][0] for run in runs)

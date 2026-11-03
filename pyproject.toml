@@ -10,6 +10,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "duckdb==1.4.1",
     "ruff==0.16.8",
 ]
 

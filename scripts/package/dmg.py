@@ -30,6 +30,8 @@ BACKGROUND_SIZE = (WINDOW_WIDTH, WINDOW_HEIGHT - TITLE_BAR_HEIGHT)
 # Finder picks the representation that matches the display from one TIFF.
 BACKGROUND_SCALES = (1, 2)
 BACKGROUND_NAME = "background.tiff"
+DETACH_ATTEMPTS = 10
+NORMAL_DETACH_ATTEMPTS = 3
 APPLICATIONS = "Applications"
 ICON_SIZE = 128
 # Icon positions in the window content area: Finder reads Iloc as the center
@@ -208,7 +210,9 @@ def build(app: Path, output: Path, volume_name: str) -> None:
             "hdiutil", "create", "-volname", volume_name, "-srcfolder", str(staging),
             "-format", "UDRW", "-ov", str(image),
         ])
-        device, mount = attach(image)
+        mount = root / "mount"
+        mount.mkdir()
+        device, mount = attach(image, mount)
         try:
             background = mount / ".background" / BACKGROUND_NAME
             write_layout(mount, app_name, Alias.for_file(str(background)).to_bytes())
@@ -224,28 +228,39 @@ def build(app: Path, output: Path, volume_name: str) -> None:
     print(f"Built {output} from {app} for volume {volume_name}.")
 
 
-def attach(image: Path) -> tuple[str, Path]:
+def attach(image: Path, mount: Path) -> tuple[str, Path]:
     """Attach a writable image and return its device and mount point."""
     result = run([
-        "hdiutil", "attach", "-readwrite", "-noverify", "-noautoopen", "-plist", str(image),
+        "hdiutil", "attach", "-readwrite", "-noverify", "-noautoopen", "-nobrowse",
+        "-mountpoint", str(mount), "-plist", str(image),
     ])
     entities = plistlib.loads(result.stdout.encode())["system-entities"]
     mounted = [entity for entity in entities if entity.get("mount-point")]
     if not mounted:
         raise SystemExit(f"Image did not mount: {image}")
-    return mounted[-1]["dev-entry"], Path(mounted[-1]["mount-point"])
+    # APFS mounts a synthesized volume on a second disk. Detach the backing
+    # image, identified by its partition map, rather than that volume.
+    device = next(
+        entity["dev-entry"] for entity in entities
+        if entity.get("content-hint") in {"GUID_partition_scheme", "Apple_partition_scheme"}
+    )
+    return device, Path(mounted[-1]["mount-point"])
 
 
 def detach(device: str) -> None:
     """Detach the image device, with retries while a process holds it."""
-    for _ in range(3):
-        result = subprocess.run(["hdiutil", "detach", device], capture_output=True, text=True)
+    for attempt in range(DETACH_ATTEMPTS):
+        command = ["hdiutil", "detach", device]
+        if attempt >= NORMAL_DETACH_ATTEMPTS:
+            command.insert(2, "-force")
+        result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode == 0:
             return
+        # Disk Arbitration can keep an image busy even after a forced eject.
+        # Retry only EBUSY, and keep persistent failures fatal to packaging.
+        if result.returncode != 16 or attempt == DETACH_ATTEMPTS - 1:
+            raise SystemExit(f"Cannot detach {device}: {(result.stderr or result.stdout).strip()}")
         time.sleep(1.0)
-    forced = subprocess.run(["hdiutil", "detach", "-force", device], capture_output=True, text=True)
-    if forced.returncode != 0:
-        raise SystemExit(f"Cannot detach {device}: {(forced.stderr or forced.stdout).strip()}")
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:

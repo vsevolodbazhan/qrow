@@ -9,6 +9,8 @@ mod dbt;
 mod dbt_details;
 mod demo;
 mod environment;
+mod export_dialog;
+mod format_sql;
 mod output;
 mod profile_view;
 mod result_tabs;
@@ -20,6 +22,7 @@ mod sign_in_view;
 mod status_dot;
 mod status_tooltip;
 mod tab_view;
+mod unit_input;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
@@ -28,7 +31,7 @@ pub use workspace_view::WindowView;
 
 use crate::themes;
 use crate::{
-    connector::hive::HiveConnector,
+    connector::DatabaseConnector,
     logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
         AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
@@ -68,6 +71,8 @@ actions!(
     qrow,
     [
         RunQuery,
+        FormatSql,
+        RunAndExport,
         SendAssistantMessage,
         NewTab,
         CloseTab,
@@ -75,6 +80,7 @@ actions!(
         ShowConnections,
         ShowSignIns,
         ToggleAssistant,
+        ToggleResults,
         ToggleActivity,
         OpenAbout,
         OpenSettings,
@@ -85,6 +91,8 @@ actions!(
         SubmitRename,
         CopyCatalogName,
         InsertCatalogName,
+        MoveConnectionUp,
+        MoveConnectionDown,
         Quit
     ]
 );
@@ -92,6 +100,7 @@ actions!(
 /// Call once before opening a Qrow window.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    cx.set_global(crate::export::Jobs::default());
     themes::init(cx);
     // Wide result sets need a persistent, discoverable horizontal scrollbar.
     Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
@@ -106,8 +115,10 @@ pub fn init(cx: &mut App) {
             "",
         ),
     );
+    cx.bind_keys(results::bindings());
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
+        KeyBinding::new("alt-cmd-l", FormatSql, None),
         KeyBinding::new(
             "cmd-enter",
             SendAssistantMessage,
@@ -116,7 +127,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ShowConnections, None),
-        KeyBinding::new("cmd-j", ToggleAssistant, None),
+        KeyBinding::new("cmd-r", ToggleAssistant, None),
+        KeyBinding::new("cmd-j", ToggleResults, None),
         KeyBinding::new("cmd-shift-u", ToggleActivity, None),
         KeyBinding::new(
             "escape",
@@ -140,6 +152,8 @@ pub fn init(cx: &mut App) {
             InsertCatalogName,
             Some(gpui_kit::base::tree_key_context()),
         ),
+        KeyBinding::new("alt-up", MoveConnectionUp, Some("Connections > Tree")),
+        KeyBinding::new("alt-down", MoveConnectionDown, Some("Connections > Tree")),
     ]);
     set_menus(cx, false);
 }
@@ -188,16 +202,12 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                 ),
             ],
         },
-        Menu {
-            disabled: false,
-            name: "Query".into(),
-            items: vec![MenuItem::action("Run query", RunQuery)],
-        },
     ];
     let mut view = vec![
         MenuItem::action("Connections", ShowConnections),
         MenuItem::action("Sign-Ins", ShowSignIns),
         MenuItem::action("Toggle sidebar", ToggleSidebar),
+        MenuItem::action("Toggle results", ToggleResults),
         MenuItem::separator(),
     ];
     if assistant_enabled {
@@ -242,6 +252,8 @@ struct Tab {
     connected: bool,
     /// The cursor of the live result has more rows.
     more: bool,
+    /// The live result holds all rows of its query.
+    preview_complete: bool,
     pending_page: Option<usize>,
     status: String,
     status_detail: Option<String>,
@@ -250,9 +262,13 @@ struct Tab {
     panel: PanelState,
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
+    result_session: Option<Uuid>,
     next_execution_id: u64,
     /// The SQL of the last Run, for a run after a browser sign-in.
     submitted_sql: Option<String>,
+    cursor: crate::worker::Cursor,
+    replay: Option<Arc<crate::export::spool::Spool>>,
+    download: Option<Arc<crate::worker::Download>>,
     /// The query waits for this browser sign-in, and then runs.
     sign_in_wait: Option<sign_in_view::SignInWait>,
     cancelled_sign_in: Option<Uuid>,
@@ -369,9 +385,21 @@ impl Tab {
         self.live.and_then(|id| self.result(id))
     }
 
+    /// The result holds all rows of its query.
+    fn result_complete(&self, id: u64) -> bool {
+        if self.live == Some(id) {
+            self.preview_complete
+        } else {
+            self.result(id).is_some_and(|result| result.complete)
+        }
+    }
+
     /// The column names and downloaded rows of the live result. A closed live
     /// result has none.
-    fn live_rows<'a>(&self, cx: &'a App) -> (Vec<&'a str>, &'a [crate::model::Row]) {
+    fn live_rows<'a>(
+        &self,
+        cx: &'a App,
+    ) -> (Vec<&'a str>, &'a dyn crate::assistant::broker::ResultRows) {
         match self.live_result() {
             Some(result) => {
                 let data = result.table.read(cx).delegate();
@@ -383,7 +411,7 @@ impl Tab {
                     &data.rows,
                 )
             }
-            None => (Vec::new(), &[]),
+            None => (Vec::new(), &[] as &[crate::model::Row; 0]),
         }
     }
 
@@ -395,6 +423,14 @@ impl Tab {
     /// The live result cannot close while its query runs.
     fn can_close_result(&self, result: u64) -> bool {
         !(self.busy && self.live == Some(result))
+    }
+
+    /// The tables of all result tabs and the spare table.
+    fn result_tables(&self) -> impl Iterator<Item = &Entity<TableState<Results>>> {
+        self.results
+            .iter()
+            .map(|result| &result.table)
+            .chain(&self.spare_table)
     }
 
     fn pinned_results(&self) -> usize {
@@ -455,10 +491,14 @@ struct ResultTab {
     pinned: bool,
     /// The statement that made the result.
     sql: Option<String>,
+    /// The connection that ran the statement.
+    profile: Option<Profile>,
     table: Entity<TableState<Results>>,
     elapsed: Option<Duration>,
     /// The cursor closed before the server sent all rows.
     unfetched: bool,
+    /// The result held all rows of its query when it stopped being live.
+    complete: bool,
 }
 
 impl ResultTab {
@@ -468,13 +508,20 @@ impl ResultTab {
             title,
             pinned: false,
             sql: None,
+            profile: None,
             table,
             elapsed: None,
             unfetched: false,
+            complete: false,
         }
     }
 }
 struct ProfileEditor {
+    transfer: connection_form::transfer::TransferForm,
+    database_type: connection_form::RowSelect,
+    _database_type_subscription: Subscription,
+    postgres_ssl_mode: connection_form::RowSelect,
+    _postgres_ssl_mode_subscription: Subscription,
     profile: Profile,
     fields: Vec<Entity<InputState>>,
     parameters: Entity<TextareaState>,
@@ -638,6 +685,7 @@ pub struct Qrow {
     /// The schema catalogs that several connections share.
     shared_catalogs: Vec<SharedCatalog>,
     tabs: Vec<Tab>,
+    exports: Vec<export_dialog::background::Entry>,
     active: usize,
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
@@ -654,8 +702,9 @@ pub struct Qrow {
     /// Reusable sign-ins. The service owns their tokens and identities.
     sign_ins: Vec<crate::model::SignIn>,
     oidc: Arc<oidc::Service>,
+    external_auth: Arc<crate::external_auth::Service>,
     sign_in_ui: sign_in_view::SignInState,
-    connector: Arc<HiveConnector>,
+    connector: Arc<DatabaseConnector>,
     sidebar: bool,
     /// The panel that the sidebar shows, also while it is hidden.
     sidebar_panel: SidebarPanel,
@@ -667,6 +716,8 @@ pub struct Qrow {
     focus: FocusHandle,
     _quit: Subscription,
     _appearance: Subscription,
+    /// Gives the focus back when the focused element leaves the window.
+    _focus_lost: Subscription,
     _assistant_submit: Subscription,
     pending_quit: Option<(Workspace, storage::SaveReceipt)>,
     quit_warning_open: bool,
@@ -796,7 +847,7 @@ impl Qrow {
             this.finish(cx);
             async {}
         });
-        let assistant_state = assistant_view::AssistantState::new(cx);
+        let mut assistant_state = assistant_view::AssistantState::new(cx);
         let assistant_pane = {
             let qrow = cx.entity();
             cx.new(|cx| assistant_view::AssistantPane::new(&qrow, window, cx))
@@ -811,8 +862,14 @@ impl Qrow {
                 }
             },
         );
+        let external_auth = Arc::new(crate::external_auth::Service::new(environment.browser()));
+        external_auth.configure(&workspace.profiles);
+        let external_wake = wake.clone();
+        external_auth.set_on_change(Arc::new(move || {
+            let _ = external_wake.try_send(());
+        }));
         let oidc = oidc::Service::new(environment.tokens(), environment.trust());
-        oidc.configure(&workspace.sign_ins);
+        oidc.configure(&workspace.sign_ins, &workspace.profiles);
         let status_wake = wake.clone();
         oidc.set_on_change(Arc::new(move || {
             let _ = status_wake.try_send(());
@@ -822,6 +879,24 @@ impl Qrow {
                 themes::apply(SYSTEM_THEME, Some(window), cx);
                 apply_ui_theme(&this.settings, window, cx);
                 cx.notify();
+            }
+        });
+        // A list draws only its rows on the screen, and a closed part draws
+        // no content, so a focused field can leave the window. The keys then
+        // go to no element, and Escape and the close button of a sheet or a
+        // dialog do nothing. The focus goes to the nearest element around
+        // the field that is still in the window, for example the sheet. In
+        // the workspace, like after a failed query hides the focused result
+        // table, the focus goes to the SQL editor, so that typing and
+        // shortcuts like ⌘B continue to operate.
+        let focus_lost = cx.on_focus_lost(window, |this: &mut Self, window, cx| {
+            if let Some(target) = window.focus_lost_restore_target(cx)
+                && !target.contains(&this.focus, window)
+            {
+                window.focus(&target, cx);
+            } else {
+                let editor = this.tabs[this.active].input.clone();
+                editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
         });
         let catalog = catalog_tree::CatalogTree::new(environment.workspace().cloned(), window, cx);
@@ -846,6 +921,13 @@ impl Qrow {
             .filter(|_| saver.is_some() && !demo)
             .map(|workspace| storage::dbt_directory(workspace));
         let dbt = dbt::DbtProjects::new(dbt_directory, wake.clone());
+        // Assistant transcripts follow the same rule as the dbt indexes.
+        assistant_state.store = assistant_view::transcript_store(
+            environment
+                .workspace()
+                .filter(|_| saver.is_some() && !demo)
+                .map(|workspace| workspace.as_path()),
+        );
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
         });
@@ -861,6 +943,7 @@ impl Qrow {
             profiles: workspace.profiles,
             shared_catalogs: workspace.shared_catalogs,
             tabs: vec![],
+            exports: vec![],
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),
@@ -875,8 +958,9 @@ impl Qrow {
             credentials: environment.credentials(),
             sign_ins: workspace.sign_ins,
             oidc,
+            external_auth,
             sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
-            connector: Arc::new(HiveConnector::new(environment.trust())),
+            connector: Arc::new(DatabaseConnector::new(environment.trust())),
             sidebar: true,
             sidebar_panel: SidebarPanel::Connections,
             sidebar_width: px(240. * scale),
@@ -886,6 +970,7 @@ impl Qrow {
             focus: cx.focus_handle(),
             _quit: quit,
             _appearance: appearance,
+            _focus_lost: focus_lost,
             _assistant_submit: assistant_submit,
             pending_quit: None,
             quit_warning_open: false,
@@ -985,7 +1070,7 @@ impl Qrow {
                 this.changed(cx);
             }
         });
-        let table = self.result_table(window, cx);
+        let table = self.result_table(saved.profile, window, cx);
         Tab {
             saved,
             revision: 0,
@@ -1003,6 +1088,7 @@ impl Qrow {
             cancelling: false,
             connected: false,
             more: false,
+            preview_complete: false,
             pending_page: None,
             status: "Not connected".into(),
             status_detail: None,
@@ -1011,7 +1097,11 @@ impl Qrow {
             panel: PanelState::default(),
             output_scroll: ScrollHandle::new(),
             current_execution: None,
+            result_session: None,
             submitted_sql: None,
+            cursor: crate::worker::Cursor::Unavailable,
+            replay: None,
+            download: None,
             sign_in_wait: None,
             cancelled_sign_in: None,
             signed_in_for_run: false,
@@ -1019,16 +1109,30 @@ impl Qrow {
             next_execution_id: 1,
         }
     }
+    /// An empty result table. `profile` is the connection of the query tab.
     fn result_table(
         &self,
+        profile: Option<Uuid>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TableState<Results>> {
         let scale = self.settings.ui_scale;
         cx.new(|cx| {
             let mut results = Results::default();
-            results.set_ui_scale(scale);
-            TableState::new(results, window, cx).col_selectable(false)
+            results.set_ui_scale(scale, cx);
+            results.export = self.settings.export.clone();
+            results.copy_format = self.settings.copy_format;
+            if let Some(profile) = self
+                .profiles
+                .iter()
+                .find(|candidate| Some(candidate.id) == profile)
+            {
+                results.set_export_profile(profile);
+            }
+            // The results delegate owns the selection: a range of cells.
+            TableState::new(results, window, cx)
+                .col_selectable(false)
+                .row_selectable(false)
         })
     }
     fn snapshot(&self, cx: &App) -> Workspace {
@@ -1061,7 +1165,15 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        cx.global::<crate::export::Jobs>().cancel();
         self.sign_in_ui.cancel_all();
+        self.assistant_state.save_transcripts = None;
+        self.save_transcripts(None);
+        if let Some(store) = &self.assistant_state.store
+            && !store.flush(Duration::from_secs(2))
+        {
+            eprintln!("Could not save all assistant transcripts before quit");
+        }
         if self.demo {
             self.assistant_state.shutdown_demo(
                 self.assistant
@@ -1096,10 +1208,23 @@ impl Qrow {
             }
         }
         self.catalog.wait_for_shutdown(deadline);
+        if !cx
+            .global::<crate::export::Jobs>()
+            .cancel_and_wait(Duration::from_secs(2))
+        {
+            eprintln!("An export destination did not stop before the shutdown deadline");
+        }
     }
-    fn active_work_description(&self) -> Option<&'static str> {
+    fn active_work_description(&self, cx: &App) -> Option<&'static str> {
         let assistant = self.assistant_working();
         let query = self.tabs.iter().any(|tab| tab.busy);
+        if cx.global::<crate::export::Jobs>().active_count() > 0 {
+            return Some(if assistant || query {
+                "Exports and other work are still running. Quit now to stop them?"
+            } else {
+                "An export is still running. Quit now to stop it?"
+            });
+        }
         match (assistant, query) {
             (true, true) => {
                 Some("An assistant turn and a query are still running. Quit now to stop both?")
@@ -1114,7 +1239,7 @@ impl Qrow {
         if self.quit_warning_open {
             return;
         }
-        let Some(description) = self.active_work_description() else {
+        let Some(description) = self.active_work_description(cx) else {
             return;
         };
         self.quit_warning_open = true;
@@ -1159,6 +1284,7 @@ impl Qrow {
                                     let _ = quit_anyway.update(cx, |this, cx| {
                                         this.quit_warning_open = false;
                                         this.quit_work_confirmed = true;
+                                        cx.global::<crate::export::Jobs>().cancel();
                                         this.request_quit(window, cx);
                                     });
                                 }),
@@ -1178,7 +1304,7 @@ impl Qrow {
             cx.notify();
             return;
         }
-        if !self.quit_work_confirmed && self.active_work_description().is_some() {
+        if !self.quit_work_confirmed && self.active_work_description(cx).is_some() {
             self.confirm_quit_while_working(window, cx);
             return;
         }
@@ -1267,6 +1393,8 @@ impl Qrow {
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.oidc.configure(&self.sign_ins, &self.profiles);
+        self.external_auth.configure(&self.profiles);
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
         // The UI scale and the Logs font settings change here.
@@ -1323,7 +1451,7 @@ impl Qrow {
         changed |= self.drain_dbt(cx);
         self.activity
             .update(cx, |activity, cx| activity.sync_labels(window, cx));
-        changed |= self.tick_sign_ins(cx);
+        changed |= self.tick_sign_ins(window, cx);
         changed |= self.tick_assistant(window, cx);
         // Catalog tool calls, also the calls that the assistant just made,
         // wait for the catalogs and for their deadline.
@@ -1345,7 +1473,8 @@ impl Qrow {
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let mut activity = Vec::new();
-        let workspace_visible = !self.activity.read(cx).is_open();
+        let workspace_visible =
+            !self.activity.read(cx).is_open() && !self.settings.results_minimized;
         let mut waits = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let events: Vec<_> = tab
@@ -1410,6 +1539,7 @@ impl Qrow {
                     event,
                     workspace_visible && index == self.active,
                     &self.profiles,
+                    u64::from(self.settings.export_replay_limit_mib) * 1024 * 1024,
                     cx,
                 );
                 if let Some((status, detail)) = &waiting {
@@ -1437,6 +1567,7 @@ impl Qrow {
         event: Event,
         active: bool,
         profiles: &[Profile],
+        replay_limit: u64,
         cx: &mut Context<Self>,
     ) {
         let live = tab.live_result().map(|result| result.table.clone());
@@ -1456,10 +1587,96 @@ impl Qrow {
             });
         }
         match event {
+            Event::Cursor { execution, state } => {
+                if tab.current_execution == Some(execution) {
+                    tab.cursor = state;
+                    if state == crate::worker::Cursor::Draining {
+                        tab.busy = true;
+                        tab.more = false;
+                        tab.pending_page = None;
+                        tab.set_status("Downloading export…");
+                    }
+                }
+            }
+            Event::DownloadProgress {
+                execution,
+                rows,
+                bytes,
+                elapsed,
+                percentage,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    let mib = bytes as f64 / (1024. * 1024.);
+                    let seconds = elapsed.as_secs_f64();
+                    let query =
+                        percentage.map_or(String::new(), |value| format!(", query {value:.0}%"));
+                    tab.set_status_detail(
+                        if bytes == 0 {
+                            "Executing export…"
+                        } else {
+                            "Downloading export…"
+                        },
+                        format!(
+                            "{rows} rows, {mib:.1} MiB, {:.0} rows/s, {seconds:.0}s{query}",
+                            rows as f64 / seconds.max(0.001)
+                        ),
+                    );
+                }
+            }
+            Event::Downloaded { execution, spool } => {
+                if tab.current_execution == Some(execution) {
+                    tab.busy = false;
+                    tab.cancelling = false;
+                    tab.more = false;
+                    tab.download = None;
+                    tab.cursor = crate::worker::Cursor::Downloaded;
+                    tab.stop_timing();
+                    tab.panel.success(active);
+                    tab.set_status_detail("Preview", "Export download complete");
+                    tab.replay =
+                        (replay_limit > 0 && spool.bytes() <= replay_limit).then_some(spool);
+                }
+            }
+            Event::DownloadFailed {
+                execution,
+                message,
+                consumed,
+                disconnected,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.busy = false;
+                    tab.cancelling = false;
+                    tab.download = None;
+                    if consumed {
+                        tab.cursor = crate::worker::Cursor::Consumed;
+                        if !tab.preview_complete {
+                            tab.mark_partial();
+                        }
+                        tab.close_cursor();
+                    }
+                    if disconnected {
+                        tab.connected = false;
+                    }
+                    tab.stop_timing();
+                    Self::record_failure(tab, active);
+                    tab.set_status_detail("Export download stopped", message);
+                }
+            }
             Event::Connecting => {
                 tab.connected = false;
                 tab.busy = true;
                 tab.set_status("Connecting…");
+            }
+            Event::Authenticating(waiting) => {
+                if waiting {
+                    tab.set_status("Waiting for browser sign-in…");
+                } else if !tab.cancelling {
+                    tab.set_status(if tab.connected {
+                        "Executing…"
+                    } else {
+                        "Connecting…"
+                    });
+                }
             }
             Event::Connected => tab.connected = true,
             Event::Running => {
@@ -1483,10 +1700,36 @@ impl Qrow {
                     tab.set_status("Connected");
                 }
             }
+            Event::Session {
+                execution,
+                generation,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.result_session = Some(generation);
+                }
+            }
+            Event::PreviewRows { execution, rows } => {
+                if tab.current_execution == Some(execution)
+                    && let Some(table) = &live
+                {
+                    table.update(cx, |table, cx| {
+                        table.delegate_mut().rows.append_shared(&rows);
+                        cx.notify();
+                    });
+                }
+            }
+            Event::PreviewComplete {
+                execution,
+                complete,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.preview_complete = complete;
+                }
+            }
             Event::Columns(columns) => {
                 if let Some(table) = &live {
                     table.update(cx, |t, cx| {
-                        t.delegate_mut().schema(columns);
+                        t.delegate_mut().schema(columns, cx);
                         t.refresh(cx);
                     });
                 }
@@ -1503,9 +1746,17 @@ impl Qrow {
                     }
                 }
             }
+            Event::ExportContext(context) => {
+                if let Some(table) = &live {
+                    table.update(cx, |table, _| {
+                        table.delegate_mut().rows.set_context(context)
+                    });
+                }
+            }
             Event::Ready { more, limited } => {
                 let was_cancelling = tab.cancelling;
                 tab.more = more && live.is_some();
+                tab.preview_complete = !more && !limited && !was_cancelling;
                 tab.pending_page = None;
                 tab.busy = false;
                 tab.cancelling = false;
@@ -1530,6 +1781,7 @@ impl Qrow {
                 }
             }
             Event::Cancelled => {
+                tab.cursor = crate::worker::Cursor::Consumed;
                 tab.busy = false;
                 tab.cancelling = false;
                 if fetching && has_rows(cx) {
@@ -1573,6 +1825,7 @@ impl Qrow {
                 tab.cancelling = false;
             }
             Event::Disconnected | Event::IdleDisconnected => {
+                tab.cursor = crate::worker::Cursor::Unavailable;
                 tab.connected = false;
                 tab.close_cursor();
                 tab.busy = false;
@@ -1696,6 +1949,31 @@ impl Qrow {
                         }
                     }
                 }
+                self.oidc.configure(&self.sign_ins, &self.profiles);
+                for tab in &self.tabs {
+                    let results = tab
+                        .results
+                        .iter()
+                        .filter(|result| {
+                            result
+                                .profile
+                                .as_ref()
+                                .map(|profile| profile.id)
+                                .or(tab.saved.profile)
+                                == Some(id)
+                        })
+                        .map(|result| &result.table);
+                    let spare = tab
+                        .spare_table
+                        .iter()
+                        .filter(|_| tab.saved.profile == Some(id));
+                    for table in results.chain(spare) {
+                        table.update(cx, |table, _| {
+                            table.delegate_mut().set_export_profile(&profile)
+                        });
+                    }
+                }
+                self.external_auth.configure(&self.profiles);
                 self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
                     self.tabs[self.active].saved.profile = Some(id);
@@ -1742,6 +2020,16 @@ impl Qrow {
         true
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_tab(index, true, window, cx);
+    }
+    /// Shows the tab at `index`. With `focus_editor`, its editor takes the focus.
+    fn show_tab(
+        &mut self,
+        index: usize,
+        focus_editor: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if index >= self.tabs.len() {
             return;
         }
@@ -1759,10 +2047,14 @@ impl Qrow {
             self.tab_scroll.scroll_to_item(position);
         }
         if !self.activity.read(cx).is_open() {
-            self.tabs[index].panel.content_visible();
-            self.tabs[index]
-                .input
-                .update(cx, |s, cx| s.focus(window, cx));
+            if !self.settings.results_minimized {
+                self.tabs[index].panel.content_visible();
+            }
+            if focus_editor {
+                self.tabs[index]
+                    .input
+                    .update(cx, |s, cx| s.focus(window, cx));
+            }
         } else {
             let focus = self.tabs[index].input.read(cx).focus_handle(cx);
             self.activity
@@ -1846,6 +2138,9 @@ impl Qrow {
         {
             return;
         }
+        if index == self.active {
+            window.release_pointer();
+        }
         // The menu names a tab that is about to disappear.
         self.menu = None;
         if let Some(w) = &self.tabs[index].worker {
@@ -1906,9 +2201,18 @@ impl Qrow {
         if let Some(index) = self.active_tab_for_profile(id) {
             // A connection selection changes the visible tab group. It does
             // not change the owning connection of either tab, so it is not a
-            // query Logs event.
-            self.activate(index, window, cx);
+            // query Logs event. The tree keeps the focus.
+            self.show_tab(index, false, window, cx);
+            if let Some(profile) = self
+                .profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .cloned()
+            {
+                self.authenticate_connection(profile, cx);
+            }
         }
+        self.select_catalog_connection(id, window, cx);
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
         self.run_selected_query(window, cx);
@@ -1925,22 +2229,9 @@ impl Qrow {
         if self.tabs.get(index).is_none_or(|tab| tab.busy) {
             return false;
         }
+        self.restore_results(cx);
+        let query = self.selected_tab_sql(index, window, cx);
         let tab = &mut self.tabs[index];
-        let query = tab.input.update(cx, |s, cx| {
-            let selected = s
-                .selected_text_range(false, window, cx)
-                .filter(|s| !s.range.is_empty());
-            selected
-                .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
-                .map(Ok)
-                .unwrap_or_else(|| {
-                    let text = s.value();
-                    sql::statement_range_at(&text, s.selected_range().start)
-                        .map(|range| text[range].to_string())
-                        .or_else(|| sql::statement_ranges(&text).is_empty().then(String::new))
-                        .ok_or("Move the cursor into a SQL statement or select SQL to run.")
-                })
-        });
         let query = match query {
             Ok(query) => query,
             // The demo always shows its results.
@@ -1959,6 +2250,37 @@ impl Qrow {
         };
         self.run_tab_sql(index, query, false, cx)
     }
+
+    fn selected_tab_sql(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<String, &'static str> {
+        self.tabs[index].input.update(cx, |s, cx| {
+            let selected = s
+                .selected_text_range(false, window, cx)
+                .filter(|s| !s.range.is_empty());
+            selected
+                .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    let text = s.value();
+                    sql::statement_range_at(&text, s.selected_range().start)
+                        .map(|range| text[range].to_string())
+                        .or_else(|| sql::statement_ranges(&text).is_empty().then(String::new))
+                        .ok_or("Move the cursor into a SQL statement or select SQL to run.")
+                })
+        })
+    }
+    fn tab_database_type(&self, profile: Option<Uuid>) -> crate::model::DatabaseType {
+        self.profiles
+            .iter()
+            .find(|candidate| Some(candidate.id) == profile)
+            .map(|profile| profile.database_type)
+            .unwrap_or_default()
+    }
+
     /// Runs `query` in the tab `index`. A connection whose sign-in needs the
     /// browser waits for it first, unless the query runs `after_sign_in`.
     fn run_tab_sql(
@@ -1971,14 +2293,16 @@ impl Qrow {
         if self.tabs.get(index).is_none_or(|tab| tab.busy) {
             return false;
         }
+        self.restore_results(cx);
         if self.demo {
             self.seed_demo(index, query, cx);
             cx.notify();
             return true;
         }
         let active = index == self.active && !self.activity.read(cx).is_open();
+        let database_type = self.tab_database_type(self.tabs[index].saved.profile);
         let tab = &mut self.tabs[index];
-        if let Err(e) = sql::validate_single(&query) {
+        if let Err(e) = sql::validate_single_for(&query, database_type) {
             let message = e.to_string();
             Self::record_log(
                 tab,
@@ -2021,6 +2345,7 @@ impl Qrow {
         // account of the sign-in.
         let live = tab.connected && tab.worker_profile == Some(profile.id) && !tab.release_pending;
         if !after_sign_in
+            && matches!(profile.authentication, Authentication::Oidc { .. })
             && let Some(sign_in) = profile.authentication.sign_in()
             && (self.sign_in_changing(sign_in) || !live && self.sign_in_needs_browser(sign_in))
         {
@@ -2030,6 +2355,7 @@ impl Qrow {
         let tab = &mut self.tabs[index];
         tab.signed_in_for_run = after_sign_in;
         tab.submitted_sql = Some(query.clone());
+        tab.result_session = None;
         // A session that a sign-out or another account released while the
         // tab was busy closes now, so the query opens a new one.
         if tab.release_pending {
@@ -2053,7 +2379,13 @@ impl Qrow {
             ));
         }
         let tab = &mut self.tabs[index];
-        Self::start_result(tab, query.clone(), Some("Waiting for query results…"), cx);
+        Self::start_result(
+            tab,
+            query.clone(),
+            Some(&profile),
+            Some("Waiting for query results…"),
+            cx,
+        );
         tab.busy = true;
         tab.panel.execution_started();
         tab.cancelling = false;
@@ -2106,17 +2438,33 @@ impl Qrow {
     fn start_result(
         tab: &mut Tab,
         sql: String,
+        profile: Option<&Profile>,
         message: Option<&'static str>,
         cx: &mut Context<Self>,
     ) -> u64 {
         tab.close_cursor();
+        let complete = tab.preview_complete;
+        if let Some(id) = tab.live
+            && let Some(previous) = tab.result_mut(id)
+        {
+            previous.complete = complete;
+        }
+        tab.preview_complete = false;
+        tab.cursor = crate::worker::Cursor::Unavailable;
+        tab.replay = None;
+        tab.download = None;
         let target = Self::run_target(tab);
         let result = tab.result_mut(target).expect("the run target exists");
         result.sql = Some(sql);
+        result.profile = profile.cloned();
         result.elapsed = None;
         result.unfetched = false;
+        result.complete = false;
         result.table.update(cx, |t, cx| {
             t.delegate_mut().clear();
+            if let Some(profile) = profile {
+                t.delegate_mut().set_export_profile(profile);
+            }
             t.delegate_mut().empty_message = message;
             t.clear_selection(cx);
             t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
@@ -2260,16 +2608,20 @@ impl Qrow {
         self.sidebar_width *= ratio;
         self.editor_height *= ratio;
         apply_ui_theme(&self.settings, window, cx);
+        self.resize_result_columns(cx);
+        self.changed(cx);
+    }
+    /// Size result columns again for the current interface scale and font.
+    fn resize_result_columns(&self, cx: &mut Context<Self>) {
+        let scale = self.settings.ui_scale;
         for tab in &self.tabs {
-            let tables = tab.results.iter().map(|result| &result.table);
-            for table in tables.chain(&tab.spare_table) {
+            for table in tab.result_tables() {
                 table.update(cx, |table, cx| {
-                    table.delegate_mut().set_ui_scale(scale);
+                    table.delegate_mut().set_ui_scale(scale, cx);
                     table.refresh(cx);
                 });
             }
         }
-        self.changed(cx);
     }
     fn adjust_ui_scale(&mut self, change: f32, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_ui_scale(self.settings.ui_scale + change, window, cx);
@@ -2323,12 +2675,14 @@ impl Qrow {
         if font_available(&font, &self.fonts) && self.settings.ui_font_family != font {
             self.settings.ui_font_family = font;
             apply_ui_theme(&self.settings, window, cx);
+            self.resize_result_columns(cx);
             self.changed(cx);
         }
     }
     fn reset_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = Settings::default();
         self.settings.theme = settings.theme;
+        let font_changed = self.settings.ui_font_family != settings.ui_font_family;
         self.settings.ui_font_family = settings.ui_font_family;
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
@@ -2344,6 +2698,9 @@ impl Qrow {
         self.apply_ui_scale(settings.ui_scale, window, cx);
         themes::apply(&self.settings.theme, Some(window), cx);
         apply_ui_theme(&self.settings, window, cx);
+        if font_changed {
+            self.resize_result_columns(cx);
+        }
         self.changed(cx);
     }
     /// Open a context menu at the pointer. Callers defer this from their right
@@ -2516,6 +2873,17 @@ impl Qrow {
                 .any(|tab| tab.saved.profile == Some(id) && tab.can_disconnect());
         let disconnect =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.disconnect_profile(id, cx));
+        let ix = self
+            .profiles
+            .iter()
+            .position(|profile| profile.id == id)
+            .unwrap();
+        let first = ix == 0;
+        let last = ix + 1 == self.profiles.len();
+        let move_up =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.move_connection(id, false, cx));
+        let move_down =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.move_connection(id, true, cx));
         let has_dbt = profile.dbt.is_some();
         let dbt_parsing = self.dbt_parsing(id);
         let edited = profile.clone();
@@ -2569,6 +2937,16 @@ impl Qrow {
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(PopupMenuItem::new("Show activity").on_click(show_activity))
+                    .item(
+                        PopupMenuItem::new("Move up")
+                            .on_click(move_up)
+                            .disabled(first),
+                    )
+                    .item(
+                        PopupMenuItem::new("Move down")
+                            .on_click(move_down)
+                            .disabled(last),
+                    )
                     .item(
                         PopupMenuItem::new("Delete")
                             .on_click(delete)
@@ -2807,6 +3185,7 @@ impl Qrow {
             settings.refresh_minutes.to_string(),
             settings.timeout_minutes.to_string(),
             profile.lifecycle.response_timeout_seconds.to_string(),
+            profile.trino_schema.clone(),
         ];
         let fields = values
             .into_iter()
@@ -2898,18 +3277,28 @@ impl Qrow {
                     cx.notify();
                 }
             });
-        let sign_in_choices = connection_form::sign_in_choices(&self.sign_ins);
+        let sign_in_choices =
+            connection_form::sign_in_choices(&self.sign_ins, profile.database_type);
         let authentication = connection_form::authentication_select(
-            profile.authentication.sign_in().is_some(),
+            profile.authentication,
+            profile.database_type,
             window,
             cx,
         );
         let sign_in = connection_form::sign_in_combobox(
             &sign_in_choices,
+            &self.sign_ins,
             profile.authentication.sign_in(),
             window,
             cx,
         );
+        if profile.database_type == crate::model::DatabaseType::Trino
+            && matches!(profile.authentication, Authentication::Oidc { .. })
+        {
+            authentication.update(cx, |select, cx| {
+                select.set_selected_value(&"Sign-in".to_owned(), window, cx)
+            });
+        }
         let authentication_subscription =
             cx.subscribe_in(&authentication, window, |_, _, event, _, cx| {
                 if connection_form::uses_sign_in_from_event(event).is_some() {
@@ -2922,8 +3311,102 @@ impl Qrow {
         if !is_new && profile.dbt.is_some() {
             self.ensure_catalog(profile.id);
         }
+        let database_type = connection_form::choice_select(
+            &connection_form::database_type_choices(),
+            &profile.database_type,
+            window,
+            cx,
+        );
+        let database_type_subscription =
+            cx.subscribe_in(&database_type, window, |this, _, event, window, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    if let Some(form) = &mut this.form {
+                        let selected = connection_form::chosen(
+                            &form.database_type,
+                            &connection_form::database_type_choices(),
+                            cx,
+                        );
+                        let previous = form.profile.database_type;
+                        if selected != previous {
+                            let default_name = |kind| match kind {
+                                crate::model::DatabaseType::Kyuubi => "Spark",
+                                crate::model::DatabaseType::Postgres => "Postgres",
+                                crate::model::DatabaseType::Trino => "Trino",
+                            };
+                            if form.is_new
+                                && form.fields[0].read(cx).value().as_ref()
+                                    == default_name(previous)
+                            {
+                                form.fields[0].update(cx, |field, cx| {
+                                    field.set_value(default_name(selected), window, cx)
+                                });
+                            }
+                            if form.fields[2].read(cx).value().as_ref()
+                                == previous.default_port().to_string()
+                            {
+                                form.fields[2].update(cx, |field, cx| {
+                                    field.set_value(selected.default_port().to_string(), window, cx)
+                                });
+                            }
+                            if form.fields[5].read(cx).value().as_ref()
+                                == match previous {
+                                    crate::model::DatabaseType::Kyuubi => "avia",
+                                    crate::model::DatabaseType::Postgres => "postgres",
+                                    crate::model::DatabaseType::Trino => "tpch",
+                                }
+                            {
+                                form.fields[5].update(cx, |field, cx| {
+                                    field.set_value(
+                                        match selected {
+                                            crate::model::DatabaseType::Kyuubi => "avia",
+                                            crate::model::DatabaseType::Postgres => "postgres",
+                                            crate::model::DatabaseType::Trino => "tpch",
+                                        },
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }
+                            form.transfer.switch_engine(previous, selected, window, cx);
+                            connection_form::reset_authentication(
+                                &form.authentication,
+                                selected,
+                                window,
+                                cx,
+                            );
+                            form.profile.database_type = selected;
+                        }
+                    }
+                    let selected = this.form.as_ref().and_then(|form| {
+                        connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
+                    });
+                    this.replace_sign_in_list(selected, window, cx);
+                    cx.notify();
+                }
+            });
+        let postgres_ssl_mode = connection_form::choice_select(
+            &connection_form::postgres_ssl_mode_choices(),
+            &if is_new {
+                crate::model::PostgresSslMode::Require
+            } else {
+                profile.postgres_ssl_mode()
+            },
+            window,
+            cx,
+        );
+        let postgres_ssl_mode_subscription =
+            cx.subscribe_in(&postgres_ssl_mode, window, |_, _, event, _, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    cx.notify();
+                }
+            });
         self.form = Some(ProfileEditor {
+            transfer: connection_form::transfer::TransferForm::new(&profile.transfer, window, cx),
             dbt,
+            database_type,
+            _database_type_subscription: database_type_subscription,
+            postgres_ssl_mode,
+            _postgres_ssl_mode_subscription: postgres_ssl_mode_subscription,
             parameters,
             notes_counted: connection_form::counts_notes(profile.assistant_notes.len()),
             assistant_notes,
@@ -3063,11 +3546,20 @@ impl Qrow {
         values[6] = form.parameters.read(cx).value().to_string();
         let mut profile = form.profile.clone();
         let mut shared = None;
+        profile.database_type = connection_form::chosen(
+            &form.database_type,
+            &connection_form::database_type_choices(),
+            cx,
+        );
         profile.name = values[0].trim().into();
         profile.host = values[1].trim().into();
         profile.username = values[3].trim().into();
         profile.database = values[5].trim().into();
+        profile.trino_schema = values[15].trim().into();
         let parse = (|| -> anyhow::Result<()> {
+            profile.transfer = form
+                .transfer
+                .value(&profile.transfer, profile.database_type, cx)?;
             profile.port = values[2]
                 .trim()
                 .parse()
@@ -3162,22 +3654,35 @@ impl Qrow {
                 connection_form::keeps_connected(&form.idle_behavior, cx),
                 &profile.lifecycle,
             )?;
-            profile.tls = form.tls;
+            if profile.database_type == crate::model::DatabaseType::Postgres {
+                let mode = connection_form::chosen(
+                    &form.postgres_ssl_mode,
+                    &connection_form::postgres_ssl_mode_choices(),
+                    cx,
+                );
+                profile.postgres_ssl_mode = Some(mode);
+                profile.tls = mode != crate::model::PostgresSslMode::Disable;
+            } else {
+                profile.tls = form.tls;
+            }
             profile.assistant_notes = form.assistant_notes.read(cx).value().trim().to_owned();
             profile.dbt = form.dbt.project(cx)?;
-            profile.authentication = if connection_form::uses_sign_in(&form.authentication, cx) {
+            profile.authentication = if profile.database_type == crate::model::DatabaseType::Trino
+                && connection_form::uses_external(&form.authentication, cx)
+            {
+                Authentication::TrinoExternal
+            } else if profile.database_type != crate::model::DatabaseType::Postgres
+                && connection_form::uses_sign_in(&form.authentication, cx)
+            {
                 let sign_in =
                     connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
                         .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
                         .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
-                anyhow::ensure!(
-                    sign_in.allows_host(&profile.host),
-                    "The sign-in \"{}\" does not send tokens to {}. Add the host to the database hosts of the sign-in.",
-                    sign_in.name,
-                    profile.host
-                );
-                Authentication::Oidc {
-                    sign_in: sign_in.id,
+                match sign_in.provider {
+                    crate::model::SignInProvider::Oidc => Authentication::Oidc {
+                        sign_in: sign_in.id,
+                    },
+                    crate::model::SignInProvider::TrinoExternal => Authentication::TrinoExternal,
                 }
             } else {
                 Authentication::Password
@@ -3204,6 +3709,7 @@ impl Qrow {
         if profile.authentication == Authentication::Password
             && needs_password
             && password.is_empty()
+            && profile.database_type != crate::model::DatabaseType::Trino
             && !self.demo
         {
             form.error = Some("Enter the password for this connection.".into());
@@ -3218,7 +3724,12 @@ impl Qrow {
         let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();
         std::thread::spawn(move || {
-            let result = if !demo && !password.is_empty() {
+            let result = if !demo
+                && (!password.is_empty()
+                    || (needs_password
+                        && profile.database_type == crate::model::DatabaseType::Trino
+                        && profile.authentication == Authentication::Password))
+            {
                 credentials
                     .set_password(profile.id, &password)
                     .map_err(|e| e.to_string())
@@ -3426,7 +3937,7 @@ impl Qrow {
             }
         }
         let tab = &mut self.tabs[index];
-        let target = Self::start_result(tab, sql, None, cx);
+        let target = Self::start_result(tab, sql, None, None, cx);
         let result = tab.result_mut(target).expect("the run target exists");
         result.elapsed = Some(Duration::from_millis(842));
         result.table.update(cx, |t, cx| {
@@ -3451,7 +3962,7 @@ impl Qrow {
                 name: format!("metric_{n}"),
                 data_type: "DOUBLE".into(),
             }));
-            data.schema(columns);
+            data.schema(columns, cx);
             data.rows = (0..2250)
                 .map(|i| {
                     let mut row = vec![
@@ -3485,6 +3996,8 @@ impl Qrow {
             t.refresh(cx);
         });
         tab.set_status_detail("Complete", "Demo data");
+        tab.preview_complete = true;
+        tab.cursor = crate::worker::Cursor::Complete;
         tab.panel.success(true);
     }
 }

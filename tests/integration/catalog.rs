@@ -30,11 +30,20 @@ struct PollGate {
     release: std::sync::mpsc::Receiver<()>,
 }
 
+struct CloseGate {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
 #[derive(Default)]
 struct Server {
+    limited: AtomicBool,
     tables: Mutex<Tables>,
     connects: AtomicUsize,
     closes: AtomicUsize,
+    closed: (Mutex<usize>, std::sync::Condvar),
+    close_gate: Mutex<Option<CloseGate>>,
+    transport_failure: AtomicBool,
     requests: Mutex<Vec<MetadataRequest>>,
     /// Column requests for these schemas fail like a schema with a broken view.
     broken_schemas: Mutex<Vec<String>>,
@@ -136,6 +145,9 @@ fn names(names: &[&str]) -> Vec<Column> {
 }
 
 impl Session for FakeSession {
+    fn result_limited(&self) -> bool {
+        self.server.limited.load(Ordering::SeqCst)
+    }
     fn execute(&mut self, _: &str) -> Result<Arc<dyn Cancellation>> {
         unreachable!("the catalog worker runs no SQL")
     }
@@ -261,6 +273,10 @@ impl Session for FakeSession {
         )))
     }
     fn poll(&mut self) -> Result<QueryState> {
+        anyhow::ensure!(
+            !self.server.transport_failure.load(Ordering::SeqCst),
+            "Transport failed"
+        );
         let gate = {
             let mut gate = self.server.poll_gate.lock().unwrap();
             if gate
@@ -324,7 +340,14 @@ impl Session for FakeSession {
         unreachable!()
     }
     fn close(&mut self) -> Result<()> {
+        let gate = self.server.close_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.entered.send(()).unwrap();
+            gate.release.recv_timeout(Duration::from_secs(15)).unwrap();
+        }
         self.server.closes.fetch_add(1, Ordering::SeqCst);
+        *self.server.closed.0.lock().unwrap() += 1;
+        self.server.closed.1.notify_all();
         Ok(())
     }
 }
@@ -434,6 +457,136 @@ fn warehouse() -> Arc<Server> {
     ])
 }
 
+fn wait_for_closes(server: &Server, expected: usize) {
+    let (closed, _) = server
+        .closed
+        .1
+        .wait_timeout_while(
+            server.closed.0.lock().unwrap(),
+            Duration::from_secs(10),
+            |closed| *closed < expected,
+        )
+        .unwrap();
+    assert_eq!(*closed, expected, "Session cleanup did not complete");
+}
+
+#[test]
+fn refresh_completion_is_published_before_session_cleanup() {
+    for failure in [None, Some("metadata"), Some("transport")] {
+        let server = Server::with(&[("sales", "orders", "TABLE", &["id"])]);
+        if failure == Some("metadata") {
+            server
+                .broken_relation_lists
+                .lock()
+                .unwrap()
+                .push("sales".into());
+        }
+        server
+            .transport_failure
+            .store(failure == Some("transport"), Ordering::SeqCst);
+        let (entered, closing) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        *server.close_gate.lock().unwrap() = Some(CloseGate {
+            entered,
+            release: resume,
+        });
+        let mut h = Harness::new(server, profile(), None);
+        h.worker.refresh(h.id, Scope::Connection);
+        h.wait(|h| h.status.active == Some(Scope::Connection));
+        closing.recv_timeout(Duration::from_secs(10)).unwrap();
+        h.wait(|h| h.status.is_idle());
+        assert_eq!(h.status.done, 0);
+        assert_eq!(h.status.total, 0);
+        if failure == Some("transport") {
+            assert!(
+                h.catalog()
+                    .error_for(h.id)
+                    .unwrap()
+                    .contains("Transport failed")
+            );
+        } else if failure == Some("metadata") {
+            assert!(
+                h.catalog()
+                    .schema("sales")
+                    .unwrap()
+                    .error_for(h.id)
+                    .is_some()
+            );
+        } else {
+            assert_eq!(h.columns("sales", "orders").unwrap(), ["id"]);
+        }
+        assert!(
+            h.worker
+                .logs
+                .try_iter()
+                .any(|(_, event)| event.kind == LogKind::SchemaRefreshFinished)
+        );
+        release.send(()).unwrap();
+        h.worker.shutdown();
+        h.worker.wait_for_shutdown(Duration::from_secs(10));
+    }
+}
+
+#[test]
+fn completed_refresh_logs_follow_their_failure_snapshot() {
+    let server = Server::with(&[("sales", "orders", "TABLE", &["id"])]);
+    server
+        .broken_relation_lists
+        .lock()
+        .unwrap()
+        .push("sales".into());
+    let profile = profile();
+    let id = profile.id;
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let resume_rx = std::sync::Mutex::new(resume_rx);
+    let worker = CatalogWorker::with_connector(
+        CatalogConfig::private(profile),
+        None,
+        Arc::new(move || {
+            if wake_tx.send(()).is_ok() {
+                let _ = resume_rx.lock().unwrap().recv();
+            }
+        }),
+        Arc::new(Fake(server)),
+        Arc::new(|_| Ok(Secret::password("synthetic-password"))),
+        MINUTE,
+    );
+    worker.refresh(id, Scope::Connection);
+    let mut catalog = None;
+    loop {
+        wake_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        // Hold the worker at each UI wake. The completion log cannot rely
+        // on a snapshot that the worker will send after this wake returns.
+        let completed = worker
+            .logs
+            .try_iter()
+            .any(|(_, event)| event.kind == LogKind::SchemaRefreshFinished);
+        for event in worker.events.try_iter() {
+            if let Event::Catalog(snapshot) = event {
+                catalog = Some(snapshot);
+            }
+        }
+        let failure = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.schema("sales"))
+            .and_then(|schema| schema.error_id);
+        resume_tx.send(()).unwrap();
+        if completed {
+            assert!(
+                failure.is_some(),
+                "Activity must acknowledge the failed snapshot"
+            );
+            break;
+        }
+    }
+    // Shutdown must not wait for the test's UI wake acknowledgement.
+    drop(wake_rx);
+    drop(resume_tx);
+    worker.shutdown();
+    worker.wait_for_shutdown(Duration::from_secs(10));
+}
+
 #[test]
 fn connection_refresh_reads_filtered_schemas_relations_and_columns() {
     let mut profile = profile();
@@ -503,6 +656,7 @@ fn connection_refresh_reads_filtered_schemas_relations_and_columns() {
     );
     // One session for the whole pass, closed when the queue is empty.
     assert_eq!(h.server.connects.load(Ordering::SeqCst), 1);
+    wait_for_closes(&h.server, 1);
     assert_eq!(h.server.closes.load(Ordering::SeqCst), 1);
 }
 
@@ -680,6 +834,7 @@ fn cancel_stops_a_running_request_and_keeps_the_catalog() {
         r,
         MetadataRequest::Relations { schema, .. } if schema == "salesx"
     )));
+    wait_for_closes(&server, server.connects.load(Ordering::SeqCst));
     assert_eq!(
         server.closes.load(Ordering::SeqCst),
         server.connects.load(Ordering::SeqCst)
@@ -1242,6 +1397,7 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
     assert!(catalog.schema("empty").unwrap().relations.is_some());
     assert!(catalog.schema("salesx").unwrap().relations.is_none());
     wait_for_cancel(&server);
+    wait_for_closes(&server, connects(&server));
     assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
     let texts: Vec<_> = h
         .worker
@@ -1283,6 +1439,7 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
     assert_eq!(h.catalog().error, None);
     assert!(h.catalog().schema("empty").unwrap().relations.is_some());
     wait_for_cancel(&server);
+    wait_for_closes(&server, connects(&server));
     assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
     let texts: Vec<_> = h
         .worker
@@ -1592,10 +1749,15 @@ fn automatic_refreshes_use_the_preferred_member_while_it_is_live() {
     // Both members are live: the preferred one refreshes.
     let server = warehouse();
     let mut h = Harness::with_config(server.clone(), config.clone(), None, minute);
-    h.worker.set_live(small.id, true);
     h.worker.set_live(large.id, true);
+    h.worker.set_live(small.id, true);
     h.wait(|h| h.catalog().fetched_at.is_some() && h.status.is_idle());
-    assert_eq!(users(&server)[0], "user-large");
+    let first = users(&server).len();
+    h.wait(|h| users(&server).len() > first && h.status.is_idle());
+    assert!(
+        users(&server).iter().all(|user| user == "user-large"),
+        "every automatic refresh must use the live preferred member"
+    );
     h.worker.shutdown();
 
     // Without the preferred member, the first live member refreshes.
@@ -1796,4 +1958,23 @@ fn a_seeded_shared_catalog_keeps_its_columns_when_an_automatic_read_fails() {
     assert!(h.catalog().schema("sales").unwrap().error.is_some());
     assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
     assert!(!private.exists());
+}
+
+#[test]
+fn a_truncated_metadata_result_is_a_failed_refresh() {
+    let server = warehouse();
+    let mut h = Harness::new(server.clone(), profile(), None);
+    h.refresh(Scope::Connection);
+    let before = h.catalog().schemas.clone();
+    server.limited.store(true, Ordering::SeqCst);
+    h.worker.refresh(h.id, Scope::Connection);
+    h.wait(|h| h.catalog().error.is_some() && h.status.is_idle());
+    assert!(
+        h.catalog()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("connector result limit")
+    );
+    assert_eq!(h.catalog().schemas, before);
 }

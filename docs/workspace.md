@@ -11,8 +11,8 @@ has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant have
 **Font Family**, **Font Size**, and **Line Height**. The interface font applies
 to controls and results. Editor also has **Tab Size**, the number of spaces for
 each indent level. The default is 2. The Tab key and SQL that Qrow formats for
-the assistant use this size. The editor indents with spaces. **SQL Keyword
-Case** is the last Editor setting. At the moment, it applies only to SQL that
+the assistant and **Format** use this size. The editor indents with spaces. **SQL Keyword
+Case** is the last Editor setting. It applies to **Format** and SQL that
 the [assistant](assistant.md) writes.
 Editor settings apply to SQL. Logs settings apply to log entries.
 Assistant settings apply to conversation messages. Code in messages keeps
@@ -27,7 +27,11 @@ CM Twilight, and the themes bundled from GPUI Kit. CM Twilight is darker than
 One Dark. It uses the navy and orange colors of twilight in Chiang Mai. A
 selected theme takes effect immediately.
 
-The Assistant page has the **General** and **Codex** sections. See
+The Export page has the **Copy** and **Replay** sections. See
+[Select and copy cells](results.md#select-and-copy-cells) for Copy Format and
+[Export all rows](results.md#export-all-rows-and-reuse-a-download) for Replay Limit.
+
+The Assistant page has the **General**, **Codex**, and **Claude Code** sections. See
 [AI assistant](assistant.md#set-up-the-assistant) for these settings.
 
 Select a page or section in the list at the left. Use the search box above the
@@ -46,7 +50,9 @@ The sidebar at the left of the window shows
 The two buttons at the left end of the status bar choose the sidebar. Click the
 button of the visible sidebar to hide it. Press **⌘B** to show or hide the
 Connections sidebar. **View → Toggle sidebar** hides or shows the sidebar that
-was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. Drag the sidebar divider
+was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. When the focused part of
+the workspace closes, for example the result table after a failed query, the
+SQL editor gets the focus. Thus shortcuts like **⌘B** continue to operate. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the
 editor height.
 These two divider positions are not saved in the workspace. Qrow saves the
@@ -57,9 +63,11 @@ optional [assistant pane](assistant.md) width.
 The workspace file contains connection profiles, connection-owned tabs, tab
 names, SQL, the selected connection, the last active tab for each connection,
 and settings. Optional assistant state includes the enabled setting, panel and
-model preferences, Codex thread identifiers, conversation titles, query
+the selected harness, the model preferences of each harness, thread
+identifiers, the harness of each conversation, conversation titles, query
 execution modes, and the query tab of each conversation. The workspace does not contain assistant messages, tool
-arguments, tool results, result rows, Logs history, or Codex credentials. Its
+arguments, tool results, result rows, Logs history, or harness credentials.
+Assistant messages and tool results are in separate files, described below. Its
 default path is:
 
 ```text
@@ -86,6 +94,12 @@ texts, but not the SQL. Qrow deletes a copy when no connection uses its
 manifest. If Qrow cannot open the workspace, it keeps the copies only in
 memory.
 
+Qrow keeps a [copy of each assistant conversation](assistant.md#saved-conversations)
+in the `assistant/transcripts` folder next to the workspace file. A copy has
+the messages, replies, errors, and tool call cards of the conversation,
+including tool arguments and results. Qrow deletes a copy when you delete its
+conversation. If Qrow cannot open the workspace, it does not save copies.
+
 Passwords and sign-in tokens remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
 Passwords, tokens, and result sets are not written to the workspace file. The
 workspace keeps each [sign-in](connections.md#sign-in-with-openid-connect)
@@ -107,10 +121,30 @@ workspace.
 Qrow ignores the removed **Schema refresh logs** option of a connection, because
 [Activity](activity.md) always records refreshes. The next save removes the
 option from the file.
+
+Workspace version 7 adds the database type of each connection. Profiles from
+older workspaces use Kyuubi. Earlier versions of Qrow cannot open a version 7
+workspace. Trino external authentication is stored on the connection, without
+an issuer or sign-in reference. Earlier Trino sign-in references load as
+external authentication. The next save removes their obsolete sign-in records.
+Direct OIDC sign-ins and their references remain unchanged. The connection
+host now determines where Qrow can send its OIDC token. The removed database
+host lists are ignored during loading and omitted from the next save.
+
+Workspace version 8 adds the assistant harness: the selected harness, the
+model choices of Claude Code, and the harness of each conversation.
+Conversations from older workspaces use Codex. Earlier versions of Qrow cannot
+open a version 8 workspace, so they cannot remove the harness of a Claude Code
+conversation.
+
 Workspace version 6 adds sign-ins, and the TLS and authentication choices of
 each connection. Earlier connections load with password authentication and
 without TLS. They keep their identifiers and stored passwords. An earlier
 version of Qrow cannot open a version 6 workspace.
+
+Postgres profiles store an optional TLS mode. A profile without this field uses
+its earlier TLS checkbox. An enabled checkbox still verifies the certificate
+and hostname. See [Postgres connections](connections.md#use-postgres).
 
 ## Quit and save
 

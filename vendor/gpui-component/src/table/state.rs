@@ -396,6 +396,69 @@ where
         cx.notify();
     }
 
+    /// The laid-out row viewport, excluding the column headers.
+    pub fn body_bounds(&self) -> Bounds<Pixels> {
+        self.vertical_scroll_handle.0.borrow().base_handle.bounds()
+    }
+
+    /// The height shared by all virtualized rows.
+    pub fn row_height(&self) -> Pixels {
+        self.options.size.table_row_height()
+    }
+
+    /// Resolve a pointer to a row and column, clamping outside the viewport.
+    /// Uses model indices, including fixed columns, without rendering hidden cells.
+    pub fn cell_at_position(&self, position: Point<Pixels>, cx: &App) -> Option<(usize, usize)> {
+        let rows = self.delegate.rows_count(cx);
+        if rows == 0 || self.col_groups.is_empty() {
+            return None;
+        }
+        let scroll = self.vertical_scroll_handle.0.borrow();
+        let bounds = scroll.base_handle.bounds();
+        let height = self.row_height();
+        if bounds.size.height <= px(1.) || bounds.size.width <= px(1.) || height <= px(0.) {
+            return None;
+        }
+        let y = position.y.clamp(bounds.top(), bounds.bottom() - px(1.));
+        let row = ((y - bounds.top() - scroll.base_handle.offset().y) / height)
+            .floor()
+            .max(0.) as usize;
+        let x = position.x.clamp(bounds.left(), bounds.right() - px(1.));
+        let fixed = self.fixed_left_cols_count();
+        let mut right = bounds.left();
+        for (ix, column) in self.col_groups.iter().enumerate() {
+            if ix == fixed {
+                right += self.horizontal_scroll_handle.offset().x;
+            }
+            right += column.width;
+            if x < right {
+                return Some((row.min(rows - 1), ix));
+            }
+        }
+        Some((row.min(rows - 1), self.col_groups.len() - 1))
+    }
+
+    /// Scroll both axes by a pixel delta, staying within the row and column extents.
+    /// Returns whether either offset changed.
+    pub fn scroll_by(&mut self, delta: Point<Pixels>, cx: &App) -> bool {
+        let vertical = self.vertical_scroll_handle.0.borrow();
+        let bounds = vertical.base_handle.bounds();
+        let height = self.row_height();
+        let mut offset = vertical.base_handle.offset();
+        let old_y = offset.y;
+        let max_y = (height * self.delegate.rows_count(cx) as f32 - bounds.size.height).max(px(0.));
+        offset.y = (offset.y + delta.y).clamp(-max_y, px(0.));
+        vertical.base_handle.set_offset(offset);
+        let mut offset = self.horizontal_scroll_handle.offset();
+        let old_x = offset.x;
+        let fixed = self.fixed_left_cols_count();
+        let width: Pixels = self.col_groups[fixed..].iter().map(|col| col.width).sum();
+        let max_x = (width - self.horizontal_scroll_handle.bounds().size.width).max(px(0.));
+        offset.x = (offset.x + delta.x).clamp(-max_x, px(0.));
+        self.horizontal_scroll_handle.set_offset(offset);
+        old_y != vertical.base_handle.offset().y || old_x != offset.x
+    }
+
     // Scroll to the column at the given index.
     pub fn scroll_to_col(&mut self, col_ix: usize, cx: &mut Context<Self>) {
         let col_ix = col_ix.saturating_sub(self.fixed_left_cols_count());
@@ -1689,7 +1752,19 @@ where
         let available_width = (self.bounds.size.width - fixed_width).max(px(0.));
         // The scroll handle offset is negative when scrolled right; negate it
         // to obtain a positive distance from the left edge of the scroll area.
-        let scroll_x = (-self.horizontal_scroll_handle.offset().x).max(px(0.));
+        //
+        // Wheel handlers move the offset past the right edge, and only the
+        // prepaint of the scroll area clamps it, after this header is built.
+        // Clamp here as well, or the header skips the columns that the
+        // clamped offset shows. The last empty column and the row header
+        // make the true limit a little larger, so this can render one more
+        // column on the left, but never fewer.
+        let content_width: Pixels = self.col_groups[left_columns_count..]
+            .iter()
+            .map(|g| g.width)
+            .sum();
+        let max_scroll_x = (content_width - available_width).max(px(0.));
+        let scroll_x = (-self.horizontal_scroll_handle.offset().x).clamp(px(0.), max_scroll_x);
 
         // Walk left-to-right through non-fixed columns to find the first one
         // whose right edge enters the viewport. The accumulated width of the

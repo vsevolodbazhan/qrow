@@ -531,7 +531,7 @@ mod tests {
             client_id: "qrow-desktop".into(),
             scopes: vec!["kyuubi".into()],
             resource: Some("https://kyuubi.example.test".into()),
-            allowed_hosts: vec!["kyuubi.example.test".into()],
+
             callback_ports: if port == 0 { vec![] } else { vec![port] },
             ..SignIn::default()
         }

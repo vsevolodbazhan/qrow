@@ -64,6 +64,56 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("--no-default-features", catalog.CLIPPY_CORE.command)
         self.assertNotIn("--no-default-features", catalog.CLIPPY_APP.command)
 
+    def test_coverage_serializes_shared_budget_tests_without_changing_selection(self):
+        coverage = catalog.SUITES["coverage"]
+        self.assertEqual(coverage.steps[1].command, (
+            "cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
+            "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
+            "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov",
+        ))
+        self.assertEqual(coverage.steps[1].env, (("RUST_TEST_THREADS", "1"),))
+        for suite in catalog.SUITES.values():
+            for step in suite.steps:
+                if suite.name != "coverage":
+                    with self.subTest(suite=suite.name):
+                        self.assertNotIn("RUST_TEST_THREADS", dict(step.env))
+
+    def test_postgres_has_its_own_docker_suite_and_backend_ci_job(self):
+        postgres = catalog.SUITES["postgres"]
+        self.assertTrue(postgres.explicit_only)
+        self.assertIn("docker", postgres.requires)
+        self.assertIsNone(postgres.fixture)
+        self.assertIn("postgres", catalog.CI_JOBS["backend"].suites)
+
+    def test_trino_has_its_own_docker_suite_and_backend_ci_job(self):
+        trino = catalog.SUITES["trino"]
+        self.assertTrue(trino.explicit_only)
+        self.assertIn("docker", trino.requires)
+        self.assertIsNone(trino.fixture)
+        self.assertIn("trino", catalog.CI_JOBS["backend"].suites)
+
+    def test_transfer_probes_run_in_the_perf_backend_job(self):
+        kyuubi = catalog.SUITES["perf-kyuubi"]
+        # Either runtime works on a computer. The perf-backend job uses Docker.
+        self.assertEqual(kyuubi.fixture, "any")
+        self.assertFalse(kyuubi.macos_only)
+        self.assertNotIn("docker", kyuubi.requires)
+        self.assertIn("transfer_perf::kyuubi", kyuubi.steps[0].nextest_filter)
+        self.assertEqual(kyuubi.prepare, (catalog.TRANSFER_PERF_BUILD,))
+        self.assertIn("perf-kyuubi", catalog.CI_JOBS["perf-backend"].report_only)
+        self.assertEqual(catalog.CI_JOBS["perf-backend"].runtime, "docker")
+        # The macOS E2E jobs do not build the integration tests with the perf profile.
+        for step in (*catalog.SUITES["perf-e2e"].steps, *catalog.SUITES["perf-e2e"].prepare):
+            self.assertNotIn("integration", step.command)
+        for engine in ("postgres", "trino"):
+            name = "perf-" + engine
+            suite = catalog.SUITES[name]
+            self.assertTrue(suite.explicit_only)
+            self.assertIn("docker", suite.requires)
+            self.assertIn("--perf", suite.steps[0].command)
+            self.assertIn(name, catalog.CI_JOBS["perf-backend"].report_only)
+            self.assertNotIn(name, catalog.CI_JOBS["e2e"].report_only)
+
     def test_guide_topics_that_the_cli_names_exist(self):
         topics = cli.guide_sections()
         self.assertIn("write-a-ui-test", topics)
@@ -149,6 +199,18 @@ class SelectionTests(unittest.TestCase):
         with patch.dict(os.environ, {"CI": "true"}):
             command = runner.render_command(step, {}, "queries", ["--no-capture"])
         self.assertEqual(command[-5:], ["--profile", "ci", "-E", "(binary(ui)) and test(queries)", "--no-capture"])
+
+    def test_e2e_test_filters_keep_the_kyuubi_fixture_boundary(self):
+        step = catalog.SUITES["e2e"].steps[0]
+        for selected in [None, "postgres", "trino", "queries"]:
+            with self.subTest(selected=selected):
+                command = runner.render_command(step, {}, selected, [])
+                expression = command[command.index("-E") + 1]
+                self.assertIn("not test(/^postgres::/)", expression)
+                self.assertIn("not test(/^trino::/)", expression)
+                self.assertIn("not test(/^perf::/)", expression)
+                if selected:
+                    self.assertTrue(expression.endswith(f" and test({selected})"))
 
     def test_other_braces_stay_in_commands(self):
         command = runner.render_command(catalog.SUITES["scripts"].steps[0], {}, None, [])
@@ -240,14 +302,71 @@ class RunTests(unittest.TestCase):
             cli.main(["ci", "e2e"])
         self.assertTrue(run.call_args.kwargs["require_all"])
 
-    def test_the_job_list_shows_the_jobs_that_pull_requests_skip(self):
+    def test_the_job_list_shows_the_scope_of_each_job(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             cli.main(["ci"])
         lines = {line.split()[0]: line for line in output.getvalue().splitlines()}
         for name, job in catalog.CI_JOBS.items():
             with self.subTest(job=name):
-                self.assertEqual(lines[name].endswith("not in pull requests"), not job.pull_requests)
+                self.assertTrue(lines[name].endswith(cli.SCOPE_NOTES[job.scope]) if job.scope != "pull_request"
+                                else not lines[name].endswith(("requests", "only")))
+
+    def test_plans_of_pushes_and_manual_runs(self):
+        for flag, expected in (("--push", catalog.ci_jobs_for_event("push")), ("--all", list(catalog.CI_JOBS))):
+            output = io.StringIO()
+            with self.subTest(flag=flag), contextlib.redirect_stdout(output):
+                cli.main(["ci", "plan", flag])
+                plan = json.loads(output.getvalue())
+                self.assertEqual([name for name, selected in plan.items() if selected], expected)
+
+    def run_ci(self, *arguments, env=None):
+        with patch.dict(os.environ, env or {}), patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
+                patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
+            os.environ.pop("QROW_CI_MEASURE", None) if env is None else None
+            cli.main(["ci", *arguments])
+            environment = dict(os.environ)
+        return run, environment
+
+    def test_report_only_suites_run_only_when_the_run_measures(self):
+        run, _ = self.run_ci("package")
+        self.assertEqual([item.suite.name for item in run.call_args.args[0]], ["package"])
+        self.assertEqual(run.call_args.kwargs["report_only"], ())
+        for arguments, env in ((("package", "--measure"), None), (("package",), {"QROW_CI_MEASURE": "true"})):
+            with self.subTest(arguments=arguments):
+                run, _ = self.run_ci(*arguments, env=env)
+                self.assertEqual([item.suite.name for item in run.call_args.args[0]], ["package", "perf-app"])
+                self.assertEqual(run.call_args.kwargs["report_only"], ("perf-app",))
+
+    def test_a_measurement_job_does_nothing_when_the_run_does_not_measure(self):
+        run, _ = self.run_ci("perf-ui")
+        run.assert_not_called()
+
+    def test_the_e2e_job_packages_the_executable_of_its_test_build(self):
+        _, environment = self.run_ci("e2e")
+        self.assertEqual(environment["QROW_PACKAGE_PREBUILT"], "true")
+        self.assertEqual(environment["QROW_BUILD_PROFILE"], "debug")
+
+    def test_a_slow_ci_job_warns_about_its_budget(self):
+        job = catalog.CI_JOBS["ui"]
+        for actions, expected in (("true", "::warning title=CI budget::"), ("", "[qtest]")):
+            output, errors = io.StringIO(), io.StringIO()
+            with self.subTest(actions=actions), patch.dict(os.environ, {"GITHUB_ACTIONS": actions}), \
+                    contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                cli.report_budget(job, job.budget + 0.5)
+                cli.report_budget(job, job.budget - 0.5)
+                self.assertEqual((output.getvalue() + errors.getvalue()).count(expected), 1)
+
+    def test_a_ci_job_sets_its_environment_and_installs_its_rust_target(self):
+        commands = []
+        with patch.dict(os.environ, {}), patch.object(runner, "run", return_value={"exit_code": 0}), \
+                patch.object(cli, "install_tools", return_value=0), patch.object(cli, "print_summary"), \
+                patch.object(cli.subprocess, "run", side_effect=lambda command, **_: commands.append(command)
+                             or subprocess.CompletedProcess(command, 0)), \
+                contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["ci", "package-intel", "--install"])
+            self.assertEqual(os.environ["CARGO_BUILD_TARGET"], "x86_64-apple-darwin")
+        self.assertEqual(commands, [("rustup", "target", "add", "x86_64-apple-darwin")])
 
     def test_a_nextest_step_that_writes_no_report_does_not_report_old_failures(self):
         report = runner.junit_report()
@@ -385,7 +504,12 @@ class FixtureSessionTests(RunTests):
         self.assertIn("Preparation failed", summary["suites"][1]["reason"])
 
     def test_e2e_and_perf_e2e_share_the_build_of_the_test_binary(self):
-        self.assertEqual(catalog.SUITES["e2e"].prepare, catalog.SUITES["perf-e2e"].prepare)
+        self.assertEqual(catalog.SUITES["e2e"].prepare, (catalog.E2E_BUILD,))
+        self.assertEqual(catalog.SUITES["perf-e2e"].prepare, (catalog.E2E_BUILD,))
+        # Without `--test e2e`, nextest builds every test binary again after the servers start.
+        for name in ("e2e", "perf-e2e"):
+            step = catalog.SUITES[name].steps[0]
+            self.assertEqual(step.command[step.command.index("--test") + 1], "e2e")
 
     def test_failed_preparation_starts_no_servers(self):
         events, patches = self.fake()

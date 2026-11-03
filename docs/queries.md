@@ -25,6 +25,11 @@ If you select text, Qrow runs that text. Each execution must contain one SQL
 statement. Qrow rejects a selection with multiple statements before it sends
 SQL to the server.
 
+After a query finishes, use **Export results…** in Results to save all rows.
+If the result cursor is unavailable, review the original SQL before an export
+rerun. See [Rerun for export](results.md#rerun-for-export) for session checks
+and cancellation limits.
+
 The dot of a tab shows the state of its work. Point to the dot to read the
 tab name and a short status. The tooltip has no query detail line. The bar
 above Results shows neutral tags for the visible rows, loaded rows, columns,
@@ -148,11 +153,14 @@ the user's SQL after setup returns. It does not immediately interrupt every
 setup step. During result fetching, cancellation releases the cursor and keeps
 rows that Qrow has already downloaded.
 
-Each network read waits up to the
+For Kyuubi, each network read waits up to the
 [response timeout](connections.md#authentication-and-connection-failures) of
 the connection, 300 seconds by default. This is not a limit on the total query
 duration. A read that times out fails with `Kyuubi did not answer within 300
 seconds`, with the timeout of the connection. A failed cancellation request is reported as an error.
+
+For Postgres, see [Postgres limits](connections.md#postgres-limits) for timeout
+and transaction behavior. For Trino, see [Trino limits](connections.md#trino-limits).
 
 On application exit, Qrow uses the [workspace close
 confirmation](workspace.md#quit-and-save) if a query is active, then requests
@@ -165,6 +173,22 @@ remain responsible for abandoned resources.
 SQL, Logs history, and downloaded rows remain available after a query or
 fetch failure. Reconnection requires an explicit Run and does not restore
 session settings from earlier SQL statements.
+
+## Format SQL
+
+Right-click in the SQL editor and choose **Format**, or press **⌥⌘L**.
+If you select text, the command formats each statement in that selection.
+Otherwise, it formats the statement at the cursor. Text between statements
+stays the same. Press **⌘Z** once to undo the command.
+
+The command uses **Tab Size** and **SQL Keyword Case** from
+[Editor settings](workspace.md#appearance-and-layout). It does not run SQL
+or open a connection. Formatting runs only when you request it.
+
+The formatter checks that SQL tokens stay the same. If the check fails,
+the command keeps that statement and shows a warning. Unsupported statements
+also stay the same. The command uses the quoting rules of the connection
+type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 
 ## Syntax
 

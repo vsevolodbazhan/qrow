@@ -604,16 +604,9 @@ impl Runner {
                 } else {
                     Severity::Info
                 };
-                self.log_as(
-                    LogKind::SchemaRefreshFinished,
-                    severity,
-                    format!(
-                        "{outcome} (client measurement: {})",
-                        format_duration(duration)
-                    ),
-                    Some(duration),
-                );
                 let member = self.profile.id;
+                let close_session =
+                    matches!(result, Err(Interrupt::Unavailable(_) | Interrupt::TimedOut));
                 match result {
                     Ok(()) => {}
                     // The `Cancel` command can arrive after the flag stops the
@@ -640,16 +633,32 @@ impl Runner {
                     Err(Interrupt::TimedOut) => {
                         let message = format!("Refresh stopped after {}", format_minutes(timeout));
                         self.update(|catalog| catalog.set_error(&scope, message, member));
-                        // The cancelled request can still hold the session.
-                        self.close_session();
                     }
                     Err(Interrupt::Cold) => {}
                 }
+                self.status = Status {
+                    queued: self.queue.iter().cloned().collect(),
+                    ..Status::default()
+                };
+                self.publish(true);
+                // Activity can mark the outcome read as soon as it arrives.
+                // Send the failure snapshot first so that acknowledgement
+                // also includes every error produced by this refresh.
+                self.log_as(
+                    LogKind::SchemaRefreshFinished,
+                    severity,
+                    format!(
+                        "{outcome} (client measurement: {})",
+                        format_duration(duration)
+                    ),
+                    Some(duration),
+                );
                 self.save();
+                if close_session {
+                    self.close_session();
+                }
             }
             self.close_session();
-            self.status = Status::default();
-            self.publish(true);
         }
         self.close_session();
     }
@@ -1161,7 +1170,6 @@ impl Runner {
                 if healthy {
                     Ok(Err(message))
                 } else {
-                    self.close_session();
                     Err(Interrupt::Unavailable(message))
                 }
             }
@@ -1182,7 +1190,21 @@ impl Runner {
         }
         if self.session.is_none() {
             let started = Instant::now();
-            let secret = (self.credentials)(&self.profile)?;
+            let cancelled = self.cancelled.clone();
+            let running = self.running.clone();
+            let secret = (self.credentials)(&self.profile)?.with_control(
+                crate::external_auth::Control::new(
+                    Arc::new(move || {
+                        let flag = cancelled.load(Ordering::SeqCst);
+                        flag == CANCEL_ALL
+                            || running
+                                .lock()
+                                .unwrap()
+                                .is_some_and(|(batch, _)| flag == batch)
+                    }),
+                    Arc::new(|_| {}),
+                ),
+            );
             let session = self.connector.connect(&self.profile, secret)?;
             self.session = Some((self.profile.id, session));
             let duration = started.elapsed();
@@ -1210,7 +1232,7 @@ impl Runner {
             match self.session().poll()? {
                 QueryState::Finished { has_results } => break has_results,
                 QueryState::Cancelled => anyhow::bail!("The catalog request was cancelled"),
-                QueryState::Running => {}
+                QueryState::Running | QueryState::Streaming { .. } => {}
             }
             // Do not wait for the server to confirm a cancellation. The next
             // request closes the operation.
@@ -1238,6 +1260,10 @@ impl Runner {
         loop {
             let batch = self.session().fetch(METADATA_BATCH)?;
             if batch.rows.is_empty() {
+                anyhow::ensure!(
+                    !self.session().result_limited(),
+                    "The catalog request exceeded the connector result limit. Use per-relation column reads or hide some schemas in the connection settings."
+                );
                 break;
             }
             bytes = bytes.saturating_add(

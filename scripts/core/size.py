@@ -9,8 +9,11 @@ dist = os.environ.get("QROW_DIST_DIR", "dist")
 # The TLS stack and OpenID Connect sign-in took the executable over 24 MiB.
 # The dbt projects (manifest index, details sheet, and assistant tools) took
 # the Intel zip over 10 MiB with Qrow's own code, not new dependencies.
+# The ARM executable reached 29.35 MiB before data export. A Parquet writer
+# adds 0.64 MiB to the executable but only 0.22 MiB to the zip, which is the
+# download size.
 limits = {
-    f"{dist}/Qrow.app/Contents/MacOS/qrow": 30 * 1024 * 1024,
+    f"{dist}/Qrow.app/Contents/MacOS/qrow": 40 * 1024 * 1024,
     f"{dist}/Qrow-macos.zip": 12 * 1024 * 1024,
 }
 errors = []

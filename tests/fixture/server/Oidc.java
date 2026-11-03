@@ -47,8 +47,11 @@ import javax.net.ssl.SSLContext;
  * parameters of the authorization request.
  */
 public final class Oidc {
-    static final String CLIENT = "qrow-desktop";
-    static final String AUDIENCE = "kyuubi";
+    // The disposable Trino fixture uses a confidential, server-owned client.
+    // The existing Kyuubi fixture keeps its public PKCE client.
+    static final String TRINO_ORIGIN = System.getenv("QROW_FIXTURE_TRINO_ORIGIN");
+    static final String CLIENT = TRINO_ORIGIN == null ? "qrow-desktop" : "trino";
+    static final String AUDIENCE = TRINO_ORIGIN == null ? "kyuubi" : "trino";
     static final String KID = "fixture-1";
     static final List<String> SCOPES = List.of("openid", "profile", "email", "kyuubi", "offline_access");
     static final Pattern REDIRECT = Pattern.compile("http://127\\.0\\.0\\.1:([1-9][0-9]{0,4})/callback");
@@ -205,7 +208,17 @@ public final class Oidc {
                 if (type == null || !type.toLowerCase().startsWith("application/x-www-form-urlencoded")) {
                     return Response.error(400, "invalid_request", "Use application/x-www-form-urlencoded");
                 }
-                return token(form(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
+                Map<String, String> tokenForm = form(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                if (TRINO_ORIGIN != null) {
+                    String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+                    String expected = "Basic " + Base64.getEncoder().encodeToString(("trino:synthetic-trino-client-secret").getBytes(StandardCharsets.UTF_8));
+                    boolean secretForm = "synthetic-trino-client-secret".equals(tokenForm.get("client_secret"));
+                    if (!expected.equals(authorization) && !secretForm) {
+                        return Response.error(401, "invalid_client", "The confidential client secret is required");
+                    }
+                    tokenForm.put("client_id", CLIENT);
+                }
+                return token(tokenForm);
             case "/fixture/revoke":
                 return post ? revoke(query.get("user")) : notAllowed();
             case "/fixture/stats":
@@ -262,7 +275,8 @@ public final class Oidc {
             raw("code_challenge_methods_supported", array(List.of("S256"))),
             raw("grant_types_supported", array(List.of("authorization_code", "refresh_token"))),
             raw("scopes_supported", array(SCOPES)),
-            raw("token_endpoint_auth_methods_supported", array(List.of("none")))) + "}";
+            raw("token_endpoint_auth_methods_supported", array(TRINO_ORIGIN == null
+                ? List.of("none") : List.of("client_secret_basic", "client_secret_post")))) + "}";
     }
 
     String jwks() {
@@ -333,6 +347,7 @@ public final class Oidc {
     }
 
     static boolean loopbackRedirect(String uri) {
+        if (TRINO_ORIGIN != null) { return uri.equals(TRINO_ORIGIN + "/oauth2/callback"); }
         var match = REDIRECT.matcher(uri);
         return match.matches() && Integer.parseInt(match.group(1)) <= 65535;
     }
@@ -348,12 +363,12 @@ public final class Oidc {
         if (!SCOPES.containsAll(scopes(scope))) {
             return "Unknown scope";
         }
-        for (String name : List.of("state", "nonce", "code_challenge")) {
+        for (String name : TRINO_ORIGIN == null ? List.of("state", "nonce", "code_challenge") : List.of("state")) {
             if (query.getOrDefault(name, "").isEmpty()) {
                 return name + " is required";
             }
         }
-        if (!"S256".equals(query.get("code_challenge_method"))) {
+        if (TRINO_ORIGIN == null && !"S256".equals(query.get("code_challenge_method"))) {
             return "code_challenge_method must be S256";
         }
         return null;
@@ -409,7 +424,7 @@ public final class Oidc {
         String value = form.get("code");
         String verifier = form.get("code_verifier");
         String redirect = form.get("redirect_uri");
-        if (value == null || verifier == null || redirect == null) {
+        if (value == null || (TRINO_ORIGIN == null && verifier == null) || redirect == null) {
             return Response.error(400, "invalid_request", "code, redirect_uri, and code_verifier are required");
         }
         // Single use: a failed redemption also consumes the code.
@@ -420,7 +435,7 @@ public final class Oidc {
         if (!code.redirectUri().equals(redirect) || !code.clientId().equals(form.get("client_id"))) {
             return Response.error(400, "invalid_grant", "redirect_uri or client_id does not match");
         }
-        if (!verifier.matches("[A-Za-z0-9._~-]{43,128}") || !challenge(verifier).equals(code.challenge())) {
+        if (code.challenge() != null && (verifier == null || !verifier.matches("[A-Za-z0-9._~-]{43,128}") || !challenge(verifier).equals(code.challenge()))) {
             return Response.error(400, "invalid_grant", "PKCE verification failed");
         }
         Family family = new Family(code.user(), code.scope(), code.ttl());
@@ -452,7 +467,8 @@ public final class Oidc {
         }
         String refresh = rotate(family);
         count("refresh_token");
-        return Response.json(200, tokens(family, scope, refresh, null));
+        return Response.json(200, tokens(family, scope, refresh,
+            TRINO_ORIGIN == null ? null : idToken(family.user, null)));
     }
 
     String rotate(Family family) {
@@ -473,10 +489,10 @@ public final class Oidc {
     String tokens(Family family, Set<String> scope, String refresh, String idToken) {
         long issued = now();
         String scopeText = String.join(" ", scope);
-        String access = jwt("at+jwt", String.join(",",
+        String access = jwt(TRINO_ORIGIN == null ? "at+jwt" : "JWT", String.join(",",
             field("iss", issuer), field("sub", family.user.subject()), field("aud", AUDIENCE),
             field("azp", CLIENT), raw("iat", Long.toString(issued)), raw("exp", Long.toString(issued + family.ttl)),
-            field("scope", scopeText), field("jti", randomToken()),
+            field("scope", scopeText), field("preferred_username", family.user.name()), field("jti", randomToken()),
             raw("qrow_accounts", array(family.user.accounts()))));
         List<String> fields = new ArrayList<>(List.of(field("access_token", access), field("token_type", "Bearer"),
             raw("expires_in", Long.toString(family.ttl)), field("scope", scopeText)));
@@ -490,12 +506,15 @@ public final class Oidc {
     }
 
     String idToken(Code code) {
+        return idToken(code.user(), code.nonce());
+    }
+
+    String idToken(User user, String nonce) {
         long issued = now();
-        User user = code.user();
         return jwt("JWT", String.join(",",
             field("iss", issuer), field("sub", user.subject()), field("aud", CLIENT), field("azp", CLIENT),
             raw("iat", Long.toString(issued)), raw("exp", Long.toString(issued + ID_TOKEN_SECONDS)),
-            field("nonce", code.nonce()), field("name", user.displayName()), field("email", user.email()),
+            field("nonce", nonce == null ? "" : nonce), field("name", user.displayName()), field("email", user.email()),
             field("preferred_username", user.name())));
     }
 

@@ -1,7 +1,9 @@
 use super::setting_row::Rows;
+use super::unit_input::unit_input;
 use super::*;
 use crate::model::{
-    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, MAX_TAB_SIZE, MIN_TAB_SIZE,
+    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, AssistantHarness, CopyFormat,
+    MAX_TAB_SIZE, MIN_TAB_SIZE,
 };
 use crate::sql::KeywordCase;
 use crate::themes;
@@ -29,11 +31,11 @@ const CONTROL_REMS: f32 = 16.;
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
 const SYSTEM_FONT_LABEL: &str = "System Font";
 
-/// A setting the dialog edits with a stepper. The variants carry their own
-/// units, bounds, and formatting so that one control and one commit path serve
-/// all of them.
+/// A setting the dialog edits as a number. The variants carry their own
+/// units, bounds, and formatting so that one commit path serves all of them.
 #[derive(Clone, Copy, PartialEq)]
 enum NumberSetting {
+    ExportReplayLimit,
     Scale,
     EditorFontSize,
     EditorLineHeight,
@@ -45,7 +47,8 @@ enum NumberSetting {
 }
 
 impl NumberSetting {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
+        Self::ExportReplayLimit,
         Self::Scale,
         Self::EditorFontSize,
         Self::EditorLineHeight,
@@ -60,6 +63,7 @@ impl NumberSetting {
     /// keep the unit they are stored in.
     fn value(self, settings: &Settings) -> f32 {
         match self {
+            Self::ExportReplayLimit => settings.export_replay_limit_mib as f32,
             Self::Scale => settings.ui_scale * 100.,
             Self::EditorFontSize => settings.editor_font_size,
             Self::EditorLineHeight => settings.editor_line_height,
@@ -74,6 +78,7 @@ impl NumberSetting {
     /// Minimum, maximum, and step, in the displayed unit.
     fn range(self) -> (f32, f32, f32) {
         match self {
+            Self::ExportReplayLimit => (0., 1024. * 1024., 1.),
             Self::Scale => (
                 MIN_UI_SCALE * 100.,
                 MAX_UI_SCALE * 100.,
@@ -105,8 +110,14 @@ impl NumberSetting {
         }
     }
 
+    /// Sizes span too wide a range for a stepper, so they use a text field.
+    fn stepped(self) -> bool {
+        self != Self::ExportReplayLimit
+    }
+
     fn unit(self) -> &'static str {
         match self {
+            Self::ExportReplayLimit => "MiB",
             Self::Scale => "%",
             Self::EditorFontSize | Self::LogsFontSize | Self::AssistantFontSize => "px",
             Self::EditorLineHeight | Self::LogsLineHeight | Self::AssistantLineHeight => "x",
@@ -118,6 +129,7 @@ impl NumberSetting {
     /// so each control names its own scope.
     fn label(self) -> &'static str {
         match self {
+            Self::ExportReplayLimit => "Export Replay Limit",
             Self::Scale => "UI Scale",
             Self::EditorFontSize => "Editor Font Size",
             Self::EditorLineHeight => "Editor Line Height",
@@ -192,7 +204,7 @@ fn font_family_for_selection(value: String) -> String {
 
 pub(super) struct SettingsForm {
     theme: SettingSelect,
-    /// Each stepper with the value it last displayed, so that a change made
+    /// Each number field with the value it last displayed, so that a change made
     /// outside the dialog can be pushed back into the input.
     numbers: Vec<(NumberSetting, Entity<InputState>, Cell<f32>)>,
     /// The last value sent from Qrow to each picker. Search and keyboard
@@ -200,7 +212,10 @@ pub(super) struct SettingsForm {
     fonts: Vec<(FontSetting, SettingSelect, RefCell<String>)>,
     assistant_mode: SettingSelect,
     assistant_keyword_case: SettingSelect,
+    assistant_harness: SettingSelect,
     assistant_executable: Entity<InputState>,
+    claude_executable: Entity<InputState>,
+    copy_format: SettingSelect,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -377,15 +392,112 @@ impl Qrow {
                 }
             },
         ));
+        let harness = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    AssistantHarness::ALL
+                        .map(|harness| harness.name().to_owned())
+                        .to_vec(),
+                ),
+                AssistantHarness::ALL
+                    .iter()
+                    .position(|harness| *harness == self.settings.assistant.harness)
+                    .map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &harness,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && let Some(harness) = AssistantHarness::ALL
+                        .into_iter()
+                        .find(|harness| harness.name() == value)
+                {
+                    this.select_assistant_harness(harness, window, cx);
+                }
+            },
+        ));
+        let claude_executable = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Automatic")
+                .default_value(
+                    self.settings
+                        .assistant
+                        .claude_executable
+                        .clone()
+                        .unwrap_or_default(),
+                )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &claude_executable,
+            window,
+            |this, input, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    let value = input.read(cx).value().trim().to_owned();
+                    let value = (!value.is_empty()).then_some(value);
+                    if this.settings.assistant.claude_executable != value {
+                        this.settings.assistant.claude_executable = value;
+                        this.changed(cx);
+                    }
+                }
+            },
+        ));
+        let copy_format = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    CopyFormat::ALL
+                        .map(|format| format.label().to_owned())
+                        .to_vec(),
+                ),
+                CopyFormat::ALL
+                    .iter()
+                    .position(|format| *format == self.settings.copy_format)
+                    .map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &copy_format,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && let Some(format) = CopyFormat::ALL
+                        .into_iter()
+                        .find(|format| format.label() == value)
+                {
+                    this.set_copy_format(format, cx);
+                }
+            },
+        ));
         self.settings_form = Some(SettingsForm {
             theme,
             numbers,
             fonts,
             assistant_mode: mode,
             assistant_keyword_case: keyword_case,
+            assistant_harness: harness,
             assistant_executable: executable,
+            claude_executable,
+            copy_format,
             _subscriptions: subscriptions,
         });
+    }
+
+    fn set_copy_format(&mut self, format: CopyFormat, cx: &mut Context<Self>) {
+        if self.settings.copy_format == format {
+            return;
+        }
+        self.settings.copy_format = format;
+        for table in self.tabs.iter().flat_map(Tab::result_tables) {
+            table.update(cx, |table, _| {
+                table.delegate_mut().copy_format = format;
+            });
+        }
+        self.changed(cx);
     }
 
     fn commit_number_setting(
@@ -427,6 +539,20 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) {
         match setting {
+            NumberSetting::ExportReplayLimit => {
+                self.settings.export_replay_limit_mib = value as u32;
+                let limit = u64::from(self.settings.export_replay_limit_mib) * 1024 * 1024;
+                for tab in &mut self.tabs {
+                    if tab
+                        .replay
+                        .as_ref()
+                        .is_some_and(|spool| limit == 0 || spool.bytes() > limit)
+                    {
+                        tab.replay = None;
+                    }
+                }
+                self.changed(cx);
+            }
             NumberSetting::Scale => self.apply_ui_scale(value / 100., window, cx),
             NumberSetting::EditorFontSize if self.settings.editor_font_size != value => {
                 self.settings.editor_font_size = value;
@@ -507,7 +633,7 @@ impl Qrow {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert.title("Enable the assistant?")
-                .description("Qrow sends selected SQL, allowed connection and tab details, the assistant notes of connections, the cached names and comments of schemas, tables, views, and columns, and the descriptions, tests, and lineage of dbt projects to Codex. It sends them only when you send a message or when the assistant reads them with a tool. Codex is a separate installation and keeps conversation history locally. Demo threads can remain in Codex after a crash.")
+                .description("Qrow sends selected SQL, allowed connection and tab details, the assistant notes of connections, the cached names and comments of schemas, tables, views, and columns, and the descriptions, tests, and lineage of dbt projects to the harness that you select: Codex or Claude Code. It sends them only when you send a message or when the assistant reads them with a tool. Each harness is a separate installation with its own account, and it keeps conversation history locally. Qrow also keeps a copy of each conversation on this Mac. Demo threads can remain in the harness after a crash.")
                 .footer(DialogFooter::new().justify_end()
                     .child(Button::new("cancel-enable-assistant").label("Cancel").on_click(|_, window, cx| window.close_dialog(cx)))
                     .child(Button::new("confirm-enable-assistant").primary().label("Enable")
@@ -650,6 +776,20 @@ impl Qrow {
                 state.set_selected_value(&keyword_case.to_owned(), window, cx)
             });
         }
+        // A switch that waits for confirmation, or that the user cancels,
+        // keeps the harness that runs.
+        let harness = self.settings.assistant.harness.name();
+        if form
+            .assistant_harness
+            .read(cx)
+            .selected_value()
+            .map(String::as_str)
+            != Some(harness)
+        {
+            form.assistant_harness.update(cx, |state, cx| {
+                state.set_selected_value(&harness.to_owned(), window, cx)
+            });
+        }
         // Match the gap the dialog leaves above the footer, which the dialog
         // adds to the smaller gap below the title.
         div()
@@ -662,6 +802,22 @@ impl Qrow {
             .child(
                 settings_panel("settings", window, cx)
                     .page(appearance_page(form))
+                    .page(
+                        SettingPage::new("Export")
+                            .resettable(false)
+                            .group(SettingGroup::new().title("Copy").item(setting_item(
+                                "Copy Format",
+                                "Format of ⌘C and Copy cell, selection, or row in results.",
+                                &["copy", "clipboard", "markdown", "plain", "csv", "tsv", "json"],
+                                select_field(&form.copy_format, "Copy Format"),
+                            )))
+                            .group(SettingGroup::new().title("Replay").item(setting_item(
+                                "Replay Limit",
+                                "Keep completed downloads up to this size. Zero turns retention off.",
+                                &["export", "replay", "spool", "disk"],
+                                number_field(form, NumberSetting::ExportReplayLimit),
+                            ))),
+                    )
                     .page(assistant_page(
                         form,
                         cx.weak_entity(),
@@ -697,10 +853,17 @@ impl Qrow {
                             this.commit_number_setting(&input, setting, 0., window, cx);
                         }
                         if let Some(form) = &this.settings_form {
-                            let path = form.assistant_executable.read(cx).value().trim().to_owned();
-                            let path = (!path.is_empty()).then_some(path);
-                            if this.settings.assistant.codex_executable != path {
-                                this.settings.assistant.codex_executable = path;
+                            let read = |input: &Entity<InputState>| {
+                                let path = input.read(cx).value().trim().to_owned();
+                                (!path.is_empty()).then_some(path)
+                            };
+                            let codex = read(&form.assistant_executable);
+                            let claude = read(&form.claude_executable);
+                            if this.settings.assistant.codex_executable != codex
+                                || this.settings.assistant.claude_executable != claude
+                            {
+                                this.settings.assistant.codex_executable = codex;
+                                this.settings.assistant.claude_executable = claude;
                                 this.changed(cx);
                             }
                         }
@@ -795,7 +958,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 ))
                 .item(setting_item(
                     "SQL Keyword Case",
-                    "Keyword case of the SQL that the assistant writes.",
+                    "Keyword case for formatted and assistant-generated SQL.",
                     &[
                         "editor",
                         "sql",
@@ -834,6 +997,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
 
 fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -> SettingPage {
     let executable = form.assistant_executable.clone();
+    let claude_executable = form.claude_executable.clone();
     SettingPage::new("Assistant")
         .resettable(false)
         .group(
@@ -841,8 +1005,8 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                 .title("General")
                 .item(setting_item(
                     "Enabled",
-                    "Shows the assistant button and turns on ⌘J.",
-                    &["assistant", "enable", "codex", "ai"],
+                    "Shows the assistant button and turns on ⌘R.",
+                    &["assistant", "enable", "codex", "claude", "ai"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();
                         Switch::new("enable-assistant")
@@ -854,6 +1018,12 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                                 });
                             })
                     },
+                ))
+                .item(setting_item(
+                    "Harness",
+                    "Runs new conversations. A conversation keeps its harness.",
+                    &["assistant", "harness", "codex", "claude", "agent"],
+                    select_field(&form.assistant_harness, "Assistant Harness"),
                 ))
                 .item(setting_item(
                     "Query Execution",
@@ -872,6 +1042,18 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                     .id(setting_id("Codex Executable"))
                     .w_full()
                     .aria_label("Codex Executable")
+            },
+        )))
+        .group(SettingGroup::new().title("Claude Code").item(setting_item(
+            "Executable",
+            "Empty searches your PATH, Homebrew folders, and ~/.local/bin.",
+            &["assistant", "claude", "path", "binary"],
+            move |_: &mut Window, _: &mut App| {
+                Input::new(&claude_executable)
+                    .focus_ring(false)
+                    .id(setting_id("Claude Code Executable"))
+                    .w_full()
+                    .aria_label("Claude Code Executable")
             },
         )))
 }
@@ -923,6 +1105,10 @@ pub(super) fn setting_row<E: IntoElement>(
                 |label| {
                     label.child(
                         div()
+                            .id(SharedString::from(format!("setting-help-{title}")))
+                            .test_support()
+                            .role(Role::Label)
+                            .aria_label(description.clone())
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(description.clone()),
@@ -973,7 +1159,21 @@ fn number_field(
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     let input = form.number(setting).clone();
     move |window: &mut Window, cx: &mut App| {
-        setting_stepper(&input, setting.unit(), setting.label(), window, cx).into_any_element()
+        if setting.stepped() {
+            setting_stepper(&input, setting.unit(), setting.label(), window, cx).into_any_element()
+        } else {
+            let id = setting_id(setting.label());
+            let unit_id = SharedString::from(format!("{id}-unit"));
+            unit_input(
+                &input,
+                id,
+                setting.label(),
+                (setting.unit(), unit_id),
+                false,
+                window,
+                cx,
+            )
+        }
     }
 }
 

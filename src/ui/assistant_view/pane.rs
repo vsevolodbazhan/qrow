@@ -289,10 +289,19 @@ impl AssistantPane {
         let busy = displayed
             .as_deref()
             .is_some_and(|thread| qrow.thread_status(thread).busy());
+        // A conversation of another harness shows its saved copy. Its next
+        // message needs that harness.
+        let other_harness = displayed
+            .as_deref()
+            .filter(|thread| !qrow.conversation_runs(thread))
+            .map(|thread| qrow.conversation_harness(thread));
+        let harness_name = qrow.settings.assistant.harness.name();
+        let has_tiers = qrow.settings.assistant.harness == AssistantHarness::Codex;
         let mode_is_run = qrow.displayed_mode() == AssistantExecutionMode::RunAutomatically;
         let model = qrow.assistant_state.snapshot.as_ref().and_then(|snapshot| {
             qrow.settings
                 .assistant
+                .choice()
                 .model
                 .as_deref()
                 .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
@@ -308,6 +317,7 @@ impl AssistantPane {
                 let find = |id: &str| efforts.iter().find(|effort| effort.id() == id);
                 qrow.settings
                     .assistant
+                    .choice()
                     .reasoning_effort
                     .as_deref()
                     .and_then(find)
@@ -320,6 +330,7 @@ impl AssistantPane {
             .map(|model| {
                 qrow.settings
                     .assistant
+                    .choice()
                     .service_tier
                     .as_deref()
                     .and_then(|id| model.service_tiers().iter().find(|tier| tier.id() == id))
@@ -333,7 +344,7 @@ impl AssistantPane {
             if controls_ready && model.is_some() {
                 format!("{name}: {value}")
             } else {
-                format!("{name}: waiting for Codex")
+                format!("{name}: waiting for {harness_name}")
             }
         };
         let model_width = assistant_select_width(&model_label);
@@ -350,7 +361,8 @@ impl AssistantPane {
                     .map(|candidate| {
                         (
                             candidate.display_name().to_owned(),
-                            qrow.settings.assistant.model.as_deref() == Some(candidate.id()),
+                            qrow.settings.assistant.choice().model.as_deref()
+                                == Some(candidate.id()),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -373,12 +385,12 @@ impl AssistantPane {
             .map(|model| {
                 let mut options = vec![(
                     "Default".to_owned(),
-                    qrow.settings.assistant.service_tier.is_none(),
+                    qrow.settings.assistant.choice().service_tier.is_none(),
                 )];
                 options.extend(model.service_tiers().iter().map(|tier| {
                     (
                         tier.name().to_owned(),
-                        qrow.settings.assistant.service_tier.as_deref() == Some(tier.id()),
+                        qrow.settings.assistant.choice().service_tier.as_deref() == Some(tier.id()),
                     )
                 }));
                 options
@@ -589,6 +601,37 @@ impl AssistantPane {
                     )
                 },
             )
+            .when_some(other_harness, |panel, harness| {
+                let name = harness.name();
+                panel.child(
+                    h_flex()
+                        .id("assistant-other-harness")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(format!("This conversation uses {name}."))
+                        .px_3()
+                        .py_2()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("This conversation uses {name}.")),
+                        )
+                        .child(
+                            Button::new("assistant-use-harness")
+                                .small()
+                                .label(format!("Use {name}"))
+                                .on_click(on_qrow(&self.qrow, move |this, _, window, cx| {
+                                    this.select_assistant_harness(harness, window, cx)
+                                })),
+                        ),
+                )
+            })
             .child(
                 v_flex()
                     .flex_shrink_0()
@@ -656,7 +699,7 @@ impl AssistantPane {
                                                     ))
                                                 })
                                             }))
-                                    .child(
+                                    .when(has_tiers, |row| row.child(
                                         Button::new("assistant-tier")
                                             .ghost().small().compact()
                                             .icon(AssetIconName::BatteryCharging)
@@ -677,7 +720,7 @@ impl AssistantPane {
                                                         },
                                                     ))
                                                 })
-                                            })),
+                                            }))),
                             )
                             .child(div().flex_1())
                             .when_some(disconnected_error, |row, error| row.child(
@@ -685,7 +728,7 @@ impl AssistantPane {
                                     .small()
                                     .icon(AssetIconName::RotateCw)
                                     .label("Reconnect")
-                                    .accessibility_label("Reconnect to Codex")
+                                    .accessibility_label(format!("Reconnect to {harness_name}"))
                                     .tooltip(error)
                                     .on_click(on_qrow(&self.qrow, |this, _, window, cx| this.reconnect_assistant(window, cx))),
                             ))
@@ -695,7 +738,7 @@ impl AssistantPane {
                                     .label("Cancel")
                                     .accessibility_label("Cancel assistant turn")
                                     .tooltip("Cancel assistant turn")
-                                    .on_click(on_qrow(&self.qrow, |this, _, _, cx| this.stop_assistant(cx))),
+                                    .on_click(on_qrow(&self.qrow, |this, _, window, cx| this.stop_assistant(window, cx))),
                             ))
                             .when(!disconnected && !active_turn, |row| row.child(
                                 h_flex().gap_2().flex_shrink_0()
@@ -732,7 +775,7 @@ impl AssistantPane {
                                             .primary().small()
                                             .icon(AssetIconName::Send)
                                             .label("Send")
-                                            .disabled(!controls_ready || first_message.is_some())
+                                            .disabled(!controls_ready || first_message.is_some() || other_harness.is_some())
                                             .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Send message", "")
                                                 .for_action_in(&SendAssistantMessage, self.composer.focus_handle(cx))); button })
                                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {

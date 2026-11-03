@@ -436,3 +436,55 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
         Some(sql)
     );
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
+    let sql = "select '日本語😀;' as value";
+    let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(cx, "formatted query", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == "SELECT '日本語😀;' AS value"
+    });
+    app.press(cx, "cmd-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀;");
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-z");
+    app.wait_until(cx, "original SQL", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    let height = app.update(cx, |window, _| {
+        window.find("sql-editor").bounds().size.height
+    });
+    app.click(cx, "toggle-results");
+    app.update(cx, |window, _| {
+        assert!(window.find("sql-editor").bounds().size.height > height);
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+    });
+    app.click(cx, "run");
+    app.wait_cell(cx, 0, 1, "233");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
+        assert_eq!(window.find("sql-editor").bounds().size.height, height);
+    });
+    app.press(cx, "cmd-j");
+    app.press(cx, "cmd-j");
+    app.wait_cell(cx, 0, 1, "233");
+    app.wait_until(
+        cx,
+        "saved restored results",
+        Duration::from_secs(10),
+        |_, _| !app.saved().settings.results_minimized,
+    );
+}

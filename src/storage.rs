@@ -132,6 +132,16 @@ pub fn dbt_directory(workspace: &Path) -> PathBuf {
     workspace.parent().unwrap_or(Path::new(".")).join("dbt")
 }
 
+/// The folder of the saved assistant transcripts, next to the workspace
+/// file. The workspace lock also protects this folder.
+pub fn assistant_transcripts_directory(workspace: &Path) -> PathBuf {
+    workspace
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("assistant")
+        .join("transcripts")
+}
+
 /// Read a schema cache. A missing, unreadable, or outdated file gives `None`,
 /// because Qrow can read the schemas from the server again.
 pub fn load_catalog(path: &Path) -> Option<Catalog> {

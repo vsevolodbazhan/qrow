@@ -15,3 +15,9 @@ mod sql_properties;
 mod storage;
 mod tls;
 mod workers;
+
+mod postgres;
+
+mod trino;
+
+mod transfer_perf;

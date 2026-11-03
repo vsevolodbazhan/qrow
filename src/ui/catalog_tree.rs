@@ -10,7 +10,7 @@
 use super::*;
 use crate::catalog::{
     Catalog, CatalogConfig, CatalogIdentity, CatalogWorker, Event as CatalogEvent, RelationKind,
-    Scope, Seed, Status, catalog_key, qualified_name, quote_identifier,
+    Scope, Seed, Status, catalog_key, qualified_name,
 };
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::FocusableExt as _;
@@ -44,8 +44,67 @@ const ROW_HEIGHT: f32 = 30.;
 const ROW_GAP: f32 = 4.;
 /// The trailing lane shared by catalog status icons and the header action.
 const STATUS_SLOT_WIDTH: f32 = 28.;
+/// The opacity of the accent fill of the current connection row.
+const CURRENT_CONNECTION_FILL: f32 = 0.18;
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
+
+#[derive(Clone)]
+struct DragConnection {
+    id: Uuid,
+    name: String,
+    database_type: crate::model::DatabaseType,
+}
+
+impl Render for DragConnection {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .bg(cx.theme().popover)
+            .text_color(cx.theme().popover_foreground)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(cx.theme().radius)
+            .child(
+                Icon::default()
+                    .path(crate::assets::connection_icon(self.database_type))
+                    .size_4(),
+            )
+            .child(self.name.clone())
+    }
+}
+
+fn connection_drop_target(id: Uuid, after: bool, weak: WeakEntity<Qrow>) -> impl IntoElement {
+    div()
+        .id(SharedString::from(format!(
+            "connection-drop-{}-{id}",
+            if after { "after" } else { "before" }
+        )))
+        .test_support()
+        .absolute()
+        .left_0()
+        .w_full()
+        .h(relative(0.5))
+        .map(|el| if after { el.bottom_0() } else { el.top_0() })
+        .drag_over::<DragConnection>(move |style, drag, _, cx| {
+            if drag.id == id {
+                return style;
+            }
+            let style = style.border_color(cx.theme().primary);
+            if after {
+                style.border_b_2()
+            } else {
+                style.border_t_2()
+            }
+        })
+        .on_drop(move |drag: &DragConnection, _, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.reorder_connection(drag.id, id, after, cx)
+            });
+        })
+}
 
 /// What a tree row shows. The tree item ID is the key of its node.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +116,7 @@ pub(super) enum Node {
         relations: Option<usize>,
         loading: bool,
         error: Option<String>,
+        error_id: Option<Uuid>,
     },
     Relation {
         profile: Uuid,
@@ -66,6 +126,7 @@ pub(super) enum Node {
         comment: Option<String>,
         loading: bool,
         error: Option<String>,
+        error_id: Option<Uuid>,
         /// The dbt resource that builds the relation.
         dbt: Option<super::dbt::DbtBadge>,
     },
@@ -76,6 +137,8 @@ pub(super) enum Node {
         name: String,
         data_type: String,
         comment: Option<String>,
+        description: Option<String>,
+        description_cut: bool,
     },
     /// A row that explains the state of its parent, with an optional refresh.
     Notice {
@@ -88,14 +151,23 @@ pub(super) enum Node {
 
 impl Node {
     /// The name that Copy gives and the name for SQL, for a node with a name.
-    fn names(&self) -> Option<(String, String)> {
+    fn names(&self, kind: crate::model::DatabaseType, catalog: &str) -> Option<(String, String)> {
         match self {
-            Node::Schema { name, .. } => Some((name.clone(), quote_identifier(name))),
+            Node::Schema { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
             Node::Relation { schema, name, .. } => {
-                let qualified = qualified_name(schema, name);
+                let qualified = format!(
+                    "{}.{}",
+                    kind.quote_identifier(schema),
+                    kind.quote_identifier(name)
+                );
+                let qualified = if kind == crate::model::DatabaseType::Trino {
+                    format!("{}.{}", kind.quote_identifier(catalog), qualified)
+                } else {
+                    qualified
+                };
                 Some((qualified.clone(), qualified))
             }
-            Node::Column { name, .. } => Some((name.clone(), quote_identifier(name))),
+            Node::Column { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
             Node::Connection(_) | Node::Notice { .. } => None,
         }
     }
@@ -105,7 +177,6 @@ impl Node {
 pub(super) enum Tone {
     Muted,
     Loading,
-    Error,
 }
 
 /// The catalog of one connection, or of the connections that share it, as
@@ -134,6 +205,8 @@ pub(super) struct CatalogTree {
     /// The refreshes of each connection, from the status of its catalog.
     statuses: HashMap<Uuid, Status>,
     nodes: Rc<HashMap<SharedString, Node>>,
+    /// Failures acknowledged through Activity, separately for each member.
+    seen_errors: Rc<HashMap<Uuid, HashSet<Uuid>>>,
     /// The laid-out width of each label in the last frame, to know which
     /// names the rows truncate.
     widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
@@ -157,6 +230,7 @@ impl CatalogTree {
             keys: HashMap::new(),
             statuses: HashMap::new(),
             nodes: Rc::new(HashMap::new()),
+            seen_errors: Rc::new(HashMap::new()),
             widths: Rc::new(RefCell::new(HashMap::new())),
             tips: Rc::new(RefCell::new(HashMap::new())),
             focus: cx.focus_handle(),
@@ -331,14 +405,7 @@ impl Builder<'_> {
         refresh: Option<Scope>,
     ) -> TreeItem {
         let text = text.into();
-        // A row can show an error and a state notice, so each tone has an ID.
-        let id = child_id(
-            parent,
-            match tone {
-                Tone::Error => "error",
-                Tone::Muted | Tone::Loading => "notice",
-            },
-        );
+        let id = child_id(parent, "notice");
         self.add(
             id,
             text.clone(),
@@ -420,14 +487,8 @@ impl Builder<'_> {
                 format!("Loading schemas… {}/{}", status.done, status.total)
             };
             children.push(self.notice(id, profile, text, Tone::Loading, None));
-        } else if let Some(error) = self.tree.connection_error(profile) {
-            children.push(self.notice(
-                id,
-                profile,
-                error.to_owned(),
-                Tone::Error,
-                Some(Scope::Connection),
-            ));
+        } else if self.tree.connection_error(profile).is_some() {
+            // The connection status opens Activity with the refresh error.
         } else if catalog.fetched_at.is_none() && catalog.schemas.is_empty() {
             let text = if status.includes(&Scope::Connection) {
                 "Waiting…"
@@ -472,6 +533,7 @@ impl Builder<'_> {
                     relations: schema.relations.as_ref().map(BTreeMap::len),
                     loading: status.includes(&Scope::Schema(name.clone())),
                     error: schema.error_for(profile).map(str::to_owned),
+                    error_id: schema.error_id,
                 },
             );
             // A search shows only the matching relations of a schema that
@@ -512,18 +574,15 @@ impl Builder<'_> {
         let loading = status.includes(&scope) || status.includes(&Scope::Connection);
         match (&node.relations, node.error_for(profile)) {
             (None, _) if loading => {
-                children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
+                children.push(self.notice(id, profile, "Loading relations…", Tone::Loading, None))
             }
-            (None, Some(error)) => {
-                children.push(self.notice(id, profile, error, Tone::Error, Some(scope)))
-            }
+            // The status dot opens Activity; keep failures out of the child list.
+            (None, Some(_)) => {}
             (None, None) => {
                 children.push(self.notice(id, profile, "Not loaded", Tone::Muted, Some(scope)))
             }
             (Some(relations), error) => {
-                if let Some(error) = error {
-                    children.push(self.notice(id, profile, error, Tone::Error, Some(scope)));
-                } else if relations.is_empty() {
+                if relations.is_empty() && error.is_none() {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
                 for (name, relation) in relations {
@@ -549,6 +608,7 @@ impl Builder<'_> {
                             loading: status.includes(&Scope::Relation(schema.into(), name.clone()))
                                 || status.includes(&Scope::Schema(schema.into())),
                             error: relation.error_for(profile).map(str::to_owned),
+                            error_id: relation.error_id,
                             dbt: self.dbt.get(&profile).and_then(|lookup| {
                                 lookup.badge(schema, name, relation.comment.as_deref())
                             }),
@@ -580,9 +640,6 @@ impl Builder<'_> {
             || status.includes(&Scope::Connection);
         let mut children = vec![];
         let error = node.error_for(profile);
-        if let Some(error) = error {
-            children.push(self.notice(id, profile, error, Tone::Error, Some(scope.clone())));
-        }
         match &node.columns {
             None if loading => {
                 children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
@@ -595,21 +652,34 @@ impl Builder<'_> {
                 children.push(self.notice(id, profile, "No columns", Tone::Muted, None))
             }
             Some(columns) => {
+                let descriptions = self
+                    .dbt
+                    .get(&profile)
+                    .map(|lookup| lookup.column_descriptions(schema, relation, columns))
+                    .unwrap_or_default();
                 for (ix, column) in columns.iter().enumerate() {
                     let item_id = child_id(id, &format!("{ix}{SEPARATOR}{}", column.name));
                     let data_type = display_type(&column.data_type);
-                    children.push(self.add(
-                        item_id,
-                        format!("{} {data_type}", column.name),
-                        Node::Column {
-                            profile,
-                            schema: schema.into(),
-                            relation: relation.into(),
-                            name: column.name.clone(),
-                            data_type,
-                            comment: column.comment.clone(),
-                        },
-                    ));
+                    children.push(
+                        self.add(
+                            item_id,
+                            format!("{} {data_type}", column.name),
+                            Node::Column {
+                                profile,
+                                schema: schema.into(),
+                                relation: relation.into(),
+                                name: column.name.clone(),
+                                data_type,
+                                comment: column.comment.clone(),
+                                description: descriptions
+                                    .get(&column.name)
+                                    .and_then(|(text, _)| text.clone()),
+                                description_cut: descriptions
+                                    .get(&column.name)
+                                    .is_some_and(|(_, cut)| *cut),
+                            },
+                        ),
+                    );
                 }
             }
         }
@@ -619,6 +689,7 @@ impl Builder<'_> {
 
 /// What a connection row shows in the current frame.
 struct ConnectionRow {
+    database_type: crate::model::DatabaseType,
     name: String,
     tooltip: StatusTooltip,
     running: bool,
@@ -635,8 +706,98 @@ struct ConnectionRow {
 }
 
 impl Qrow {
+    fn reorder_connection(&mut self, id: Uuid, target: Uuid, after: bool, cx: &mut Context<Self>) {
+        if id == target {
+            return;
+        }
+        let Some(source_ix) = self.profiles.iter().position(|profile| profile.id == id) else {
+            return;
+        };
+        let Some(target_ix) = self
+            .profiles
+            .iter()
+            .position(|profile| profile.id == target)
+        else {
+            return;
+        };
+        let destination_ix = target_ix + usize::from(after) - usize::from(source_ix < target_ix);
+        if source_ix == destination_ix {
+            return;
+        }
+        let profile = self.profiles.remove(source_ix);
+        self.profiles.insert(destination_ix, profile);
+        self.rebuild_catalog_tree(cx);
+        self.changed(cx);
+    }
+
+    pub(super) fn move_connection(&mut self, id: Uuid, down: bool, cx: &mut Context<Self>) {
+        let Some(ix) = self.profiles.iter().position(|profile| profile.id == id) else {
+            return;
+        };
+        let target_ix = if down {
+            ix.checked_add(1)
+        } else {
+            ix.checked_sub(1)
+        };
+        if let Some(target) = target_ix
+            .and_then(|ix| self.profiles.get(ix))
+            .map(|profile| profile.id)
+        {
+            self.reorder_connection(id, target, down, cx);
+            if let Some(ix) = self.catalog.state.read(cx).index_of(&connection_id(id)) {
+                self.catalog
+                    .state
+                    .read(cx)
+                    .scroll_handle()
+                    .scroll_to_item(ix, ScrollStrategy::Nearest);
+            }
+        }
+    }
+
+    fn move_selected_connection(&mut self, down: bool, cx: &mut Context<Self>) {
+        let selected = self
+            .catalog
+            .state
+            .read(cx)
+            .selected_item()
+            .map(|item| item.id.clone());
+        if let Some(Node::Connection(id)) = selected.as_ref().and_then(|id| self.catalog.node(id)) {
+            self.move_connection(*id, down, cx);
+        }
+    }
+
+    /// Activity acknowledges the failures currently held by this member's catalog.
+    pub(super) fn mark_catalog_errors_seen(&mut self, profile: Uuid) {
+        let seen = self
+            .catalog
+            .catalog(profile)
+            .map(|catalog| {
+                catalog
+                    .schemas
+                    .values()
+                    .flat_map(|schema| {
+                        schema
+                            .error_id
+                            .filter(|_| schema.error_for(profile).is_some())
+                            .into_iter()
+                            .chain(schema.relations.iter().flat_map(|relations| {
+                                relations.values().filter_map(|relation| {
+                                    relation
+                                        .error_id
+                                        .filter(|_| relation.error_for(profile).is_some())
+                                })
+                            }))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Rc::make_mut(&mut self.catalog.seen_errors).insert(profile, seen);
+    }
+
     /// Rebuild the tree items. Keeps the selected row when it still exists.
     pub(super) fn rebuild_catalog_tree(&mut self, cx: &mut Context<Self>) {
+        Rc::make_mut(&mut self.catalog.seen_errors)
+            .retain(|profile, _| self.profiles.iter().any(|item| item.id == *profile));
         let search = self.catalog.search.read(cx).value().trim().to_lowercase();
         let dbt = self.dbt_lookups();
         let mut builder = Builder {
@@ -915,6 +1076,7 @@ impl Qrow {
                     relations: None,
                     loading: false,
                     error: None,
+                    ..
                 } if self.catalog_warm(profile) => {
                     self.refresh_catalog(profile, Scope::Schema(name), cx);
                 }
@@ -1060,6 +1222,20 @@ impl Qrow {
         }
     }
 
+    /// Selects the row of the connection `profile` and focuses the tree.
+    pub(super) fn select_catalog_connection(
+        &mut self,
+        profile: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.catalog.state.update(cx, |state, cx| {
+            let ix = state.index_of(&connection_id(profile));
+            state.set_selected_index(ix, cx);
+            state.focus(window, cx);
+        });
+    }
+
     /// Inserts `text` at the cursor of the active query tab.
     fn insert_into_editor(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         let input = self.tabs[self.active].input.clone();
@@ -1136,10 +1312,21 @@ impl Qrow {
         cx.notify();
     }
 
+    fn catalog_node_names(&self, node: &Node) -> Option<(String, String)> {
+        let id = match node {
+            Node::Schema { profile, .. }
+            | Node::Relation { profile, .. }
+            | Node::Column { profile, .. } => *profile,
+            _ => return None,
+        };
+        let profile = self.profiles.iter().find(|profile| profile.id == id)?;
+        node.names(profile.database_type, &profile.database)
+    }
+
     /// The names of the row that the tree selects.
     fn selected_catalog_names(&self, cx: &App) -> Option<(String, String)> {
         let state = self.catalog.state.read(cx);
-        self.catalog.node(&state.selected_item()?.id)?.names()
+        self.catalog_node_names(self.catalog.node(&state.selected_item()?.id)?)
     }
 
     /// Copies the name of the selected row, like Copy Name in its menu.
@@ -1166,7 +1353,7 @@ impl Qrow {
         let Some(node) = self.catalog.node(&id).cloned() else {
             return;
         };
-        let Some((name, insert)) = node.names() else {
+        let Some((name, insert)) = self.catalog_node_names(&node) else {
             return;
         };
         let (profile, scope) = match &node {
@@ -1286,7 +1473,7 @@ impl Qrow {
         query_status.max(
             if self.activity.read(cx).activity().unseen_errors_of(id) > 0 {
                 Some(DotStatus::Error)
-            } else if self.catalog.is_refreshing(id) {
+            } else if self.catalog.is_refreshing(id) || self.external_authentication_pending(id) {
                 Some(DotStatus::Working)
             } else {
                 None
@@ -1298,76 +1485,81 @@ impl Qrow {
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let action_size = self.ui_px(STATUS_SLOT_WIDTH);
         let active = self.active_profile();
-        let rows: Rc<HashMap<Uuid, ConnectionRow>> =
-            Rc::new(
-                self.profiles
-                    .iter()
-                    .map(|profile| {
-                        let id = profile.id;
-                        let refresh_error = self.catalog.connection_error(id);
-                        let status = self.connection_dot_status(id, cx);
-                        let connected = self
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.worker_profile == Some(id) && tab.connected);
-                        let unread_success = self.tabs.iter().any(|tab| {
-                            tab.saved.profile == Some(id) && tab.panel.has_unread_success()
-                        });
-                        let assistant_states: Vec<_> = self
-                            .tabs
-                            .iter()
-                            .filter(|tab| tab.saved.profile == Some(id))
-                            .filter_map(|tab| {
-                                self.settings
-                                    .assistant
-                                    .enabled
-                                    .then(|| self.tab_assistant_status(tab.saved.id))
-                                    .flatten()
-                            })
-                            .collect();
-                        let tooltip = StatusTooltip::new(
-                            profile.name.clone(),
-                            match status {
-                                Some(DotStatus::Connected) => "Idle",
-                                Some(DotStatus::Connecting) => "Connecting",
-                                Some(DotStatus::Working) => "In use",
-                                Some(DotStatus::Ready) if unread_success => "Unread result",
-                                Some(DotStatus::Ready) => "Unread reply",
-                                Some(DotStatus::Error) => "Unread error",
-                                Some(DotStatus::Attention) => "Needs approval",
-                                None => "Disconnected",
-                            },
-                        )
-                        .metadata("Host", profile.host.clone())
-                        .metadata("User", profile.username.clone());
-                        (
-                            id,
-                            ConnectionRow {
-                                name: profile.name.clone(),
-                                tooltip,
-                                connected,
-                                unread_success,
-                                status,
-                                assistant_states,
-                                refresh_error: refresh_error.is_some(),
-                                running: self.tabs.iter().any(|tab| {
-                                    tab.worker_profile == Some(id) && tab.busy && tab.connected
-                                }),
-                                connecting: self.tabs.iter().any(|tab| {
+        let rows: Rc<HashMap<Uuid, ConnectionRow>> = Rc::new(
+            self.profiles
+                .iter()
+                .map(|profile| {
+                    let id = profile.id;
+                    let refresh_error = self.catalog.connection_error(id);
+                    let status = self.connection_dot_status(id, cx);
+                    let connected = self
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.worker_profile == Some(id) && tab.connected);
+                    let unread_success = self
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.saved.profile == Some(id) && tab.panel.has_unread_success());
+                    let assistant_states: Vec<_> = self
+                        .tabs
+                        .iter()
+                        .filter(|tab| tab.saved.profile == Some(id))
+                        .filter_map(|tab| {
+                            self.settings
+                                .assistant
+                                .enabled
+                                .then(|| self.tab_assistant_status(tab.saved.id))
+                                .flatten()
+                        })
+                        .collect();
+                    let tooltip = StatusTooltip::new(
+                        profile.name.clone(),
+                        match status {
+                            Some(DotStatus::Connected) => "Idle",
+                            Some(DotStatus::Connecting) => "Connecting",
+                            Some(DotStatus::Working) => "In use",
+                            Some(DotStatus::Ready) if unread_success => "Unread result",
+                            Some(DotStatus::Ready) => "Unread reply",
+                            Some(DotStatus::Error) => "Unread error",
+                            Some(DotStatus::Attention) => "Needs approval",
+                            None => "Disconnected",
+                        },
+                    )
+                    .metadata("Host", profile.host.clone())
+                    .metadata("User", profile.username.clone());
+                    (
+                        id,
+                        ConnectionRow {
+                            database_type: profile.database_type,
+                            name: profile.name.clone(),
+                            tooltip,
+                            connected,
+                            unread_success,
+                            status,
+                            assistant_states,
+                            refresh_error: refresh_error.is_some(),
+                            running: self.tabs.iter().any(|tab| {
+                                tab.worker_profile == Some(id) && tab.busy && tab.connected
+                            }),
+                            connecting: self.external_authentication_pending(id)
+                                || self.tabs.iter().any(|tab| {
                                     tab.worker_profile == Some(id) && tab.busy && !tab.connected
                                 }),
-                                refreshing: self.catalog.is_refreshing(id),
-                                unread_error: self.tabs.iter().any(|tab| {
+                            refreshing: self.catalog.is_refreshing(id),
+                            unread_error: self.activity.read(cx).activity().unseen_errors_of(id)
+                                > 0
+                                || self.tabs.iter().any(|tab| {
                                     tab.saved.profile == Some(id) && tab.panel.unread_error
                                 }),
-                                active: active == Some(id),
-                            },
-                        )
-                    })
-                    .collect(),
-            );
+                            active: active == Some(id),
+                        },
+                    )
+                })
+                .collect(),
+        );
         let context = Rc::new(RowContext {
             nodes: self.catalog.nodes.clone(),
+            seen_errors: self.catalog.seen_errors.clone(),
             rows,
             weak: cx.weak_entity(),
             tree: self.catalog.state.clone(),
@@ -1399,8 +1591,11 @@ impl Qrow {
                 ),
             )
             .when(!self.profiles.is_empty(), |el| {
+                // Match the query toolbar band so the search box and the Run
+                // button share a centerline. The bottom padding stands in for
+                // the toolbar border.
                 el.child(
-                    div().p_2().flex_shrink_0().child(
+                    h_flex().h_12().px_2().pb_px().flex_shrink_0().child(
                         Input::new(&self.catalog.search)
                             .focus_ring(false)
                             .small()
@@ -1414,6 +1609,13 @@ impl Qrow {
                     .id("connections-list")
                     .test_support()
                     .track_focus(&self.catalog.focus)
+                    .key_context("Connections")
+                    .on_action(cx.listener(|this, _: &MoveConnectionUp, _, cx| {
+                        this.move_selected_connection(false, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &MoveConnectionDown, _, cx| {
+                        this.move_selected_connection(true, cx)
+                    }))
                     .on_action(
                         cx.listener(|this, _: &CopyCatalogName, _, cx| this.copy_catalog_name(cx)),
                     )
@@ -1441,6 +1643,7 @@ impl Qrow {
 /// What the rows of one frame share.
 struct RowContext {
     nodes: Rc<HashMap<SharedString, Node>>,
+    seen_errors: Rc<HashMap<Uuid, HashSet<Uuid>>>,
     rows: Rc<HashMap<Uuid, ConnectionRow>>,
     weak: WeakEntity<Qrow>,
     tree: Entity<TreeState>,
@@ -1746,6 +1949,8 @@ fn render_entry(
             name,
             data_type,
             comment,
+            description,
+            description_cut,
             ..
         } => (
             Some(AssetIconName::Minus),
@@ -1753,7 +1958,11 @@ fn render_entry(
             Some(data_type.clone()),
             false,
             None,
-            row_tooltip(&format!("{name} {data_type}"), comment.as_deref(), None),
+            row_tooltip(name, comment.as_deref(), None).map(|mut tip| {
+                tip.data_type = Some(data_type.clone());
+                tip.description(description.clone())
+                    .hint(description_cut.then_some(DESCRIPTION_HINT))
+            }),
         ),
         Node::Notice {
             profile,
@@ -1770,6 +1979,35 @@ fn render_entry(
         }
         Node::Connection(_) => unreachable!(),
     };
+    let error_status = error.as_ref().and_then(|_| match node {
+        Node::Schema {
+            profile,
+            name,
+            error_id,
+            ..
+        }
+        | Node::Relation {
+            profile,
+            name,
+            error_id,
+            ..
+        } if !error_id.is_some_and(|id| {
+            context
+                .seen_errors
+                .get(profile)
+                .is_some_and(|seen| seen.contains(&id))
+        }) =>
+        {
+            Some((
+                *profile,
+                format!("{name}, schema refresh error, show Activity"),
+            ))
+        }
+        _ => None,
+    });
+    let menu_id = id.clone();
+    let schema_detail = matches!(node, Node::Schema { .. });
+    let detail = detail.filter(|_| !schema_detail || (!loading && error_status.is_none()));
     // Show the tooltip only when it adds text: a name that the row cuts, a
     // comment, or an error.
     let label_key = child_id(&id, "label");
@@ -1778,7 +2016,11 @@ fn render_entry(
         Node::Relation { comment, dbt, .. } => {
             comment.is_some() || dbt.as_ref().is_some_and(|dbt| dbt.description.is_some())
         }
-        Node::Column { comment, .. } => comment.is_some(),
+        Node::Column {
+            comment,
+            description,
+            ..
+        } => comment.is_some() || description.is_some(),
         _ => false,
     };
     let truncation = (!has_comment && error.is_none()).then(|| Truncation {
@@ -1794,22 +2036,20 @@ fn render_entry(
     if let Some(text) = &tooltip {
         context.record_tip(&id, text.clone(), truncation);
     }
-    let menu_id = id.clone();
-    let schema_detail = matches!(node, Node::Schema { .. });
     let leaf = matches!(node, Node::Column { .. });
     let row = h_flex()
         .id(id.clone())
         .size_full()
         .pl(indent)
-        .when(!schema_detail && !loading && error.is_none(), |el| {
+        .when(!schema_detail && !loading && error_status.is_none(), |el| {
             el.pr_2()
         })
         .gap(ui_px(ROW_GAP))
         .text_sm()
         .rounded(cx.theme().radius)
-        .when(selected, |el| el.bg(cx.theme().list_active))
-        .when(right_clicked && !selected, |el| el.bg(cx.theme().accent))
-        .when(!selected && !right_clicked, |el| {
+        .relative()
+        .when(right_clicked, |el| el.bg(cx.theme().accent))
+        .when(!right_clicked, |el| {
             el.hover(|el| el.bg(cx.theme().tokens.list_hover))
         })
         .text_color(cx.theme().sidebar_foreground)
@@ -1859,24 +2099,32 @@ fn render_entry(
                     .on_prepaint(context.record_width(detail_key)),
             )
         })
-        .when(loading, |el| {
+        .when(loading && error_status.is_none(), |el| {
             el.child(
                 status_lane(child_id(&id, "busy"), ui_px(STATUS_SLOT_WIDTH))
                     .test_support()
                     .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
             )
         })
-        .when(error.is_some(), |el| {
+        .when_some(error_status, |el, (profile, label)| {
             el.child(
-                status_lane(child_id(&id, "error-icon"), ui_px(STATUS_SLOT_WIDTH))
-                    .test_support()
+                h_flex()
+                    .id(child_id(&id, "error-status"))
+                    .h_full()
                     .child(
-                        Icon::new(AssetIconName::TriangleAlert)
-                            .xsmall()
-                            .text_color(cx.theme().danger),
-                    ),
+                        status_slot(
+                            child_id(&id, "error-icon").to_string(),
+                            ui_px(STATUS_SLOT_WIDTH),
+                            label,
+                            show_activity(profile, weak),
+                        )
+                        .child(DotStatus::Error.dot(cx)),
+                    )
+                    .when(!*menu_open, |el| el.tooltip(context.live_tooltip(&id)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
             )
         })
+        .when(selected, |el| el.child(focus_outline(cx)))
         .when(tooltip.is_some() && !*menu_open, |el| {
             el.tooltip(context.live_tooltip(&id))
         })
@@ -1920,9 +2168,27 @@ fn tree_tooltip_view(tip: &TreeTip, window: &mut Window, cx: &mut App) -> AnyVie
             .aria_label(tip.text())
             .gap_0p5()
             .child(
-                div()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child(tip.title.clone()),
+                h_flex()
+                    .w_full()
+                    .items_baseline()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("catalog-tooltip-title")
+                            .test_support()
+                            .min_w_0()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .child(tip.title.clone()),
+                    )
+                    .when_some(tip.data_type.as_ref(), |header, data_type| {
+                        header.child(
+                            div()
+                                .id("catalog-tooltip-type")
+                                .test_support()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(data_type.clone()),
+                        )
+                    }),
             )
             .children(tip.comment.clone())
             .when_some(description.as_ref(), |tooltip, state| {
@@ -2027,6 +2293,7 @@ const DESCRIPTION_HINT: &str = "Open dbt details to see the full description.";
 struct TreeTip {
     /// The full name, which the row can truncate.
     title: String,
+    data_type: Option<String>,
     comment: Option<String>,
     /// The dbt description, in Markdown.
     description: Option<String>,
@@ -2047,8 +2314,12 @@ impl TreeTip {
 
     /// All the text, one part on each line.
     fn text(&self) -> String {
+        let title = match &self.data_type {
+            Some(data_type) => format!("{} {data_type}", self.title),
+            None => self.title.clone(),
+        };
         [
-            Some(self.title.as_str()),
+            Some(title.as_str()),
             self.comment.as_deref(),
             self.description.as_deref(),
             self.error.as_deref(),
@@ -2066,6 +2337,7 @@ impl TreeTip {
 fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option<TreeTip> {
     Some(TreeTip {
         title: name.to_owned(),
+        data_type: None,
         comment: comment.map(str::to_owned),
         description: None,
         error: error.map(error_summary),
@@ -2084,7 +2356,7 @@ fn status_lane(id: SharedString, width: Pixels) -> Stateful<Div> {
         .justify_center()
 }
 
-/// A button for one status dot at the end of a connection row. The header and
+/// A button for one status dot at the end of a catalog row. The header and
 /// the list have the same side padding, so a slot as wide as the header's New
 /// Connection button at the row end has the same centerline.
 fn status_slot(
@@ -2103,7 +2375,7 @@ fn status_slot(
         .on_click(on_click)
 }
 
-/// A click on a status dot of a connection row opens the Activity of the
+/// A click on a status dot of a catalog row opens the Activity of the
 /// connection, which has the details.
 fn show_activity(
     id: Uuid,
@@ -2114,6 +2386,19 @@ fn show_activity(
         cx.stop_propagation();
         let _ = weak.update(cx, |this, cx| this.open_activity(Some(id), window, cx));
     }
+}
+
+/// The outline of the selected tree row while the tree has the focus. The
+/// row must be `relative`, and the outline must be its last child, so that
+/// hover fills of the row's controls do not cover it.
+fn focus_outline(cx: &App) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .size_full()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().ring)
 }
 
 /// The row of a connection: the disclosure and the connection button.
@@ -2159,12 +2444,8 @@ fn connection_row(
             ""
         }
     );
-    let foreground = if row.active {
-        cx.theme().sidebar_accent_foreground
-    } else {
-        cx.theme().sidebar_foreground
-    };
-    // Only the current query connection paints an active fill. An inset focus
+    let foreground = cx.theme().sidebar_foreground;
+    // Only the current query connection paints an accent fill. An inset focus
     // outline shows the keyboard position, also without schema browsing.
     // The button itself paints no background.
     let button = Button::new(SharedString::from(format!("profile-{id}")))
@@ -2188,6 +2469,16 @@ fn connection_row(
         .accessibility_label(accessibility_label.clone())
         .child(
             h_flex()
+                .id(SharedString::from(format!("connection-drag-{id}")))
+                .cursor(CursorStyle::OpenHand)
+                .on_drag(
+                    DragConnection {
+                        id,
+                        name: row.name.clone(),
+                        database_type: row.database_type,
+                    },
+                    |drag, _, _, cx| cx.new(|_| drag.clone()),
+                )
                 .h_full()
                 .w_full()
                 .min_w_0()
@@ -2198,13 +2489,17 @@ fn connection_row(
                 .when(!has_status, |el| el.pr_3())
                 .child(
                     div()
+                        .id(child_id(entry, "icon"))
+                        .test_support()
+                        .role(Role::Image)
+                        .aria_label(format!("{} database", row.database_type.label()))
                         .w(px(context.scale * 16.))
                         .flex_shrink_0()
                         .flex()
                         .justify_center()
                         .child(
                             gpui_kit::component::Icon::default()
-                                .path(crate::assets::SPARK_ICON)
+                                .path(crate::assets::connection_icon(row.database_type))
                                 .size_4(),
                         ),
                 )
@@ -2231,21 +2526,10 @@ fn connection_row(
         .gap(px(context.scale * ROW_GAP))
         .rounded(cx.theme().radius)
         .relative()
-        .when(keyboard_position, |el| {
-            el.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .size_full()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().ring),
-            )
-        })
         .text_color(foreground)
         .map(|el| {
             if row.active {
-                el.bg(cx.theme().sidebar_accent)
+                el.bg(cx.theme().primary.opacity(CURRENT_CONNECTION_FILL))
             } else {
                 el.hover(|el| el.bg(cx.theme().tokens.list_hover))
             }
@@ -2292,6 +2576,11 @@ fn connection_row(
                 // The tree must not also expand the row.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
         )
+        // The outline paints after the status slot, so the hover fill of the
+        // slot does not cover it.
+        .when(keyboard_position, |el| el.child(focus_outline(cx)))
+        .child(connection_drop_target(id, false, weak.clone()))
+        .child(connection_drop_target(id, true, weak.clone()))
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
             move |event, window, cx| {
@@ -2317,7 +2606,6 @@ fn notice_row(
     scale: f32,
     cx: &App,
 ) -> Stateful<Div> {
-    let tooltip = (tone == Tone::Error).then(|| error_summary(text));
     h_flex()
         .id(id.clone())
         .w_full()
@@ -2326,10 +2614,7 @@ fn notice_row(
         .pr(px(scale * STATUS_SLOT_WIDTH / 2.))
         .gap(px(scale * ROW_GAP))
         .text_sm()
-        .text_color(match tone {
-            Tone::Error => cx.theme().danger,
-            Tone::Muted | Tone::Loading => cx.theme().muted_foreground,
-        })
+        .text_color(cx.theme().muted_foreground)
         // A notice explains its parent rather than adding a tree level.
         // Its spinner and label use the parent's icon and label lanes.
         .child(
@@ -2367,9 +2652,6 @@ fn notice_row(
                             weak.update(cx, |this, cx| this.refresh_catalog(profile, scope, cx));
                     }),
             )
-        })
-        .when_some(tooltip, |el, tooltip| {
-            el.tooltip(move |window, cx| row_tooltip_view(&tooltip, window, cx))
         })
 }
 

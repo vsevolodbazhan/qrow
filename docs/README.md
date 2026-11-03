@@ -10,7 +10,7 @@ For build and launch instructions, see the [project README](../README.md).
 | [Connections](connections.md) | Create profiles, manage sessions, and reconnect. |
 | [Queries](queries.md) | Use tabs, run selected SQL, and cancel work. |
 | [Activity](activity.md) | See the background work and errors of each connection. |
-| [Results](results.md) | Browse pages, copy values, and understand preview limits. |
+| [Results](results.md) | Browse pages, select cells, export CSV or TSV, and understand preview limits. |
 | [Workspace](workspace.md) | Change appearance settings and understand saved state. |
 | [Architecture](architecture.md) | Understand component responsibilities and data flow. |
 | [Development](development.md) | Set up the tools, use hooks and CI, and maintain dependencies. |

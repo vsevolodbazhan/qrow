@@ -6,7 +6,7 @@ use gpui_kit::component::{
 };
 
 /// The height of the Logs and result tabs at 100% UI scale.
-const RESULT_TAB_BAR_HEIGHT: f32 = 30.;
+pub(super) const RESULT_TAB_BAR_HEIGHT: f32 = 30.;
 /// The longest part of the query that a result tab tooltip shows.
 const TOOLTIP_SQL_CHARS: usize = 120;
 
@@ -77,6 +77,7 @@ impl Qrow {
             .max_h(height)
             .px_3()
             .selected_index(selected)
+            .suffix(h_flex().h_full().child(self.results_toggle_button(cx)))
             .child(logs)
             .children(tab.results.iter().map(|result| {
                 let id = result.id;
@@ -147,6 +148,7 @@ impl Qrow {
                     )
             }))
             .on_click(cx.listener(move |this, index: &usize, _, cx| {
+                this.restore_results(cx);
                 let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) else {
                     return;
                 };
@@ -250,7 +252,7 @@ impl Qrow {
         if tab.spare_table.is_some() || tab.results.iter().any(|result| !result.pinned) {
             return;
         }
-        let table = self.result_table(window, cx);
+        let table = self.result_table(self.tabs[index].saved.profile, window, cx);
         self.tabs[index].spare_table = Some(table);
     }
 
@@ -289,7 +291,7 @@ impl Qrow {
         if tab.results.is_empty() {
             let table = match self.tabs[index].spare_table.take() {
                 Some(table) => table,
-                None => self.result_table(window, cx),
+                None => self.result_table(self.tabs[index].saved.profile, window, cx),
             };
             self.tabs[index].add_result(table);
         }

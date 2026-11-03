@@ -3,7 +3,7 @@
 //! workspace directory, and marker files there release its held turns.
 use super::{TestApp, elements, label, labels, present};
 use gpui_kit::{TestAppContext, Window};
-use qrow::model::{AssistantTitleSource, Settings, Workspace};
+use qrow::model::{AssistantHarness, AssistantTitleSource, Settings, Workspace};
 use qrow::ui::ToggleAssistant;
 use std::{
     os::unix::fs::PermissionsExt,
@@ -101,6 +101,72 @@ impl FakeCodex {
             settings: self.settings(),
             ..workspace
         }
+    }
+}
+
+/// The synthetic Claude Code of `tests/desktop/fake-claude.py`. It shares
+/// the workspace directory of a `FakeCodex`, so that one workspace can use
+/// both harnesses.
+pub struct FakeClaude {
+    executable: PathBuf,
+    state: PathBuf,
+}
+
+impl FakeClaude {
+    /// A Claude Code executable in the workspace directory `directory`.
+    pub fn beside(directory: &TempDir) -> Self {
+        let script = directory.path().join("fake-claude.py");
+        std::fs::write(&script, include_str!("../desktop/fake-claude.py")).unwrap();
+        let executable = directory.path().join("claude");
+        std::fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\nQROW_DATA_DIR='{}' exec python3 '{}' \"$@\"\n",
+                directory.path().display(),
+                script.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let state = directory.path().join("fake-claude");
+        std::fs::create_dir_all(&state).unwrap();
+        Self { executable, state }
+    }
+
+    /// Creates a marker file that the fake waits for or reads.
+    pub fn mark(&self, name: &str) {
+        std::fs::write(self.state.join(name), "").unwrap();
+    }
+
+    /// Removes a marker file.
+    pub fn unmark(&self, name: &str) {
+        let _ = std::fs::remove_file(self.state.join(name));
+    }
+
+    /// The lines that the fake logged: control requests and turns.
+    pub fn log(&self) -> Vec<String> {
+        std::fs::read_to_string(self.state.join("log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The messages of the turns that the fake ran, in order.
+    pub fn turns(&self) -> Vec<String> {
+        // A line is "turn <session> model=<model> effort=<effort> <message>".
+        self.log()
+            .iter()
+            .filter_map(|line| line.strip_prefix("turn "))
+            .filter_map(|turn| turn.splitn(4, ' ').nth(3).map(str::to_owned))
+            .collect()
+    }
+
+    /// `settings` with this Claude Code as the selected harness.
+    pub fn select(&self, mut settings: Settings) -> Settings {
+        settings.assistant.harness = AssistantHarness::Claude;
+        settings.assistant.claude_executable = Some(self.executable.display().to_string());
+        settings
     }
 }
 

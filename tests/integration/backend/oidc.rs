@@ -15,13 +15,14 @@ struct Signed {
     service: Arc<Service>,
     sign_in: SignIn,
     fixture: FixtureProvider,
+    profiles: std::sync::Mutex<Vec<Profile>>,
 }
 
 fn sign_in(user: &str, options: &[(&str, &str)]) -> Result<Signed> {
     let fixture = FixtureProvider::get();
     let service = Service::new(Arc::new(MemoryTokenStore::default()), fixture.trust.clone());
     let sign_in = fixture.sign_in("Fixture");
-    service.configure(std::slice::from_ref(&sign_in));
+    service.configure(std::slice::from_ref(&sign_in), &[]);
     let identity = service.sign_in(
         sign_in.id,
         &AtomicBool::new(false),
@@ -32,12 +33,13 @@ fn sign_in(user: &str, options: &[(&str, &str)]) -> Result<Signed> {
         service,
         sign_in,
         fixture,
+        profiles: std::sync::Mutex::default(),
     })
 }
 
 impl Signed {
     fn profile(&self, username: &str) -> Result<Profile> {
-        Ok(Profile {
+        let profile = Profile {
             port: self.fixture.tls_port,
             username: username.into(),
             tls: true,
@@ -45,7 +47,15 @@ impl Signed {
                 sign_in: self.sign_in.id,
             },
             ..profile()?
-        })
+        };
+        Ok(self.register(profile))
+    }
+    fn register(&self, profile: Profile) -> Profile {
+        let mut profiles = self.profiles.lock().unwrap();
+        profiles.push(profile.clone());
+        self.service
+            .configure(std::slice::from_ref(&self.sign_in), &profiles);
+        profile
     }
     fn client(&self, username: &str) -> Result<Client> {
         let service = self.service.clone();
@@ -80,11 +90,14 @@ fn an_access_token_also_works_over_plain_tcp() -> Result<()> {
         ..profile()?
     };
     let service = signed.service.clone();
-    let client = Client::with(
-        Profile {
-            authentication: signed.profile("qrow")?.authentication,
-            ..plain
+    let plain = signed.register(Profile {
+        authentication: Authentication::Oidc {
+            sign_in: signed.sign_in.id,
         },
+        ..plain
+    });
+    let client = Client::with(
+        plain,
         HiveConnector::new(signed.fixture.trust),
         Arc::new(move |profile: &Profile| service.secret(profile)),
     );
@@ -96,11 +109,9 @@ fn an_access_token_also_works_over_plain_tcp() -> Result<()> {
 #[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
 fn a_valid_token_without_access_to_the_account_is_rejected() -> Result<()> {
     let signed = sign_in("mallory", &[])?;
+    let profile = signed.profile("qrow")?;
     let error = HiveConnector::new(signed.fixture.trust.clone())
-        .connect(
-            &signed.profile("qrow")?,
-            signed.service.secret(&signed.profile("qrow")?)?,
-        )
+        .connect(&profile, signed.service.secret(&profile)?)
         .err()
         .context("mallory has no database account")?;
     let message = format!("{error:#}");

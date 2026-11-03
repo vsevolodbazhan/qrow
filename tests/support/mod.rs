@@ -8,14 +8,16 @@ pub mod evidence;
 pub mod fixture;
 pub mod oidc;
 pub mod perf;
+pub mod response_gate;
+pub mod trino_protocol;
 use anyhow::Result;
 use gpui_kit::InputEvent as _;
 use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, WeakEntity,
-    Window, point, px, size,
+    Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext,
+    WeakEntity, Window, point, px, size,
 };
 use qrow::{
     model::{Profile, WORKSPACE_VERSION, Workspace},
@@ -367,7 +369,8 @@ pub fn selected_tree_rows(window: &Window) -> Vec<String> {
         .collect()
 }
 
-/// Only the current query connection paints an active row background.
+/// Only the current query connection paints a fill: a tint of the accent
+/// color.
 pub fn assert_connection_highlight(window: &Window, cx: &App, profile: Uuid, active: bool) {
     use gpui_kit::component::ActiveTheme as _;
     let center = window
@@ -375,21 +378,25 @@ pub fn assert_connection_highlight(window: &Window, cx: &App, profile: Uuid, act
         .bounds()
         .scale(window.scale_factor())
         .center();
-    let backgrounds: Vec<_> = window
+    let primary = cx.theme().primary;
+    let fills: Vec<_> = window
         .painted_quads()
         .into_iter()
         .filter(|quad| quad.bounds.contains(&center) && quad.content_mask.bounds.contains(&center))
-        .map(|quad| quad.background)
+        .filter_map(|quad| quad.background.as_solid())
+        .filter(|fill| fill.a > 0.)
         .collect();
+    let tinted = fills.iter().any(|fill| {
+        (fill.h, fill.s, fill.l) == (primary.h, primary.s, primary.l) && fill.a < primary.a
+    });
     assert_eq!(
-        backgrounds.contains(&gpui_kit::Background::from(cx.theme().sidebar_accent)),
-        active,
-        "Unexpected current-connection highlight: {backgrounds:?}"
+        tinted, active,
+        "Unexpected current-connection fill: {fills:?}"
     );
-    if !active {
+    for fill in [cx.theme().sidebar_accent, cx.theme().list_active] {
         assert!(
-            !backgrounds.contains(&gpui_kit::Background::from(cx.theme().list_active)),
-            "An inactive connection has a tree-selection fill: {backgrounds:?}"
+            !fills.contains(&fill),
+            "A connection row has a gray fill: {fills:?}"
         );
     }
 }
@@ -401,13 +408,41 @@ pub fn assert_connection_keyboard_position(
     profile: Uuid,
     expected: bool,
 ) {
+    let bounds = window.find(connection_row(profile)).bounds();
+    assert_eq!(
+        has_focus_outline(window, cx, bounds),
+        expected,
+        "Unexpected connection keyboard outline at {bounds:?}"
+    );
+}
+
+/// The selected schema, table, or column row labelled `row` has the focus
+/// outline and no selection fill.
+pub fn assert_tree_row_outline(window: &Window, cx: &App, row: &str, expected: bool) {
     use gpui_kit::component::ActiveTheme as _;
-    let center = window
-        .find(connection_row(profile))
-        .bounds()
-        .scale(window.scale_factor())
-        .center();
-    let outlined = window.painted_quads().into_iter().any(|quad| {
+    let bounds = labelled(window, row)
+        .unwrap_or_else(|| panic!("No tree row {row}"))
+        .bounds();
+    assert_eq!(
+        has_focus_outline(window, cx, bounds),
+        expected,
+        "Unexpected tree row outline of {row}"
+    );
+    let center = bounds.scale(window.scale_factor()).center();
+    assert!(
+        !window.painted_quads().into_iter().any(|quad| {
+            quad.bounds.contains(&center)
+                && quad.background == gpui_kit::Background::from(cx.theme().list_active)
+        }),
+        "The tree row {row} has a selection fill"
+    );
+}
+
+/// A ring-colored outline around the center of `bounds`.
+fn has_focus_outline(window: &Window, cx: &App, bounds: Bounds<Pixels>) -> bool {
+    use gpui_kit::component::ActiveTheme as _;
+    let center = bounds.scale(window.scale_factor()).center();
+    window.painted_quads().into_iter().any(|quad| {
         quad.bounds.contains(&center)
             && quad.border_color == cx.theme().ring
             && quad.border_widths.top > px(0.).scale(window.scale_factor())
@@ -416,18 +451,14 @@ pub fn assert_connection_keyboard_position(
                 center.x,
                 quad.bounds.top() + quad.border_widths.top / 2.,
             ))
-    });
-    assert_eq!(
-        outlined, expected,
-        "Unexpected connection keyboard outline at {center:?}"
-    );
+    })
 }
 
-/// One painted dot in a region, in the expected theme color.
-fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
+/// The painted status dots in a region.
+fn dots_in(window: &Window, bounds: Bounds<Pixels>) -> Vec<gpui_kit::Quad> {
     let bounds = bounds.scale(window.scale_factor());
     let dot_size = px(6.).scale(window.scale_factor());
-    let dots: Vec<_> = window
+    window
         .painted_quads()
         .into_iter()
         .filter(|quad| {
@@ -436,25 +467,48 @@ fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_
                 && bounds.contains(&quad.bounds.center())
                 && quad.content_mask.bounds.contains(&quad.bounds.center())
         })
-        .collect();
+        .collect()
+}
+
+/// One painted dot in a region, in the expected theme color.
+fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
+    let dots = dots_in(window, bounds);
     assert_eq!(dots.len(), usize::from(expected.is_some()), "{dots:?}");
     if let Some(color) = expected {
         assert_eq!(dots[0].background, gpui_kit::Background::from(color));
     }
 }
 
-/// A tab paints one status dot and keeps its Close control visible.
-pub fn assert_tab_dot(window: &Window, tab: Uuid, expected: Option<gpui_kit::Hsla>) {
+/// The bounds of the tab with a visible Close control.
+fn tab_bounds(window: &Window, tab: Uuid) -> Bounds<Pixels> {
     let close = window.find(format!("close-tab-{tab}"));
     assert!(close.visible(), "The Close control is hidden");
-    let tab = elements(window)
+    elements(window)
         .into_iter()
         .find(|element| {
             element.role() == Some(gpui_kit::Role::Tab)
                 && element.bounds().contains(&close.bounds().center())
         })
-        .expect("The Close control is inside a tab");
-    assert_dot_in(window, tab.bounds(), expected);
+        .expect("The Close control is inside a tab")
+        .bounds()
+}
+
+/// A tab paints one status dot and keeps its Close control visible.
+pub fn assert_tab_dot(window: &Window, tab: Uuid, expected: Option<gpui_kit::Hsla>) {
+    assert_dot_in(window, tab_bounds(window, tab), expected);
+}
+
+/// Whether a tab paints the expected status dot. Use it to wait for a dot
+/// that background work, like a keep-alive, can change for a moment.
+pub fn shows_tab_dot(window: &Window, tab: Uuid, expected: Option<gpui_kit::Hsla>) -> bool {
+    let dots: Vec<_> = dots_in(window, tab_bounds(window, tab))
+        .into_iter()
+        .map(|quad| quad.background)
+        .collect();
+    dots == expected
+        .map(gpui_kit::Background::from)
+        .into_iter()
+        .collect::<Vec<_>>()
 }
 
 /// A connection row paints one dot in the expected theme color.
@@ -471,10 +525,25 @@ pub fn assert_connection_dot(window: &Window, profile: Uuid, expected: gpui_kit:
     assert_dot_in(window, row.bounds(), Some(expected));
 }
 
+/// A schema or relation error paints one red dot inside its Activity button.
+pub fn assert_catalog_error_dot(window: &Window, id: &str, expected: gpui_kit::Hsla) {
+    let dot = window.find(id.to_owned());
+    assert!(dot.visible(), "The catalog error dot is hidden");
+    assert_eq!(dot.role(), Some(gpui_kit::Role::Button));
+    assert_dot_in(window, dot.bounds(), Some(expected));
+}
+
 /// A sign-in row paints the shared dot in the expected theme color.
 pub fn assert_sign_in_dot(window: &Window, sign_in: Uuid, expected: gpui_kit::Hsla) {
     let dot = window.find(format!("sign-in-status-{sign_in}"));
     assert!(dot.visible(), "The sign-in dot is hidden");
+    assert_eq!(dot.role(), Some(gpui_kit::Role::Status));
+    assert!(
+        window
+            .find(format!("sign-in-{sign_in}"))
+            .bounds()
+            .contains(&dot.bounds().center())
+    );
     assert_dot_in(window, dot.bounds(), Some(expected));
 }
 
@@ -492,13 +561,25 @@ pub fn pointer_click(
     button: MouseButton,
     cx: &mut App,
 ) {
+    pointer_click_with(window, element, button, Modifiers::default(), cx);
+}
+
+/// Presses and releases `button` with `modifiers` held, at the center of an
+/// observed element.
+pub fn pointer_click_with(
+    window: &mut Window,
+    element: &ElementSnapshot,
+    button: MouseButton,
+    modifiers: Modifiers,
+    cx: &mut App,
+) {
     assert!(element.visible(), "{:?} is not visible", element.path());
     let position = element.bounds().center();
     window.dispatch_event(
         MouseMoveEvent {
             position,
             pressed_button: None,
-            modifiers: Default::default(),
+            modifiers,
         }
         .to_platform_input(),
         cx,
@@ -507,7 +588,7 @@ pub fn pointer_click(
         MouseDownEvent {
             button,
             position,
-            modifiers: Default::default(),
+            modifiers,
             click_count: 1,
             first_mouse: false,
         }
@@ -518,7 +599,51 @@ pub fn pointer_click(
         MouseUpEvent {
             button,
             position,
-            modifiers: Default::default(),
+            modifiers,
+            click_count: 1,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+}
+
+/// Drag the left pointer between two visible elements.
+pub fn pointer_drag(
+    window: &mut Window,
+    from: &ElementSnapshot,
+    to: &ElementSnapshot,
+    cx: &mut App,
+) {
+    assert!(from.visible() && to.visible());
+    let modifiers = Modifiers::default();
+    window.dispatch_event(
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position: from.bounds().center(),
+            modifiers,
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+    window.dispatch_event(
+        MouseMoveEvent {
+            position: to.bounds().center(),
+            pressed_button: Some(MouseButton::Left),
+            modifiers,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+    window.dispatch_event(
+        MouseUpEvent {
+            button: MouseButton::Left,
+            position: to.bounds().center(),
+            modifiers,
             click_count: 1,
         }
         .to_platform_input(),
@@ -708,7 +833,7 @@ impl TestApp {
     /// Opens the page `title` of the Connection Settings dialog with its
     /// sidebar item.
     pub fn connection_page(&self, cx: &mut TestAppContext, title: &str) {
-        let index = ["General", "Catalog", "dbt", "Assistant"]
+        let index = ["General", "Export", "Catalog", "dbt", "Assistant"]
             .iter()
             .position(|page| *page == title)
             .unwrap_or_else(|| panic!("No connection page {title}"));
@@ -831,6 +956,11 @@ impl TestApp {
             };
         }
         panic!("{id} has no option {option}");
+    }
+
+    pub fn select_json(&self, cx: &mut TestAppContext, style: &str) {
+        self.select(cx, "export-format", "JSON");
+        self.select(cx, "export-json-style", style);
     }
 
     /// Runs the queued work of the UI, like deferred updates of a select.
@@ -992,6 +1122,25 @@ impl TestApp {
         panic!("{target} did not scroll into view: {state:?}. Wheel positions: {positions:?}");
     }
 
+    /// Moves the pointer over an element with a stable ID.
+    pub fn hover(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.wait_for(cx, id.clone());
+        self.update(cx, |window, cx| {
+            let position = window.find(id).bounds().center();
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
     /// Moves the pointer over the element labelled exactly `text`, for
     /// controls that show on hover, like the close button of a tab.
     pub fn hover_labelled(&self, cx: &mut TestAppContext, text: &str) {
@@ -1129,6 +1278,11 @@ impl TestApp {
         );
     }
 
+    // Exercise the captured execution pipeline shared by export reruns.
+    pub fn run_export(&self, cx: &mut TestAppContext) {
+        self.dispatch(cx, qrow::ui::RunAndExport);
+    }
+
     /// The workspace as Qrow last saved it.
     /// The text of the Activity of `profile`, as Copy All copies it with
     /// the filter that shows. Activity opens from the connection menu and
@@ -1155,6 +1309,20 @@ impl TestApp {
 
     pub fn saved(&self) -> Workspace {
         storage::load(&self.workspace).unwrap()
+    }
+
+    /// Waits until the saved workspace matches `predicate`. Qrow writes the
+    /// workspace on a background thread, so a check right after an action
+    /// can still read the previous file.
+    pub fn wait_saved(
+        &self,
+        cx: &mut TestAppContext,
+        what: &str,
+        predicate: impl Fn(&Workspace) -> bool,
+    ) {
+        self.wait_until(cx, what, Duration::from_secs(10), |_, _| {
+            predicate(&self.saved())
+        });
     }
 
     /// Polls `predicate` on fresh frames until it holds. Fails with the
