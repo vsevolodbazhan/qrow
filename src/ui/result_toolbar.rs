@@ -1,5 +1,6 @@
 use super::*;
-use gpui_kit::component::{h_flex, popover::Popover, tag::Tag, v_flex};
+use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::component::{Icon, Selectable, h_flex, popover::Popover, tag::Tag, v_flex};
 
 const VISIBLE_ROWS: &str = "Visible Rows";
 const LOADED_ROWS: &str = "Loaded Rows";
@@ -15,7 +16,8 @@ struct ResultSummary {
 
 impl ResultSummary {
     fn new(tab: &Tab, cx: &App) -> Self {
-        let data = tab.table.read(cx).delegate();
+        let result = tab.shown_result();
+        let data = result.table.read(cx).delegate();
         let range = data.pagination.range(data.rows.len());
         Self {
             range: if range.is_empty() {
@@ -25,7 +27,7 @@ impl ResultSummary {
             },
             loaded: data.rows.len(),
             columns: data.columns.len(),
-            elapsed: tab
+            elapsed: result
                 .elapsed
                 .map(|elapsed| format!("{:.2} s", elapsed.as_secs_f64())),
         }
@@ -171,7 +173,9 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tab = &self.tabs[self.active];
-        let data = tab.table.read(cx).delegate();
+        let result = tab.shown_result();
+        let (tab_id, result_id) = (tab.saved.id, result.id);
+        let data = result.table.read(cx).delegate();
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
         let summary = ResultSummary::new(tab, cx);
@@ -185,7 +189,6 @@ impl Qrow {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(self.panel_switcher(cx))
             .when(show_range, |row| row.child(summary.tags(compact, cx)))
             .when(compact, |row| {
                 let qrow = cx.entity().downgrade();
@@ -220,6 +223,58 @@ impl Qrow {
                 h_flex()
                     .flex_shrink_0()
                     .gap_2()
+                    .when(result.unfetched, |row| {
+                        row.child(
+                            div()
+                                .id("result-partial")
+                                .test_support()
+                                .role(Role::Label)
+                                .whitespace_nowrap()
+                                .aria_label("Partial result")
+                                .tooltip(|window, cx| {
+                                    StatusTooltip::new("Partial Result", "")
+                                        .detail(
+                                            "The cursor closed before all rows loaded. \
+                                             Run the query again to load them.",
+                                        )
+                                        .build(None, window, cx)
+                                })
+                                .child(ResultSummary::neutral_tag(cx).child("Partial")),
+                        )
+                    })
+                    .child(
+                        Button::new("copy-result-query")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Copy)
+                            .tooltip("Copy query")
+                            .accessibility_label("Copy query")
+                            .disabled(result.sql.is_none())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.copy_result_query(tab_id, result_id, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("pin-result")
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(AssetIconName::Pin))
+                            .selected(result.pinned)
+                            .tooltip(if result.pinned {
+                                "Unpin result"
+                            } else {
+                                "Pin result"
+                            })
+                            .accessibility_label(if result.pinned {
+                                "Unpin result"
+                            } else {
+                                "Pin result"
+                            })
+                            .disabled(!result.pinned && tab.pinned_results() >= MAX_PINNED_RESULTS)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.toggle_result_pin(tab_id, result_id, window, cx)
+                            })),
+                    )
                     .child(
                         div()
                             .id("page-label")
@@ -246,7 +301,7 @@ impl Qrow {
                             .icon(IconName::ChevronRight)
                             .tooltip("Next page")
                             .accessibility_label("Next page")
-                            .disabled(page + 1 >= pages && (!tab.more || tab.busy))
+                            .disabled(page + 1 >= pages && (!tab.can_fetch(result_id) || tab.busy))
                             .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
                         cx,
                     )),

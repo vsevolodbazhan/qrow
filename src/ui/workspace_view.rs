@@ -292,22 +292,30 @@ impl Qrow {
     }
 
     fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.tabs[self.active].panel.selected == Panel::Output {
-            return self.output_panel(cx);
-        }
-        let tab = &self.tabs[self.active];
-        results::selection_boundary(&tab.table)
+        let content = if self.tabs[self.active].panel.selected == Panel::Output {
+            self.output_panel(cx)
+        } else {
+            let table = &self.tabs[self.active].shown_result().table;
+            results::selection_boundary(table)
+                .size_full()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .child(self.result_toolbar(cx))
+                .child(div().flex_1().min_h_0().min_w_0().child(results::view(
+                    table,
+                    self.dialog_open(),
+                    self.settings.ui_scale,
+                    cx,
+                )))
+                .into_any_element()
+        };
+        v_flex()
             .size_full()
-            .flex()
-            .flex_col()
+            .min_h_0()
             .overflow_hidden()
-            .child(self.result_toolbar(cx))
-            .child(div().flex_1().min_h_0().min_w_0().child(results::view(
-                &tab.table,
-                self.dialog_open(),
-                self.settings.ui_scale,
-                cx,
-            )))
+            .child(self.result_tabs(cx))
+            .child(div().flex_1().min_h_0().min_w_0().child(content))
             .into_any_element()
     }
 

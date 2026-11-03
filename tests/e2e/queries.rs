@@ -389,3 +389,50 @@ fn a_query_result_hidden_by_activity_stays_unread(cx: &mut TestAppContext) {
     app.click_labelled(cx, "Query 1, unread query result");
     app.wait_cell(cx, 0, 1, "42");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let sql = "SELECT id FROM range(1001)";
+    let (workspace, credentials) = kyuubi.workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "pin-result");
+    app.run_complete(cx, "SELECT 7 AS value");
+    app.wait_cell(cx, 0, 1, "7");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-partial").is_none());
+    });
+
+    app.click(cx, "result-tab-1");
+    app.wait_cell(cx, 0, 1, "0");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-partial").as_deref(),
+            Some("Partial result")
+        );
+        assert_eq!(
+            label(window, "result-range").as_deref(),
+            Some("Rows 1–1000")
+        );
+    });
+    // The cursor is closed, so Next page does not fetch.
+    app.click(cx, "next-page");
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(app.status(cx), "Complete");
+        assert_eq!(
+            label(window, "result-range").as_deref(),
+            Some("Rows 1–1000")
+        );
+    });
+    app.click(cx, "copy-result-query");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some(sql)
+    );
+}

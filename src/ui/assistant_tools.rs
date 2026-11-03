@@ -1100,32 +1100,32 @@ impl Qrow {
         if tab.busy {
             return;
         }
-        let results = tab.table.read(cx);
-        let results = results.delegate();
+        let (columns, rows) = tab.live_rows(cx);
+        let elapsed = tab.live_result().and_then(|result| result.elapsed);
         let ok = !tab.status.starts_with("Error")
             && !tab.status.starts_with("Rejected")
             && !tab.status.starts_with("Cancelled");
         let mut content = json!({"version": 1, "tab_id": tab.saved.id, "status": tab.status_label(),
-            "columns": results.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
-            "downloaded_rows": results.rows.len(), "more_rows_available": tab.more,
-            "duration_seconds": tab.elapsed.map(|duration| duration.as_secs_f64())});
+            "columns": columns,
+            "downloaded_rows": rows.len(), "more_rows_available": tab.more,
+            "duration_seconds": elapsed.map(|duration| duration.as_secs_f64())});
         if ok {
             // Returning the first rows saves a query-read-results call and a model turn.
             let used =
                 serde_json::to_vec(&content).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
-            let preview = preview_rows(&results.rows, pending.first_row, used);
+            let preview = preview_rows(rows, pending.first_row, used);
             content["rows"] = json!(preview.rows);
             content["next_offset"] = json!(preview.next_offset);
-            content["more_downloaded_rows"] = json!(preview.next_offset < results.rows.len());
+            content["more_downloaded_rows"] = json!(preview.next_offset < rows.len());
             if !preview.omitted_row_offsets.is_empty() {
                 content["omitted_row_offsets"] = json!(preview.omitted_row_offsets);
             }
         }
         let state = if ok {
             ToolState::QueryResult {
-                rows: results.rows.len(),
+                rows: rows.len(),
                 more: tab.more,
-                elapsed: tab.elapsed,
+                elapsed,
             }
         } else if tab.status.starts_with("Cancelled") {
             ToolState::Cancelled
@@ -1212,13 +1212,12 @@ impl Qrow {
             .iter()
             .find(|tab| tab.saved.id == args.tab_id)
             .ok_or_else(|| failure("invalid_arguments", "The query tab was not found."))?;
-        let data = tab.table.read(cx);
-        let data = data.delegate();
+        let (columns, rows) = tab.live_rows(cx);
         Ok(success(
             json!({"version": 1, "tab_id": args.tab_id, "status": tab.status_label(),
             "running": tab.busy, "cancelling": tab.cancelling,
-            "columns": data.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
-            "downloaded_rows": data.rows.len(), "more_rows_available": tab.more,
+            "columns": columns,
+            "downloaded_rows": rows.len(), "more_rows_available": tab.more,
             "latest_error": tab.output.latest_error().map(|entry| bound_text(&entry.text).0)}),
         ))
     }
@@ -1235,23 +1234,20 @@ impl Qrow {
             .iter()
             .find(|tab| tab.saved.id == args.tab_id)
             .ok_or_else(|| failure("invalid_arguments", "The query tab was not found."))?;
-        let data = tab.table.read(cx);
-        let data = data.delegate();
+        let (columns, rows) = tab.live_rows(cx);
         let mut content = json!({"version": 1, "tab_id": args.tab_id,
-            "columns": data.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
-            "downloaded_rows": data.rows.len(), "rows": [], "next_offset": args.offset,
+            "columns": columns,
+            "downloaded_rows": rows.len(), "rows": [], "next_offset": args.offset,
             "more_downloaded_rows": false, "truncated": false, "omitted_row_offsets": []});
         let used = serde_json::to_vec(&content).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
         let bounded =
-            bound_rows_after(&data.rows, args.offset, args.count, used).map_err(|error| {
-                ToolResult {
-                    success: false,
-                    content: json!({"version": 1, "error": error}),
-                }
+            bound_rows_after(rows, args.offset, args.count, used).map_err(|error| ToolResult {
+                success: false,
+                content: json!({"version": 1, "error": error}),
             })?;
         content["rows"] = json!(bounded.rows);
         content["next_offset"] = json!(bounded.next_offset);
-        content["more_downloaded_rows"] = json!(bounded.next_offset < data.rows.len());
+        content["more_downloaded_rows"] = json!(bounded.next_offset < rows.len());
         content["truncated"] = json!(bounded.truncated);
         content["omitted_row_offsets"] = json!(bounded.omitted_row_offsets);
         Ok(success(content))
@@ -1305,10 +1301,12 @@ impl Qrow {
                     "The query worker is no longer available.",
                 )
             })?;
-            let (next_page, first_row) = {
-                let data = tab.table.read(cx);
-                let rows = data.delegate().rows.len();
-                (data.delegate().pagination.pages(rows), rows)
+            let (next_page, first_row) = match tab.live_result() {
+                Some(result) => {
+                    let data = result.table.read(cx).delegate();
+                    (data.pagination.pages(data.rows.len()), data.rows.len())
+                }
+                None => (0, 0),
             };
             worker.more();
             let tab = &mut self.tabs[index];

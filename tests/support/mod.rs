@@ -136,11 +136,13 @@ pub fn assert_workspace_header_alignment(window: &Window, sidebar_action: &str) 
     }
     let border = bounds_of(window, "sidebar-header-border");
     let title = bounds_of(window, "sidebar-title");
+    // The query tabs are above the Logs and result tabs.
     let tab = elements(window)
         .into_iter()
-        .find(|element| element.role() == Some(gpui_kit::Role::Tab))
-        .expect("The workspace has a query tab")
-        .bounds();
+        .filter(|element| element.role() == Some(gpui_kit::Role::Tab))
+        .map(|element| element.bounds())
+        .min_by(|a, b| f32::from(a.top()).total_cmp(&f32::from(b.top())))
+        .expect("The workspace has a query tab");
     assert_eq!(border, header, "The separator covers the header frame");
     assert_eq!(header.top(), tab.top());
     assert_eq!(header.bottom(), tab.bottom());
