@@ -986,8 +986,8 @@ catalog and its copy of the schemas.
 
 ### Search the tree
 
-Type in **Search tables…** to find schemas and tables in all connections. The
-search also finds views. Use a name or part of a name. For a table or view,
+Type in **Search relations…** to find schemas, tables, and views in all
+connections. Use a name or part of a name. For a table or view,
 you can include the schema, for example `integrations.bookings`. The search
 also accepts names from **Copy qualified name**, for example
 `` `integrations`.`bookings` ``. The search ignores letter case and spaces

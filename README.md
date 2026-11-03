@@ -251,7 +251,7 @@ Intel build. Existing Homebrew releases contain only the ARM64 app.
 
 Launch the demo to inspect the SQL editor, results, schema catalog, and dbt
 details. The first connection opens with the columns of `avia.bookings`.
-Expand other tables or use **Search tables…** to inspect the catalog.
+Expand other tables or use **Search relations…** to inspect the catalog.
 In either Rivendell connection, right-click a table and select **Show dbt
 details** to read its description, columns, tests, lineage, and SQL.
 
