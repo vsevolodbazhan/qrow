@@ -364,7 +364,9 @@ copies the server logs and evidence to `fixture/` in its artifact directory.
 Two runtimes are available:
 
 - `docker` starts the [Compose project](../tests/fixture/compose.yml) with a
-  random loopback port.
+  random loopback port. LDAP waits for a successful local EXTERNAL bind before
+  it imports schemas. If the bind fails 100 times, LDAP startup fails and
+  the fixture saves the container logs.
 - `native` starts local Java processes from [verified
   downloads](../tests/fixture/native-downloads.json). It needs a Java 17 JDK
   in `JAVA_HOME`. Hosted macOS CI runners use it because they have no Docker.
