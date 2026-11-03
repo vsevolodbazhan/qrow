@@ -7,9 +7,37 @@ Trino shows the first page while it reads the result stream.
 See [Postgres limits](connections.md#postgres-limits) and
 [Trino limits](connections.md#trino-limits).
 
-Select **Results** beside **Logs** to view the current preview. Qrow keeps
-one Results panel. A new execution replaces the preview. The [Queries](queries.md)
-page describes the Logs panel.
+Each query tab has a tab strip below the editor. The strip starts with
+**Logs**, followed by one or more result tabs. Select a result tab to view
+its preview. The [Queries](queries.md) page describes the Logs panel.
+
+## Result tabs
+
+A new execution fills an unpinned result tab and shows it. Qrow uses the shown
+result tab if it is not pinned. Otherwise, it uses the last unpinned result
+tab. If all result tabs are pinned, Qrow opens a new result tab. New result
+tabs get the names **Result 1**, **Result 2**, and so on.
+
+To keep a result, click **Pin result** in the result toolbar, or right-click
+the result tab and choose **Pin**. A pinned result tab shows a pin icon. A
+query tab can pin up to 10 result tabs. Each one can hold a full preview, so
+the limit bounds memory use. Click **Unpin result** or choose **Unpin** to let
+the next execution replace the result.
+
+Right-click a result tab for these commands:
+
+- **Rename…** gives the result tab a name. The name must be unique in the
+  query tab. Renaming also pins the result tab, if the pin limit allows it.
+- **Pin** or **Unpin** changes whether the next execution can replace it.
+- **Copy query** copies the SQL statement that made the result.
+- **Close** removes the result tab and its downloaded rows.
+
+**Copy query** in the result toolbar also copies the statement. It copies the
+statement that Qrow sent, not the current editor text. Point to a result tab
+to see its name and the start of its statement.
+
+A query tab always has at least one result tab. Closing the last result tab
+creates an empty replacement. The result tab of a running query cannot close.
 
 If a result has no columns, the panel shows a status message without a table
 header. Column headers remain visible when a query returns columns but no rows.
@@ -17,10 +45,9 @@ header. Column headers remain visible when a query returns columns but no rows.
 ## Minimize the panel
 
 Press **⌘J**, select **View → Toggle results**, or use **Collapse**
-in the panel header. The editor fills the available height. The Results and
-Logs buttons remain visible. Selecting either button restores the panel.
-Use **Expand** or **⌘J** to restore
-the previous panel height.
+at the right end of the result tabs. The editor fills the available height.
+The Logs tab and the result tabs remain visible. Selecting a tab restores the
+panel. Use **Expand** or **⌘J** to restore the previous panel height.
 
 The minimized state applies to all query tabs and is saved after restart.
 Running a query restores the panel. Minimizing the panel keeps its results
@@ -402,7 +429,7 @@ preview requests keep their 1000-row limit.
 
 ## Preview limits
 
-The preview can store up to 100,000 rows or approximately 64 MiB per tab.
+Each result tab can store up to 100,000 rows or approximately 64 MiB.
 For Kyuubi, if an incoming batch would exceed either limit, Qrow keeps that
 batch outside the preview and keeps the cursor open for export. The
 grid cannot fetch more pages at the preview limit. The memory
@@ -428,11 +455,19 @@ Cancellation and fetch failures retain downloaded rows. Disconnecting releases
 unfetched rows, but the downloaded rows remain visible. Selecting another
 connection keeps the preview and its session. **Next page** can fetch remaining
 rows from that session, even when another connection is selected. The next
-accepted query replaces the previous preview, regardless of the selected
+accepted query fills the unpinned result tab, regardless of the selected
 connection.
 
-Results are not restored after application restart. Logs history is separate and
-is also not restored after application restart.
+The session of a query tab keeps one open cursor. Only the result tab of the
+last execution can fetch more rows. The next execution closes the cursor of the
+earlier result, so a pinned result keeps only its downloaded rows. When a
+cursor closes before the server sends all rows, or a result reaches the preview
+limit, the result toolbar shows a **Partial** tag. To get the remaining rows,
+run the query again or export the result. An export of an earlier result
+cannot read a cursor, so it saves the downloaded rows or runs the query again.
+
+Result tabs and their rows are not restored after application restart. Logs
+history is separate and is also not restored after application restart.
 
 ## Design
 

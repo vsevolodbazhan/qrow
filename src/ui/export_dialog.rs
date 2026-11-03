@@ -107,7 +107,8 @@ impl Drop for ExportDialog {
 impl Qrow {
     pub(super) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab = &self.tabs[self.active];
-        let data = tab.table.read(cx).delegate();
+        let shown = tab.shown_result();
+        let data = shown.table.read(cx).delegate();
         if data.columns.is_empty() {
             return;
         }
@@ -120,31 +121,42 @@ impl Qrow {
         };
         let settings = self.settings.export.clone();
         let filename = tab.saved.title.clone();
-        let incomplete = !tab.preview_complete;
-        let result = ExportResult {
-            tab: tab.saved.id,
-            execution: tab.current_execution,
-            cursor: tab.cursor,
-            replay: tab
-                .replay
-                .clone()
-                .or_else(|| self.export_spool(tab.saved.id, tab.current_execution, None, cx)),
+        let incomplete = !tab.result_complete(shown.id);
+        // Only the live result has a cursor and a replay spool. An earlier
+        // result exports its loaded rows, or runs its query again.
+        let result = if tab.live == Some(shown.id) {
+            ExportResult {
+                tab: tab.saved.id,
+                execution: tab.current_execution,
+                cursor: tab.cursor,
+                replay: tab
+                    .replay
+                    .clone()
+                    .or_else(|| self.export_spool(tab.saved.id, tab.current_execution, None, cx)),
+            }
+        } else {
+            ExportResult {
+                tab: tab.saved.id,
+                execution: None,
+                cursor: crate::worker::Cursor::Unavailable,
+                replay: None,
+            }
         };
         let owner = cx.weak_entity();
-        let intent = self.export_result_intent(tab);
+        let intent = self.export_result_intent(shown);
         let profile = self
             .profiles
             .iter()
             .find(|profile| {
                 Some(profile.id)
-                    == tab
-                        .result_profile
+                    == shown
+                        .profile
                         .as_ref()
                         .map(|profile| profile.id)
                         .or(tab.saved.profile)
             })
             .cloned()
-            .or_else(|| tab.result_profile.clone());
+            .or_else(|| shown.profile.clone());
         let view = cx.new(|cx| {
             let mut view = ExportDialog::new(
                 source, settings, filename, incomplete, result, profile, owner, window, cx,
@@ -164,8 +176,8 @@ impl Qrow {
 
     fn remember_export(&mut self, settings: export::Settings, cx: &mut Context<Self>) {
         self.settings.export = settings;
-        for tab in &self.tabs {
-            tab.table.update(cx, |table, _| {
+        for table in self.tabs.iter().flat_map(Tab::result_tables) {
+            table.update(cx, |table, _| {
                 table.delegate_mut().export = self.settings.export.clone();
             });
         }
@@ -1488,7 +1500,7 @@ mod tests {
                 let (source, mut result) = owner
                     .update(cx, |owner, cx| {
                         let tab = &owner.tabs[0];
-                        let data = tab.table.read(cx).delegate();
+                        let data = tab.shown_result().table.read(cx).delegate();
                         (
                             Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
                             ExportResult {
@@ -1622,7 +1634,7 @@ mod tests {
                     .update(cx, |owner, cx| {
                         let tab = &mut owner.tabs[0];
                         tab.cursor = crate::worker::Cursor::Available;
-                        let data = tab.table.read(cx).delegate();
+                        let data = tab.shown_result().table.read(cx).delegate();
                         (
                             Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
                             ExportResult {
@@ -1701,7 +1713,7 @@ mod tests {
             let (source, mut result) = owner
                 .update(cx, |owner, cx| {
                     let tab = &owner.tabs[0];
-                    let data = tab.table.read(cx).delegate();
+                    let data = tab.shown_result().table.read(cx).delegate();
                     (
                         Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
                         ExportResult {
@@ -1884,7 +1896,7 @@ mod tests {
                     );
                     let tab = &owner.tabs[0];
                     assert!(tab.preview_complete);
-                    let data = tab.table.read(cx).delegate();
+                    let data = tab.shown_result().table.read(cx).delegate();
                     (
                         Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
                         ExportResult {

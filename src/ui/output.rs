@@ -1,33 +1,9 @@
 use super::*;
 use crate::logs::timestamp_label;
 use gpui_kit::base::SelectableText;
-use gpui_kit::component::{Selectable, h_flex, v_flex};
+use gpui_kit::component::{h_flex, v_flex};
 
 impl Qrow {
-    pub(super) fn panel_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self.tabs[self.active].panel.selected;
-        button_pair::button_pair(
-            "panel-switcher",
-            Button::new("output-panel-tab")
-                .ghost()
-                .small()
-                .label("Logs")
-                .selected(selected == Panel::Output)
-                .toggled(selected == Panel::Output)
-                .accessibility_label("Logs Panel")
-                .on_click(cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx))),
-            Button::new("results-panel-tab")
-                .ghost()
-                .small()
-                .label("Results")
-                .selected(selected == Panel::Results)
-                .toggled(selected == Panel::Results)
-                .accessibility_label("Results Panel")
-                .on_click(cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx))),
-            cx,
-        )
-    }
-
     pub(super) fn output_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let tab = &self.tabs[self.active];
         let connection = tab.worker_profile.or(tab.saved.profile);
@@ -105,7 +81,6 @@ impl Qrow {
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(self.panel_switcher(cx))
                     .child(
                         div()
                             .text_xs()
@@ -138,8 +113,7 @@ impl Qrow {
                             .label("Clear")
                             .accessibility_label("Clear logs history")
                             .on_click(cx.listener(|this, _, _, cx| this.clear_output(cx))),
-                    )
-                    .child(self.results_toggle_button(cx)),
+                    ),
             )
             .child(
                 div()

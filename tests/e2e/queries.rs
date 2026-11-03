@@ -392,6 +392,71 @@ fn a_query_result_hidden_by_activity_stays_unread(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let sql = "SELECT id FROM range(1001)";
+    let (workspace, credentials) = kyuubi.workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "pin-result");
+    app.run_complete(cx, "SELECT 7 AS value");
+    app.wait_cell(cx, 0, 1, "7");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-partial").is_none());
+    });
+
+    app.click(cx, "result-tab-1");
+    app.wait_cell(cx, 0, 1, "0");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-partial").as_deref(),
+            Some("Partial result")
+        );
+        assert_eq!(
+            label(window, "result-range").as_deref(),
+            Some("Rows 1–1000")
+        );
+    });
+    // The cursor is closed, so Next page does not fetch.
+    app.click(cx, "next-page");
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(app.status(cx), "Complete");
+        assert_eq!(
+            label(window, "result-range").as_deref(),
+            Some("Rows 1–1000")
+        );
+    });
+    // A compact toolbar shows the Partial tag between the range and the details.
+    cx.simulate_window_resize(app.window, size(px(700.), px(650.)));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        let range = bounds_of(window, "result-range");
+        let partial = bounds_of(window, "result-partial");
+        let details = bounds_of(window, "result-details");
+        assert!(range.right() <= partial.left() && partial.right() <= details.left());
+    });
+    // A narrow toolbar hides result metadata, but not the Partial tag.
+    cx.simulate_window_resize(app.window, size(px(500.), px(650.)));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-range").is_none());
+        let toolbar = bounds_of(window, "query-footer");
+        let partial = bounds_of(window, "result-partial");
+        assert!(partial.left() >= toolbar.left() && partial.right() <= toolbar.right());
+    });
+    app.click(cx, "copy-result-query");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some(sql)
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
     let sql = "select '日本語😀;' as value";
     let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);

@@ -492,8 +492,8 @@ impl Qrow {
             return;
         }
         self.settings.copy_format = format;
-        for tab in &self.tabs {
-            tab.table.update(cx, |table, _| {
+        for table in self.tabs.iter().flat_map(Tab::result_tables) {
+            table.update(cx, |table, _| {
                 table.delegate_mut().copy_format = format;
             });
         }

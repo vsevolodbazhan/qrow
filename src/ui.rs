@@ -13,6 +13,7 @@ mod export_dialog;
 mod format_sql;
 mod output;
 mod profile_view;
+mod result_tabs;
 mod result_toolbar;
 mod results;
 mod run_highlight;
@@ -233,7 +234,16 @@ struct Tab {
     revision: u64,
     pending_assistant_edit: Option<String>,
     input: Entity<EditorState>,
-    table: Entity<TableState<Results>>,
+    /// The result tabs. A query tab always has at least one.
+    results: Vec<ResultTab>,
+    /// The result tab that Results shows.
+    active_result: u64,
+    /// The result tab of the last run. The worker sends its rows.
+    live: Option<u64>,
+    next_result: u64,
+    /// A table for a new result tab. A run can start without a window, so
+    /// pinning the last unpinned result tab makes it ready.
+    spare_table: Option<Entity<TableState<Results>>>,
     _subscription: Subscription,
     _run_highlight: Subscription,
     worker: Option<Worker>,
@@ -242,19 +252,19 @@ struct Tab {
     busy: bool,
     cancelling: bool,
     connected: bool,
+    /// The cursor of the live result has more rows.
     more: bool,
+    /// The live result holds all rows of its query.
     preview_complete: bool,
     pending_page: Option<usize>,
     status: String,
     status_detail: Option<String>,
     started: Option<Instant>,
-    elapsed: Option<Duration>,
     output: LogHistory,
     panel: PanelState,
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
     result_session: Option<Uuid>,
-    result_profile: Option<Profile>,
     next_execution_id: u64,
     /// The SQL of the last Run, for a run after a browser sign-in.
     submitted_sql: Option<String>,
@@ -356,6 +366,156 @@ impl Tab {
             && self.connected
             && self.worker_profile.is_some()
             && self.worker_profile == self.saved.profile
+    }
+
+    fn result(&self, id: u64) -> Option<&ResultTab> {
+        self.results.iter().find(|result| result.id == id)
+    }
+
+    fn result_mut(&mut self, id: u64) -> Option<&mut ResultTab> {
+        self.results.iter_mut().find(|result| result.id == id)
+    }
+
+    /// The result tab that Results shows.
+    fn shown_result(&self) -> &ResultTab {
+        self.result(self.active_result)
+            .unwrap_or_else(|| &self.results[0])
+    }
+
+    /// The result tab that receives the rows of the worker.
+    fn live_result(&self) -> Option<&ResultTab> {
+        self.live.and_then(|id| self.result(id))
+    }
+
+    /// The result holds all rows of its query.
+    fn result_complete(&self, id: u64) -> bool {
+        if self.live == Some(id) {
+            self.preview_complete
+        } else {
+            self.result(id).is_some_and(|result| result.complete)
+        }
+    }
+
+    /// The column names and downloaded rows of the live result. A closed live
+    /// result has none.
+    fn live_rows<'a>(
+        &self,
+        cx: &'a App,
+    ) -> (Vec<&'a str>, &'a dyn crate::assistant::broker::ResultRows) {
+        match self.live_result() {
+            Some(result) => {
+                let data = result.table.read(cx).delegate();
+                (
+                    data.columns
+                        .iter()
+                        .map(|column| column.name.as_str())
+                        .collect(),
+                    &data.rows,
+                )
+            }
+            None => (Vec::new(), &[] as &[crate::model::Row; 0]),
+        }
+    }
+
+    /// The result tab can fetch more rows from the server.
+    fn can_fetch(&self, result: u64) -> bool {
+        self.more && self.live == Some(result)
+    }
+
+    /// The live result cannot close while its query runs.
+    fn can_close_result(&self, result: u64) -> bool {
+        !(self.busy && self.live == Some(result))
+    }
+
+    /// The tables of all result tabs and the spare table.
+    fn result_tables(&self) -> impl Iterator<Item = &Entity<TableState<Results>>> {
+        self.results
+            .iter()
+            .map(|result| &result.table)
+            .chain(&self.spare_table)
+    }
+
+    fn pinned_results(&self) -> usize {
+        self.results.iter().filter(|result| result.pinned).count()
+    }
+
+    /// Records the duration of the live result's work.
+    fn stop_timing(&mut self) {
+        let elapsed = self.started.take().map(|started| started.elapsed());
+        if let Some(id) = self.live
+            && let Some(result) = self.result_mut(id)
+        {
+            result.elapsed = elapsed;
+        }
+    }
+
+    /// Adds an empty result tab. Its name skips the names that renamed
+    /// result tabs took.
+    fn add_result(&mut self, table: Entity<TableState<Results>>) -> u64 {
+        let id = self.next_result;
+        self.next_result += 1;
+        let title = (id..)
+            .map(|number| format!("Result {number}"))
+            .find(|title| self.results.iter().all(|result| &result.title != title))
+            .expect("an unused result name exists");
+        self.results.push(ResultTab::new(id, title, table));
+        id
+    }
+
+    /// Marks the live result as partial when its cursor stops early.
+    fn mark_partial(&mut self) {
+        if let Some(id) = self.live
+            && let Some(result) = self.result_mut(id)
+        {
+            result.unfetched = true;
+        }
+    }
+
+    /// The session released the cursor. Rows that the live result did not
+    /// fetch stay on the server.
+    fn close_cursor(&mut self) {
+        if self.more {
+            self.mark_partial();
+        }
+        self.more = false;
+        self.pending_page = None;
+    }
+}
+
+/// The most result tabs that a query tab can pin. Each one can hold a full
+/// preview in memory.
+const MAX_PINNED_RESULTS: usize = 10;
+
+/// One result of a query tab. The next run replaces an unpinned result.
+struct ResultTab {
+    id: u64,
+    title: String,
+    pinned: bool,
+    /// The statement that made the result.
+    sql: Option<String>,
+    /// The connection that ran the statement.
+    profile: Option<Profile>,
+    table: Entity<TableState<Results>>,
+    elapsed: Option<Duration>,
+    /// The cursor closed before the server sent all rows.
+    unfetched: bool,
+    /// The result held all rows of its query when it stopped being live.
+    complete: bool,
+}
+
+impl ResultTab {
+    fn new(id: u64, title: String, table: Entity<TableState<Results>>) -> Self {
+        Self {
+            id,
+            title,
+            pinned: false,
+            sql: None,
+            profile: None,
+            table,
+            elapsed: None,
+            unfetched: false,
+            complete: false,
+        }
     }
 }
 struct ProfileEditor {
@@ -534,6 +694,7 @@ pub struct Qrow {
     tab_scroll: ScrollHandle,
     form: Option<ProfileEditor>,
     tab_form: Option<TabEditor>,
+    result_form: Option<result_tabs::ResultEditor>,
     menu: Option<ContextMenu>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
@@ -790,6 +951,7 @@ impl Qrow {
             tab_scroll: ScrollHandle::new(),
             form: None,
             tab_form: None,
+            result_form: None,
             menu: None,
             saver,
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
@@ -847,7 +1009,8 @@ impl Qrow {
             .get(this.active)
             .map(|tab| assistant_view::ComposerTarget::Tab(tab.saved.id));
         if demo {
-            this.seed_demo(this.active, cx);
+            let sql = this.tabs[this.active].input.read(cx).value().to_string();
+            this.seed_demo(this.active, sql, cx);
         }
         if demo {
             this.expand_demo_catalog();
@@ -910,30 +1073,17 @@ impl Qrow {
             }
         });
         let run_highlight = run_highlight::track(&input, cx);
-        let scale = self.settings.ui_scale;
-        let table = cx.new(|cx| {
-            let mut results = Results::default();
-            results.set_ui_scale(scale, cx);
-            results.export = self.settings.export.clone();
-            results.copy_format = self.settings.copy_format;
-            if let Some(profile) = self
-                .profiles
-                .iter()
-                .find(|profile| Some(profile.id) == saved.profile)
-            {
-                results.set_export_profile(profile);
-            }
-            // The results delegate owns the selection: a range of cells.
-            TableState::new(results, window, cx)
-                .col_selectable(false)
-                .row_selectable(false)
-        });
+        let table = self.result_table(saved.profile, window, cx);
         Tab {
             saved,
             revision: 0,
             pending_assistant_edit: None,
             input,
-            table,
+            results: vec![ResultTab::new(1, "Result 1".into(), table)],
+            active_result: 1,
+            live: None,
+            next_result: 2,
+            spare_table: None,
             _subscription: subscription,
             _run_highlight: run_highlight,
             worker: None,
@@ -947,13 +1097,11 @@ impl Qrow {
             status: "Not connected".into(),
             status_detail: None,
             started: None,
-            elapsed: None,
             output: LogHistory::default(),
             panel: PanelState::default(),
             output_scroll: ScrollHandle::new(),
             current_execution: None,
             result_session: None,
-            result_profile: None,
             submitted_sql: None,
             cursor: crate::worker::Cursor::Unavailable,
             replay: None,
@@ -964,6 +1112,32 @@ impl Qrow {
             release_pending: false,
             next_execution_id: 1,
         }
+    }
+    /// An empty result table. `profile` is the connection of the query tab.
+    fn result_table(
+        &self,
+        profile: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TableState<Results>> {
+        let scale = self.settings.ui_scale;
+        cx.new(|cx| {
+            let mut results = Results::default();
+            results.set_ui_scale(scale, cx);
+            results.export = self.settings.export.clone();
+            results.copy_format = self.settings.copy_format;
+            if let Some(profile) = self
+                .profiles
+                .iter()
+                .find(|candidate| Some(candidate.id) == profile)
+            {
+                results.set_export_profile(profile);
+            }
+            // The results delegate owns the selection: a range of cells.
+            TableState::new(results, window, cx)
+                .col_selectable(false)
+                .row_selectable(false)
+        })
     }
     fn snapshot(&self, cx: &App) -> Workspace {
         Workspace {
@@ -1249,11 +1423,6 @@ impl Qrow {
         tab.output_scroll.scroll_to_bottom();
         tab.panel.failure(active);
     }
-    fn select_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
-        self.restore_results(cx);
-        self.tabs[self.active].panel.user_select(panel);
-        cx.notify();
-    }
     fn allocate_execution_id(tab: &mut Tab) -> ExecutionId {
         let execution_id = ExecutionId(tab.next_execution_id);
         tab.next_execution_id = tab.next_execution_id.saturating_add(1);
@@ -1405,8 +1574,17 @@ impl Qrow {
         replay_limit: u64,
         cx: &mut Context<Self>,
     ) {
-        if tab.started.is_some() {
-            tab.table.update(cx, |table, cx| {
+        let live = tab.live_result().map(|result| result.table.clone());
+        // A fetch that stops early after rows arrived leaves a partial result.
+        let fetching = tab.started.is_some() && tab.sign_in_wait.is_none();
+        let has_rows = |cx: &App| {
+            live.as_ref()
+                .is_some_and(|table| !table.read(cx).delegate().rows.is_empty())
+        };
+        if tab.started.is_some()
+            && let Some(table) = &live
+        {
+            table.update(cx, |table, cx| {
                 if table.delegate_mut().query_event(&event, tab.cancelling) {
                     cx.notify();
                 }
@@ -1456,7 +1634,7 @@ impl Qrow {
                     tab.more = false;
                     tab.download = None;
                     tab.cursor = crate::worker::Cursor::Downloaded;
-                    tab.elapsed = tab.started.take().map(|started| started.elapsed());
+                    tab.stop_timing();
                     tab.panel.success(active);
                     tab.set_status_detail("Preview", "Export download complete");
                     tab.replay =
@@ -1475,12 +1653,15 @@ impl Qrow {
                     tab.download = None;
                     if consumed {
                         tab.cursor = crate::worker::Cursor::Consumed;
-                        tab.more = false;
+                        if !tab.preview_complete {
+                            tab.mark_partial();
+                        }
+                        tab.close_cursor();
                     }
                     if disconnected {
                         tab.connected = false;
                     }
-                    tab.elapsed = tab.started.take().map(|started| started.elapsed());
+                    tab.stop_timing();
                     Self::record_failure(tab, active);
                     tab.set_status_detail("Export download stopped", message);
                 }
@@ -1532,8 +1713,10 @@ impl Qrow {
                 }
             }
             Event::PreviewRows { execution, rows } => {
-                if tab.current_execution == Some(execution) {
-                    tab.table.update(cx, |table, cx| {
+                if tab.current_execution == Some(execution)
+                    && let Some(table) = &live
+                {
+                    table.update(cx, |table, cx| {
                         table.delegate_mut().rows.append_shared(&rows);
                         cx.notify();
                     });
@@ -1548,34 +1731,43 @@ impl Qrow {
                 }
             }
             Event::Columns(columns) => {
-                tab.table.update(cx, |t, cx| {
-                    t.delegate_mut().schema(columns, cx);
-                    t.refresh(cx);
-                });
+                if let Some(table) = &live {
+                    table.update(cx, |t, cx| {
+                        t.delegate_mut().schema(columns, cx);
+                        t.refresh(cx);
+                    });
+                }
                 tab.set_status("Fetching preview…");
             }
             Event::Rows(rows) => {
-                tab.table.update(cx, |t, cx| {
-                    t.delegate_mut().rows.extend(rows);
-                    cx.notify();
-                });
-                if let Some(page) = tab.pending_page.take() {
-                    results::select_page(&tab.table, page, cx);
+                if let Some(table) = &live {
+                    table.update(cx, |t, cx| {
+                        t.delegate_mut().rows.extend(rows);
+                        cx.notify();
+                    });
+                    if let Some(page) = tab.pending_page.take() {
+                        results::select_page(table, page, cx);
+                    }
                 }
             }
             Event::ExportContext(context) => {
-                tab.table.update(cx, |table, _| {
-                    table.delegate_mut().rows.set_context(context)
-                });
+                if let Some(table) = &live {
+                    table.update(cx, |table, _| {
+                        table.delegate_mut().rows.set_context(context)
+                    });
+                }
             }
             Event::Ready { more, limited } => {
                 let was_cancelling = tab.cancelling;
-                tab.more = more;
+                tab.more = more && live.is_some();
                 tab.preview_complete = !more && !limited && !was_cancelling;
                 tab.pending_page = None;
                 tab.busy = false;
                 tab.cancelling = false;
-                tab.elapsed = tab.started.take().map(|t| t.elapsed());
+                tab.stop_timing();
+                if limited || was_cancelling && has_rows(cx) {
+                    tab.mark_partial();
+                }
                 if limited {
                     tab.set_status_detail("Preview", "Limit reached");
                 } else if more {
@@ -1584,6 +1776,11 @@ impl Qrow {
                     tab.set_status("Complete");
                 }
                 if !was_cancelling {
+                    // The finished result shows, even if another result tab
+                    // was selected while it ran.
+                    if let Some(id) = tab.live {
+                        tab.active_result = id;
+                    }
                     tab.panel.success(active);
                 }
             }
@@ -1591,9 +1788,11 @@ impl Qrow {
                 tab.cursor = crate::worker::Cursor::Consumed;
                 tab.busy = false;
                 tab.cancelling = false;
-                tab.more = false;
-                tab.pending_page = None;
-                tab.elapsed = tab.started.take().map(|t| t.elapsed());
+                if fetching && has_rows(cx) {
+                    tab.mark_partial();
+                }
+                tab.close_cursor();
+                tab.stop_timing();
                 tab.set_status_detail("Cancelled", "Partial preview retained");
             }
             Event::Error {
@@ -1603,14 +1802,16 @@ impl Qrow {
             } => {
                 tab.busy = false;
                 tab.cancelling = false;
-                tab.more = false;
-                tab.pending_page = None;
+                if fetching && has_rows(cx) {
+                    tab.mark_partial();
+                }
+                tab.close_cursor();
                 // A session that never opened failed to connect; it was not lost.
                 let was_connected = tab.connected;
                 if disconnected {
                     tab.connected = false;
                 }
-                tab.elapsed = tab.started.take().map(|t| t.elapsed());
+                tab.stop_timing();
                 if sign_in_required {
                     tab.set_status_detail("Error", "Sign-in required");
                 } else if disconnected && !was_connected {
@@ -1630,8 +1831,7 @@ impl Qrow {
             Event::Disconnected | Event::IdleDisconnected => {
                 tab.cursor = crate::worker::Cursor::Unavailable;
                 tab.connected = false;
-                tab.more = false;
-                tab.pending_page = None;
+                tab.close_cursor();
                 tab.busy = false;
                 tab.cancelling = false;
                 if matches!(event, Event::IdleDisconnected) {
@@ -1735,8 +1935,7 @@ impl Qrow {
                         tab.connected = false;
                         tab.busy = false;
                         tab.cancelling = false;
-                        tab.more = false;
-                        tab.pending_page = None;
+                        tab.close_cursor();
                         tab.set_status("Not connected");
                     }
                 } else if action == ProfileSaveAction::Update {
@@ -1756,14 +1955,24 @@ impl Qrow {
                 }
                 self.oidc.configure(&self.sign_ins, &self.profiles);
                 for tab in &self.tabs {
-                    if tab
-                        .result_profile
-                        .as_ref()
-                        .map(|profile| profile.id)
-                        .or(tab.saved.profile)
-                        == Some(id)
-                    {
-                        tab.table.update(cx, |table, _| {
+                    let results = tab
+                        .results
+                        .iter()
+                        .filter(|result| {
+                            result
+                                .profile
+                                .as_ref()
+                                .map(|profile| profile.id)
+                                .or(tab.saved.profile)
+                                == Some(id)
+                        })
+                        .map(|result| &result.table);
+                    let spare = tab
+                        .spare_table
+                        .iter()
+                        .filter(|_| tab.saved.profile == Some(id));
+                    for table in results.chain(spare) {
+                        table.update(cx, |table, _| {
                             table.delegate_mut().set_export_profile(&profile)
                         });
                     }
@@ -1886,6 +2095,7 @@ impl Qrow {
             || self.settings_open
             || self.about_open
             || self.tab_form.is_some()
+            || self.result_form.is_some()
             || self.assistant_state.rename_form.is_some()
             || self.sign_in_ui.editor.is_some()
     }
@@ -2024,13 +2234,12 @@ impl Qrow {
             return false;
         }
         self.restore_results(cx);
-        if self.demo {
-            return self.run_tab_sql(index, String::new(), false, cx);
-        }
         let query = self.selected_tab_sql(index, window, cx);
         let tab = &mut self.tabs[index];
         let query = match query {
             Ok(query) => query,
+            // The demo always shows its results.
+            Err(_) if self.demo => tab.input.read(cx).value().to_string(),
             Err(message) => {
                 let active = index == self.active && !self.activity.read(cx).is_open();
                 Self::record_log(
@@ -2090,7 +2299,7 @@ impl Qrow {
         }
         self.restore_results(cx);
         if self.demo {
-            self.seed_demo(index, cx);
+            self.seed_demo(index, query, cx);
             cx.notify();
             return true;
         }
@@ -2150,7 +2359,6 @@ impl Qrow {
         let tab = &mut self.tabs[index];
         tab.signed_in_for_run = after_sign_in;
         tab.submitted_sql = Some(query.clone());
-        tab.result_profile = Some(profile.clone());
         tab.result_session = None;
         // A session that a sign-out or another account released while the
         // tab was busy closes now, so the query opens a new one.
@@ -2175,22 +2383,13 @@ impl Qrow {
             ));
         }
         let tab = &mut self.tabs[index];
-        tab.table.update(cx, |t, cx| {
-            t.delegate_mut().clear();
-            t.delegate_mut().set_export_profile(&profile);
-            t.delegate_mut().empty_message = Some("Waiting for query results…");
-            t.clear_selection(cx);
-            t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
-            t.scroll_to_row(0, cx);
-            t.refresh(cx);
-        });
-        tab.more = false;
-        tab.pending_page = None;
-        tab.elapsed = None;
-        tab.preview_complete = false;
-        tab.cursor = crate::worker::Cursor::Unavailable;
-        tab.replay = None;
-        tab.download = None;
+        Self::start_result(
+            tab,
+            query.clone(),
+            Some(&profile),
+            Some("Waiting for query results…"),
+            cx,
+        );
         tab.busy = true;
         tab.panel.execution_started();
         tab.cancelling = false;
@@ -2219,18 +2418,83 @@ impl Qrow {
         cx.notify();
         true
     }
+    /// The result tab that a new run fills: the shown result tab when it is
+    /// not pinned, then the last unpinned one, then a new one.
+    fn run_target(tab: &mut Tab) -> u64 {
+        if let Some(shown) = tab
+            .result(tab.active_result)
+            .filter(|result| !result.pinned)
+        {
+            return shown.id;
+        }
+        if let Some(unpinned) = tab.results.iter().rev().find(|result| !result.pinned) {
+            return unpinned.id;
+        }
+        let Some(table) = tab.spare_table.take() else {
+            // Pinning the last unpinned result tab prepares the spare table.
+            debug_assert!(false, "all result tabs are pinned without a spare table");
+            return tab.shown_result().id;
+        };
+        tab.add_result(table)
+    }
+    /// Empties the result tab of a new run and shows it. The new operation
+    /// closes the cursor of the previous result.
+    fn start_result(
+        tab: &mut Tab,
+        sql: String,
+        profile: Option<&Profile>,
+        message: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        tab.close_cursor();
+        let complete = tab.preview_complete;
+        if let Some(id) = tab.live
+            && let Some(previous) = tab.result_mut(id)
+        {
+            previous.complete = complete;
+        }
+        tab.preview_complete = false;
+        tab.cursor = crate::worker::Cursor::Unavailable;
+        tab.replay = None;
+        tab.download = None;
+        let target = Self::run_target(tab);
+        let result = tab.result_mut(target).expect("the run target exists");
+        result.sql = Some(sql);
+        result.profile = profile.cloned();
+        result.elapsed = None;
+        result.unfetched = false;
+        result.complete = false;
+        result.table.update(cx, |t, cx| {
+            t.delegate_mut().clear();
+            if let Some(profile) = profile {
+                t.delegate_mut().set_export_profile(profile);
+            }
+            t.delegate_mut().empty_message = message;
+            t.clear_selection(cx);
+            t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
+            t.scroll_to_row(0, cx);
+            t.refresh(cx);
+        });
+        tab.live = Some(target);
+        tab.active_result = target;
+        target
+    }
     fn next_page(&mut self, cx: &mut Context<Self>) {
         self.next_tab_page(self.active, cx);
     }
     fn next_tab_page(&mut self, index: usize, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[index];
-        let data = tab.table.read(cx).delegate();
+        let shown = tab.shown_result();
+        let (id, table) = (shown.id, shown.table.clone());
+        let data = table.read(cx).delegate();
         let page = data.pagination.page() + 1;
         if page < data.pagination.pages(data.rows.len()) {
-            tab.pending_page = None;
-            results::select_page(&tab.table, page, cx);
+            if tab.live == Some(id) {
+                tab.pending_page = None;
+            }
+            results::select_page(&table, page, cx);
         } else if !tab.busy
-            && tab.more
+            && tab.can_fetch(id)
             && let Some(worker) = &tab.worker
         {
             tab.pending_page = Some(page);
@@ -2245,9 +2509,12 @@ impl Qrow {
 
     fn previous_page(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
-        let page = tab.table.read(cx).delegate().pagination.page();
-        tab.pending_page = None;
-        results::select_page(&tab.table, page.saturating_sub(1), cx);
+        let table = tab.shown_result().table.clone();
+        let page = table.read(cx).delegate().pagination.page();
+        if tab.live == Some(tab.active_result) {
+            tab.pending_page = None;
+        }
+        results::select_page(&table, page.saturating_sub(1), cx);
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -2352,10 +2619,12 @@ impl Qrow {
     fn resize_result_columns(&self, cx: &mut Context<Self>) {
         let scale = self.settings.ui_scale;
         for tab in &self.tabs {
-            tab.table.update(cx, |table, cx| {
-                table.delegate_mut().set_ui_scale(scale, cx);
-                table.refresh(cx);
-            });
+            for table in tab.result_tables() {
+                table.update(cx, |table, cx| {
+                    table.delegate_mut().set_ui_scale(scale, cx);
+                    table.refresh(cx);
+                });
+            }
         }
     }
     fn adjust_ui_scale(&mut self, change: f32, window: &mut Window, cx: &mut Context<Self>) {
@@ -3624,10 +3893,9 @@ impl Qrow {
                 .iter()
                 .any(|tab| tab.saved.profile == Some(id) && self.assistant_tab_busy(tab.saved.id))
     }
-    fn seed_demo(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn seed_demo(&mut self, index: usize, sql: String, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[index];
         let execution_id = Self::allocate_execution_id(tab);
-        let sql = tab.input.read(cx).value().to_string();
         tab.current_execution = Some(execution_id);
         let events = [
             LogEvent::new(
@@ -3644,7 +3912,7 @@ impl Qrow {
                 format!("Submitted query:\n{sql}"),
             )
             .with_connection("rivendell-s")
-            .with_sql(sql),
+            .with_sql(sql.clone()),
             LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
@@ -3673,9 +3941,11 @@ impl Qrow {
             }
         }
         let tab = &mut self.tabs[index];
-        tab.table.update(cx, |t, cx| {
+        let target = Self::start_result(tab, sql, None, None, cx);
+        let result = tab.result_mut(target).expect("the run target exists");
+        result.elapsed = Some(Duration::from_millis(842));
+        result.table.update(cx, |t, cx| {
             let data = t.delegate_mut();
-            data.clear();
             let mut columns: Vec<_> = [
                 ("route", "STRING"),
                 ("carrier", "STRING"),
@@ -3732,9 +4002,6 @@ impl Qrow {
         tab.set_status_detail("Complete", "Demo data");
         tab.preview_complete = true;
         tab.cursor = crate::worker::Cursor::Complete;
-        tab.replay = None;
-        tab.download = None;
-        tab.elapsed = Some(Duration::from_millis(842));
         tab.panel.success(true);
     }
 }

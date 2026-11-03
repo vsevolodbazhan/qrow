@@ -50,7 +50,7 @@ impl Qrow {
             sql,
         };
         let source = match if self.demo {
-            let data = tab.table.read(cx).delegate();
+            let data = tab.shown_result().table.read(cx).delegate();
             Snapshot::new(&data.columns, &data.rows)
         } else {
             Snapshot::new(&[], &export::Rows::default())
@@ -90,20 +90,21 @@ impl Qrow {
         ExportDialog::open(&view, window, cx);
     }
 
-    pub(super) fn export_result_intent(&self, tab: &Tab) -> Option<Intent> {
-        let original = tab.result_profile.as_ref()?;
+    /// The query of a result, to run again for an export.
+    pub(super) fn export_result_intent(&self, result: &ResultTab) -> Option<Intent> {
+        let original = result.profile.as_ref()?;
         let profile = self
             .profiles
             .iter()
             .find(|profile| profile.id == original.id)?
             .clone();
-        let expected = tab
+        let expected = self.tabs[self.active]
             .worker
             .as_ref()
             .and_then(|worker| worker.session_generation(&profile));
         Some(Intent {
             profile,
-            sql: tab.submitted_sql.clone()?,
+            sql: result.sql.clone()?,
             expected,
         })
     }
@@ -154,23 +155,13 @@ impl Qrow {
             jobs,
             cancel,
         )?;
-        tab.table.update(cx, |table, cx| {
-            table.delegate_mut().clear();
-            table.delegate_mut().set_export_profile(&intent.profile);
-            table.delegate_mut().empty_message = Some("Waiting for query results…");
-            table.clear_selection(cx);
-            table
-                .horizontal_scroll_handle
-                .set_offset(point(px(0.), px(0.)));
-            table.scroll_to_row(0, cx);
-            table.refresh(cx);
-        });
-        tab.more = false;
-        tab.pending_page = None;
-        tab.elapsed = None;
-        tab.preview_complete = false;
-        tab.cursor = crate::worker::Cursor::Unavailable;
-        tab.replay = None;
+        Self::start_result(
+            tab,
+            intent.sql.clone(),
+            Some(&intent.profile),
+            Some("Waiting for query results…"),
+            cx,
+        );
         tab.download = Some(download.clone());
         tab.busy = true;
         tab.panel.execution_started();
@@ -179,7 +170,6 @@ impl Qrow {
         tab.set_status("Preparing export…");
         tab.current_execution = Some(execution);
         tab.worker_profile = Some(intent.profile.id);
-        tab.result_profile = Some(intent.profile.clone());
         tab.result_session = None;
         tab.submitted_sql = Some(intent.sql.clone());
         let submission = LogEvent::new(
@@ -313,7 +303,7 @@ impl ExportDialog {
             let tab = owner.read(cx).tabs.iter().find(|tab| {
                 tab.saved.id == self.result.tab && tab.current_execution == self.result.execution
             })?;
-            let data = tab.table.read(cx).delegate();
+            let data = tab.live_result()?.table.read(cx).delegate();
             if data.columns.is_empty()
                 || self.source.column_count() > 0 && data.rows.len() == self.source.row_count()
             {

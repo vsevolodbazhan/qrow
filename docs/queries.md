@@ -1,7 +1,7 @@
 # Queries
 
-Each query tab contains SQL, a selected connection, a result preview, and a
-Logs panel. A tab can run one query at a time. Other tabs can run
+Each query tab contains SQL, a selected connection, one or more
+[result tabs](results.md#result-tabs), and a Logs panel. A tab can run one query at a time. Other tabs can run
 concurrently.
 
 ## Run SQL
@@ -45,8 +45,9 @@ controls and keyboard use. Action tooltips show
 the command name and its keyboard shortcut on one line. The name and shortcut
 share a vertical center.
 
-A new accepted execution clears the previous preview and the unread outcome
-of that tab. The blue dot shows that the execution continues. Results appear
+A new accepted execution clears the unpinned result tab and the unread outcome
+of that tab. Pinned result tabs keep their rows. See
+[Result tabs](results.md#result-tabs). The blue dot shows that the execution continues. Results appear
 as Qrow fetches them. Switching connections does not clear the preview or
 close the tab's session.
 The Logs panel remains across executions in the tab. A successful execution
@@ -55,7 +56,7 @@ also clears the unread error, even if you selected Logs after the failure. See
 
 ## Logs
 
-Select **Logs** beside **Results** to inspect the work of the tab. The history shows
+Select the **Logs** tab before the result tabs to inspect the work of the tab. The history shows
 connection and session events, the exact SQL submitted to the tab's owning
 connection, execution completion, preview page fetches, cancellation, and
 errors. Selecting a connection or query tab does not add a log entry. Each
@@ -78,10 +79,10 @@ all stored entries with the timestamps that Logs shows. **Copy error** copies
 the latest error with its timestamp. Text selection and both copy commands
 preserve multiline text and Unicode error details.
 
-Qrow selects Logs when a query fails. It selects Results when a query succeeds,
-after the first preview fetch or completion without a result set. This applies
-even if you selected Logs before completion. You can select either panel again
-after completion. Background queries update their own panel without changing
+Qrow selects Logs when a query fails. It selects the result tab of the query
+when the query succeeds, after the first preview fetch or completion without a
+result set. This applies even if you selected Logs before completion. You can
+select Logs or any result tab again after completion. Background queries update their own panel without changing
 the active query tab. A failed background query shows a red dot on its tab.
 A successful background query shows a green dot until its Results show.
 
