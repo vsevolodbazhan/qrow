@@ -381,6 +381,15 @@ mod tests {
             card,
             reply,
             TranscriptEntry::new(Speaker::Error, "The turn failed.", Some("turn-1".into())),
+            TranscriptEntry::tool(
+                ToolActivity {
+                    kind: ToolKind::WebSearch,
+                    target: None,
+                    state: ToolState::Done(Some("2 links".into())),
+                },
+                "turn-1".into(),
+            )
+            .with_detail("Search:\npostgres generate_series".into()),
         ];
         let loaded: Vec<_> = live
             .iter()
@@ -391,6 +400,10 @@ mod tests {
         assert_ne!(fingerprint(&live, None), fingerprint(&live, Some(&cursor)));
         for (live, loaded) in live.iter().zip(&loaded) {
             assert_eq!(live.id, loaded.id);
+            assert_eq!(
+                live.tool.as_ref().map(|tool| tool.kind),
+                loaded.tool.as_ref().map(|tool| tool.kind)
+            );
             assert_eq!(live.label(), loaded.label());
             assert_eq!(live.text(), loaded.text());
             assert_eq!(live.detail, loaded.detail);

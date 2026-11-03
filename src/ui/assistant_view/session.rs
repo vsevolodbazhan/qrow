@@ -76,6 +76,9 @@ pub(in crate::ui) struct PendingQuery {
     pub detached: bool,
     /// The first result row that this request adds, for the rows in its result.
     pub first_row: usize,
+    /// The conversation runs queries automatically, but this query waits,
+    /// because the assistant searched the web in its turn.
+    pub held_after_web_search: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,6 +134,11 @@ pub(in crate::ui) struct ThreadRun {
     /// The reply message that streams into the last reply entry. A turn of
     /// Claude Code can have several reply messages in one entry.
     pub reply_message: Option<ReplyMessage>,
+    /// The card of each web search of the active turn, by search ID.
+    pub web_searches: BTreeMap<String, Uuid>,
+    /// The turn in which the assistant searched the web. Its queries wait
+    /// for approval in every query mode.
+    pub web_search_turn: Option<String>,
 }
 
 /// A message that waits for the end of the running turn, with the
@@ -703,6 +711,7 @@ mod tests {
             activity_index: None,
             detached: false,
             first_row: 0,
+            held_after_web_search: false,
         }
     }
 

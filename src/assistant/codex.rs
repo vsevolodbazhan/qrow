@@ -1,11 +1,11 @@
 use super::{
-    AccountKind, AccountStatus, AssistantEvent, BASE_INSTRUCTIONS, Conversation,
-    ConversationHistory, ConversationPage, HarnessFeatures, HarnessSnapshot, HistoryTurn,
-    LoginStart, MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, Model, ReasoningEffort, ServiceTier,
-    TitleRequest, ToolCall, ToolDefinition, ToolResult, Turn, TurnRequest,
-    WORKSPACE_CONTEXT_SEPARATOR, history_item_text,
+    AccountKind, AccountStatus, AssistantEvent, Conversation, ConversationHistory,
+    ConversationPage, HarnessFeatures, HarnessSnapshot, HistoryTurn, LoginStart, MAX_CONTEXT_BYTES,
+    MAX_MESSAGE_BYTES, Model, ReasoningEffort, ServiceTier, TitleRequest, ToolCall, ToolDefinition,
+    ToolResult, Turn, TurnRequest, WORKSPACE_CONTEXT_SEPARATOR, WebSearch, WebSearchStatus,
+    history_item_text,
     inbox::{Inbox, Message, OutputSender, SendError},
-    service,
+    service, web,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -98,6 +98,7 @@ pub struct CodexHarness {
     title_timeout: Duration,
     /// Title threads that ended before Codex stopped their messages.
     ended_title_threads: VecDeque<String>,
+    web_search: bool,
 }
 
 /// The next work for the assistant worker.
@@ -201,15 +202,17 @@ impl CodexHarness {
 
     pub fn launch(executable: impl AsRef<OsStr>, cwd: &Path) -> Result<Self> {
         let (_commands, inbox) = Inbox::channel(0);
-        Self::launch_with_inbox(executable, cwd, inbox, |_| {})
+        Self::launch_with_inbox(executable, cwd, inbox, false, |_| {})
     }
 
     /// Starts Codex. Its output and the commands for `inbox` arrive on one
-    /// channel, which `next_input` reads.
+    /// channel, which `next_input` reads. With `web_search`, Codex searches
+    /// its cached web index. It never opens live pages.
     pub(crate) fn launch_with_inbox(
         executable: impl AsRef<OsStr>,
         cwd: &Path,
         mut inbox: Inbox,
+        web_search: bool,
         on_spawn: impl Fn(u32) + Send + 'static,
     ) -> Result<Self> {
         anyhow::ensure!(cwd.is_dir(), "Codex working directory does not exist");
@@ -240,7 +243,11 @@ impl CodexHarness {
                 "--disable",
                 "skill_search",
                 "-c",
-                "web_search=\"disabled\"",
+                if web_search {
+                    "web_search=\"cached\""
+                } else {
+                    "web_search=\"disabled\""
+                },
                 "-c",
                 "mcp_servers={}",
             ])
@@ -312,6 +319,7 @@ impl CodexHarness {
             title_jobs: Vec::new(),
             title_timeout: TITLE_TIMEOUT,
             ended_title_threads: VecDeque::new(),
+            web_search,
         };
         if let Err(error) = harness.initialize() {
             let _ = harness.shutdown();
@@ -399,6 +407,9 @@ impl CodexHarness {
                     turn: turn.into(),
                     error,
                 })
+            }
+            "item/started" | "item/completed" if is_web_search(&params) => {
+                web_search_event(&params, method == "item/completed")
             }
             "thread/name/updated" => {
                 let thread_id = required_string(&params, "threadId")?.to_owned();
@@ -861,6 +872,57 @@ pub(super) fn clean_title(title: &str) -> Option<String> {
     (!title.is_empty()).then(|| title.to_owned())
 }
 
+fn is_web_search(params: &Value) -> bool {
+    params.pointer("/item/type").and_then(Value::as_str) == Some("webSearch")
+}
+
+/// A web search item of Codex: the search text, or the page action, and the
+/// links when Codex sends them.
+fn web_search_event(params: &Value, completed: bool) -> Result<AssistantEvent> {
+    let item = params.get("item").unwrap_or(&Value::Null);
+    let text = |pointer: &str| item.pointer(pointer).and_then(Value::as_str).unwrap_or("");
+    let query = match text("/action/type") {
+        "search" => {
+            let queries: Vec<&str> = item
+                .pointer("/action/queries")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            match (text("/action/query"), queries.is_empty()) {
+                ("", false) => queries.join("; "),
+                ("", true) => text("/query").to_owned(),
+                (query, _) => query.to_owned(),
+            }
+        }
+        "openPage" => format!("Open {}", text("/action/url")),
+        "findInPage" => format!(
+            "Find \"{}\" in {}",
+            text("/action/pattern"),
+            text("/action/url")
+        ),
+        _ => text("/query").to_owned(),
+    };
+    let status = if completed {
+        WebSearchStatus::Completed(web::collect_links(
+            item.get("results")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        ))
+    } else {
+        WebSearchStatus::Running
+    };
+    Ok(AssistantEvent::WebSearch(WebSearch {
+        thread_id: required_string(params, "threadId")?.to_owned(),
+        turn_id: required_string(params, "turnId")?.to_owned(),
+        id: required_string(item, "id")?.to_owned(),
+        query: web::clean_text(&query),
+        status,
+    }))
+}
+
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
     value
         .get(field)
@@ -927,7 +989,7 @@ impl CodexHarness {
                 "sandbox": "read-only",
                 "approvalPolicy": "never",
                 "dynamicTools": dynamic_tools,
-                "baseInstructions": BASE_INSTRUCTIONS,
+                "baseInstructions": super::instructions(self.web_search),
             }),
         )?;
         Ok(response.thread.into())
@@ -943,7 +1005,7 @@ impl CodexHarness {
                     "cwd": self.cwd,
                     "sandbox": "read-only",
                     "approvalPolicy": "never",
-                    "baseInstructions": BASE_INSTRUCTIONS,
+                    "baseInstructions": super::instructions(self.web_search),
                     "excludeTurns": true,
                 }),
             )
