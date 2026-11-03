@@ -302,7 +302,7 @@ fn kyuubi_transfer_preset_save_keeps_the_session_and_exports_all_rows(cx: &mut T
     });
     app.type_sql(cx, "SELECT id FROM qrow_transfer_view ORDER BY id");
     app.run_export(cx);
-    app.wait_for(cx, "export-incremental-notice");
+    app.wait_for(cx, "export-save");
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("transfer.csv");
     app.click(cx, "export-save");

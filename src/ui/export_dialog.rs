@@ -114,7 +114,7 @@ impl Qrow {
         let source = match Snapshot::new(&data.columns, &data.rows) {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                window.push_notification(error.to_string(), cx);
+                window.push_notification(Notification::error(error.to_string()), cx);
                 return;
             }
         };
@@ -1031,62 +1031,211 @@ impl Render for ExportDialog {
             ),
         ];
         let custom_null = format == Format::Csv && matches!(options.null, NullMarker::Custom(_));
-        v_flex().id("export-form").gap_4().w_full()
-            .child(v_form().columns(2).gap_x_4().children([4,0,1,2,3,5,9,6,7,8].into_iter()
-                .filter(|index| *index == 4 || format == Format::Csv && (0..=3).contains(index) || format == Format::Markdown && *index == 5 || matches!(format, Format::Json | Format::JsonLines) && *index == 9 || format == Format::Parquet && (6..=8).contains(index))
-                .map(|index| field().label(labels[index]).child(
-                    Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
-                        .disabled(busy || index == 8 && self.settings.parquet.column_types == export::parquet::ColumnTypes::Text).w_full().accessibility_label(labels[index])))))
-            .when(custom_null, |view| view.child(field().label("Null Marker")
-                .description("Exclude separators, quotes, and line breaks.")
-                .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
-            .when(format == Format::Csv, |view| view.child(v_flex().gap_2().children(
-                flags.into_iter().enumerate().map(|(index,(id,label,checked))|
-                    Checkbox::new(id).small().label(label).checked(checked).disabled(busy)
-                        .on_click(cx.listener(move |this,checked,window,cx| {
-                            match index {0 => this.settings.csv.header = *checked,
-                                1 => this.settings.csv.byte_order_mark = *checked,
-                                2 => this.settings.csv.quote_all = *checked,
-                                3 => this.settings.csv.escape_formulas = *checked, _ => unreachable!()}
-                            this.sync(window,cx);
-                        }))))))
-            .when(format == Format::Markdown, |view| view
-                .when(self.settings.markdown.style == export::markdown::Style::CodeBlock, |view| view.child(
-                    field().label("Maximum Cell Width").description("Use 1 to 1000 display columns.")
-                        .child(Input::new(&self.cell_width).id("export-cell-width").focus_ring(false).disabled(busy).aria_label("Maximum Cell Width"))))
-                .child(v_flex().gap_2()
-                    .when(self.settings.markdown.style == export::markdown::Style::Table, |view| view.child(
-                        Checkbox::new("export-markdown-pretty").small().label("Pretty output").checked(self.settings.markdown.pretty).disabled(busy)
-                            .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.pretty = *checked; this.sync(window,cx);}))))
-                    .child(Checkbox::new("export-row-numbers").small().label("Include row numbers").checked(self.settings.markdown.row_numbers).disabled(busy)
-                        .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.row_numbers = *checked; this.sync(window,cx);})))))
-            .when(matches!(format, Format::Json | Format::JsonLines), |view| view.child(v_flex().gap_2().children(
-                json_flags.into_iter().enumerate().filter(|(index,_)| *index != 1 || format == Format::Json).map(|(index,(id,label,checked))|
-                    Checkbox::new(id).small().label(label).checked(checked).disabled(busy || index == 2 && !self.settings.json.typed)
-                        .on_click(cx.listener(move |this,checked,window,cx| {
-                            match index {0 => this.settings.json.typed = *checked, 1 => this.settings.json.pretty = *checked,
-                                2 => this.settings.json.decimals_as_numbers = *checked, _ => unreachable!()}
-                            this.sync(window,cx);
-                        }))))))
-            .when(format == Format::Parquet && self.settings.parquet.column_types == export::parquet::ColumnTypes::Typed && self.settings.parquet.numeric == export::parquet::Numeric::Double, |view| view.child(div().text_sm().text_color(cx.theme().warning).child("Double can change numeric values.")))
-            .when(format == Format::Parquet && !self.source.table(None).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
-                .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
-                .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
-            .when(self.scope.executes(), |view| view.children(self.run.as_ref().and_then(transfer::notice).map(|text|
-                div().id("export-incremental-notice").test_support().role(Role::Label).aria_label(text.clone())
-                    .text_sm().text_color(cx.theme().muted_foreground).child(text)))
-                .when(self.run.as_ref().is_some_and(transfer::save_to_file), |view| view.child(
-                    div().id("export-save-to-file-warning").test_support().role(Role::Alert)
-                        .aria_label("saveToFile is enabled in this connection. It can change how incremental collect works.")
-                        .text_sm().text_color(cx.theme().warning).child("saveToFile is enabled in this connection. It can change how incremental collect works."))))
-            .when(self.large_copy, |view| view.child(div().id("export-copy-warning").test_support().role(Role::Alert)
-                .aria_label("Markdown exceeds 40,000 characters. It can exceed message limits.")
-                .text_sm().text_color(cx.theme().warning).child("Markdown exceeds 40,000 characters. It can exceed message limits.")))
-            .when_some(self.error.clone(), |view,error| view.child(div().id("export-error").test_support().role(Role::Alert)
-                .aria_label(error.clone()).child(Alert::error("export-error-alert", error))))
-            .when(busy, |view| view.child(div().id("export-progress").test_support().role(Role::Status)
-                .aria_label(self.status_text()).w_full().text_sm().text_color(cx.theme().muted_foreground).child(self.status_text())))
+        v_flex()
+            .id("export-form")
+            .gap_4()
+            .w_full()
+            .child(
+                v_form().columns(2).gap_x_4().children(
+                    [4, 0, 1, 2, 3, 5, 9, 6, 7, 8]
+                        .into_iter()
+                        .filter(|index| {
+                            *index == 4
+                                || format == Format::Csv && (0..=3).contains(index)
+                                || format == Format::Markdown && *index == 5
+                                || matches!(format, Format::Json | Format::JsonLines) && *index == 9
+                                || format == Format::Parquet && (6..=8).contains(index)
+                        })
+                        .map(|index| {
+                            field().label(labels[index]).child(
+                                Select::new(&self.controls[index])
+                                    .id(ids[index])
+                                    .focus_ring(false)
+                                    .disabled(
+                                        busy || index == 8
+                                            && self.settings.parquet.column_types
+                                                == export::parquet::ColumnTypes::Text,
+                                    )
+                                    .w_full()
+                                    .accessibility_label(labels[index]),
+                            )
+                        }),
+                ),
+            )
+            .when(custom_null, |view| {
+                view.child(
+                    field()
+                        .label("Null Marker")
+                        .description("Exclude separators, quotes, and line breaks.")
+                        .child(
+                            Input::new(&self.null_text)
+                                .id("export-null-text")
+                                .focus_ring(false)
+                                .disabled(busy)
+                                .aria_label("Null Marker"),
+                        ),
+                )
+            })
+            .when(format == Format::Csv, |view| {
+                view.child(v_flex().gap_2().children(flags.into_iter().enumerate().map(
+                    |(index, (id, label, checked))| {
+                        Checkbox::new(id)
+                            .small()
+                            .label(label)
+                            .checked(checked)
+                            .disabled(busy)
+                            .on_click(cx.listener(move |this, checked, window, cx| {
+                                match index {
+                                    0 => this.settings.csv.header = *checked,
+                                    1 => this.settings.csv.byte_order_mark = *checked,
+                                    2 => this.settings.csv.quote_all = *checked,
+                                    3 => this.settings.csv.escape_formulas = *checked,
+                                    _ => unreachable!(),
+                                }
+                                this.sync(window, cx);
+                            }))
+                    },
+                )))
+            })
+            .when(format == Format::Markdown, |view| {
+                view.when(
+                    self.settings.markdown.style == export::markdown::Style::CodeBlock,
+                    |view| {
+                        view.child(
+                            field()
+                                .label("Maximum Cell Width")
+                                .description("Use 1 to 1000 display columns.")
+                                .child(
+                                    Input::new(&self.cell_width)
+                                        .id("export-cell-width")
+                                        .focus_ring(false)
+                                        .disabled(busy)
+                                        .aria_label("Maximum Cell Width"),
+                                ),
+                        )
+                    },
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .when(
+                            self.settings.markdown.style == export::markdown::Style::Table,
+                            |view| {
+                                view.child(
+                                    Checkbox::new("export-markdown-pretty")
+                                        .small()
+                                        .label("Pretty output")
+                                        .checked(self.settings.markdown.pretty)
+                                        .disabled(busy)
+                                        .on_click(cx.listener(|this, checked, window, cx| {
+                                            this.settings.markdown.pretty = *checked;
+                                            this.sync(window, cx);
+                                        })),
+                                )
+                            },
+                        )
+                        .child(
+                            Checkbox::new("export-row-numbers")
+                                .small()
+                                .label("Include row numbers")
+                                .checked(self.settings.markdown.row_numbers)
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, checked, window, cx| {
+                                    this.settings.markdown.row_numbers = *checked;
+                                    this.sync(window, cx);
+                                })),
+                        ),
+                )
+            })
+            .when(matches!(format, Format::Json | Format::JsonLines), |view| {
+                view.child(
+                    v_flex().gap_2().children(
+                        json_flags
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(index, _)| *index != 1 || format == Format::Json)
+                            .map(|(index, (id, label, checked))| {
+                                Checkbox::new(id)
+                                    .small()
+                                    .label(label)
+                                    .checked(checked)
+                                    .disabled(busy || index == 2 && !self.settings.json.typed)
+                                    .on_click(cx.listener(move |this, checked, window, cx| {
+                                        match index {
+                                            0 => this.settings.json.typed = *checked,
+                                            1 => this.settings.json.pretty = *checked,
+                                            2 => this.settings.json.decimals_as_numbers = *checked,
+                                            _ => unreachable!(),
+                                        }
+                                        this.sync(window, cx);
+                                    }))
+                            }),
+                    ),
+                )
+            })
+            .when(
+                format == Format::Parquet
+                    && self.settings.parquet.column_types == export::parquet::ColumnTypes::Typed
+                    && self.settings.parquet.numeric == export::parquet::Numeric::Double,
+                |view| {
+                    view.child(warning(
+                        "export-double-warning",
+                        "Double can change numeric values.",
+                    ))
+                },
+            )
+            .when(
+                format == Format::Parquet && !self.source.table(None).rows.context().iso_dates(),
+                |view| {
+                    view.child(warning(
+                        "export-date-style-warning",
+                        "The result uses a non-ISO DateStyle. Dates and timestamps remain text.",
+                    ))
+                },
+            )
+            .when(self.large_copy, |view| {
+                view.child(warning(
+                    "export-copy-warning",
+                    "Markdown exceeds 40,000 characters. It can exceed message limits.",
+                ))
+            })
+            .when_some(self.error.clone(), |view, error| {
+                view.child(
+                    div()
+                        .id("export-error")
+                        .test_support()
+                        .role(Role::Alert)
+                        .aria_label(error.clone())
+                        .child(Alert::error("export-error-alert", error)),
+                )
+            })
+            .when(busy, |view| {
+                view.child(
+                    div()
+                        .id("export-progress")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(self.status_text())
+                        .w_full()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(self.status_text()),
+                )
+            })
     }
+}
+
+/// Wraps a warning alert so tests and assistive technology can find it.
+fn warning(id: &'static str, text: &'static str) -> impl IntoElement {
+    div()
+        .id(id)
+        .test_support()
+        .role(Role::Alert)
+        .aria_label(text)
+        .child(Alert::warning(
+            SharedString::from(format!("{id}-alert")),
+            text,
+        ))
 }
 
 impl ExportDialog {
@@ -1152,7 +1301,7 @@ pub(super) fn copy_format(
     let guard = match guard {
         Ok(guard) => guard,
         Err(error) => {
-            window.push_notification(error.to_string(), cx);
+            window.push_notification(Notification::error(error.to_string()), cx);
             return;
         }
     };
@@ -1205,7 +1354,7 @@ pub(super) fn copy_format(
                 }
             }
             Ok(_) => {}
-            Err(error) => window.push_notification(error.to_string(), cx),
+            Err(error) => window.push_notification(Notification::error(error.to_string()), cx),
         });
     })
     .detach();
@@ -1220,7 +1369,10 @@ fn confirm_markdown_copy(
         if request.is_current(cx) {
             copy_text(text.into_string(), cx);
         } else {
-            window.push_notification("The clipboard changed. Choose Copy to try again.", cx);
+            window.push_notification(
+                Notification::error("The clipboard changed. Choose Copy to try again."),
+                cx,
+            );
         }
     }
 }

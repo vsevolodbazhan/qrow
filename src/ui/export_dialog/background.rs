@@ -224,6 +224,7 @@ impl Render for ExportList {
                 let state = job.read(cx);
                 let id = state.id;
                 let message = state.status_text();
+                let error = state.error.is_some();
                 let running = state.running;
                 let cancel = job.downgrade();
                 v_flex()
@@ -231,7 +232,12 @@ impl Render for ExportList {
                     .py_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().text_sm().child(message))
+                    .child(
+                        div()
+                            .text_sm()
+                            .when(error, |view| view.text_color(cx.theme().danger))
+                            .child(message),
+                    )
                     .child(
                         h_flex()
                             .gap_2()

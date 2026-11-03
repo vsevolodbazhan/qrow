@@ -133,13 +133,8 @@ fn a_full_connection_rejects_run_export_after_save_before_credentials_or_sql(
 }
 
 #[gpui_kit::test]
-fn run_export_shows_captured_incremental_policy_and_staging_conflict(cx: &mut TestAppContext) {
-    use qrow::model::transfer::{SAVE_TO_FILE_KEY, TransferPreset};
-    let mut profile = offline_profile("Conservative export");
-    profile.transfer.preset = TransferPreset::Conservative;
-    profile
-        .parameters
-        .insert(SAVE_TO_FILE_KEY.into(), "true".into());
+fn run_export_form_opens_without_reading_credentials(cx: &mut TestAppContext) {
+    let profile = offline_profile("Kyuubi export");
     let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT 1".into();
     let app = TestApp::launch(
@@ -151,17 +146,7 @@ fn run_export_shows_captured_incremental_policy_and_staging_conflict(cx: &mut Te
         },
     );
     app.run_export(cx);
-    app.wait_for(cx, "export-incremental-notice");
-    app.update(cx, |window, _| {
-        assert!(
-            window
-                .find("export-incremental-notice")
-                .label()
-                .unwrap()
-                .contains("On from Conservative")
-        );
-        assert!(window.try_find("export-save-to-file-warning").is_some());
-    });
+    app.wait_for(cx, "export-save");
     assert_eq!(app.credentials.reads(), 0);
     app.click(cx, "export-cancel");
 }
@@ -883,7 +868,9 @@ fn parquet_save_disables_copy_and_remembers_format_options(cx: &mut TestAppConte
     app.select(cx, "export-format", "Parquet");
     app.select(cx, "export-parquet-compression", "Gzip");
     app.select(cx, "export-parquet-numeric", "Double (approximate)");
+    app.wait_for(cx, "export-double-warning");
     app.select(cx, "export-parquet-types", "Text");
+    app.wait_gone(cx, "export-double-warning");
     cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
     app.click(cx, "export-copy");
     assert_eq!(

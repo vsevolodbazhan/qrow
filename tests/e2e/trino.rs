@@ -562,16 +562,7 @@ fn parallel_spooling_saves_all_rows_and_keeps_normal_queries_usable(cx: &mut Tes
         qrow::model::transfer::TransferPreset::Fast,
     );
     app.run_export(cx);
-    app.wait_for(cx, "export-incremental-notice");
-    app.update(cx, |window, _| {
-        assert!(
-            window
-                .find("export-incremental-notice")
-                .label()
-                .unwrap()
-                .contains("Trino spooling: Parallel")
-        )
-    });
+    app.wait_for(cx, "export-save");
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("parallel.csv");
     save_export(&app, cx, &output);

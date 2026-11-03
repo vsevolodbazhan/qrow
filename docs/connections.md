@@ -134,9 +134,6 @@ connection's transfer settings.
 
 Incremental collect can reduce Spark driver result memory. It can also
 increase execution time. Server policy can override profile settings.
-The export rerun form shows the configured collection value before
-you choose a file. It also shows a warning when connection parameters enable
-`saveToFile`.
 `kyuubi.engine.spark.operation.incremental.collect` takes precedence over
 `kyuubi.operation.incremental.collect`. The administrator's
 `kyuubi.operation.result.saveToFile.enabled` option conflicts with
