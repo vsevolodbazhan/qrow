@@ -428,6 +428,15 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
             Some("Rows 1–1000")
         );
     });
+    // A compact toolbar shows the Partial tag between the range and the details.
+    cx.simulate_window_resize(app.window, size(px(700.), px(650.)));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        let range = bounds_of(window, "result-range");
+        let partial = bounds_of(window, "result-partial");
+        let details = bounds_of(window, "result-details");
+        assert!(range.right() <= partial.left() && partial.right() <= details.left());
+    });
     // A narrow toolbar hides result metadata, but not the Partial tag.
     cx.simulate_window_resize(app.window, size(px(500.), px(650.)));
     app.settle(cx);

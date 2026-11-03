@@ -19,8 +19,8 @@ fn assert_toolbar_fits(app: &TestApp, cx: &mut TestAppContext) {
         let mut right = toolbar.left();
         for id in [
             "result-count",
-            "result-details",
             "result-partial",
+            "result-details",
             "export-results",
             "copy-result-query",
             "pin-result",

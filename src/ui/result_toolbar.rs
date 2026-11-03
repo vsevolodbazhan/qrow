@@ -194,6 +194,25 @@ impl Qrow {
             .border_b_1()
             .border_color(cx.theme().border)
             .when(show_range, |row| row.child(summary.tags(compact, cx)))
+            // The tag stays at every toolbar width: it changes what the rows mean.
+            .when(result.unfetched, |row| {
+                row.child(
+                    div()
+                        .id("result-partial")
+                        .test_support()
+                        .role(Role::Label)
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .aria_label("Partial result")
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(
+                                "The result does not hold all rows of the query.",
+                            )
+                            .build(window, cx)
+                        })
+                        .child(ResultSummary::neutral_tag(cx).child("Partial")),
+                )
+            })
             .when(compact, |row| {
                 let qrow = cx.entity().downgrade();
                 let tab_id = tab.saved.id;
@@ -220,25 +239,6 @@ impl Qrow {
                         };
                         ResultSummary::new(tab, cx).details(cx).into_any_element()
                     }),
-                )
-            })
-            // The tag stays at every toolbar width: it changes what the rows mean.
-            .when(result.unfetched, |row| {
-                row.child(
-                    div()
-                        .id("result-partial")
-                        .test_support()
-                        .role(Role::Label)
-                        .flex_shrink_0()
-                        .whitespace_nowrap()
-                        .aria_label("Partial result")
-                        .tooltip(|window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(
-                                "The result does not hold all rows of the query.",
-                            )
-                            .build(window, cx)
-                        })
-                        .child(ResultSummary::neutral_tag(cx).child("Partial")),
                 )
             })
             .child(div().flex_1().min_w_0())
