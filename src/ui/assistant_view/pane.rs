@@ -267,7 +267,69 @@ impl AssistantPane {
     }
 }
 
+/// Prompts that a new conversation offers. A click puts one in the
+/// message field.
+const EXAMPLE_PROMPTS: [&str; 3] = [
+    "Which tables hold booking data?",
+    "Write a query for the busiest routes",
+    "Explain the SQL in this tab",
+];
+
 impl AssistantPane {
+    /// The transcript of a conversation without messages: what the
+    /// assistant does, with prompts to start from.
+    fn empty_transcript(&self, qrow: &Qrow, cx: &Context<Self>) -> impl IntoElement {
+        v_flex()
+            .id("assistant-empty")
+            .test_support()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .items_center()
+            .justify_center()
+            .px_6()
+            .py_8()
+            .gap_2()
+            .child(
+                Icon::new(AssetIconName::Bot)
+                    .large()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Ask about your data"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_center()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("The assistant reads the catalog and writes SQL for this tab."),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w(qrow.ui_px(320.))
+                    .pt_2()
+                    .gap_1()
+                    .children(EXAMPLE_PROMPTS.iter().enumerate().map(|(index, prompt)| {
+                        Button::new(("assistant-example", index))
+                            .outline()
+                            .small()
+                            .w_full()
+                            .label(*prompt)
+                            .accessibility_label(format!("Use prompt: {prompt}"))
+                            .on_click(cx.listener(move |pane, _, window, cx| {
+                                pane.composer.update(cx, |composer, cx| {
+                                    composer.set_value(*prompt, window, cx);
+                                    composer.focus(window, cx);
+                                });
+                            }))
+                    })),
+            )
+    }
+
     fn panel(&self, qrow: &Qrow, width: Pixels, cx: &Context<Self>) -> impl IntoElement {
         let narrow = width < qrow.ui_px(600.);
         let show_threads = show_thread_list(narrow, self.thread_list_override);
@@ -528,7 +590,12 @@ impl AssistantPane {
                     .min_h_0()
                     .overflow_y_scroll()
                     .child(self.sign_in(qrow, cx))))
-            .when(!signed_out, |panel| panel.child(self.transcript(cx)))
+            .when(!signed_out && self.rows.rows.is_empty() && first_message.is_none(), |panel| {
+                panel.child(self.empty_transcript(qrow, cx))
+            })
+            .when(!signed_out && (!self.rows.rows.is_empty() || first_message.is_some()), |panel| {
+                panel.child(self.transcript(cx))
+            })
             .when_some(
                 pending_approval,
                 |panel, pending| {
@@ -661,7 +728,19 @@ impl AssistantPane {
                     )
                     .child(
                         h_flex().min_w_0().gap_1()
-                            .child(
+                            // Until the harness supplies its models, the
+                            // selectors have no values: a status names the wait.
+                            .when(model.is_none() && !disconnected, |row| row.child(
+                                div()
+                                    .id("assistant-controls-waiting")
+                                    .test_support()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("Waiting for {harness_name}…")),
+                            ))
+                            .when(model.is_some(), |row| row.child(
                                 h_flex()
                                     .min_w_0()
                                     .gap_1()
@@ -731,7 +810,7 @@ impl AssistantPane {
                                                     ))
                                                 })
                                             }))),
-                            )
+                            ))
                             .child(div().flex_1())
                             .when_some(disconnected_error, |row, error| row.child(
                                 Button::new("assistant-reconnect")

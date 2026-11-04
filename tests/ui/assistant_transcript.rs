@@ -370,9 +370,8 @@ fn a_saved_conversation_shows_as_it_did_live_without_codex(cx: &mut TestAppConte
         rows(window) == live
     });
     assert_eq!(card_detail(&app, cx, &card), live_detail);
-    assert_eq!(
-        app.update(cx, |window, _| label(window, "assistant-model"))
-            .as_deref(),
-        Some("Model: waiting for Codex")
-    );
+    assert!(app.update(cx, |window, _| {
+        present(window, &"assistant-controls-waiting".into())
+            && !present(window, &"assistant-model".into())
+    }));
 }

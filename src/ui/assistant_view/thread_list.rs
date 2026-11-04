@@ -68,6 +68,16 @@ impl AssistantPane {
             self.lowercase.borrow_mut().clear();
         }
         let displayed = qrow.displayed_thread();
+        let visible: Vec<_> = conversations
+            .into_iter()
+            .map(|conversation| (conversation, qrow.conversation_place(conversation)))
+            .filter(|(conversation, (place, closed))| {
+                search.is_empty()
+                    || self.search_matches(&conversation.title, &search)
+                    || self.search_matches(place, &search)
+                    || (*closed && self.search_matches("Tab closed", &search))
+            })
+            .collect();
         v_flex()
             .w(if narrow { width } else { qrow.ui_px(230.) })
             .max_w_full()
@@ -119,18 +129,26 @@ impl AssistantPane {
                     .px_2()
                     .py_2()
                     .gap_1()
+                    .when(visible.is_empty(), |list| {
+                        list.child(
+                            div()
+                                .id("assistant-thread-list-empty")
+                                .test_support()
+                                .px_2()
+                                .py_4()
+                                .text_sm()
+                                .text_center()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(if search.is_empty() {
+                                    "No conversations yet"
+                                } else {
+                                    "No matching conversations"
+                                }),
+                        )
+                    })
                     .children(
-                        conversations
+                        visible
                             .into_iter()
-                            .map(|conversation| {
-                                (conversation, qrow.conversation_place(conversation))
-                            })
-                            .filter(|(conversation, (place, closed))| {
-                                search.is_empty()
-                                    || self.search_matches(&conversation.title, &search)
-                                    || self.search_matches(place, &search)
-                                    || (*closed && self.search_matches("Tab closed", &search))
-                            })
                             .map(|(conversation, (place, closed))| {
                                 let id = conversation.thread_id.clone();
                                 let status = qrow.thread_status(&id);
