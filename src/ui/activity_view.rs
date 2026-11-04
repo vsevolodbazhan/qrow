@@ -5,12 +5,11 @@
 use super::{
     Qrow, StatusTooltip,
     button_pair::{button_pair, segment},
-    log_row::LogRow,
+    log_row::{self, LogRow},
     panel_empty_state,
 };
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
 use crate::logs::timestamp_label;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -437,7 +436,6 @@ impl ActivityView {
             .child(
                 div().w_64().flex_shrink_0().child(
                     Select::new(&self.connection)
-                        .focus_ring(false)
                         .id("activity-connection")
                         .small()
                         .placeholder("No connection")
@@ -592,12 +590,17 @@ impl ActivityView {
                     .when_some(tab, |row, tab| {
                         let view = view.downgrade();
                         row.action(
+                            // On every row the arrow would repeat, so it shows
+                            // on hover and on keyboard focus only.
                             Button::new(("activity-show-tab", entry.id()))
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::ArrowRight)
                                 .tooltip("Show tab")
                                 .accessibility_label("Show tab")
+                                .opacity(0.)
+                                .group_hover(log_row::ROW_GROUP, |style| style.opacity(1.))
+                                .focus_visible(|style| style.opacity(1.))
                                 .on_click(move |_, _, cx| {
                                     let _ = view.update(cx, |_, cx| {
                                         cx.emit(ActivityViewEvent::ShowTab(tab));

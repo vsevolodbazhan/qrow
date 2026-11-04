@@ -2,7 +2,6 @@ use crate::model::{
     CatalogColumnReads, CatalogRefresh, CatalogSettings, ConnectionLifecycle, Profile,
     SharedCatalog,
 };
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::ActiveTheme;
 use uuid::Uuid;
 pub(super) mod transfer;
@@ -718,7 +717,6 @@ pub(super) fn assistant_page(qrow: &WeakEntity<Qrow>) -> SettingPage {
                             .w_full()
                             .child(
                                 Textarea::new(&form.assistant_notes)
-                                    .focus_ring(false)
                                     .w_full()
                                     .disabled(form.saving.is_some())
                                     .aria_label("Assistant Notes"),
@@ -753,7 +751,6 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             false,
             |_, form, _, _| {
                 Select::new(&form.schema_refresh)
-                    .focus_ring(false)
                     .id("connection-schema-refresh")
                     .w_full()
                     .disabled(form.saving.is_some())
@@ -790,7 +787,6 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                 false,
                 |_, form, _, _| {
                     Select::new(&form.column_reads)
-                        .focus_ring(false)
                         .id("connection-column-reads")
                         .w_full()
                         .disabled(form.saving.is_some())
@@ -819,7 +815,6 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                     false,
                     |_, form, _, _| {
                         Input::new(&form.shared_name)
-                            .focus_ring(false)
                             .id("connection-shared-catalog-name")
                             .w_full()
                             .disabled(form.saving.is_some())
@@ -834,7 +829,6 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                     false,
                     |_, form, _, _| {
                         Select::new(&form.preferred_select)
-                            .focus_ring(false)
                             .id("connection-preferred-catalog-connection")
                             .w_full()
                             .disabled(form.saving.is_some())
@@ -886,7 +880,6 @@ fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
         .w_full()
         .child(
             Combobox::new(&form.catalog_select)
-                .focus_ring(false)
                 .w_full()
                 .disabled(form.saving.is_some())
                 .search_placeholder("Search catalogs…")

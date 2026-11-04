@@ -12,6 +12,8 @@ use crate::logs::timestamp_label;
 
 /// The selection order of the parts of one entry.
 const PARTS: u64 = 4;
+/// The hover group of a row, for actions that show on hover.
+pub(super) const ROW_GROUP: &str = "log-row";
 
 #[derive(IntoElement)]
 pub(super) struct LogRow {
@@ -103,6 +105,7 @@ impl RenderOnce for LogRow {
         });
         h_flex()
             .id(self.id)
+            .group(ROW_GROUP)
             .w_full()
             .items_start()
             .gap_2()

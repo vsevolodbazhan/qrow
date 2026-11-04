@@ -38,8 +38,9 @@ pub(super) fn button_pair(
     let radius = cx.theme().font_size * 0.375;
     let inner_radius = (radius - px(1.)).max(px(0.));
 
-    // GPUI overflow masks are rectangular. Round the end buttons themselves
-    // so selected, hover, and pressed fills stay inside the rounded outline.
+    // The end buttons are rounded themselves, so their selected, hover, and
+    // pressed fills stay inside the rounded outline without a clip. Without
+    // one, the keyboard focus ring of a segment shows in full.
     h_flex()
         .id(id)
         .flex_shrink_0()
@@ -47,7 +48,6 @@ pub(super) fn button_pair(
         .border_1()
         .border_color(cx.theme().border)
         .rounded(radius)
-        .overflow_hidden()
         .child(left.rounded_none().rounded_l(inner_radius))
         .child(div().w_px().bg(cx.theme().border))
         .child(right.rounded_none().rounded_r(inner_radius))

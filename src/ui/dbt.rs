@@ -12,7 +12,6 @@ use crate::{
     },
     model::{DbtProject, DbtRefresh, parse_schema_rules},
 };
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IndexPath, Sizable as _,
     button::Button,
@@ -352,7 +351,6 @@ impl Qrow {
                 false,
                 |_, form, _, _| {
                     Select::new(&form.dbt.refresh)
-                        .focus_ring(false)
                         .id("connection-dbt-refresh")
                         .w_full()
                         .disabled(form.saving.is_some())
@@ -381,7 +379,6 @@ impl Qrow {
                                 .w_full()
                                 .child(
                                     Textarea::new(&form.dbt.rules)
-                                        .focus_ring(false)
                                         .w_full()
                                         .disabled(form.saving.is_some())
                                         .font_family("Menlo")
@@ -426,7 +423,6 @@ impl Qrow {
                             }))
                             .child(
                                 Input::new(&form.dbt.manifest)
-                                    .focus_ring(false)
                                     .id("connection-dbt-manifest")
                                     .w_full()
                                     .disabled(saving)

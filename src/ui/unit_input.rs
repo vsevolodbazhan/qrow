@@ -1,5 +1,4 @@
 use super::*;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::input::Input;
 
 /// A text field with its unit right after the value, like `16 MiB`.
@@ -37,7 +36,6 @@ pub(super) fn unit_input(
         .w_full()
         .child(
             Input::new(input)
-                .focus_ring(false)
                 .id(id)
                 .w_full()
                 .disabled(disabled)

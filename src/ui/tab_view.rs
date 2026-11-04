@@ -1,6 +1,5 @@
 use super::setting_row::Rows;
 use super::*;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     alert::Alert,
     form::{field, v_form},
@@ -105,7 +104,6 @@ impl Qrow {
                 v_form().w_full().child(
                     field().label(spec.label).child(
                         Input::new(input)
-                            .focus_ring(false)
                             .id(SharedString::from(format!("rename-{}-name", spec.key)))
                             .w_full()
                             .aria_label(spec.label),

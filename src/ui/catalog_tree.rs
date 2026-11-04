@@ -13,7 +13,6 @@ use crate::catalog::{
     Scope, Seed, Status, catalog_key, qualified_name,
 };
 use gpui_kit::assets::IconName as AssetIconName;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::base::{
     ElementExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState,
 };
@@ -1621,7 +1620,6 @@ impl Qrow {
                         .flex_shrink_0()
                         .child(
                             Input::new(&self.catalog.search)
-                                .focus_ring(false)
                                 .small()
                                 .w_full()
                                 .aria_label("Search relations"),

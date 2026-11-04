@@ -7,7 +7,6 @@ use crate::model::{
 };
 use crate::sql::KeywordCase;
 use crate::themes;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     IndexPath, h_flex,
     input::{NumberInputEvent, StepAction},
@@ -1101,7 +1100,6 @@ fn assistant_page(
             &["assistant", "codex", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&executable)
-                    .focus_ring(false)
                     .id(setting_id("Codex Executable"))
                     .w_full()
                     .aria_label("Codex Executable")
@@ -1113,7 +1111,6 @@ fn assistant_page(
             &["assistant", "claude", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&claude_executable)
-                    .focus_ring(false)
                     .id(setting_id("Claude Code Executable"))
                     .w_full()
                     .aria_label("Claude Code Executable")
@@ -1178,7 +1175,9 @@ pub(super) fn setting_row<E: IntoElement>(
                     )
                 },
             );
-            let control = div().child(field(window, cx));
+            // The focus ring paints outside the control; the page clips at its
+            // edge, so the control keeps the ring width free beside it.
+            let control = div().px_1().child(field(window, cx));
             if stacked || options.layout() == Axis::Vertical {
                 v_flex()
                     .w_full()
@@ -1279,7 +1278,6 @@ fn select_field(
     let select = select.clone();
     move |_: &mut Window, _: &mut App| {
         Select::new(&select)
-            .focus_ring(false)
             .id(setting_id(label))
             .w_full()
             .accessibility_label(label)

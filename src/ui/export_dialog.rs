@@ -6,7 +6,6 @@ use crate::export::{
     self, Format, Snapshot,
     csv::{CsvOptions, LineEnding, NullMarker, Preset, Separator},
 };
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     alert::Alert,
     checkbox::Checkbox,
@@ -1062,7 +1061,6 @@ impl Render for ExportDialog {
                             field().label(labels[index]).child(
                                 Select::new(&self.controls[index])
                                     .id(ids[index])
-                                    .focus_ring(false)
                                     .disabled(
                                         busy || index == 8
                                             && self.settings.parquet.column_types
@@ -1082,7 +1080,6 @@ impl Render for ExportDialog {
                         .child(
                             Input::new(&self.null_text)
                                 .id("export-null-text")
-                                .focus_ring(false)
                                 .disabled(busy)
                                 .aria_label("Null Marker"),
                         ),
@@ -1120,7 +1117,6 @@ impl Render for ExportDialog {
                                 .child(
                                     Input::new(&self.cell_width)
                                         .id("export-cell-width")
-                                        .focus_ring(false)
                                         .disabled(busy)
                                         .aria_label("Maximum Cell Width"),
                                 ),
