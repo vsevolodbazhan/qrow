@@ -3205,7 +3205,7 @@ impl Qrow {
                         input.masked(true).placeholder(if is_new {
                             ""
                         } else {
-                            "Leave blank to keep stored password"
+                            "Keep the stored password"
                         })
                     } else {
                         input

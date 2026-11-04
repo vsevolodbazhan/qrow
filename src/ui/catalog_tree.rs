@@ -2083,7 +2083,9 @@ fn render_entry(
                 .id(label_key.clone())
                 .test_support()
                 .relative()
-                .flex_1()
+                // The name keeps its width before the detail does: the detail
+                // shrinks much faster when the row is short.
+                .flex_grow(1.)
                 .min_w_0()
                 .truncate()
                 .child(label)
@@ -2095,7 +2097,10 @@ fn render_entry(
                     .id(detail_key.clone())
                     .test_support()
                     .relative()
-                    .flex_shrink_0()
+                    .when(!schema_detail, |el| {
+                        el.min_w(ui_px(DETAIL_MIN_WIDTH)).flex_shrink(DETAIL_SHRINK)
+                    })
+                    .when(schema_detail, |el| el.flex_shrink_0())
                     .max_w(ui_px(120.))
                     .truncate()
                     .when(schema_detail, |el| {
@@ -2294,6 +2299,11 @@ pub(super) fn error_summary(error: &str) -> String {
 }
 
 /// The hint under a dbt description that the tooltip cuts.
+/// How much faster the detail of a row shrinks than its name.
+const DETAIL_SHRINK: f32 = 24.;
+/// The narrowest detail, which still shows a letter and the ellipsis.
+const DETAIL_MIN_WIDTH: f32 = 24.;
+
 const DESCRIPTION_HINT: &str = "Open dbt details to see the full description.";
 
 /// The tooltip of a schema, table, or column row.
