@@ -1401,8 +1401,10 @@ impl Qrow {
                 ..
             } => {
                 let (profile, unique_id) = (*profile, dbt.unique_id.clone());
+                let origin = id.clone();
                 Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.open_dbt_details(profile, &unique_id, window, cx)
+                    this.open_dbt_details(profile, &unique_id, window, cx);
+                    this.dbt_details_origin = Some(origin.clone());
                 }))
             }
             _ => None,

@@ -120,18 +120,34 @@ impl Qrow {
                 )
                 // The status bar stays visible below the sheet.
                 .margin_bottom(status_bar)
+                // A side sheet is not modal: the window behind it stays bright
+                // and usable.
+                .overlay(false)
                 .title(title_bar)
                 .child(view.clone())
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(cx));
+                .on_close(move |_, window, cx| {
+                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(window, cx));
                 })
         });
     }
 
     /// The user closed the details sheet. The way back through the lineage
     /// closes with it: only the back button goes back.
-    fn dbt_details_closed(&mut self, cx: &mut Context<Self>) {
+    /// A sheet that a tree row opened gives the focus back to that row.
+    fn dbt_details_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dbt_details = None;
+        if let Some(origin) = self.dbt_details_origin.take() {
+            let tree = self.catalog.state.clone();
+            // After the sheet restores the focus it had when it opened.
+            cx.defer_in(window, move |_, window, cx| {
+                tree.update(cx, |tree, cx| {
+                    if let Some(ix) = tree.index_of(&origin) {
+                        tree.set_selected_index(Some(ix), cx);
+                    }
+                    tree.focus(window, cx);
+                });
+            });
+        }
         cx.notify();
     }
 

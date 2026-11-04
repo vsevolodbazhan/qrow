@@ -761,6 +761,9 @@ pub struct Qrow {
     dbt: dbt::DbtProjects,
     /// The dbt resource of the open dbt details sheet.
     dbt_details: Option<Entity<dbt_details::DbtDetailsView>>,
+    /// The schema tree row that opened the dbt details sheet. Closing the
+    /// sheet returns the focus to it.
+    dbt_details_origin: Option<SharedString>,
     /// The height of the status bar in the last frame. Side sheets end
     /// above it.
     status_bar_height: std::rc::Rc<std::cell::Cell<Pixels>>,
@@ -1014,6 +1017,7 @@ impl Qrow {
             _activity_events: activity_events,
             dbt,
             dbt_details: None,
+            dbt_details_origin: None,
             status_bar_height: Default::default(),
             _demo_manifest: demo_manifest,
         };
@@ -2780,9 +2784,12 @@ impl Qrow {
         if self.dialog_open() || window.has_active_dialog(cx) {
             return;
         }
-        // Dismissing the menu returns focus to the SQL editor rather than the
-        // row or tab that was clicked.
-        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
+        // Dismissing the menu returns focus to the view that opened it, like
+        // the schema tree. Other menus return it to the SQL editor rather
+        // than the row or tab that was clicked.
+        let restore = trigger
+            .clone()
+            .unwrap_or_else(|| self.tabs[self.active].input.read(cx).focus_handle(cx));
         let view = PopupMenu::build(window, cx, move |menu, window, cx| {
             items(menu.action_context(restore), window, cx)
         });
