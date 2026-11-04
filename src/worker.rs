@@ -1121,12 +1121,12 @@ impl Runner {
             format!("rows {}–{}", start_row + 1, start_row + fetched)
         };
         let remaining = if more {
-            "More rows are available"
+            "more rows are available"
         } else {
-            "No more rows"
+            "no more rows"
         };
         let limit = if limited {
-            "; preview limit reached"
+            ", preview limit reached"
         } else {
             ""
         };
