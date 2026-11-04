@@ -11,6 +11,7 @@ mod demo;
 mod environment;
 mod export_dialog;
 mod format_sql;
+mod log_row;
 mod output;
 mod profile_view;
 mod result_tabs;
@@ -3917,13 +3918,13 @@ impl Qrow {
                 Some(execution_id),
                 Severity::Info,
                 LogKind::ExecutionCompleted,
-                "Execution completed on the server, result set: true (demo)",
+                "Execution completed on the server (demo)",
             ),
             LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
                 LogKind::FetchCompleted,
-                "Fetched preview page 1: rows 1–2250, 2250 rows, 2250 retained, more rows: false (demo)",
+                "Fetched page 1: rows 1–2250, end of results (demo)",
             ),
         ];
         let mut activity = Vec::new();

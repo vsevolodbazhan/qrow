@@ -1,7 +1,6 @@
 use super::*;
-use crate::logs::timestamp_label;
-use gpui_kit::base::SelectableText;
-use gpui_kit::component::{h_flex, v_flex};
+use super::log_row::LogRow;
+use gpui_kit::component::{Icon, h_flex, v_flex};
 
 impl Qrow {
     pub(super) fn output_panel(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -13,51 +12,26 @@ impl Qrow {
             v_flex()
                 .w_full()
                 .children(tab.output.entries().enumerate().map(|(index, entry)| {
-                    let (first_line, remaining_lines) = entry
-                        .text
-                        .split_once('\n')
-                        .map_or((entry.text.as_str(), None), |(first, rest)| {
-                            (first, Some(rest))
-                        });
-                    let header = if entry.kind == LogKind::HistoryTrimmed {
-                        first_line.to_owned()
-                    } else {
-                        format!("[{}] {first_line}", timestamp_label(entry.timestamp))
-                    };
                     // A failed keep-alive closed the session. Activity shows
                     // what else happened on the connection.
                     let show_activity =
                         connection.filter(|_| entry.kind == LogKind::KeepAliveFailed);
-                    let text = v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .font_family(self.settings.logs_font_family.clone())
-                        .text_size(self.ui_px(self.settings.logs_font_size))
-                        .line_height(relative(self.settings.logs_line_height))
-                        .whitespace_normal()
-                        .when(entry.severity == Severity::Error, |el| {
-                            el.text_color(cx.theme().danger)
+                    LogRow::new(("output-entry", entry.id()), index as u64, entry.text.clone())
+                        .when(entry.kind != LogKind::HistoryTrimmed, |row| {
+                            row.time(entry.timestamp)
                         })
-                        .child(
-                            SelectableText::new("header", header).document_order(index as u64 * 2),
+                        .error(entry.severity == Severity::Error)
+                        .typography(
+                            self.settings.logs_font_family.clone().into(),
+                            self.ui_px(self.settings.logs_font_size),
+                            self.settings.logs_line_height,
                         )
-                        .when_some(remaining_lines, |el, text| {
-                            el.child(
-                                SelectableText::new("body", text.to_owned())
-                                    .document_order(index as u64 * 2 + 1),
-                            )
-                        });
-                    h_flex()
-                        .id(("output-entry", entry.id()))
-                        .w_full()
-                        .items_start()
-                        .gap_2()
-                        .child(text)
-                        .when_some(show_activity, |el, connection| {
-                            el.child(
+                        .when_some(show_activity, |row, connection| {
+                            row.action(
                                 Button::new(("output-show-activity", entry.id()))
                                     .ghost()
                                     .xsmall()
+                                    .icon(Icon::new(gpui_kit::assets::IconName::Activity))
                                     .label("Show activity")
                                     .accessibility_label("Show activity")
                                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -97,15 +71,17 @@ impl Qrow {
                             .accessibility_label("Copy all logs")
                             .on_click(cx.listener(|this, _, _, cx| this.copy_output(cx))),
                     )
-                    .child(
-                        Button::new("output-copy-error")
-                            .ghost()
-                            .small()
-                            .label("Copy error")
-                            .disabled(!tab.output.has_error())
-                            .accessibility_label("Copy latest error")
-                            .on_click(cx.listener(|this, _, _, cx| this.copy_output_error(cx))),
-                    )
+                    // Hidden, not disabled, when no entry is an error.
+                    .when(tab.output.has_error(), |el| {
+                        el.child(
+                            Button::new("output-copy-error")
+                                .ghost()
+                                .small()
+                                .label("Copy error")
+                                .accessibility_label("Copy latest error")
+                                .on_click(cx.listener(|this, _, _, cx| this.copy_output_error(cx))),
+                        )
+                    })
                     .child(
                         Button::new("output-clear")
                             .ghost()

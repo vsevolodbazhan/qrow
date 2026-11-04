@@ -280,14 +280,17 @@ impl Qrow {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
-            .child(
-                Button::new("disconnect")
-                    .ghost()
-                    .small()
-                    .label("Disconnect")
-                    .disabled(!tab.can_disconnect())
-                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
-            )
+            // Hidden, not disabled, without an open session: a gray label
+            // beside Run reads as a broken control.
+            .when(tab.can_disconnect(), |el| {
+                el.child(
+                    Button::new("disconnect")
+                        .ghost()
+                        .small()
+                        .label("Disconnect")
+                        .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+                )
+            })
             .when(authenticating, |el| {
                 el.child(
                     div()

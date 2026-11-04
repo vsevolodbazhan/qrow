@@ -648,7 +648,7 @@ impl Runner {
                     LogKind::SchemaRefreshFinished,
                     severity,
                     format!(
-                        "{outcome} (client measurement: {})",
+                        "{outcome} ({})",
                         format_duration(duration)
                     ),
                     Some(duration),
@@ -1114,7 +1114,7 @@ impl Runner {
                 self.log(
                     Severity::Info,
                     format!(
-                        "{label}: {} (client measurement: {})",
+                        "{label}: {} ({})",
                         describe_count(request, parsed.count()),
                         format_duration(duration)
                     ),
@@ -1211,7 +1211,7 @@ impl Runner {
             self.log(
                 Severity::Info,
                 format!(
-                    "Opened a session for the schema refresh (client measurement: {})",
+                    "Opened a session for the schema refresh ({})",
                     format_duration(duration)
                 ),
                 Some(duration),

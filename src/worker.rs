@@ -531,10 +531,17 @@ impl Runner {
             Some(execution_id),
             Severity::Info,
             LogKind::ExecutionCompleted,
-            format!(
-                "Execution completed on the server, result set: {has_results} (client measurement: {})",
-                format_duration(duration)
-            ),
+            if has_results {
+                format!(
+                    "Execution completed on the server ({})",
+                    format_duration(duration)
+                )
+            } else {
+                format!(
+                    "Execution completed on the server with no result set ({})",
+                    format_duration(duration)
+                )
+            },
             Some(duration),
         );
     }
@@ -614,7 +621,7 @@ impl Runner {
                 Severity::Info,
                 LogKind::Connected,
                 format!(
-                    "Connected to {} (client measurement: {})",
+                    "Connected to {} ({})",
                     self.profile.as_ref().unwrap().name,
                     format_duration(connect_started.elapsed())
                 ),
@@ -1115,13 +1122,24 @@ impl Runner {
         } else {
             format!("rows {}–{}", start_row + 1, start_row + fetched)
         };
+        let loaded = if self.rows == fetched {
+            String::new()
+        } else {
+            format!(", {} rows loaded", self.rows)
+        };
+        let end = if limited {
+            "preview limit reached"
+        } else if more {
+            "more rows available"
+        } else {
+            "end of results"
+        };
         self.log(
             execution_id,
             Severity::Info,
             LogKind::FetchCompleted,
             format!(
-                "Fetched preview page {page}: {range}, {fetched} rows, {} retained, more rows: {more}, preview limit: {limited} (client measurement: {})",
-                self.rows,
+                "Fetched page {page}: {range}{loaded}, {end} ({})",
                 format_duration(started.elapsed())
             ),
             Some(started.elapsed()),

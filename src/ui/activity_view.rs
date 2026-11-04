@@ -2,11 +2,10 @@
 //! area of the window. The status bar button, ⇧⌘U, and the connection menu
 //! open it.
 
-use super::{Qrow, StatusTooltip, button_pair::button_pair, panel_empty_state};
+use super::{Qrow, StatusTooltip, button_pair::button_pair, log_row::LogRow, panel_empty_state};
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
 use crate::logs::timestamp_label;
 use gpui_kit::base::FocusableExt as _;
-use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -545,22 +544,14 @@ impl ActivityView {
             size: cx.theme().font_size,
             line_height: 1.2,
         });
-        let text = |el: Div| {
-            el.w_full()
-                .font_family(typography.family.clone())
-                .text_size(typography.size)
-                .line_height(relative(typography.line_height))
-                .whitespace_normal()
-        };
         let entry = match self.rows.get(index) {
             Some(Row::Entry(position)) => self
                 .shown
                 .and_then(|id| self.activity.log(id))
                 .and_then(|log| log.entries().get(*position)),
             Some(Row::Trimmed) => {
-                return text(div())
-                    .id("activity-trimmed")
-                    .child(SelectableText::new("text", TRIMMED_TEXT))
+                return LogRow::new("activity-trimmed", 0, TRIMMED_TEXT)
+                    .typography(typography.family, typography.size, typography.line_height)
                     .into_any_element();
             }
             None => None,
@@ -568,63 +559,50 @@ impl ActivityView {
         let Some(entry) = entry else {
             return div().into_any_element();
         };
-        let (first_line, rest) = entry
-            .text
-            .split_once('\n')
-            .map_or((entry.text.as_str(), None), |(first, rest)| {
-                (first, Some(rest))
-            });
-        let header = format!("[{}] {first_line}", timestamp_label(entry.timestamp));
-        let order = entry.id() * 2;
         let tab = entry.tab.filter(|tab| !self.closed_tabs.contains(tab));
         let error = entry
             .is_error()
             .then(|| format!("[{}] {}", timestamp_label(entry.timestamp), entry.text));
-        h_flex()
+        div()
             .id(("activity-entry", entry.id()))
             .test_support()
             .w_full()
-            .items_start()
-            .gap_2()
             .child(
-                text(v_flex())
-                    .flex_1()
-                    .min_w_0()
-                    .when(entry.is_error(), |el| el.text_color(cx.theme().danger))
-                    .child(SelectableText::new("header", header).document_order(order))
-                    .when_some(rest, |el, rest| {
-                        el.child(
-                            SelectableText::new("body", rest.to_owned()).document_order(order + 1),
+                LogRow::new(("activity-row", entry.id()), entry.id(), entry.message().to_owned())
+                    .time(entry.timestamp)
+                    .error(entry.is_error())
+                    .source(Some(entry.title.clone().unwrap_or_default()))
+                    .typography(typography.family, typography.size, typography.line_height)
+                    .when_some(error, |row, error| {
+                        row.action(
+                            Button::new(("activity-copy", entry.id()))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Copy)
+                                .label("Copy")
+                                .accessibility_label("Copy error")
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
+                                }),
+                        )
+                    })
+                    .when_some(tab, |row, tab| {
+                        let view = view.downgrade();
+                        row.action(
+                            Button::new(("activity-show-tab", entry.id()))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::ArrowRight)
+                                .label("Show tab")
+                                .accessibility_label("Show tab")
+                                .on_click(move |_, _, cx| {
+                                    let _ = view.update(cx, |_, cx| {
+                                        cx.emit(ActivityViewEvent::ShowTab(tab));
+                                    });
+                                }),
                         )
                     }),
             )
-            .when_some(error, |el, error| {
-                el.child(
-                    Button::new(("activity-copy", entry.id()))
-                        .ghost()
-                        .xsmall()
-                        .label("Copy")
-                        .accessibility_label("Copy error")
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
-                        }),
-                )
-            })
-            .when_some(tab, |el, tab| {
-                let view = view.downgrade();
-                el.child(
-                    Button::new(("activity-show-tab", entry.id()))
-                        .ghost()
-                        .xsmall()
-                        .label("Show tab")
-                        .accessibility_label("Show tab")
-                        .on_click(move |_, _, cx| {
-                            let _ = view.update(cx, |_, cx| {
-                                cx.emit(ActivityViewEvent::ShowTab(tab));
-                            });
-                        }),
-                )
-            })
             .into_any_element()
     }
 }

@@ -70,7 +70,7 @@ impl Runner {
                 Severity::Error,
                 LogKind::KeepAliveFailed,
                 format!(
-                    "Keep-alive failed and closed the session: {reason} (client measurement: {})",
+                    "Keep-alive failed and closed the session: {reason} ({})",
                     format_duration(duration)
                 ),
             )
@@ -88,7 +88,7 @@ impl Runner {
                 Severity::Info,
                 LogKind::KeepAliveCompleted,
                 format!(
-                    "Keep-alive completed (client measurement: {})",
+                    "Keep-alive completed ({})",
                     format_duration(duration)
                 ),
             )
