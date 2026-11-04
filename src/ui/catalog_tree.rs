@@ -1439,8 +1439,17 @@ impl Qrow {
                 };
                 let menu = if has_commands { menu.separator() } else { menu };
                 let menu = menu
-                    .item(PopupMenuItem::new(copy_label).on_click(copy))
-                    .item(PopupMenuItem::new("Insert into editor").on_click(insert));
+                    // The actions only show the shortcuts: a click runs the handler.
+                    .item(
+                        PopupMenuItem::new(copy_label)
+                            .action(Box::new(CopyCatalogName))
+                            .on_click(copy),
+                    )
+                    .item(
+                        PopupMenuItem::new("Insert into editor")
+                            .action(Box::new(InsertCatalogName))
+                            .on_click(insert),
+                    );
                 match details {
                     Some(details) => menu
                         .separator()

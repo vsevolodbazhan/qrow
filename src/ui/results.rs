@@ -762,7 +762,12 @@ impl TableDelegate for Results {
             menu
         };
         menu.when_some(selection, |menu, copy| {
-            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| copy.run(window, cx)))
+            // The action only shows the shortcut: a click runs the handler.
+            menu.item(
+                PopupMenuItem::new(label)
+                    .action(Box::new(Copy))
+                    .on_click(move |_, window, cx| copy.run(window, cx)),
+            )
         })
         .item(
             PopupMenuItem::new("Copy row").on_click(move |_, window, cx| row_copy.run(window, cx)),

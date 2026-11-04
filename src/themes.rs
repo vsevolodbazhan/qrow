@@ -108,10 +108,39 @@ fn strengthen_overlay(cx: &mut App) {
     }
 }
 
+/// Give SQL comments of the default light theme the muted text color. GPUI
+/// Kit paints them in a saturated blue that outweighs the SQL.
+fn quiet_light_comments(cx: &mut App) {
+    use gpui_kit::component::highlighter::HighlightTheme;
+    use std::sync::Arc;
+
+    let theme = Theme::global_mut(cx);
+    if theme.is_dark() {
+        return;
+    }
+    let muted = theme.muted_foreground.to_rgb();
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    let color = format!(
+        "#{:02x}{:02x}{:02x}",
+        channel(muted.r),
+        channel(muted.g),
+        channel(muted.b)
+    );
+    let Ok(comment) = serde_json::from_value(serde_json::json!({ "color": color })) else {
+        return;
+    };
+    let mut highlight: HighlightTheme = (*theme.highlight_theme).clone();
+    highlight.style.syntax.comment = Some(comment);
+    theme.highlight_theme = Arc::new(highlight);
+}
+
 pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
     let applied = apply_theme(name, window, cx);
     if applied {
         strengthen_overlay(cx);
+        if name == SYSTEM_THEME {
+            quiet_light_comments(cx);
+        }
     }
     applied
 }
@@ -150,6 +179,13 @@ fn apply_theme(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_comment_color_parses_from_hex() {
+        let style: Result<gpui_kit::component::highlighter::ThemeStyle, _> =
+            serde_json::from_value(serde_json::json!({ "color": "#8c8c8c" }));
+        assert!(style.is_ok());
+    }
 
     #[test]
     fn bundled_theme_sets_parse() {

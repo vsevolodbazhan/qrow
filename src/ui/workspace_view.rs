@@ -681,12 +681,12 @@ impl Qrow {
             })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     this.resize = Some((
                         horizontal,
                         e.position,
                         if horizontal {
-                            this.sidebar_width
+                            this.shown_sidebar_width(window.viewport_size().width)
                         } else {
                             this.editor_height
                         },
@@ -784,12 +784,20 @@ fn changed_view(view: AnyView, window: &Window) -> AnyElement {
 }
 
 impl Qrow {
+    /// The width of the sidebar in a window that is `viewport` wide. A
+    /// narrow window narrows the sidebar to its least width before the work
+    /// area gets narrower.
+    pub(super) fn shown_sidebar_width(&self, viewport: Pixels) -> Pixels {
+        let least = self.ui_px(180.);
+        self.sidebar_width.min((viewport * 0.24).max(least))
+    }
+
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
         let available = viewport
             - self.ui_px(420.)
             - if self.sidebar {
-                self.sidebar_width
+                self.shown_sidebar_width(viewport)
             } else {
                 px(0.)
             };
@@ -864,7 +872,7 @@ impl Qrow {
                     let available = window.viewport_size().width
                         - this.ui_px(420.)
                         - if this.sidebar {
-                            this.sidebar_width
+                            this.shown_sidebar_width(window.viewport_size().width)
                         } else {
                             px(0.)
                         };
@@ -989,7 +997,7 @@ impl Render for Qrow {
                 el.child(
                     div()
                         .track_focus(&self.sidebar_focus)
-                        .w(self.sidebar_width)
+                        .w(self.shown_sidebar_width(window.viewport_size().width))
                         .flex_shrink_0()
                         .map(|el| match self.sidebar_panel {
                             SidebarPanel::Connections => {

@@ -2945,13 +2945,16 @@ impl Qrow {
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(PopupMenuItem::new("Show activity").on_click(show_activity))
+                    // The actions only show the shortcuts: a click runs the handler.
                     .item(
                         PopupMenuItem::new("Move up")
+                            .action(Box::new(MoveConnectionUp))
                             .on_click(move_up)
                             .disabled(first),
                     )
                     .item(
                         PopupMenuItem::new("Move down")
+                            .action(Box::new(MoveConnectionDown))
                             .on_click(move_down)
                             .disabled(last),
                     )
