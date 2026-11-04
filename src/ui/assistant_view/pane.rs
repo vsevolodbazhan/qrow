@@ -308,16 +308,18 @@ impl AssistantPane {
                     .child("The assistant reads the catalog and writes SQL for this tab."),
             )
             .child(
+                // Suggestions, not commands: quiet rows that read as text.
                 v_flex()
                     .w_full()
                     .max_w(qrow.ui_px(320.))
-                    .pt_2()
-                    .gap_1()
+                    .items_start()
+                    .pt_3()
+                    .gap_2()
                     .children(EXAMPLE_PROMPTS.iter().enumerate().map(|(index, prompt)| {
                         Button::new(("assistant-example", index))
-                            .outline()
+                            .ghost()
                             .small()
-                            .w_full()
+                            .icon(IconName::ArrowRight)
                             .label(*prompt)
                             .accessibility_label(format!("Use prompt: {prompt}"))
                             .on_click(cx.listener(move |pane, _, window, cx| {
@@ -461,10 +463,20 @@ impl AssistantPane {
         let assistant_entity = self.qrow.clone();
         let conversation_width = width.as_f32() / qrow.settings.ui_scale
             - if show_threads && !narrow { 230. } else { 0. };
-        let [show_model_label, show_reasoning_label, show_tier_label] = assistant_selector_labels(
-            (conversation_width - 228.).max(0.),
-            [model_width, reasoning_width, tier_width],
-        );
+        let widths = [
+            model_width,
+            reasoning_width,
+            if has_tiers { tier_width } else { 0. },
+        ];
+        let one_row = assistant_selector_labels((conversation_width - 228.).max(0.), widths);
+        // When the labels do not fit beside Send, the selectors take a row of
+        // their own, where they keep their labels.
+        let selector_row = one_row != [true; 3];
+        let [show_model_label, show_reasoning_label, show_tier_label] = if selector_row {
+            assistant_selector_labels((conversation_width - 24.).max(0.), widths)
+        } else {
+            one_row
+        };
         let displayed_title = displayed
             .as_deref()
             .and_then(|thread| qrow.assistant.conversation(thread))
@@ -728,6 +740,7 @@ impl AssistantPane {
                     )
                     .child(
                         h_flex().min_w_0().gap_1()
+                            .when(selector_row && model.is_some(), |row| row.flex_wrap().gap_y_2())
                             // Until the harness supplies its models, the
                             // selectors have no values: a status names the wait.
                             .when(model.is_none() && !disconnected, |row| row.child(
@@ -744,6 +757,7 @@ impl AssistantPane {
                                 h_flex()
                                     .min_w_0()
                                     .gap_1()
+                                    .when(selector_row, |selectors| selectors.w_full())
                                     .child(
                                         Button::new("assistant-model")
                                             .ghost().small().compact()
