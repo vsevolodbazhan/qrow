@@ -179,6 +179,8 @@ impl Qrow {
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
         let export_disabled = data.columns.is_empty();
+        // Without a result set, counts and pages describe nothing.
+        let no_result = data.columns.is_empty();
         // A cursor drain reads only the live result.
         let draining = tab.live == Some(result_id)
             && (tab.download.is_some() || tab.cursor == crate::worker::Cursor::Draining);
@@ -193,7 +195,7 @@ impl Qrow {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .when(show_range, |row| row.child(summary.tags(compact, cx)))
+            .when(show_range && !no_result, |row| row.child(summary.tags(compact, cx)))
             // The tag stays at every toolbar width: it changes what the rows mean.
             .when(result.unfetched, |row| {
                 row.child(
@@ -213,7 +215,7 @@ impl Qrow {
                         .child(ResultSummary::neutral_tag(cx).child("Partial")),
                 )
             })
-            .when(compact, |row| {
+            .when(compact && !no_result, |row| {
                 let qrow = cx.entity().downgrade();
                 let tab_id = tab.saved.id;
                 row.child(
@@ -299,7 +301,7 @@ impl Qrow {
                                     })),
                             ),
                     )
-                    .child(
+                    .when(!no_result, |row| row.child(
                         div()
                             .id("page-label")
                             .test_support()
@@ -331,7 +333,7 @@ impl Qrow {
                             )
                             .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
                         cx,
-                    )),
+                    ))),
             )
             .into_any_element()
     }

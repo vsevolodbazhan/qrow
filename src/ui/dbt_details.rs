@@ -17,7 +17,7 @@ use gpui_kit::base::{
     SelectableText, StyledExt as _, TextSelectionEvent, TextSelectionHandle, input::Rope,
 };
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex,
@@ -1366,12 +1366,22 @@ impl DbtDetailsView {
             Part::Parents => data.parents.len(),
             Part::Children => data.children.len(),
         };
-        let header = disclosure(
+        // An empty part has nothing to open: its header says so and does not
+        // open. Columns load when they open, so their count can be zero first.
+        let empty = count == 0 && part != Part::Columns;
+        let open = open && !empty;
+        let header = disclosure_with(
             format!("dbt-details-{}-toggle", part.id()),
-            format!("{} ({count})", part.title()).into(),
+            if empty {
+                format!("No {}", part.title().to_lowercase()).into()
+            } else {
+                format!("{} ({count})", part.title()).into()
+            },
             open,
+            !empty,
             muted,
         )
+        .disabled(empty)
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_part(part, cx)))
         .when(part == Part::Columns && !open, |header| {
             header.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
@@ -1382,9 +1392,6 @@ impl DbtDetailsView {
         });
         let body = match part {
             _ if !open => None,
-            Part::Tests if data.tests.is_empty() => {
-                Some(muted_text("No tests of the table.", muted))
-            }
             Part::Tests => Some(tests_element(
                 "dbt-details-tests",
                 &data.tests,
@@ -1400,7 +1407,7 @@ impl DbtDetailsView {
                     .aria_label("Filter columns")
                     .into_any_element()
             }),
-            Part::Parents | Part::Children => (count == 0).then(|| muted_text("None.", muted)),
+            Part::Parents | Part::Children => None,
         };
         v_flex()
             .map(|header| self.group_spacing(header, Row::Part(part)))
@@ -1706,6 +1713,18 @@ fn column_match(name: &str, description: &str, query: &str) -> Option<ColumnMatc
 /// The header of a part that opens on a click, with a chevron that turns
 /// down when the part is open.
 fn disclosure(id: String, title: SharedString, open: bool, muted: Hsla) -> Button {
+    disclosure_with(id, title, open, true, muted)
+}
+
+/// A disclosure header. One that is not `expandable` keeps the chevron slot
+/// empty, so that its title stays on the line of the other titles.
+fn disclosure_with(
+    id: String,
+    title: SharedString,
+    open: bool,
+    expandable: bool,
+    muted: Hsla,
+) -> Button {
     Button::new(SharedString::from(id))
         .ghost()
         .small()
@@ -1722,7 +1741,8 @@ fn disclosure(id: String, title: SharedString, open: bool, muted: Hsla) -> Butto
                     Icon::new(IconName::ChevronRight)
                         .xsmall()
                         .text_color(muted)
-                        .rotate(percentage(if open { 0.25 } else { 0. })),
+                        .rotate(percentage(if open { 0.25 } else { 0. }))
+                        .when(!expandable, |icon| icon.invisible()),
                 )
                 .child(div().text_sm().font_semibold().child(title)),
         )
