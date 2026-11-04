@@ -6,8 +6,8 @@ to a database until you run SQL.
 ## Appearance and layout
 
 Open **Qrow → Settings…** to change the appearance. The Appearance page shows
-the **Interface**, **Assistant**, **Editor**, and **Logs** sections. Interface
-has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant have
+the **Interface**, **Assistant Text**, **Editor**, and **Logs** sections. Interface
+has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant Text have
 **Font Family**, **Font Size**, and **Line Height**. The interface font applies
 to controls and results. Editor also has **Tab Size**, the number of spaces for
 each indent level. The default is 2. The Tab key and SQL that Qrow formats for
@@ -36,8 +36,9 @@ The Assistant page has the **General**, **Codex**, and **Claude Code** sections.
 
 Select a page or section in the list at the left. Use the search box above the
 list to show only settings that match a word in their name or description.
-Each setting shows a description below its name. A long description wraps, and
-the controls stay aligned at the right.
+Each setting shows one line of help below its name. Long help ends with an
+ellipsis. Point to the help to read the full text. The controls stay aligned
+at the right.
 
 Changes appear immediately and are saved with the workspace. **Restore defaults**
 restores the defaults of all appearance settings, including the System theme,

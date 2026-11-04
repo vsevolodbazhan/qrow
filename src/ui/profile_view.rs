@@ -264,7 +264,7 @@ impl Qrow {
                     if (uses_sign_in || uses_external) && !form.tls {
                         "Without TLS, the token is exposed."
                     } else {
-                        "Requires a TLS-enabled port."
+                        "Encrypts traffic on a TLS port."
                     },
                     &["ssl", "encryption", "security"],
                     false,

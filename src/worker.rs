@@ -1120,12 +1120,22 @@ impl Runner {
         } else {
             format!("rows {}–{}", start_row + 1, start_row + fetched)
         };
+        let remaining = if more {
+            "More rows are available"
+        } else {
+            "No more rows"
+        };
+        let limit = if limited {
+            "; preview limit reached"
+        } else {
+            ""
+        };
         self.log(
             execution_id,
             Severity::Info,
             LogKind::FetchCompleted,
             format!(
-                "Fetched preview page {page}: {range}, {fetched} rows, {} retained, more rows: {more}, preview limit: {limited} (client measurement: {})",
+                "Fetched preview page {page}: {range}, {fetched} rows, {} retained, {remaining}{limit} (client measurement: {})",
                 self.rows,
                 format_duration(started.elapsed())
             ),

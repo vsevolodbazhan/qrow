@@ -1231,7 +1231,7 @@ impl DbtDetailsView {
                     .test_support()
                     .gap_1()
                     .children(data.facts.iter().map(|(label, value)| {
-                        let value = if *label == "Generated At" && changed {
+                        let value = if *label == "Manifest Time" && changed {
                             SharedString::from(format!("{value} (changed since the last read)"))
                         } else {
                             value.clone()
@@ -1370,7 +1370,7 @@ impl DbtDetailsView {
             return v_flex()
                 .map(|header| self.group_spacing(header, Row::Part(part)))
                 .child(
-                    div()
+                    h_flex()
                         .id(SharedString::from(format!(
                             "dbt-details-{}-empty",
                             part.id()
@@ -1378,9 +1378,13 @@ impl DbtDetailsView {
                         .test_support()
                         .role(Role::Label)
                         .aria_label(format!("{} (0)", part.title()))
-                        .text_sm()
+                        .h_6()
                         .text_color(muted)
-                        .child(format!("{} (0)", part.title())),
+                        .child(part_heading(
+                            format!("{} (0)", part.title()).into(),
+                            None,
+                            muted,
+                        )),
                 )
                 .into_any_element();
         }
@@ -1635,7 +1639,7 @@ fn data(state: &ManifestState, project: &DbtProject, unique_id: &str) -> Option<
     let generated_at = chrono::DateTime::parse_from_rfc3339(&index.generated_at)
         .map(|time| time.format("%Y-%m-%d %H:%M:%S %:z").to_string())
         .unwrap_or_else(|_| index.generated_at.to_string());
-    facts.push(("Generated At", shared(&generated_at)));
+    facts.push(("Manifest Time", shared(&generated_at)));
 
     let description = entry.description.trim();
     let sql = match (entry.kind, entry.compiled_code, entry.raw_code) {
@@ -1735,18 +1739,23 @@ fn disclosure(id: String, title: SharedString, open: bool, muted: Hsla) -> Butto
         // The chevron lines up with the text above the parts.
         .px_0()
         .accessibility_label(title.clone())
+        .child(part_heading(title, Some(open), muted))
+}
+
+/// Shared title geometry for expandable and empty parts. An empty icon slot
+/// keeps every title on the same leading edge at each interface scale.
+fn part_heading(title: SharedString, open: Option<bool>, muted: Hsla) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .gap_1p5()
         .child(
-            h_flex()
-                .w_full()
-                .gap_1p5()
-                .child(
-                    Icon::new(IconName::ChevronRight)
-                        .xsmall()
-                        .text_color(muted)
-                        .rotate(percentage(if open { 0.25 } else { 0. })),
-                )
-                .child(div().text_sm().font_semibold().child(title)),
+            Icon::new(IconName::ChevronRight)
+                .xsmall()
+                .text_color(muted)
+                .opacity(if open.is_some() { 1. } else { 0. })
+                .rotate(percentage(if open == Some(true) { 0.25 } else { 0. })),
         )
+        .child(div().text_sm().font_semibold().child(title))
 }
 
 /// A titled part of the sheet.

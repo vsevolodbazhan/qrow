@@ -3923,7 +3923,7 @@ impl Qrow {
                 Some(execution_id),
                 Severity::Info,
                 LogKind::FetchCompleted,
-                "Fetched preview page 1: rows 1–2250, 2250 rows, 2250 retained, more rows: false (demo)",
+                "Fetched preview page 1: rows 1–2250, 2250 rows, 2250 retained, no more rows (demo)",
             ),
         ];
         let mut activity = Vec::new();
