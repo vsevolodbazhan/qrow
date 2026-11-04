@@ -171,10 +171,10 @@ fn closing_results_keeps_one_and_pins_are_limited(cx: &mut TestAppContext) {
     app.settle(cx);
     assert_eq!(result_tabs(&app, cx), ["Result 2"]);
     assert_eq!(shown(&app, cx), Some(2));
-    // An empty result has no query to copy.
-    cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
-    app.click(cx, "copy-result-query");
-    assert_eq!(copied(cx).as_deref(), Some("before"));
+    // An empty result has no toolbar, so no query to copy.
+    app.update(cx, |window, _| {
+        assert!(!crate::support::present(window, &"copy-result-query".into()))
+    });
 
     for count in 1..=10 {
         run(&app, cx);

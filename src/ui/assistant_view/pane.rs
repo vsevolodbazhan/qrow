@@ -697,9 +697,9 @@ impl AssistantPane {
                     )
                     .child(
                         h_flex().min_w_0().gap_1()
-                            // Until the harness supplies its models, the
-                            // selectors have no values: a status names the wait.
-                            .when(model.is_none() && !disconnected, |row| row.child(
+                            // Until the harness is ready, the selectors have no
+                            // values to offer: a status names the wait.
+                            .when((!controls_ready || model.is_none()) && !disconnected, |row| row.child(
                                 div()
                                     .id("assistant-controls-waiting")
                                     .test_support()
@@ -709,7 +709,7 @@ impl AssistantPane {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(format!("Waiting for {harness_name}…")),
                             ))
-                            .when(model.is_some(), |row| row.child(
+                            .when(controls_ready && model.is_some(), |row| row.child(
                                 h_flex()
                                     .min_w_0()
                                     .gap_1()

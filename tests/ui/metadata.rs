@@ -55,7 +55,10 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
         }
         let mut pagination_width = None;
         // 75% is the lower limit; three decreases clamp the scale to it.
-        for width in [1900., 850., 700., 500., 1900.] {
+        // A narrow window narrows the sidebar first, so the narrowest width
+        // leaves the results pane about as wide as a 500-point window did
+        // with a full sidebar.
+        for width in [1900., 850., 700., 450., 1900.] {
             cx.simulate_window_resize(app.window, size(px(width * scale), px(650. * scale)));
             app.settle(cx);
             assert_toolbar_fits(&app, cx);
@@ -105,7 +108,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                     assert!(window.try_find("result-loaded").is_none());
                     assert!(window.try_find("result-columns").is_none());
                     assert!(window.try_find("result-elapsed").is_none());
-                    if width == 500. {
+                    if width == 450. {
                         assert!(window.try_find("result-range").is_none());
                     }
                 }
@@ -202,7 +205,7 @@ fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppCo
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1–1000")
+            Some("Visible Rows: 1–1,000")
         );
     });
     app.press(cx, "escape");
@@ -227,7 +230,7 @@ fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppCo
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1001–2000")
+            Some("Visible Rows: 1,001–2,000")
         )
     });
     // Outside clicks dismiss without consuming the target command.

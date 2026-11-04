@@ -320,10 +320,12 @@ fn conversation_search_fits_the_header(cx: &mut TestAppContext) {
     app.show_threads(cx);
     app.update(cx, |window, _| {
         let search = bounds_of(window, "Search conversations");
-        let toggle = bounds_of(window, "assistant-toggle-threads");
-        let control = window
-            .try_find("assistant-back-to-thread")
-            .map_or(toggle, |back| back.bounds());
+        // A narrow pane shows the list in place of the conversation, with a
+        // back button in place of the list toggle.
+        let control = match window.try_find("assistant-back-to-thread") {
+            Some(back) => back.bounds(),
+            None => bounds_of(window, "assistant-toggle-threads"),
+        };
         assert!(
             search.size.height <= control.size.height + gpui_kit::px(1.),
             "The search is taller than the header control"

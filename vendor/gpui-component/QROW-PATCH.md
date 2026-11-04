@@ -69,9 +69,11 @@ Qrow changes these files:
   stopped in the middle of the page.
 - `src/sheet.rs`: `Sheet::margin_bottom` keeps a band at the bottom of the
   window free. The dbt details sheet ends above the status bar.
-- `src/table/state.rs`: the table keeps the scrollbar width free below its
-  rows and beside its header and rows. Before, the scrollbars covered the
-  text of the bottom row and of the rightmost column.
+- `src/table/state.rs`: the table keeps the scrollbar width free beside its
+  header and rows. Before, the vertical scrollbar covered the text of the
+  rightmost column. A gutter below the rows broke the scroll to the first
+  row after a drag (`results::a_held_drag_scrolls_both_axes_and_escape_releases_it`),
+  so the horizontal scrollbar still overlays the bottom row.
 - `src/menu/popup_menu.rs`: `PopupMenu::set_trigger_focus` is public, so a
   context menu that the application opens shows the shortcuts of the view
   under the pointer.
