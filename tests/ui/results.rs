@@ -327,6 +327,39 @@ fn the_context_menu_copies_the_selection_and_a_page_change_clears_it(cx: &mut Te
 }
 
 #[gpui_kit::test]
+fn copy_as_plain_text_copies_values_without_changing_the_saved_format(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    let copy_plain_text = |cx: &mut TestAppContext, row, column| {
+        click_cell(
+            &app,
+            cx,
+            row,
+            column,
+            MouseButton::Right,
+            Modifiers::default(),
+        );
+        app.wait_for(cx, "popup-menu");
+        cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+        app.choose_in_submenu(cx, "Copy as", "Plain text");
+        wait_clipboard(&app, cx)
+    };
+    assert_eq!(copy_plain_text(cx, 1, 1), ROUTES[1]);
+    assert_eq!(copy_plain_text(cx, 0, 2), "NULL");
+    click_cell(&app, cx, 0, 1, MouseButton::Left, Modifiers::default());
+    click_cell(&app, cx, 1, 3, MouseButton::Left, shift());
+    assert_eq!(
+        copy_plain_text(cx, 1, 2),
+        format!("{}\n{}", first_columns(0), first_columns(1))
+    );
+    let markdown = copy_markdown(&app, cx);
+    assert!(markdown.starts_with("| route"), "{markdown}");
+    assert_eq!(
+        app.saved().settings.copy_format,
+        qrow::model::CopyFormat::Markdown
+    );
+}
+
+#[gpui_kit::test]
 fn the_copy_format_setting_applies_to_command_c_and_the_menu_but_not_copy_as(
     cx: &mut TestAppContext,
 ) {

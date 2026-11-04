@@ -81,6 +81,34 @@ fn command_c_copies_postgres_selection_as_pretty_markdown(cx: &mut TestAppContex
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run postgres"]
+fn copy_as_plain_text_copies_a_date_value(cx: &mut TestAppContext) {
+    use crate::support::{find_in, pointer_click_with};
+    use gpui_kit::{ClipboardItem, Modifiers, MouseButton};
+    let (workspace, credentials) = workspace("SELECT DATE '2026-11-03' AS pdate");
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_cell(cx, 0, 1, "2026-11-03");
+    app.update(cx, |window, cx| {
+        let cell = find_in(window, ("row", 0usize), ("cell", 1usize)).unwrap();
+        pointer_click_with(window, &cell, MouseButton::Right, Modifiers::default(), cx);
+    });
+    app.wait_for(cx, "popup-menu");
+    cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+    app.choose_in_submenu(cx, "Copy as", "Plain text");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("2026-11-03")
+    );
+    assert_eq!(
+        app.saved().settings.copy_format,
+        qrow::model::CopyFormat::Markdown
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
 fn menu_copy_commands_use_the_saved_copy_format(cx: &mut TestAppContext) {
     use crate::support::{find_in, pointer_click_with};
     use gpui_kit::{ClipboardItem, Modifiers, MouseButton};

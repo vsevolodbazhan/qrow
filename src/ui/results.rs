@@ -650,6 +650,12 @@ impl TableDelegate for Results {
                 selection.columns(),
             )
         });
+        let plain_text = self
+            .selection
+            .map(|selection| match self.plain_text(selection) {
+                Ok(text) => ClipboardCopy::Text(text),
+                Err(error) => ClipboardCopy::Failed(error.to_string()),
+            });
         let formats = [
             CopyFormat::Csv,
             CopyFormat::Tsv,
@@ -660,6 +666,12 @@ impl TableDelegate for Results {
         let export_profile = self.export_profile;
         let menu = if let Ok(source) = source {
             let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
+                let menu = menu.when_some(plain_text, |menu, copy| {
+                    menu.item(
+                        PopupMenuItem::new(CopyFormat::PlainText.label())
+                            .on_click(move |_, window, cx| copy.run(window, cx)),
+                    )
+                });
                 formats
                     .iter()
                     .filter_map(|(label, options)| Some((*label, options.clone()?)))

@@ -131,12 +131,16 @@ must be saved to a file.
 
 Copy actions use full stored values from the displayed page. Long cells show
 a shortened preview, but their stored and copied values are not shortened.
+Use **Copy as → Plain text** to copy the selected values without column names.
+One cell copies its full value. A range copies tab-separated values.
+This command copies immediately and does not change the saved copy format.
 Use **Copy as → CSV** to copy the selection with column names and the saved
 CSV options. A saved tab separator changes to a comma for this action.
 Use **Copy as → TSV** to copy it with tab separators and column names.
 Use **Copy as → Markdown** or **Copy as → JSON** for the other text formats.
 **Copy as → Markdown** uses the saved Markdown options of the export. The copy
-format does not change **Copy as**. These actions run in the background. Text above 10 MiB must be saved to a file.
+format does not change **Copy as**. CSV, TSV, Markdown, and JSON copy in the
+background. Text above 10 MiB must be saved to a file.
 
 ## Export results
 
