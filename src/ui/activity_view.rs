@@ -5,13 +5,14 @@
 use super::{
     Qrow, StatusTooltip,
     button_pair::{button_pair, segment},
+    result_toolbar::ResultSummary,
     log_row::{self, LogRow},
     panel_empty_state,
 };
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
 use crate::logs::timestamp_label;
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, IconName, IndexPath, Sizable as _,
+    ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     message_scroller::{MessageScroller, MessageScrollerState},
@@ -458,33 +459,45 @@ impl ActivityView {
                 .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(true, cx))),
                 cx,
             ))
-            .child(
+            // The same chip and icon buttons as the Logs and Result toolbars.
+            .child({
+                let entries = match self.entry_count() {
+                    1 => "1 entry".to_owned(),
+                    count => format!("{} entries", crate::logs::group_digits(count)),
+                };
                 div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(match self.entry_count() {
-                        1 => "1 entry".to_owned(),
-                        count => format!("{count} entries"),
-                    }),
-            )
+                    .id("activity-count")
+                    .test_support()
+                    .role(Role::Label)
+                    .whitespace_nowrap()
+                    .aria_label(entries.clone())
+                    .child(ResultSummary::neutral_tag(cx).child(entries))
+            })
             .child(div().flex_1())
             .child(
-                Button::new("activity-copy-all")
-                    .ghost()
-                    .small()
-                    .label("Copy all")
-                    .disabled(empty)
-                    .accessibility_label("Copy all activity")
-                    .on_click(cx.listener(|this, _, _, cx| this.copy_all(cx))),
-            )
-            .child(
-                Button::new("activity-clear")
-                    .ghost()
-                    .small()
-                    .label("Clear")
-                    .disabled(log_empty)
-                    .accessibility_label("Clear activity")
-                    .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
+                h_flex()
+                    .flex_shrink_0()
+                    .gap_1()
+                    .child(
+                        Button::new("activity-copy-all")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Copy)
+                            .tooltip("Copy all activity")
+                            .disabled(empty)
+                            .accessibility_label("Copy all activity")
+                            .on_click(cx.listener(|this, _, _, cx| this.copy_all(cx))),
+                    )
+                    .child(
+                        Button::new("activity-clear")
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(gpui_kit::assets::IconName::Trash))
+                            .tooltip("Clear activity")
+                            .disabled(log_empty)
+                            .accessibility_label("Clear activity")
+                            .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
+                    ),
             )
             .child(
                 Button::new("activity-close")
