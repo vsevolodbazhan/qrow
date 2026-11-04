@@ -443,6 +443,84 @@ fn visible_columns(app: &TestApp, cx: &mut TestAppContext, name: &str) -> BTreeS
 }
 
 #[gpui_kit::test]
+fn a_wider_pane_renders_the_headers_of_the_revealed_columns(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    app.wait_until(cx, "the demo rows", Duration::from_secs(10), |window, _| {
+        cell(window, 0, 1).is_some()
+    });
+    let position = app.update(cx, |window, _| {
+        let column: ElementId = ("cell", 1usize).into();
+        elements(window)
+            .into_iter()
+            .find(|element| element.visible() && element.path().last() == Some(&column))
+            .expect("A visible result cell")
+            .bounds()
+            .center()
+    });
+    // A little horizontal scroll, then the pane gets wider and narrower
+    // while the window keeps its size, as when the Assistant or the sidebar
+    // opens and closes. The pointer does not move over the header, so
+    // nothing but the new width renders it again.
+    app.update(cx, |window, cx| {
+        window.dispatch_event(
+            ScrollWheelEvent {
+                position,
+                delta: ScrollDelta::Pixels(point(px(-120.), px(0.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    app.settle(cx);
+    // The focus leaves the SQL editor, whose blinking caret would draw the
+    // window again and repair a stale header.
+    app.update(cx, |window, cx| {
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    app.settle(cx);
+    for step in 0..4 {
+        app.dispatch(cx, qrow::ui::ToggleSidebar);
+        // Only the frames that the app requests itself: `settle` would
+        // refresh every view and hide a header that the width did not
+        // render again.
+        cx.run_until_parked();
+        let width = if step % 2 == 0 { "a wider pane" } else { "a narrower pane" };
+        let cells = visible_columns(&app, cx, "cell");
+        let headers = visible_columns(&app, cx, "column-header");
+        assert!(
+            cells.iter().filter(|&&c| c > 0).count() > 1,
+            "No visible result columns at {width}: {cells:?}"
+        );
+        assert!(
+            cells.is_subset(&headers),
+            "Columns without a header at {width}: {:?}",
+            cells.difference(&headers).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn fast_horizontal_scroll_keeps_the_column_headers(cx: &mut TestAppContext) {
     let app = TestApp::launch_demo(cx);
     app.wait_until(cx, "the demo rows", Duration::from_secs(10), |window, _| {

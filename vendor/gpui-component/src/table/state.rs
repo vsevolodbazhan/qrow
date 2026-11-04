@@ -2635,7 +2635,21 @@ where
             })
             .on_prepaint({
                 let state = cx.entity();
-                move |bounds, _, cx| state.update(cx, |state, _| state.bounds = bounds)
+                move |bounds, _, cx| {
+                    // The header picks its visible columns from these bounds
+                    // when it renders, before this prepaint. A new size, like
+                    // a wider pane, renders it again with the current width;
+                    // the rows measure their own viewport.
+                    let resized = state.update(cx, |state, _| {
+                        let resized = state.bounds.size != bounds.size;
+                        state.bounds = bounds;
+                        resized
+                    });
+                    if resized {
+                        let state = state.clone();
+                        cx.defer(move |cx| state.update(cx, |_, cx| cx.notify()));
+                    }
+                }
             })
             .when(!window.is_inspector_picking(cx), |this| {
                 this.child(
