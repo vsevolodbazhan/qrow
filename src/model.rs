@@ -140,6 +140,11 @@ pub const LINE_HEIGHT_STEP: f32 = 0.1;
 pub const MIN_TAB_SIZE: u8 = 1;
 pub const MAX_TAB_SIZE: u8 = 8;
 pub const SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
+/// The bundled interface font, the default for controls and assistant
+/// messages.
+pub const INTERFACE_FONT_FAMILY: &str = "IBM Plex Sans";
+/// The bundled monospace font, the default for SQL and logs.
+pub const MONOSPACE_FONT_FAMILY: &str = "JetBrains Mono";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -173,15 +178,15 @@ impl Default for Settings {
         Self {
             theme: SYSTEM_THEME.into(),
             ui_scale: 1.,
-            ui_font_family: SYSTEM_FONT_FAMILY.into(),
-            editor_font_family: "Menlo".into(),
+            ui_font_family: INTERFACE_FONT_FAMILY.into(),
+            editor_font_family: MONOSPACE_FONT_FAMILY.into(),
             editor_font_size: 13.,
             editor_line_height: 1.2,
             editor_tab_size: 2,
-            logs_font_family: "Menlo".into(),
+            logs_font_family: MONOSPACE_FONT_FAMILY.into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
-            assistant_font_family: SYSTEM_FONT_FAMILY.into(),
+            assistant_font_family: INTERFACE_FONT_FAMILY.into(),
             assistant_font_size: 14.,
             assistant_line_height: 1.6,
             assistant: AssistantSettings::default(),

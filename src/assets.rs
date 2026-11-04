@@ -57,6 +57,28 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
+/// The bundled fonts: IBM Plex Sans for the interface and JetBrains Mono for
+/// SQL and logs, in the weights that the interface uses. See NOTICE.
+pub(crate) fn fonts() -> Vec<Cow<'static, [u8]>> {
+    macro_rules! fonts {
+        ($($path:literal),+ $(,)?) => {
+            vec![$(Cow::Borrowed(include_bytes!(concat!("../assets/fonts/", $path)).as_slice())),+]
+        };
+    }
+    fonts![
+        "ibm-plex-sans/IBMPlexSans-Regular.ttf",
+        "ibm-plex-sans/IBMPlexSans-Medium.ttf",
+        "ibm-plex-sans/IBMPlexSans-SemiBold.ttf",
+        "ibm-plex-sans/IBMPlexSans-Bold.ttf",
+        "ibm-plex-sans/IBMPlexSans-Italic.ttf",
+        "jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "jetbrains-mono/JetBrainsMono-Medium.ttf",
+        "jetbrains-mono/JetBrainsMono-SemiBold.ttf",
+        "jetbrains-mono/JetBrainsMono-Bold.ttf",
+        "jetbrains-mono/JetBrainsMono-Italic.ttf",
+    ]
+}
+
 pub struct Assets;
 
 impl AssetSource for Assets {

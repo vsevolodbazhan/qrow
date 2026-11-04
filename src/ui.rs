@@ -103,6 +103,10 @@ actions!(
 /// Call once before opening a Qrow window.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    // Before the themes: they name the bundled monospace font.
+    if let Err(error) = cx.text_system().add_fonts(crate::assets::fonts()) {
+        eprintln!("Could not load the bundled fonts: {error:#}");
+    }
     cx.set_global(crate::export::Jobs::default());
     themes::init(cx);
     // Wide result sets need a persistent, discoverable horizontal scrollbar.
@@ -640,8 +644,16 @@ fn truncate_display_name(name: &str) -> String {
 fn installed_fonts(cx: &App) -> Vec<String> {
     let mut fonts = cx.text_system().all_font_names();
     fonts.retain(|font| !font.is_empty());
-    if !fonts.iter().any(|font| font == "Menlo") {
-        fonts.insert(0, "Menlo".into());
+    // The macOS font list has only the installed fonts; the bundled fonts
+    // are in the GPUI text system and are always there.
+    for font in [
+        crate::model::INTERFACE_FONT_FAMILY,
+        crate::model::MONOSPACE_FONT_FAMILY,
+        "Menlo",
+    ] {
+        if !fonts.iter().any(|name| name == font) {
+            fonts.insert(0, font.into());
+        }
     }
     fonts
 }
@@ -828,7 +840,8 @@ impl Qrow {
         let mut unavailable_font = !font_available(&workspace.settings.editor_font_family, &fonts);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
-            let warning = "The saved editor font is unavailable, so Qrow is using Menlo.";
+            let warning =
+                "The saved editor font is unavailable, so Qrow is using JetBrains Mono.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -839,7 +852,7 @@ impl Qrow {
         if !font_available(&workspace.settings.logs_font_family, &fonts) {
             workspace.settings.logs_font_family = Settings::default().logs_font_family;
             unavailable_font = true;
-            let warning = "The saved Logs font is unavailable, so Qrow is using Menlo.";
+            let warning = "The saved Logs font is unavailable, so Qrow is using JetBrains Mono.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -851,7 +864,7 @@ impl Qrow {
             workspace.settings.assistant_font_family = Settings::default().assistant_font_family;
             unavailable_font = true;
             let warning =
-                "The saved assistant font is unavailable, so Qrow is using the system font.";
+                "The saved assistant font is unavailable, so Qrow is using IBM Plex Sans.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -863,7 +876,7 @@ impl Qrow {
             workspace.settings.ui_font_family = Settings::default().ui_font_family;
             unavailable_font = true;
             let warning =
-                "The saved interface font is unavailable, so Qrow is using the system font.";
+                "The saved interface font is unavailable, so Qrow is using IBM Plex Sans.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);

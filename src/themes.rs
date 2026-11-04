@@ -46,7 +46,9 @@ fn reset_configurable_defaults(cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.font_family = defaults.font_family;
     theme.font_size = defaults.font_size;
-    theme.mono_font_family = defaults.mono_font_family;
+    // Code in assistant messages and other monospace text uses the bundled
+    // monospace font, like the SQL editor.
+    theme.mono_font_family = crate::model::MONOSPACE_FONT_FAMILY.into();
     theme.mono_font_size = defaults.mono_font_size;
     theme.radius = defaults.radius;
     theme.radius_lg = defaults.radius_lg;

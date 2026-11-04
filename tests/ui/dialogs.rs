@@ -228,6 +228,9 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
     wait_saved(&app, cx, "the restored default fonts", |w| {
         w.settings.editor_font_size == 13.
             && w.settings.assistant_font_size == 14.
-            && w.settings.editor_font_family == "Menlo"
+            && w.settings.editor_font_family == "JetBrains Mono"
+            && w.settings.logs_font_family == "JetBrains Mono"
+            && w.settings.ui_font_family == "IBM Plex Sans"
+            && w.settings.assistant_font_family == "IBM Plex Sans"
     });
 }
