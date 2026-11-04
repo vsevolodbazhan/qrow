@@ -77,13 +77,20 @@ pub(super) fn field_with_error(
     let Some(error) = error else {
         return control.into_any_element();
     };
-    v_flex()
+    // The error sits in the space below the field, so the row keeps its
+    // height and its label stays on the line of the other labels.
+    div()
+        .relative()
         .w_full()
-        .gap_1()
         .child(control.border_color(cx.theme().danger))
         .child(
             h_flex()
                 .id("connection-form-error-accessibility")
+                .absolute()
+                .left_0()
+                .top(relative(1.))
+                .mt_1()
+                .w_full()
                 .test_support()
                 .role(Role::Alert)
                 .aria_label(error.clone())
@@ -91,7 +98,7 @@ pub(super) fn field_with_error(
                 .text_sm()
                 .text_color(cx.theme().danger)
                 .child(gpui_kit::component::Icon::new(IconName::CircleX).xsmall())
-                .child(error),
+                .child(div().min_w_0().truncate().child(error)),
         )
         .into_any_element()
 }

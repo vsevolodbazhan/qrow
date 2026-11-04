@@ -156,7 +156,9 @@ pub(super) const FIELD_IDS: [&str; 16] = [
 /// The index in [`FIELD_IDS`] of the field that a validation error is
 /// about, or `None` when the error is not about one text field.
 pub(super) fn field_of_error(error: &str) -> Option<usize> {
-    const PREFIXES: [(&str, usize); 9] = [
+    // Only short errors: one line below the field holds them. A JSON error
+    // of the session parameters shows in the footer.
+    const PREFIXES: [(&str, usize); 8] = [
         ("Give this connection a name", 0),
         ("Connection name must", 0),
         ("A connection with this name", 0),
@@ -165,7 +167,6 @@ pub(super) fn field_of_error(error: &str) -> Option<usize> {
         ("Enter a username", 3),
         ("Username contains", 3),
         ("Enter an initial database", 5),
-        ("Session parameters must", 6),
     ];
     PREFIXES
         .iter()
