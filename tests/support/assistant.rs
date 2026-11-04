@@ -242,7 +242,9 @@ pub fn approval(window: &Window) -> Option<String> {
 impl TestApp {
     /// Opens the assistant pane and waits until Codex reports its models.
     pub fn open_assistant(&self, cx: &mut TestAppContext) {
-        if !self.update(cx, |window, _| window_has(window, "assistant-model")) {
+        // While Codex starts, the composer shows a status in place of the
+        // model selector, so the composer tells whether the pane is open.
+        if !self.update(cx, |window, _| window_has(window, "assistant-composer")) {
             self.dispatch(cx, ToggleAssistant);
         }
         self.wait_until(cx, "Codex to start", REPLY_TIMEOUT, |window, _| {

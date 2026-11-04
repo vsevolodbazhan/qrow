@@ -741,37 +741,35 @@ impl Qrow {
         cx.notify();
     }
 
-    pub(super) fn open_settings_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let close = weak.clone();
-            let body = weak.clone();
-            let footer = weak.update(cx, |this, cx| this.settings_footer(cx)).ok();
-            let (width, height) = settings_dialog_size(window);
-            let viewport = window.viewport_size();
-            dialog
-                .title("Settings")
-                .w(width)
-                .h(height)
-                .margin_top((viewport.height - height) / 2.)
-                .overlay_closable(false)
-                .on_ok(|_, _, _| false)
-                .content(move |content, window, cx| {
-                    let panel = body
-                        .update(cx, |this, cx| this.settings_content(window, cx))
-                        .ok();
-                    content.children(panel)
-                })
-                .when_some(footer, |dialog, footer| dialog.footer(footer))
-                .on_close(move |_, window, cx| {
-                    let _ = close.update(cx, |this, cx| {
-                        this.commit_settings_form(window, cx);
-                        this.settings_open = false;
-                        this.settings_form = None;
-                        cx.notify();
-                    });
-                })
-        });
+    /// The content of the Settings window: the sections and pages, then a
+    /// footer with Restore defaults.
+    pub(super) fn settings_window_content(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .size_full()
+            .child(div().flex_1().min_h_0().child(self.settings_content(window, cx)))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_4()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(self.settings_footer(cx)),
+            )
+            .into_any_element()
+    }
+
+    /// The Settings window closed: keep the pending edits and drop the form.
+    pub(super) fn settings_window_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_settings_form(window, cx);
+        self.settings_open = false;
+        self.settings_form = None;
+        self.settings_window = None;
+        cx.notify();
     }
 
     fn settings_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -846,15 +844,9 @@ impl Qrow {
                 state.set_selected_value(&harness.to_owned(), window, cx)
             });
         }
-        // Match the gap the dialog leaves above the footer, which the dialog
-        // adds to the smaller gap below the title.
         div()
             .size_full()
-            .mt_2()
             .overflow_hidden()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
             .child(
                 settings_panel("settings", window, cx)
                     .page(appearance_page(form))
@@ -886,7 +878,7 @@ impl Qrow {
 
     /// Keep the edits that apply only when they are complete: numbers that
     /// are still being typed and the executable paths. Settings has no Save:
-    /// closing it with ⌘W, Escape, or the close button keeps every change.
+    /// closing its window keeps every change.
     fn commit_settings_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let pending: Vec<_> = self
             .settings_form

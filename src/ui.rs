@@ -20,6 +20,7 @@ mod results;
 mod run_highlight;
 mod setting_row;
 mod settings_view;
+mod settings_window;
 mod sign_in_view;
 mod status_dot;
 mod status_tooltip;
@@ -118,6 +119,7 @@ pub fn init(cx: &mut App) {
         ),
     );
     cx.bind_keys(results::bindings());
+    cx.bind_keys(settings_window::bindings());
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
         KeyBinding::new("alt-cmd-l", FormatSql, None),
@@ -666,6 +668,16 @@ fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     gpui_kit::component::Theme::sync_base(cx);
     window.set_rem_size(font_size);
     window.refresh();
+    // The Settings window and the main window share the interface scale.
+    let current = window.window_handle();
+    for handle in cx.windows() {
+        if handle != current {
+            let _ = handle.update(cx, |_, window, _| {
+                window.set_rem_size(font_size);
+                window.refresh();
+            });
+        }
+    }
 }
 
 fn panel_empty_state(message: &'static str, cx: &App) -> Div {
@@ -688,6 +700,8 @@ pub struct Qrow {
     assistant_pane: Entity<assistant_view::AssistantPane>,
     fonts: Vec<String>,
     settings_open: bool,
+    /// The Settings window, while it is open. There is at most one.
+    settings_window: Option<AnyWindowHandle>,
     /// The page that Settings shows when it opens.
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
@@ -951,6 +965,7 @@ impl Qrow {
             assistant_pane,
             fonts,
             settings_open: false,
+            settings_window: None,
             about_open: false,
             settings_form: None,
             profiles: workspace.profiles,
@@ -2102,9 +2117,10 @@ impl Qrow {
             })
     }
     /// A modal owns the window, so tab and profile commands wait for it.
+    /// Whether a dialog of the main window is open. The Settings window is a
+    /// window of its own and leaves the main window usable.
     fn dialog_open(&self) -> bool {
         self.form.is_some()
-            || self.settings_open
             || self.about_open
             || self.tab_form.is_some()
             || self.result_form.is_some()
@@ -2234,7 +2250,7 @@ impl Qrow {
         self.run_selected_query(window, cx);
     }
     fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.form.is_some() || self.settings_open {
+        if self.form.is_some() {
             return false;
         }
         self.run_tab_query(self.active, window, cx)
@@ -2566,7 +2582,7 @@ impl Qrow {
     }
     fn disconnect_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[index];
-        if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
+        if !tab.can_disconnect() || self.form.is_some() {
             return;
         }
         if tab.worker.is_some() {
@@ -2588,13 +2604,27 @@ impl Qrow {
         }
         cx.notify();
     }
-    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.dialog_open() {
-            self.settings_open = true;
-            self.init_settings_form(window, cx);
-            self.open_settings_dialog(window, cx);
-            cx.notify();
+    /// Open the Settings window, or bring the open one to the front.
+    fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.settings_window {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+            self.settings_window = None;
+            self.settings_form = None;
         }
+        // The window creates its form inside Qrow, so it opens after this
+        // update of Qrow ends.
+        let qrow = cx.weak_entity();
+        cx.defer(move |cx| settings_window::open(qrow, cx));
+    }
+
+    /// The Settings window, while it is open.
+    pub fn settings_window(&self) -> Option<AnyWindowHandle> {
+        self.settings_window
     }
     fn open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dialog_open() {
@@ -3955,13 +3985,13 @@ impl Qrow {
                 Some(execution_id),
                 Severity::Info,
                 LogKind::ExecutionCompleted,
-                "Query finished on the server (demo)",
+                "Query finished on the server",
             ),
             LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
                 LogKind::FetchCompleted,
-                "Fetched rows 1–2,250 (all rows, demo)",
+                "Fetched rows 1–2,250 (all rows)",
             ),
         ];
         let mut activity = Vec::new();

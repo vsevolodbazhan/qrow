@@ -10,7 +10,8 @@ pub(in crate::ui) struct ConversationEditor {
 
 pub(super) const CONVERSATION_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "conversation",
-    label: "Conversation Name",
+    title: "Rename Conversation",
+    label: "Name",
     tooltip: "Rename conversation",
     form: |this| {
         this.assistant_state

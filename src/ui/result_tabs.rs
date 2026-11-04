@@ -20,7 +20,8 @@ pub(super) struct ResultEditor {
 
 pub(super) const RESULT_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "result",
-    label: "Result Name",
+    title: "Rename Result",
+    label: "Name",
     tooltip: "Rename result",
     form: |this| {
         this.result_form

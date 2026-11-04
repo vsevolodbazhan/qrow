@@ -790,14 +790,18 @@ fn changed_view(view: AnyView, window: &Window) -> AnyElement {
 /// results. Below it, the pane narrows, which also collapses its
 /// conversation list.
 const MIN_WORK_AREA_WIDTH: f32 = 560.;
+/// The width of the work area that a narrow window keeps before the sidebar
+/// keeps its own width.
+const SIDEBAR_YIELDS_TO_WIDTH: f32 = 560.;
 
 impl Qrow {
     /// The width of the sidebar in a window that is `viewport` wide. A
-    /// narrow window narrows the sidebar to its least width before the work
-    /// area gets narrower.
+    /// narrow window narrows the sidebar, down to its least width, before
+    /// the work area gets narrower than [`SIDEBAR_YIELDS_TO_WIDTH`].
     pub(super) fn shown_sidebar_width(&self, viewport: Pixels) -> Pixels {
         let least = self.ui_px(180.);
-        self.sidebar_width.min((viewport * 0.24).max(least))
+        self.sidebar_width
+            .min((viewport - self.ui_px(SIDEBAR_YIELDS_TO_WIDTH)).max(least))
     }
 
     /// The width of the assistant pane in a window that is `viewport` wide.
