@@ -8,16 +8,19 @@ use gpui_kit::base::actions::{
     SelectPrevColumn, SelectUp,
 };
 use gpui_kit::component::{
-    ActiveTheme, Sizable, WindowExt,
+    ActiveTheme, ElementExt as _, Sizable, WindowExt,
     input::{Copy, SelectAll},
     menu::{PopupMenu, PopupMenuItem},
     table::{Column, DataTable, TableDelegate, TableState},
+    tooltip::ManagedTooltipExt as _,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::{
     borrow::Cow,
+    cell::Cell,
     ops::{Range, RangeInclusive},
+    rc::Rc,
     sync::Arc,
     time::Duration,
 };
@@ -131,6 +134,9 @@ pub struct Results {
     export_profile: Option<(uuid::Uuid, u8)>,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
+    /// The width of each column name in the header font, and whether the
+    /// last frame cut the name to fit its column.
+    names: Vec<(Pixels, Rc<Cell<bool>>)>,
     /// Whether each column holds numbers, which align on the trailing edge.
     numeric: Vec<bool>,
     pub selection: Option<Selection>,
@@ -150,6 +156,7 @@ impl Default for Results {
             export_profile: None,
             empty_message: None,
             headers: vec![],
+            names: vec![],
             numeric: vec![],
             selection: None,
             drag: None,
@@ -214,16 +221,16 @@ impl Results {
         ];
         self.headers
             .extend(columns.iter().enumerate().map(|(i, c)| {
-                let width = match c.data_type.as_str() {
-                    "TIMESTAMP" => 190.,
-                    "STRING" => 180.,
-                    _ => 120.,
-                };
                 Column::new(i.to_string(), c.name.clone())
-                    .width(px(scale * width).max(header.width(c)))
+                    .min_width(px(scale * MIN_COLUMN_WIDTH))
+                    .width(px(scale * MIN_COLUMN_WIDTH).max(header.width(c)))
                     .paddings(padding)
                     .movable(false)
             }));
+        self.names = columns
+            .iter()
+            .map(|c| (header.text(&c.name, false), Rc::default()))
+            .collect();
         self.numeric = columns
             .iter()
             .map(|column| is_numeric(&column.data_type))
@@ -452,14 +459,21 @@ struct HeaderMeasure {
     // A cache of its own, because the measure runs outside a window.
     text: WindowTextSystem,
     font: Font,
+    /// The font of the column name, which the header shows in medium weight.
+    name_font: Font,
     rem: Pixels,
     scale: f32,
 }
 impl HeaderMeasure {
     fn new(scale: f32, cx: &App) -> Self {
+        let font = font(cx.theme().font_family.clone());
         Self {
             text: WindowTextSystem::new(cx.text_system().clone()),
-            font: font(cx.theme().font_family.clone()),
+            name_font: Font {
+                weight: FontWeight::MEDIUM,
+                ..font.clone()
+            },
+            font,
             rem: px(14. * scale),
             scale,
         }
@@ -469,7 +483,11 @@ impl HeaderMeasure {
         let size = self.rem * if small { 10. / 14. } else { 12. / 14. };
         let run = TextRun {
             len: text.len(),
-            font: self.font.clone(),
+            font: if small {
+                self.font.clone()
+            } else {
+                self.name_font.clone()
+            },
             color: Hsla::default(),
             background_color: None,
             underline: None,
@@ -497,6 +515,10 @@ impl Results {
         c == 0 || self.numeric.get(c - 1).copied().unwrap_or(false)
     }
 }
+
+/// The least width of a result column, in points of the 100% scale, also
+/// when a drag resizes it: room for an 18-character name and a short type.
+const MIN_COLUMN_WIDTH: f32 = 190.;
 
 /// The share of the selection color in the other cells of a selected row.
 const SELECTED_ROW_TINT: f32 = 0.35;
@@ -596,11 +618,28 @@ impl TableDelegate for Results {
                 cx.notify();
             }))
             .when(self.is_numeric_column(c), |el| el.justify_end())
+            // A column name that its column cuts shows in full in a tooltip.
+            .when_some(self.names.get(c.wrapping_sub(1)), |el, (_, cut)| {
+                let name = self.headers[c].name.clone();
+                let cut = cut.clone();
+                el.managed_tooltip_when(
+                    move || cut.get(),
+                    move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(name.clone()).build(window, cx)
+                    },
+                )
+            })
             .child(
                 div()
                     .truncate()
                     .text_color(cx.theme().foreground)
                     .font_weight(FontWeight::MEDIUM)
+                    .when_some(self.names.get(c.wrapping_sub(1)), |el, (width, cut)| {
+                        let (width, cut) = (*width, cut.clone());
+                        el.on_prepaint(move |bounds, _, _| {
+                            cut.set(bounds.size.width + px(0.5) < width)
+                        })
+                    })
                     .child(self.headers[c].name.clone()),
             )
             .when(c > 0, |el| {
@@ -635,10 +674,7 @@ impl TableDelegate for Results {
         let focus = selection.is_some_and(|s| s.focus == (r, c - 1));
         // The other cells of a selected row, and its row number, get a faint
         // tint, so the row of the selection is easy to follow.
-        let row_selected = !selected
-            && self
-                .selection
-                .is_some_and(|s| s.rows().contains(&r));
+        let row_selected = !selected && self.selection.is_some_and(|s| s.rows().contains(&r));
         div()
             .id(("cell", c))
             .test_support()
@@ -1289,13 +1325,16 @@ mod tests {
                     column("id", "INT"),
                     column("paid_bookings", "BIGINT"),
                     column("a_much_longer_column_name", "BIGINT"),
+                    column("booking_reference_", "STRING"),
                 ],
                 cx,
             );
             let widths: Vec<_> = results.headers.iter().map(|c| c.width).collect();
-            assert_eq!(widths[1], px(120.));
-            assert!(widths[2] > px(120.));
+            assert_eq!(widths[1], px(super::MIN_COLUMN_WIDTH));
+            assert_eq!(widths[2], px(super::MIN_COLUMN_WIDTH));
             assert!(widths[3] > widths[2]);
+            // An 18-character name and a short type fit in the least width.
+            assert_eq!(widths[4], px(super::MIN_COLUMN_WIDTH));
 
             let header = super::HeaderMeasure::new(1., cx);
             let text =

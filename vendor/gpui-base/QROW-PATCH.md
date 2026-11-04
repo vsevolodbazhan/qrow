@@ -75,6 +75,10 @@ Qrow changes these files:
 
 - `src/tree.rs`: `TreeState` implements `Focusable`, so a context menu of a
   tree row can show the shortcuts that the tree binds.
+- `src/tooltip.rs`: a scroll wheel event hides the managed tooltip, as it
+  already hid on a key press, a mouse press, and a pointer move off the
+  trigger. Before, a tooltip stayed on the screen while its trigger scrolled
+  away.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.

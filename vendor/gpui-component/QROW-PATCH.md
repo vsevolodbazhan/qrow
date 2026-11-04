@@ -79,6 +79,11 @@ Qrow changes these files:
   short of room, down to a least width. Its label ends in an ellipsis and its
   suffix, like a close button, keeps its size. Before, the bar scrolled and
   clipped the close button of the last tab under the bar suffix.
+- `src/tooltip.rs`: `ManagedTooltipExt` is public, and `managed_tooltip_when`
+  shows its tooltip only while a condition holds when the pointer enters.
+  A result column header shows its full name only when its column cuts it.
+  The Qrow UI test `results::a_column_name_that_fits_has_no_tooltip` checks
+  the condition.
 - `src/menu/popup_menu.rs`: `PopupMenu::set_trigger_focus` is public, so a
   context menu that the application opens shows the shortcuts of the view
   under the pointer.

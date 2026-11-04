@@ -227,9 +227,7 @@ impl ComponentTooltip {
 
 // ── Internal managed tooltip trait ──────────────────────────────────────────
 
-pub(crate) trait ManagedTooltipExt:
-    StatefulInteractiveElement + crate::ElementExt + Sized
-{
+pub trait ManagedTooltipExt: StatefulInteractiveElement + crate::ElementExt + Sized {
     fn managed_tooltip(
         self,
         build_tooltip: impl Fn(&mut Window, &mut App) -> AnyView + 'static,
@@ -245,9 +243,28 @@ pub(crate) trait ManagedTooltipExt:
         self.managed_tooltip_with_placement(Some(placement), build_tooltip)
     }
 
+    /// Qrow: a managed tooltip that shows only while `show` is true when
+    /// the pointer enters, for example while a label is cut.
+    fn managed_tooltip_when(
+        self,
+        show: impl Fn() -> bool + 'static,
+        build_tooltip: impl Fn(&mut Window, &mut App) -> AnyView + 'static,
+    ) -> Self {
+        self.managed_tooltip_inner(None, Some(Rc::new(show)), build_tooltip)
+    }
+
     fn managed_tooltip_with_placement(
         self,
         preferred_placement: Option<Placement>,
+        build_tooltip: impl Fn(&mut Window, &mut App) -> AnyView + 'static,
+    ) -> Self {
+        self.managed_tooltip_inner(preferred_placement, None, build_tooltip)
+    }
+
+    fn managed_tooltip_inner(
+        self,
+        preferred_placement: Option<Placement>,
+        show: Option<Rc<dyn Fn() -> bool>>,
         build_tooltip: impl Fn(&mut Window, &mut App) -> AnyView + 'static,
     ) -> Self {
         let build_tooltip = Rc::new(build_tooltip);
@@ -262,7 +279,7 @@ pub(crate) trait ManagedTooltipExt:
             let build_tooltip = build_tooltip.clone();
             move |hovered, window, cx| {
                 if let Some(overlay) = Root::tooltip_overlay(window, cx) {
-                    if *hovered {
+                    if *hovered && show.as_ref().is_none_or(|show| show()) {
                         let bounds = trigger_bounds_cell.get();
                         overlay.update(cx, |o: &mut BaseTooltipOverlay, cx| {
                             let build = build_tooltip.clone();

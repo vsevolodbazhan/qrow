@@ -505,7 +505,11 @@ fn a_wider_pane_renders_the_headers_of_the_revealed_columns(cx: &mut TestAppCont
         // refresh every view and hide a header that the width did not
         // render again.
         cx.run_until_parked();
-        let width = if step % 2 == 0 { "a wider pane" } else { "a narrower pane" };
+        let width = if step % 2 == 0 {
+            "a wider pane"
+        } else {
+            "a narrower pane"
+        };
         let cells = visible_columns(&app, cx, "cell");
         let headers = visible_columns(&app, cx, "column-header");
         assert!(
@@ -769,7 +773,9 @@ fn a_held_drag_scrolls_back_to_the_first_row_and_column(cx: &mut TestAppContext)
         app.press(cx, "down");
         app.settle(cx);
     }
-    for _ in 0..14 {
+    // Columns are at least 190 points wide, so the selection at column 11
+    // has the first column outside the view and column 10 beside it.
+    for _ in 0..10 {
         app.press(cx, "right");
         app.settle(cx);
     }
@@ -912,5 +918,31 @@ fn results_toggle_does_not_change_layout_behind_settings(cx: &mut TestAppContext
     app.press(cx, "escape");
     app.update(cx, |window, _| {
         assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
+    });
+}
+
+#[gpui_kit::test]
+fn a_column_name_that_fits_has_no_tooltip(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.update(cx, |window, cx| {
+        let position = window.find(("column-header", 1usize)).bounds().center();
+        window.dispatch_event(
+            MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(
+            window.try_find("tooltip").is_none(),
+            "The header of a column name that fits must not show a tooltip"
+        )
     });
 }

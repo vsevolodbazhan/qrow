@@ -2,9 +2,9 @@ use std::{rc::Rc, time::Duration};
 
 use gpui::{
     AnyElement, AnyView, App, Bounds, Context, Div, ElementId, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Render, RenderOnce, Role, Size, Stateful,
-    StatefulInteractiveElement, Styled, Task, Window, canvas, deferred, div,
-    prelude::FluentBuilder as _, px,
+    KeyDownEvent, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Render, RenderOnce, Role,
+    ScrollWheelEvent, Size, Stateful, StatefulInteractiveElement, Styled, Task, Window, canvas,
+    deferred, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::{Placement, Positioner};
@@ -280,6 +280,13 @@ impl Render for TooltipOverlay {
                 window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
                     if phase.capture() {
                         let _ = presses.update(cx, |tooltip, cx| tooltip.hide(cx));
+                    }
+                });
+                // Scrolling moves the trigger away from the tooltip.
+                let scrolls = overlay.clone();
+                window.on_mouse_event(move |_: &ScrollWheelEvent, phase, _, cx| {
+                    if phase.capture() {
+                        let _ = scrolls.update(cx, |tooltip, cx| tooltip.hide(cx));
                     }
                 });
             },
