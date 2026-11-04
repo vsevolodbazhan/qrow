@@ -63,6 +63,18 @@ Qrow changes these files:
   element `tooltip`, so application tests can find an open tooltip.
 - `Cargo.toml`: `cargo machete` ignores the `log` dependency, which the crate
   declares but does not use.
+- `src/setting/page.rs`: selecting a group in the Settings sidebar scrolls the
+  group heading to the top of the page. A spacer after the last group lets
+  the last groups scroll that far. Before, the page scrolled only until the
+  group was visible, so its heading stopped in the middle of the page.
+- `src/sheet.rs`: `Sheet::margin_bottom` keeps a band at the bottom of the
+  window free. The dbt details sheet ends above the status bar.
+- `src/table/state.rs`: the table body keeps the width of the horizontal
+  scrollbar free below its rows. Before, the scrollbar covered the text of
+  the bottom row.
+- `src/menu/popup_menu.rs`: `PopupMenu::set_trigger_focus` is public, so a
+  context menu that the application opens shows the shortcuts of the view
+  under the pointer.
 
 Remove the patch when a GPUI Kit release includes the fixes. Update the crate
 with the other GPUI crates as one set.

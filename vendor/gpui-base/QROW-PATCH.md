@@ -73,5 +73,8 @@ Qrow changes these files:
   memory, and the tint shows most of the time. The Qrow UI test
   `the_editor_tints_the_statement_that_run_uses` is the regression test.
 
+- `src/tree.rs`: `TreeState` implements `Focusable`, so a context menu of a
+  tree row can show the shortcuts that the tree binds.
+
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.
