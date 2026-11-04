@@ -26,11 +26,13 @@ pub(super) fn thread_list_after_selection(override_visibility: Option<bool>) -> 
 const SELECTOR_ICON_WIDTH: f32 = 24.;
 /// The gap between two selector buttons, in points.
 const SELECTOR_GAP: f32 = 4.;
-/// What a labeled selector adds to its label: the side padding, the icon,
-/// the caret, and their gaps, in points.
-const SELECTOR_CHROME: f32 = 48.;
-/// What a labeled button of the composer adds to its label, in points.
-const COMPOSER_BUTTON_CHROME: f32 = 34.;
+/// What a labeled selector adds to its label: the compact side padding, the
+/// icon, the caret, and their gaps, in points. Measured on the rendered
+/// composer, with a few points to spare, so a label that shows always fits.
+const SELECTOR_CHROME: f32 = 30.;
+/// What a labeled button of the composer adds to its label, measured the
+/// same way.
+const COMPOSER_BUTTON_CHROME: f32 = 24.;
 
 /// Which selectors show their labels when `available` points hold them:
 /// the model first, then reasoning, then the tier. `labeled` holds the
