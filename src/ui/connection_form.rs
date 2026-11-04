@@ -654,24 +654,12 @@ fn notes_description(bytes: usize) -> String {
     if counts_notes(bytes) {
         format!(
             "{} of {} bytes. Do not enter secrets.",
-            group_digits(bytes),
-            group_digits(MAX_ASSISTANT_NOTES_BYTES)
+            crate::logs::group_digits(bytes),
+            crate::logs::group_digits(MAX_ASSISTANT_NOTES_BYTES)
         )
     } else {
         "Sent to the assistant as plain text. Omit secrets.".to_owned()
     }
-}
-
-fn group_digits(value: usize) -> String {
-    let digits = value.to_string();
-    let mut grouped = String::new();
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
 }
 
 /// The notes that the assistant reads about the connection.
@@ -924,8 +912,8 @@ mod tests {
             notes_description(NOTES_COUNT_FROM),
             "12,288 of 16,384 bytes. Do not enter secrets."
         );
-        assert_eq!(group_digits(7), "7");
-        assert_eq!(group_digits(1_234_567), "1,234,567");
+        assert_eq!(crate::logs::group_digits(7), "7");
+        assert_eq!(crate::logs::group_digits(1_234_567), "1,234,567");
     }
 
     #[test]

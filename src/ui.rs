@@ -3937,13 +3937,13 @@ impl Qrow {
                 Some(execution_id),
                 Severity::Info,
                 LogKind::ExecutionCompleted,
-                "Execution completed on the server (demo)",
+                "Query finished on the server (demo)",
             ),
             LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
                 LogKind::FetchCompleted,
-                "Fetched page 1: rows 1–2250, end of results (demo)",
+                "Fetched rows 1–2,250 (all rows, demo)",
             ),
         ];
         let mut activity = Vec::new();

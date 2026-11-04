@@ -160,7 +160,7 @@ impl Qrow {
                 } => {
                     for (profile, key) in &self.dbt.keys {
                         if *key == manifest {
-                            activity.push((*profile, ActivityEntry::new(severity, text.clone())));
+                            activity.push((*profile, ActivityEntry::new(severity, text.clone()).with_source("dbt")));
                         }
                     }
                 }

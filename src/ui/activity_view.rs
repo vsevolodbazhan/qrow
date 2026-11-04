@@ -441,15 +441,16 @@ impl ActivityView {
             )
             .child(button_pair(
                 "activity-filter",
+                // The selected segment is filled, the other one is quiet.
                 Button::new("activity-all")
-                    .ghost()
+                    .when(self.errors_only, |button| button.ghost())
                     .small()
                     .label("All activity")
                     .selected(!self.errors_only)
                     .toggled(!self.errors_only)
                     .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(false, cx))),
                 Button::new("activity-errors")
-                    .ghost()
+                    .when(!self.errors_only, |button| button.ghost())
                     .small()
                     .label("Errors only")
                     .selected(self.errors_only)
@@ -579,7 +580,7 @@ impl ActivityView {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::Copy)
-                                .label("Copy")
+                                .tooltip("Copy error")
                                 .accessibility_label("Copy error")
                                 .on_click(move |_, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
@@ -593,7 +594,7 @@ impl ActivityView {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::ArrowRight)
-                                .label("Show tab")
+                                .tooltip("Show tab")
                                 .accessibility_label("Show tab")
                                 .on_click(move |_, _, cx| {
                                     let _ = view.update(cx, |_, cx| {

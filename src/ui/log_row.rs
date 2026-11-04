@@ -1,5 +1,6 @@
 //! One entry of the tab Logs or of Activity: time, severity, source, message,
-//! and actions in fixed lanes, so that entries scan as rows.
+//! and actions in fixed lanes, so that entries scan as rows. Time and SQL use
+//! the Logs font; the message and the source use the interface font.
 
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -93,9 +94,12 @@ impl RenderOnce for LogRow {
             // The date is the same for nearly all entries of a session; the
             // copied text keeps it.
             let clock = label.split_once(' ').map_or(label.clone(), |(_, t)| t.into());
-            lane().text_color(muted).child(
-                SelectableText::new("time", format!("{clock} ")).document_order(self.order),
-            )
+            lane()
+                .font_family(self.font_family.clone())
+                .text_color(muted)
+                .child(
+                    SelectableText::new("time", format!("{clock} ")).document_order(self.order),
+                )
         });
         h_flex()
             .id(self.id)
@@ -105,7 +109,8 @@ impl RenderOnce for LogRow {
             .py_1()
             .border_b_1()
             .border_color(theme.border.opacity(0.5))
-            .font_family(self.font_family)
+            // Prose uses the interface font; time and SQL use the Logs font.
+            .font_family(theme.font_family.clone())
             .text_size(self.font_size)
             .line_height(relative(self.line_height))
             .children(time)
@@ -149,6 +154,7 @@ impl RenderOnce for LogRow {
                                 .py_1()
                                 .rounded(theme.radius)
                                 .bg(theme.muted)
+                                .font_family(self.font_family.clone())
                                 .text_color(theme.foreground)
                                 .child(
                                     SelectableText::new("body", body)
@@ -157,11 +163,6 @@ impl RenderOnce for LogRow {
                         )
                     }),
             )
-            .child(
-                lane()
-                    .gap_1()
-                    .font_family(theme.font_family.clone())
-                    .children(self.actions),
-            )
+            .child(lane().gap_1().children(self.actions))
     }
 }

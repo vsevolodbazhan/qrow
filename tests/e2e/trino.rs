@@ -108,7 +108,7 @@ fn run_export_keeps_settings_prepared_statements_and_the_transaction(cx: &mut Te
         cx,
         "the bounded preview",
         std::time::Duration::from_secs(5),
-        |window, _| window.find("result-loaded").label() == Some("100000 loaded"),
+        |window, _| window.find("result-loaded").label() == Some("100,000 loaded"),
     );
     app.wait_cell(cx, 0, 1, "1");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 5);

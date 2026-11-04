@@ -532,13 +532,10 @@ impl Runner {
             Severity::Info,
             LogKind::ExecutionCompleted,
             if has_results {
-                format!(
-                    "Execution completed on the server ({})",
-                    format_duration(duration)
-                )
+                format!("Query finished on the server ({})", format_duration(duration))
             } else {
                 format!(
-                    "Execution completed on the server with no result set ({})",
+                    "Query finished on the server without a result set ({})",
                     format_duration(duration)
                 )
             },
@@ -1117,31 +1114,35 @@ impl Runner {
             more,
             limited,
         } = summary;
+        let group = crate::logs::group_digits;
         let range = if fetched == 0 {
-            "no rows".into()
+            "no rows".to_owned()
         } else {
-            format!("rows {}–{}", start_row + 1, start_row + fetched)
+            format!("rows {}–{}", group(start_row + 1), group(start_row + fetched))
         };
-        let loaded = if self.rows == fetched {
-            String::new()
-        } else {
-            format!(", {} rows loaded", self.rows)
-        };
-        let end = if limited {
-            "preview limit reached"
-        } else if more {
-            "more rows available"
-        } else {
-            "end of results"
-        };
+        let mut notes = Vec::new();
+        if page > 1 {
+            notes.push(format!("page {page}"));
+        }
+        if self.rows != fetched {
+            notes.push(format!("{} loaded", group(self.rows)));
+        }
+        notes.push(
+            if limited {
+                "preview limit reached"
+            } else if more {
+                "more available"
+            } else {
+                "all rows"
+            }
+            .to_owned(),
+        );
+        notes.push(format_duration(started.elapsed()));
         self.log(
             execution_id,
             Severity::Info,
             LogKind::FetchCompleted,
-            format!(
-                "Fetched page {page}: {range}{loaded}, {end} ({})",
-                format_duration(started.elapsed())
-            ),
+            format!("Fetched {range} ({})", notes.join(", ")),
             Some(started.elapsed()),
         );
     }

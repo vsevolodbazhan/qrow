@@ -9,6 +9,19 @@ pub const MAX_EXECUTION_GROUPS: usize = 100;
 pub const MAX_NON_EXECUTION_GROUPS: usize = 50;
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
 
+/// `value` with a comma between groups of three digits, like 1,234,567.
+pub fn group_digits(value: usize) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 pub(crate) fn timestamp_label(timestamp: SystemTime) -> String {
     let seconds = timestamp
         .duration_since(SystemTime::UNIX_EPOCH)

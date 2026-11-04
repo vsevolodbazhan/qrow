@@ -23,7 +23,11 @@ impl ResultSummary {
             range: if range.is_empty() {
                 "0 rows".into()
             } else {
-                format!("Rows {}–{}", range.start + 1, range.end)
+                format!(
+                    "Rows {}–{}",
+                    crate::logs::group_digits(range.start + 1),
+                    crate::logs::group_digits(range.end)
+                )
             },
             loaded: data.rows.len(),
             columns: data.columns.len(),
@@ -49,8 +53,8 @@ impl ResultSummary {
             .when(!range_only, |row| {
                 row.child(Self::tag(
                     "result-loaded",
-                    &format!("{} loaded", self.loaded),
-                    &format!("{} loaded", self.loaded),
+                    &format!("{} loaded", crate::logs::group_digits(self.loaded)),
+                    &format!("{} loaded", crate::logs::group_digits(self.loaded)),
                     LOADED_ROWS,
                     cx,
                 ))
@@ -76,7 +80,7 @@ impl ResultSummary {
     fn columns_label(&self) -> String {
         format!(
             "{} {}",
-            self.columns,
+            crate::logs::group_digits(self.columns),
             if self.columns == 1 {
                 "column"
             } else {
@@ -126,7 +130,7 @@ impl ResultSummary {
                         VISIBLE_ROWS,
                         self.range.strip_prefix("Rows ").unwrap_or("0").to_owned(),
                     ),
-                    ("result-detail-loaded", LOADED_ROWS, self.loaded.to_string()),
+                    ("result-detail-loaded", LOADED_ROWS, crate::logs::group_digits(self.loaded)),
                     ("result-detail-columns", COLUMNS, self.columns.to_string()),
                 ]
                 .into_iter()

@@ -28,7 +28,9 @@ pub struct ActivityEntry {
     pub text: String,
     /// The query tab that the entry is about, if any.
     pub tab: Option<Uuid>,
-    /// The title of that tab when the entry arrived. `text` starts with it.
+    /// What the entry is about, for its source column: the title of the tab
+    /// when the entry arrived, or a name like `dbt`. The text of a tab entry
+    /// starts with the title.
     pub title: Option<String>,
     /// Whether the entry counts as an unseen error until its Activity shows.
     counts: bool,
@@ -52,6 +54,12 @@ impl ActivityEntry {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// The entry with `source` in its source column.
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.title = Some(source.into());
+        self
     }
 
     /// The text without the tab title.
@@ -83,7 +91,7 @@ pub fn from_refresh(event: LogEvent) -> ActivityEntry {
         counts: event.severity == Severity::Error && event.kind == LogKind::SchemaRefreshFinished,
         text: event.text,
         tab: None,
-        title: None,
+        title: Some("Schemas".into()),
         id: 0,
     }
 }

@@ -1844,7 +1844,7 @@ fn render_entry(
     entry: &TreeEntry,
     state: TreeEntryState,
     context: &RowContext,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let RowContext {
@@ -2025,6 +2025,36 @@ fn render_entry(
     let menu_id = id.clone();
     let schema_detail = matches!(node, Node::Schema { .. });
     let detail = detail.filter(|_| !schema_detail || (!loading && error_status.is_none()));
+    let leaf = matches!(node, Node::Column { .. });
+    // The name comes first: a data type or a dbt kind shows only when it fits
+    // next to the full name. The width of the row does not depend on the
+    // detail, so the choice is stable from frame to frame.
+    let row_key = child_id(&id, "row");
+    let detail = detail.filter(|detail| {
+        if schema_detail {
+            return true;
+        }
+        let Some(row_width) = context.widths.borrow().get(&row_key).copied() else {
+            return true;
+        };
+        let measure = |text: &str, rems: f32| {
+            let run = TextRun {
+                len: text.len(),
+                font: font(cx.theme().font_family.clone()),
+                color: cx.theme().foreground,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            window
+                .text_system()
+                .shape_line(SharedString::from(text.to_owned()), window.rem_size() * rems, &[run], None)
+                .width
+        };
+        let lanes = if leaf { 1. } else { 2. };
+        let fixed = indent + ui_px((16. + ROW_GAP) * lanes + ROW_GAP + 8.);
+        fixed + measure(&label, 0.875) + measure(detail, 0.75) <= row_width
+    });
     // Show the tooltip only when it adds text: a name that the row cuts, a
     // comment, or an error.
     let label_key = child_id(&id, "label");
@@ -2053,10 +2083,10 @@ fn render_entry(
     if let Some(text) = &tooltip {
         context.record_tip(&id, text.clone(), truncation);
     }
-    let leaf = matches!(node, Node::Column { .. });
     let row = h_flex()
         .id(id.clone())
         .size_full()
+        .on_prepaint(context.record_width(row_key))
         .pl(indent)
         .when(!schema_detail && !loading && error_status.is_none(), |el| {
             el.pr_2()

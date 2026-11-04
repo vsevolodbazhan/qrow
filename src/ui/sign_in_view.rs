@@ -339,7 +339,7 @@ impl Qrow {
         self.sign_in_ui.errors.insert(id, message.clone());
         self.record_activity(
             connection,
-            crate::activity::ActivityEntry::new(Severity::Error, message),
+            crate::activity::ActivityEntry::new(Severity::Error, message).with_source("Sign-in"),
             cx,
         );
     }

@@ -354,12 +354,15 @@ impl Qrow {
             self.output_panel(cx)
         } else {
             let table = &self.tabs[self.active].shown_result().table;
+            // Without a result set the toolbar has nothing to count, export,
+            // or pin.
+            let has_result = !table.read(cx).delegate().columns.is_empty();
             results::selection_boundary(table)
                 .size_full()
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .child(self.result_toolbar(cx))
+                .when(has_result, |el| el.child(self.result_toolbar(cx)))
                 .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                     table,
                     self.dialog_open(),

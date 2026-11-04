@@ -246,7 +246,7 @@ fn run_export_keeps_temp_tables_uncommitted_rows_and_exact_values(cx: &mut TestA
     app.wait_status(cx, "Preview: Export download complete");
     app.wait_cell(cx, 0, 1, "1");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("result-loaded").label(), Some("100000 loaded"))
+        assert_eq!(window.find("result-loaded").label(), Some("100,000 loaded"))
     });
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 4);
     assert_eq!(app.logs(cx).matches("Connected to").count(), 1);

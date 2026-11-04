@@ -595,7 +595,7 @@ fn kyuubi_run_export_keeps_session_state_and_all_preview_pages(cx: &mut TestAppC
         assert_eq!(&row[0], expected.to_string());
     }
     app.wait_until(cx, "the export preview", QUERY_TIMEOUT, |window, _| {
-        window.find("result-loaded").label() == Some("2123 loaded")
+        window.find("result-loaded").label() == Some("2,123 loaded")
     });
     app.wait_cell(cx, 0, 1, "0");
     app.wait_status(cx, "Preview: Export download complete");
@@ -647,7 +647,7 @@ fn kyuubi_run_export_again_uses_result_sql_after_disconnect_without_session_warn
         );
     }
     app.wait_until(cx, "the rerun preview", QUERY_TIMEOUT, |window, _| {
-        window.find("result-loaded").label() == Some("2123 loaded")
+        window.find("result-loaded").label() == Some("2,123 loaded")
     });
     app.wait_status(cx, "Preview: Export download complete");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);

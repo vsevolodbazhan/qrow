@@ -22,6 +22,11 @@ use gpui::{
 
 use super::*;
 
+
+/// The space below the last row for the horizontal scrollbar: its full
+/// width in `gpui-base`.
+const HORIZONTAL_SCROLLBAR_GUTTER: Pixels = px(16.);
+
 /// How far behind the pointer a resize drag trails the column edge.
 const HANDLE_SIZE: Pixels = px(2.);
 
@@ -2511,7 +2516,17 @@ where
                     this.children(empty_view)
                 } else {
                     this.child(
-                        h_flex().id("table-body").flex_grow_1().size_full().child(
+                        h_flex()
+                            .id("table-body")
+                            .flex_grow_1()
+                            .size_full()
+                            .min_h_0()
+                            // A gutter below the rows keeps them clear of the
+                            // horizontal scrollbar, which overlays the body.
+                            .when(self.options.scrollbar_visible.bottom, |this| {
+                                this.mb(HORIZONTAL_SCROLLBAR_GUTTER)
+                            })
+                            .child(
                             uniform_list(
                                 "table-uniform-list",
                                 render_rows_count,

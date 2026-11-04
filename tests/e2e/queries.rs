@@ -166,7 +166,7 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
         );
         assert_eq!(
             label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded Rows: 1000")
+            Some("Loaded Rows: 1,000")
         );
         assert_eq!(
             label(window, "result-detail-columns").as_deref(),
@@ -179,7 +179,7 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
         cx,
         "the fetched page in Result Details",
         QUERY_TIMEOUT,
-        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded Rows: 1001"),
+        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded Rows: 1,001"),
     );
     app.update(cx, |window, _| {
         assert_eq!(
@@ -415,7 +415,7 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
         );
         assert_eq!(
             label(window, "result-range").as_deref(),
-            Some("Rows 1–1000")
+            Some("Rows 1–1,000")
         );
     });
     // The cursor is closed, so Next page does not fetch.
@@ -425,7 +425,7 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
         assert_eq!(app.status(cx), "Complete");
         assert_eq!(
             label(window, "result-range").as_deref(),
-            Some("Rows 1–1000")
+            Some("Rows 1–1,000")
         );
     });
     // A compact toolbar shows the Partial tag between the range and the details.

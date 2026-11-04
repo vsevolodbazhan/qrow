@@ -82,11 +82,11 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                 if !compact {
                     assert_eq!(
                         label(window, "result-range").as_deref(),
-                        Some("Rows 1–1000")
+                        Some("Rows 1–1,000")
                     );
                     assert_eq!(
                         label(window, "result-loaded").as_deref(),
-                        Some("2250 loaded")
+                        Some("2,250 loaded")
                     );
                     assert_eq!(
                         label(window, "result-columns").as_deref(),
@@ -116,7 +116,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                 app.update(cx, |window, _| {
                     assert_eq!(
                         label(window, "result-detail-loaded").as_deref(),
-                        Some("Loaded Rows: 2250")
+                        Some("Loaded Rows: 2,250")
                     );
                     assert_eq!(
                         label(window, "result-detail-columns").as_deref(),
