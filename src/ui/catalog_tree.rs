@@ -46,6 +46,8 @@ const ROW_GAP: f32 = 4.;
 const STATUS_SLOT_WIDTH: f32 = 28.;
 /// The opacity of the accent fill of the current connection row.
 const CURRENT_CONNECTION_FILL: f32 = 0.18;
+/// The key of the width that all tree rows share.
+const ROW_WIDTH_KEY: &str = "tree-row-width";
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
@@ -1746,6 +1748,32 @@ impl RowContext {
         }
     }
 
+    /// Records the width of the tree rows under `key`. Rows decide from it
+    /// whether a detail fits, so a new width, for example after a window or
+    /// sidebar resize, renders the tree again with the current width.
+    fn record_row_width(
+        &self,
+        key: SharedString,
+    ) -> impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + use<> {
+        let widths = self.widths.clone();
+        let weak = self.weak.clone();
+        move |bounds, _, cx| {
+            let width = bounds.size.width;
+            let changed = {
+                let mut widths = widths.borrow_mut();
+                if widths.len() >= MAX_LABEL_WIDTHS && !widths.contains_key(&key) {
+                    widths.clear();
+                }
+                widths.insert(key, width) != Some(width)
+            };
+            if changed {
+                cx.defer(move |cx| {
+                    let _ = weak.update(cx, |_, cx| cx.notify());
+                });
+            }
+        }
+    }
+
     fn record_width(
         &self,
         key: SharedString,
@@ -2063,7 +2091,9 @@ fn render_entry(
     // The name comes first: a data type or a dbt kind shows only when it fits
     // next to the full name. The width of the row does not depend on the
     // detail, so the choice is stable from frame to frame.
-    let row_key = child_id(&id, "row");
+    // All rows of the tree have the same width, so one value serves every
+    // row, also a row that scrolls into view.
+    let row_key = SharedString::new_static(ROW_WIDTH_KEY);
     let detail = detail.filter(|detail| {
         if schema_detail {
             return true;
@@ -2120,7 +2150,7 @@ fn render_entry(
     let row = h_flex()
         .id(id.clone())
         .size_full()
-        .on_prepaint(context.record_width(row_key))
+        .on_prepaint(context.record_row_width(row_key))
         .pl(indent)
         .when(!schema_detail && !loading && error_status.is_none(), |el| {
             el.pr_2()

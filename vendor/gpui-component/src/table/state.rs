@@ -23,9 +23,9 @@ use gpui::{
 use super::*;
 
 
-/// The space below the last row for the horizontal scrollbar: its full
+/// The space that the table keeps free for a scrollbar: the full scrollbar
 /// width in `gpui-base`.
-const HORIZONTAL_SCROLLBAR_GUTTER: Pixels = px(16.);
+const SCROLLBAR_GUTTER: Pixels = px(16.);
 
 /// How far behind the pointer a resize drag trails the column edge.
 const HANDLE_SIZE: Pixels = px(2.);
@@ -1841,10 +1841,15 @@ where
         let style = header.style().clone();
         let layout = self.header_layout.clone();
 
+        // The header keeps the same gutter for the vertical scrollbar as the
+        // body, so their columns stay aligned.
+        let vertical_gutter = self.options.scrollbar_visible.right
+            && self.delegate.rows_count(cx) > 0;
         header
             .h_flex()
             .w_full()
             .flex_shrink_0()
+            .when(vertical_gutter, |this| this.pr(SCROLLBAR_GUTTER))
             .bg(cx.theme().tokens.table_head)
             .text_color(cx.theme().table_head_foreground)
             .refine_style(&style)
@@ -2521,10 +2526,13 @@ where
                             .flex_grow_1()
                             .size_full()
                             .min_h_0()
-                            // A gutter below the rows keeps them clear of the
-                            // horizontal scrollbar, which overlays the body.
+                            // Gutters below and beside the rows keep them clear
+                            // of the scrollbars, which overlay the body.
                             .when(self.options.scrollbar_visible.bottom, |this| {
-                                this.mb(HORIZONTAL_SCROLLBAR_GUTTER)
+                                this.mb(SCROLLBAR_GUTTER)
+                            })
+                            .when(self.options.scrollbar_visible.right, |this| {
+                                this.pr(SCROLLBAR_GUTTER)
                             })
                             .child(
                             uniform_list(
