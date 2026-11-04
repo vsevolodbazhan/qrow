@@ -73,6 +73,9 @@ impl Qrow {
         let visible = self.visible_tab_indices();
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
+            // Long titles end in an ellipsis, and a short bar shrinks the
+            // titles before it scrolls, so a tab keeps its close button whole.
+            .max_width(self.ui_px(MAX_QUERY_TAB_WIDTH))
             .selected_index(
                 visible
                     .iter()
@@ -791,6 +794,9 @@ fn changed_view(view: AnyView, window: &Window) -> AnyElement {
             .into_any_element()
     }
 }
+
+/// The widest query tab, in points of the 100% scale.
+const MAX_QUERY_TAB_WIDTH: f32 = 240.;
 
 /// The least width that the assistant pane leaves to the editor and the
 /// results. Below it, the pane narrows, which also collapses its

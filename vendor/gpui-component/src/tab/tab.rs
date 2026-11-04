@@ -6,8 +6,12 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Edges, ElementId, Hsla,
     InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, relative,
+    StatefulInteractiveElement, Styled, Window, div, px, relative, rems,
 };
+
+/// The least width of a tab with a maximum width, in rems: room for a few
+/// characters of its label and a close button.
+const TAB_MIN_WIDTH_REMS: f32 = 5.5;
 
 /// Tab variants.
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]
@@ -797,7 +801,13 @@ impl RenderOnce for Tab {
             })
             .gap_1()
             .items_center()
-            .flex_shrink_0()
+            // A capped tab also gives way when the bar is short of room: its
+            // label shrinks to an ellipsis and its suffix, like a close
+            // button, keeps its size. Below the least width, the bar scrolls.
+            .map(|this| match max_width {
+                Some(_) => this.flex_shrink_1().min_w(rems(TAB_MIN_WIDTH_REMS)),
+                None => this.flex_shrink_0(),
+            })
             .h(height)
             .overflow_hidden()
             .map(|this| match self.size {

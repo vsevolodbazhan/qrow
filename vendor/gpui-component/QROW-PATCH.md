@@ -75,6 +75,10 @@ Qrow changes these files:
   renders the table again: the header picks its visible columns from the
   size of the last frame, so a wider pane left the header cells of the
   revealed columns blank.
+- `src/tab/tab.rs`: a tab with a maximum width also shrinks when its bar is
+  short of room, down to a least width. Its label ends in an ellipsis and its
+  suffix, like a close button, keeps its size. Before, the bar scrolled and
+  clipped the close button of the last tab under the bar suffix.
 - `src/menu/popup_menu.rs`: `PopupMenu::set_trigger_focus` is public, so a
   context menu that the application opens shows the shortcuts of the view
   under the pointer.
