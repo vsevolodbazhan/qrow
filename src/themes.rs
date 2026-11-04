@@ -89,7 +89,34 @@ pub(crate) fn is_available(name: &str, cx: &App) -> bool {
             .is_some_and(|theme| !theme.is_default)
 }
 
+/// The least opacity of the dialog backdrop. Many themes, the GPUI Kit
+/// defaults among them, dim so little that a dialog blends into the window.
+const MIN_OVERLAY_OPACITY_LIGHT: f32 = 0.2;
+const MIN_OVERLAY_OPACITY_DARK: f32 = 0.45;
+
+/// Raise the backdrop of the active theme to the least opacity. The hue of
+/// the theme stays.
+fn strengthen_overlay(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    let least = if theme.is_dark() {
+        MIN_OVERLAY_OPACITY_DARK
+    } else {
+        MIN_OVERLAY_OPACITY_LIGHT
+    };
+    if theme.overlay.a < least {
+        theme.overlay = theme.overlay.alpha(least);
+    }
+}
+
 pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
+    let applied = apply_theme(name, window, cx);
+    if applied {
+        strengthen_overlay(cx);
+    }
+    applied
+}
+
+fn apply_theme(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
     if name == SYSTEM_THEME {
         reset_configurable_defaults(cx);
         let (light_theme, dark_theme) = {

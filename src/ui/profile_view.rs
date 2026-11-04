@@ -110,11 +110,18 @@ impl Qrow {
             let save = weak.clone();
             let body = weak.clone();
             let footer = weak.update(cx, |this, cx| this.profile_footer(cx)).ok();
+            let is_new = weak
+                .read_with(cx, |this, _| this.form.as_ref().is_some_and(|form| form.is_new))
+                .unwrap_or(false);
             // Resolve the popup against the current window so its footer stays visible.
             let (width, height) = settings_dialog_size(window);
             let viewport = window.viewport_size();
             dialog
-                .title("Connection Settings")
+                .title(if is_new {
+                    "New Connection"
+                } else {
+                    "Connection Settings"
+                })
                 .w(width)
                 .h(height)
                 .margin_top((viewport.height - height) / 2.)
