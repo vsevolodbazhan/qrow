@@ -433,7 +433,7 @@ impl Results {
     fn empty_state(&self, cx: &App) -> Div {
         super::panel_empty_state(
             self.empty_message
-                .unwrap_or("Run a query to preview its results"),
+                .unwrap_or("Press ⌘↩ to run a query and preview its results"),
             cx,
         )
     }
@@ -489,6 +489,9 @@ impl Results {
         c == 0 || self.numeric.get(c - 1).copied().unwrap_or(false)
     }
 }
+
+/// The share of the selection color in the other cells of a selected row.
+const SELECTED_ROW_TINT: f32 = 0.35;
 
 /// Whether a column of `data_type` holds numbers.
 fn is_numeric(data_type: &str) -> bool {
@@ -570,6 +573,9 @@ impl TableDelegate for Results {
             .px_1()
             .overflow_hidden()
             .text_size(rems(12. / 14.))
+            .rounded_sm()
+            // A click selects the column, so the header shows that it reacts.
+            .hover(|el| el.bg(cx.theme().table_hover))
             .aria_label(self.headers[c].name.clone())
             .on_click(cx.listener(move |state, event: &ClickEvent, window, cx| {
                 let data = state.delegate_mut();
@@ -617,8 +623,14 @@ impl TableDelegate for Results {
         let display: String = value.unwrap_or("NULL").chars().take(500).collect();
         let selection = self.selection.filter(|_| c > 0);
         let selected = selection.is_some_and(|s| s.contains(r, c - 1));
-        // In a range, the focus cell also shows a ring.
-        let focus = selection.is_some_and(|s| !s.is_cell() && s.focus == (r, c - 1));
+        // The focus cell shows a ring, also when it is the only selected cell.
+        let focus = selection.is_some_and(|s| s.focus == (r, c - 1));
+        // The other cells of a selected row, and its row number, get a faint
+        // tint, so the row of the selection is easy to follow.
+        let row_selected = !selected
+            && self
+                .selection
+                .is_some_and(|s| s.rows().contains(&r));
         div()
             .id(("cell", c))
             .test_support()
@@ -636,6 +648,9 @@ impl TableDelegate for Results {
             .text_color(cx.theme().foreground)
             .when(c == 0 || null, |el| {
                 el.text_color(cx.theme().muted_foreground)
+            })
+            .when(row_selected, |el| {
+                el.bg(cx.theme().selection.opacity(SELECTED_ROW_TINT))
             })
             .when(selected, |el| {
                 el.bg(cx.theme().selection)

@@ -280,6 +280,32 @@ impl Qrow {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
+            // The connection that Run uses, quiet beside the button.
+            .child(
+                h_flex()
+                    .id("tab-connection")
+                    .test_support()
+                    .role(Role::Label)
+                    .aria_label(format!(
+                        "Runs on {}",
+                        connection_name(&self.profiles, tab.saved.profile)
+                    ))
+                    .min_w_0()
+                    .gap_1()
+                    .px_1()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        Icon::new(AssetIconName::Database)
+                            .xsmall()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .child(connection_name(&self.profiles, tab.saved.profile).to_owned()),
+                    ),
+            )
             // Hidden, not disabled, without an open session: a gray label
             // beside Run reads as a broken control.
             .when(tab.can_disconnect(), |el| {
@@ -612,26 +638,32 @@ impl Qrow {
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
-        // Equal-width columns keep the connection name at the window center.
-        // StatusBar centers its middle region only between the left and right
-        // items, so labels of different widths would move it off center.
+        // One line of information: the sidebar panels and the connection of
+        // the tab on the left, the workspace state and tools on the right.
+        let connected = tab.connected.then_some(DotStatus::Connected);
         StatusBar::new()
             .flex_shrink_0()
             // The default padding is a quarter rem, 3.5 pixels, which rounds
             // to an uneven space above and below the Activity button.
             .py(self.ui_px(4.))
-            .child(h_flex().flex_1().min_w_0().child(self.sidebar_buttons(cx)))
             .child(
-                div()
-                    .id("current-connection")
-                    .test_support()
-                    .role(Role::Label)
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_center()
-                    .aria_label(format!("Current connection: {connection_name}"))
-                    .child(connection_name.to_owned()),
+                    .gap_2()
+                    .child(self.sidebar_buttons(cx))
+                    .child(div().w_px().h_4().flex_shrink_0().bg(cx.theme().border))
+                    .child(
+                        h_flex()
+                            .id("current-connection")
+                            .test_support()
+                            .role(Role::Label)
+                            .min_w_0()
+                            .gap_1p5()
+                            .aria_label(format!("Current connection: {connection_name}"))
+                            .when_some(connected, |el, status| el.child(status.dot(cx)))
+                            .child(div().min_w_0().truncate().child(connection_name.to_owned())),
+                    ),
             )
             .child(
                 h_flex()

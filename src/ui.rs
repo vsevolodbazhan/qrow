@@ -1086,6 +1086,7 @@ impl Qrow {
                 .language("sql")
                 .soft_wrap(false)
                 .tab_size(editor_tab_size(&self.settings))
+                .placeholder("Write SQL, then press ⌘↩ to run")
                 .default_value(saved.sql.clone())
         });
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {

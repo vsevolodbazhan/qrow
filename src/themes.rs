@@ -151,11 +151,52 @@ fn quiet_light_comments(cx: &mut App) {
     theme.highlight_theme = Arc::new(highlight);
 }
 
+/// Give the SQL keywords that the grammar marks as attributes, like `DESC`,
+/// `ASC`, and `NULLS`, the keyword color, so that all keywords share one
+/// color in each theme.
+fn unify_sql_keywords(cx: &mut App) {
+    use gpui_kit::component::highlighter::HighlightTheme;
+    use std::sync::Arc;
+
+    let theme = Theme::global_mut(cx);
+    let Some(keyword) = theme.highlight_theme.style.syntax.keyword.clone() else {
+        return;
+    };
+    let mut highlight: HighlightTheme = (*theme.highlight_theme).clone();
+    highlight.style.syntax.attribute = Some(keyword);
+    theme.highlight_theme = Arc::new(highlight);
+}
+
+/// The least difference in lightness between the rows of a striped table.
+const MIN_STRIPE_LIGHTNESS: f32 = 0.025;
+/// The share of the foreground color in a stripe that a theme makes too faint.
+const STRIPE_FOREGROUND: f32 = 0.045;
+
+/// Make the alternate rows of a dark table faintly visible. Some dark
+/// themes, the GPUI Kit default among them, stripe them in almost the color
+/// of the other rows.
+fn visible_dark_stripes(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    if !theme.is_dark() {
+        return;
+    }
+    let base: gpui_kit::Hsla = theme.tokens.table.into();
+    let even: gpui_kit::Hsla = theme.tokens.table_even.into();
+    if (even.l - base.l).abs() >= MIN_STRIPE_LIGHTNESS {
+        return;
+    }
+    let stripe = base.blend(theme.foreground.opacity(STRIPE_FOREGROUND));
+    theme.table_even = stripe;
+    theme.tokens.table_even = stripe.into();
+}
+
 pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
     let applied = apply_theme(name, window, cx);
     if applied {
         strengthen_overlay(cx);
         quiet_light_comments(cx);
+        unify_sql_keywords(cx);
+        visible_dark_stripes(cx);
     }
     applied
 }
