@@ -2,12 +2,17 @@
 //! area of the window. The status bar button, ⇧⌘U, and the connection menu
 //! open it.
 
-use super::{Qrow, StatusTooltip, button_pair::button_pair, log_row::LogRow, panel_empty_state};
+use super::{
+    Qrow, StatusTooltip,
+    button_pair::{button_pair, segment},
+    log_row::LogRow,
+    panel_empty_state,
+};
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
 use crate::logs::timestamp_label;
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
+    ActiveTheme, Disableable as _, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     message_scroller::{MessageScroller, MessageScrollerState},
@@ -441,21 +446,18 @@ impl ActivityView {
             )
             .child(button_pair(
                 "activity-filter",
-                // The selected segment is filled, the other one is quiet.
-                Button::new("activity-all")
-                    .when(self.errors_only, |button| button.ghost())
-                    .small()
-                    .label("All activity")
-                    .selected(!self.errors_only)
-                    .toggled(!self.errors_only)
-                    .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(false, cx))),
-                Button::new("activity-errors")
-                    .when(!self.errors_only, |button| button.ghost())
-                    .small()
-                    .label("Errors only")
-                    .selected(self.errors_only)
-                    .toggled(self.errors_only)
-                    .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(true, cx))),
+                segment(
+                    Button::new("activity-all").small().label("All activity"),
+                    !self.errors_only,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(false, cx))),
+                segment(
+                    Button::new("activity-errors").small().label("Errors only"),
+                    self.errors_only,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(true, cx))),
                 cx,
             ))
             .child(

@@ -1194,8 +1194,12 @@ pub(super) fn setting_row<E: IntoElement>(
                     .child(label.w_full())
                     .child(control.w_full())
             } else {
+                // Labels align with the top of their control, so a control
+                // that grows, like a field with an error below it, does not
+                // move its label.
                 h_flex()
                     .w_full()
+                    .items_start()
                     .justify_between()
                     .gap_3()
                     .child(label.flex_1().min_w_0().max_w_3_5())

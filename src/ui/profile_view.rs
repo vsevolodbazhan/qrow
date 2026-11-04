@@ -77,28 +77,33 @@ pub(super) fn field_with_error(
     let Some(error) = error else {
         return control.into_any_element();
     };
-    // The error sits in the space below the field, so the row keeps its
-    // height and its label stays on the line of the other labels.
-    div()
-        .relative()
+    // The row grows to hold the error below the field. Rows align their
+    // labels with the top of the control, so the label does not move.
+    v_flex()
         .w_full()
+        .gap_1()
         .child(control.border_color(cx.theme().danger))
         .child(
             h_flex()
                 .id("connection-form-error-accessibility")
-                .absolute()
-                .left_0()
-                .top(relative(1.))
-                .mt_1()
-                .w_full()
                 .test_support()
                 .role(Role::Alert)
                 .aria_label(error.clone())
+                .w_full()
+                .items_start()
                 .gap_1()
                 .text_sm()
+                .line_height(rems(1.25))
                 .text_color(cx.theme().danger)
-                .child(gpui_kit::component::Icon::new(IconName::CircleX).xsmall())
-                .child(div().min_w_0().truncate().child(error)),
+                .child(
+                    // The icon sits on the first line of a wrapped message.
+                    div()
+                        .h(rems(1.25))
+                        .flex()
+                        .items_center()
+                        .child(gpui_kit::component::Icon::new(IconName::CircleX).xsmall()),
+                )
+                .child(div().flex_1().min_w_0().child(error)),
         )
         .into_any_element()
 }
