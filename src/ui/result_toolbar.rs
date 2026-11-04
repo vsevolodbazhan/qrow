@@ -7,7 +7,7 @@ const LOADED_ROWS: &str = "Loaded Rows";
 const COLUMNS: &str = "Columns";
 const QUERY_DURATION: &str = "Query Duration";
 
-struct ResultSummary {
+pub(super) struct ResultSummary {
     range: String,
     loaded: usize,
     columns: usize,
@@ -106,7 +106,8 @@ impl ResultSummary {
             .child(Self::neutral_tag(cx).child(text.to_owned()))
     }
 
-    fn neutral_tag(cx: &App) -> Tag {
+    /// The chip of a count in the Result and Logs toolbars.
+    pub(super) fn neutral_tag(cx: &App) -> Tag {
         Tag::secondary().small().border_color(cx.theme().secondary)
     }
 

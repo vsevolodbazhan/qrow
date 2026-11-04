@@ -271,6 +271,7 @@ impl Qrow {
                     form.dbt.manifest.update(cx, |input, cx| {
                         input.set_value(path.to_string_lossy().into_owned(), window, cx)
                     });
+                    show_path_end(&form.dbt.manifest, cx);
                 }
                 cx.notify();
             });
@@ -412,14 +413,26 @@ impl Qrow {
                 h_flex()
                     .w_full()
                     .gap_2()
-                    .child(
-                        Input::new(&form.dbt.manifest)
-                            .focus_ring(false)
-                            .id("connection-dbt-manifest")
+                    .child({
+                        // The field may cut a long path; the tooltip has all of it.
+                        let path = form.dbt.manifest.read(cx).value().to_string();
+                        div()
+                            .id("connection-dbt-manifest-path")
                             .flex_1()
-                            .disabled(saving)
-                            .aria_label("Manifest"),
-                    )
+                            .min_w_0()
+                            .when(!path.is_empty(), |el| el.tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(path.clone())
+                                    .build(window, cx)
+                            }))
+                            .child(
+                                Input::new(&form.dbt.manifest)
+                                    .focus_ring(false)
+                                    .id("connection-dbt-manifest")
+                                    .w_full()
+                                    .disabled(saving)
+                                    .aria_label("Manifest"),
+                            )
+                    })
                     .child(
                         Button::new("connection-dbt-choose")
                             .label("Choose…")
@@ -809,6 +822,7 @@ impl DbtForm {
                 .placeholder("/path/to/project/target/manifest.json")
                 .default_value(project.map(|p| p.manifest.clone()).unwrap_or_default())
         });
+        show_path_end(&manifest, cx);
         let refresh = project.map_or(DbtRefresh::Automatic, |project| project.refresh);
         let refresh = cx.new(|cx| {
             SelectState::new(
@@ -877,6 +891,15 @@ fn refresh_choice(select: &connection_form::ChoiceSelect, cx: &App) -> DbtRefres
         Some(MANUAL) => DbtRefresh::Manual,
         _ => DbtRefresh::Automatic,
     }
+}
+
+/// Put the cursor of the path field at the end, so that a long path shows
+/// its file name rather than its first folders.
+fn show_path_end(input: &Entity<InputState>, cx: &mut App) {
+    input.update(cx, |input, cx| {
+        let end = input.value().len();
+        input.set_selected_range(end..end, cx);
+    });
 }
 
 /// Replace a leading `~/` with the home folder.

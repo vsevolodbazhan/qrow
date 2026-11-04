@@ -64,9 +64,9 @@ Qrow changes these files:
 - `Cargo.toml`: `cargo machete` ignores the `log` dependency, which the crate
   declares but does not use.
 - `src/setting/page.rs`: selecting a group in the Settings sidebar scrolls the
-  group heading to the top of the page. A spacer after the last group lets
-  the last groups scroll that far. Before, the page scrolled only until the
-  group was visible, so its heading stopped in the middle of the page.
+  group heading as close to the top of the page as the content allows.
+  Before, the page scrolled only until the group was visible, so its heading
+  stopped in the middle of the page.
 - `src/sheet.rs`: `Sheet::margin_bottom` keeps a band at the bottom of the
   window free. The dbt details sheet ends above the status bar.
 - `src/table/state.rs`: the table keeps the scrollbar width free below its

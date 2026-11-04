@@ -1,5 +1,6 @@
 use super::*;
 use super::log_row::LogRow;
+use super::result_toolbar::ResultSummary;
 use gpui_kit::component::{Icon, h_flex, v_flex};
 
 impl Qrow {
@@ -43,52 +44,71 @@ impl Qrow {
                 .into_any_element()
         };
 
+        let entries = match tab.output.entries().len() {
+            1 => "1 entry".to_owned(),
+            count => format!("{} entries", crate::logs::group_digits(count)),
+        };
         v_flex()
             .size_full()
             .min_h_0()
             .overflow_hidden()
             .child(
                 h_flex()
+                    .id("output-toolbar")
                     .h_10()
                     .flex_shrink_0()
                     .px_3()
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
+                    // The same chip and icon buttons as the Result toolbar.
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{} entries", tab.output.entries().len())),
+                            .id("output-count")
+                            .test_support()
+                            .role(Role::Label)
+                            .whitespace_nowrap()
+                            .aria_label(entries.clone())
+                            .child(ResultSummary::neutral_tag(cx).child(entries)),
                     )
                     .child(div().flex_1())
                     .child(
-                        Button::new("output-copy-all")
-                            .ghost()
-                            .small()
-                            .label("Copy all")
-                            .disabled(tab.output.is_empty())
-                            .accessibility_label("Copy all logs")
-                            .on_click(cx.listener(|this, _, _, cx| this.copy_output(cx))),
-                    )
-                    // Hidden, not disabled, when no entry is an error.
-                    .when(tab.output.has_error(), |el| {
-                        el.child(
-                            Button::new("output-copy-error")
-                                .ghost()
-                                .small()
-                                .label("Copy error")
-                                .accessibility_label("Copy latest error")
-                                .on_click(cx.listener(|this, _, _, cx| this.copy_output_error(cx))),
-                        )
-                    })
-                    .child(
-                        Button::new("output-clear")
-                            .ghost()
-                            .small()
-                            .label("Clear")
-                            .accessibility_label("Clear logs history")
-                            .on_click(cx.listener(|this, _, _, cx| this.clear_output(cx))),
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_1()
+                            .child(
+                                Button::new("output-copy-all")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Copy)
+                                    .tooltip("Copy all logs")
+                                    .disabled(tab.output.is_empty())
+                                    .accessibility_label("Copy all logs")
+                                    .on_click(cx.listener(|this, _, _, cx| this.copy_output(cx))),
+                            )
+                            // Hidden, not disabled, when no entry is an error.
+                            .when(tab.output.has_error(), |el| {
+                                el.child(
+                                    Button::new("output-copy-error")
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::CircleX)
+                                        .tooltip("Copy latest error")
+                                        .accessibility_label("Copy latest error")
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.copy_output_error(cx)),
+                                        ),
+                                )
+                            })
+                            .child(
+                                Button::new("output-clear")
+                                    .ghost()
+                                    .small()
+                                    .icon(Icon::new(gpui_kit::assets::IconName::Trash))
+                                    .tooltip("Clear logs")
+                                    .accessibility_label("Clear logs history")
+                                    .on_click(cx.listener(|this, _, _, cx| this.clear_output(cx))),
+                            ),
                     ),
             )
             .child(

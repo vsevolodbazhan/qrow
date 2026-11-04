@@ -982,7 +982,7 @@ pub(super) fn view(
         .overflow_hidden()
         .child(
             DataTable::new(table)
-                .xsmall()
+                .small()
                 .stripe(true)
                 .bordered(false)
                 .scrollbar_visible(true, true),

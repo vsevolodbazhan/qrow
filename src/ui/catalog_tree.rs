@@ -1582,6 +1582,7 @@ impl Qrow {
             // A tooltip would cover the open menu.
             menu_open: self.menu.is_some(),
             focused: self.catalog.focus.contains_focused(window, cx),
+            relation_types: RefCell::default(),
         });
         let tree = self.catalog.state.clone();
         v_flex()
@@ -1674,6 +1675,10 @@ struct RowContext {
     menu_open: bool,
     /// Whether the tree has the focus. A selection without it is not shown.
     focused: bool,
+    /// For each relation in this frame, whether the data types of all its
+    /// columns fit beside their names. The columns of one relation show
+    /// their types together or not at all.
+    relation_types: RefCell<HashMap<(Uuid, String, String), bool>>,
 }
 
 impl RowContext {
@@ -2094,11 +2099,9 @@ fn render_entry(
     // All rows of the tree have the same width, so one value serves every
     // row, also a row that scrolls into view.
     let row_key = SharedString::new_static(ROW_WIDTH_KEY);
-    let detail = detail.filter(|detail| {
-        if schema_detail {
-            return true;
-        }
-        let Some(row_width) = context.widths.borrow().get(&row_key).copied() else {
+    let row_width = context.widths.borrow().get(&row_key).copied();
+    let fits = |label: &str, detail: &str| {
+        let Some(row_width) = row_width else {
             return true;
         };
         let measure = |text: &str, rems: f32| {
@@ -2117,7 +2120,35 @@ fn render_entry(
         };
         let lanes = if leaf { 1. } else { 2. };
         let fixed = indent + ui_px((16. + ROW_GAP) * lanes + ROW_GAP + 8.);
-        fixed + measure(&label, 0.875) + measure(detail, 0.75) <= row_width
+        fixed + measure(label, 0.875) + measure(detail, 0.75) <= row_width
+    };
+    let detail = detail.filter(|detail| match node {
+        _ if schema_detail => true,
+        Node::Column {
+            profile,
+            schema,
+            relation,
+            ..
+        } => {
+            let key = (*profile, schema.clone(), relation.clone());
+            if let Some(fit) = context.relation_types.borrow().get(&key) {
+                return *fit;
+            }
+            let fit = context.nodes.values().all(|sibling| match sibling {
+                Node::Column {
+                    profile: p,
+                    schema: s,
+                    relation: r,
+                    name,
+                    data_type,
+                    ..
+                } if p == profile && s == schema && r == relation => fits(name, data_type),
+                _ => true,
+            });
+            context.relation_types.borrow_mut().insert(key, fit);
+            fit
+        }
+        _ => fits(&label, detail),
     });
     // Show the tooltip only when it adds text: a name that the row cuts, a
     // comment, or an error.

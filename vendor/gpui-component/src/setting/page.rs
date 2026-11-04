@@ -139,16 +139,12 @@ impl SettingPage {
             .map(|&ix| (ix, self.groups[ix].clone()))
             .collect::<Vec<_>>();
         let groups_count = groups.len();
-        // A spacer after the last group lets every group scroll to the top,
-        // so a selected group heading lands at the top of the page.
-        let items_count = groups_count + usize::from(groups_count > 1);
-        let spacer_height = window.viewport_size().height * 0.5;
 
         let page_state = window.use_keyed_state(
             SharedString::from(format!("list-state:{}", ix)),
             cx,
             |_, _| PageState {
-                list: ListState::new(items_count, ListAlignment::Top, px(100.)),
+                list: ListState::new(groups_count, ListAlignment::Top, px(100.)),
                 query: query.clone(),
                 groups: group_indices.to_vec(),
             },
@@ -158,7 +154,7 @@ impl SettingPage {
         let list_state = page_state.read(cx).list.clone();
         if changed {
             page_state.update(cx, |state, _| {
-                state.list.reset(items_count);
+                state.list.reset(groups_count);
                 state.query = query.clone();
                 state.groups = group_indices.to_vec();
             });
@@ -239,10 +235,7 @@ impl SettingPage {
                             let query = query.clone();
                             let options = *options;
                             move |visible_ix, window, cx| {
-                                let Some((group_ix, group)) = groups.get(visible_ix).cloned()
-                                else {
-                                    return div().h(spacer_height).into_any_element();
-                                };
+                                let (group_ix, group) = groups[visible_ix].clone();
                                 group
                                     .py_4()
                                     .render(

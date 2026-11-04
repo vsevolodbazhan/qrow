@@ -267,18 +267,10 @@ impl AssistantPane {
     }
 }
 
-/// Prompts that a new conversation offers. A click puts one in the
-/// message field.
-const EXAMPLE_PROMPTS: [&str; 3] = [
-    "Which tables hold booking data?",
-    "Write a query for the busiest routes",
-    "Explain the SQL in this tab",
-];
-
 impl AssistantPane {
     /// The transcript of a conversation without messages: what the
-    /// assistant does, with prompts to start from.
-    fn empty_transcript(&self, qrow: &Qrow, cx: &Context<Self>) -> impl IntoElement {
+    /// assistant does.
+    fn empty_transcript(&self, cx: &Context<Self>) -> impl IntoElement {
         v_flex()
             .id("assistant-empty")
             .test_support()
@@ -295,40 +287,13 @@ impl AssistantPane {
                     .large()
                     .text_color(cx.theme().muted_foreground),
             )
-            .child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Ask about your data"),
-            )
+            .child(div().font_weight(FontWeight::BOLD).child("Assistant"))
             .child(
                 div()
                     .text_sm()
                     .text_center()
                     .text_color(cx.theme().muted_foreground)
                     .child("The assistant reads the catalog and writes SQL for this tab."),
-            )
-            .child(
-                // Suggestions, not commands: quiet rows that read as text.
-                v_flex()
-                    .w_full()
-                    .max_w(qrow.ui_px(320.))
-                    .items_start()
-                    .pt_3()
-                    .gap_2()
-                    .children(EXAMPLE_PROMPTS.iter().enumerate().map(|(index, prompt)| {
-                        Button::new(("assistant-example", index))
-                            .ghost()
-                            .small()
-                            .icon(IconName::ArrowRight)
-                            .label(*prompt)
-                            .accessibility_label(format!("Use prompt: {prompt}"))
-                            .on_click(cx.listener(move |pane, _, window, cx| {
-                                pane.composer.update(cx, |composer, cx| {
-                                    composer.set_value(*prompt, window, cx);
-                                    composer.focus(window, cx);
-                                });
-                            }))
-                    })),
             )
     }
 
@@ -463,20 +428,12 @@ impl AssistantPane {
         let assistant_entity = self.qrow.clone();
         let conversation_width = width.as_f32() / qrow.settings.ui_scale
             - if show_threads && !narrow { 230. } else { 0. };
-        let widths = [
-            model_width,
-            reasoning_width,
-            if has_tiers { tier_width } else { 0. },
-        ];
-        let one_row = assistant_selector_labels((conversation_width - 228.).max(0.), widths);
-        // When the labels do not fit beside Send, the selectors take a row of
-        // their own, where they keep their labels.
-        let selector_row = one_row != [true; 3];
-        let [show_model_label, show_reasoning_label, show_tier_label] = if selector_row {
-            assistant_selector_labels((conversation_width - 24.).max(0.), widths)
-        } else {
-            one_row
-        };
+        // The composer stays one row: selectors whose labels do not fit
+        // beside Send show only their icons, and their tooltips name the value.
+        let [show_model_label, show_reasoning_label, show_tier_label] = assistant_selector_labels(
+            (conversation_width - 228.).max(0.),
+            [model_width, reasoning_width, tier_width],
+        );
         let displayed_title = displayed
             .as_deref()
             .and_then(|thread| qrow.assistant.conversation(thread))
@@ -603,7 +560,7 @@ impl AssistantPane {
                     .overflow_y_scroll()
                     .child(self.sign_in(qrow, cx))))
             .when(!signed_out && self.rows.rows.is_empty() && first_message.is_none(), |panel| {
-                panel.child(self.empty_transcript(qrow, cx))
+                panel.child(self.empty_transcript(cx))
             })
             .when(!signed_out && (!self.rows.rows.is_empty() || first_message.is_some()), |panel| {
                 panel.child(self.transcript(cx))
@@ -740,7 +697,6 @@ impl AssistantPane {
                     )
                     .child(
                         h_flex().min_w_0().gap_1()
-                            .when(selector_row && model.is_some(), |row| row.flex_wrap().gap_y_2())
                             // Until the harness supplies its models, the
                             // selectors have no values: a status names the wait.
                             .when(model.is_none() && !disconnected, |row| row.child(
@@ -757,7 +713,6 @@ impl AssistantPane {
                                 h_flex()
                                     .min_w_0()
                                     .gap_1()
-                                    .when(selector_row, |selectors| selectors.w_full())
                                     .child(
                                         Button::new("assistant-model")
                                             .ghost().small().compact()
