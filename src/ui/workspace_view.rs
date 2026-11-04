@@ -280,26 +280,6 @@ impl Qrow {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
-            // The connection that Run uses, quiet beside the button.
-            .child(
-                h_flex()
-                    .id("tab-connection")
-                    .test_support()
-                    .role(Role::Label)
-                    .aria_label(format!(
-                        "Runs on {}",
-                        connection_name(&self.profiles, tab.saved.profile)
-                    ))
-                    .min_w_0()
-                    .px_1()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(
-                        div()
-                            .truncate()
-                            .child(connection_name(&self.profiles, tab.saved.profile).to_owned()),
-                    ),
-            )
             // Hidden, not disabled, without an open session: a gray label
             // beside Run reads as a broken control.
             .when(tab.can_disconnect(), |el| {
