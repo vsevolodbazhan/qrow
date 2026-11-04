@@ -562,6 +562,9 @@ struct ProfileEditor {
     dbt: dbt::DbtForm,
     is_new: bool,
     error: Option<String>,
+    /// The index in `fields` of the field that `error` is about. The error
+    /// shows below that field, else in the footer.
+    invalid_field: Option<usize>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
 }
 struct ProfileSave {
@@ -3438,6 +3441,7 @@ impl Qrow {
             fields,
             is_new,
             error: None,
+            invalid_field: None,
             saving: None,
         });
         self.open_profile_dialog(window, cx);
@@ -3700,7 +3704,9 @@ impl Qrow {
             Ok(())
         })();
         if let Err(e) = parse {
-            form.error = Some(e.to_string());
+            let error = e.to_string();
+            form.invalid_field = connection_form::field_of_error(&error);
+            form.error = Some(error);
             cx.notify();
             return;
         }
@@ -3718,6 +3724,7 @@ impl Qrow {
             && !self.demo
         {
             form.error = Some("Enter the password for this connection.".into());
+            form.invalid_field = Some(4);
             cx.notify();
             return;
         }
@@ -3725,6 +3732,7 @@ impl Qrow {
         form.saving = Some(recv);
         let _ = self.wake.try_send(());
         form.error = None;
+        form.invalid_field = None;
         let demo = self.demo;
         let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();

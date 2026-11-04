@@ -868,7 +868,7 @@ impl Qrow {
                             )))
                             .group(SettingGroup::new().title("Replay").item(setting_item(
                                 "Replay Limit",
-                                "Keep completed downloads up to this size. Zero turns retention off.",
+                                "Size limit for kept downloads. Zero turns it off.",
                                 &["export", "replay", "spool", "disk"],
                                 number_field(form, NumberSetting::ExportReplayLimit),
                             ))),
@@ -894,9 +894,11 @@ impl Qrow {
             )
             .child(div().flex_1())
             .child(
+                // Settings apply as they change, so the dialog has no
+                // Cancel. Done also saves the executable paths.
                 Button::new("save-settings")
                     .primary()
-                    .label("Save")
+                    .label("Done")
                     .on_click(cx.listener(|this, _, window, cx| {
                         // Commit pending numeric edits before disposing their subscriptions.
                         let pending: Vec<_> = this
@@ -965,7 +967,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
         )
         .group(
             SettingGroup::new()
-                .title("Assistant")
+                .title("Conversations")
                 .item(setting_item(
                     "Font Family",
                     "Font of messages in assistant conversations.",
@@ -1014,7 +1016,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 ))
                 .item(setting_item(
                     "SQL Keyword Case",
-                    "Keyword case for formatted and assistant-generated SQL.",
+                    "Applies to formatted and assistant-written SQL.",
                     &[
                         "editor",
                         "sql",
@@ -1083,7 +1085,7 @@ fn assistant_page(
                 ))
                 .item(setting_item(
                     "Harness",
-                    "Runs new conversations. A conversation keeps its harness.",
+                    "Runs new conversations. Old ones keep theirs.",
                     &["assistant", "harness", "codex", "claude", "agent"],
                     select_field(&form.assistant_harness, "Assistant Harness"),
                 ))
@@ -1124,7 +1126,7 @@ fn assistant_page(
         )))
         .group(SettingGroup::new().title("Claude Code").item(setting_item(
             "Executable",
-            "Empty searches your PATH, Homebrew folders, and ~/.local/bin.",
+            "Empty searches PATH, Homebrew, and ~/.local/bin.",
             &["assistant", "claude", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&claude_executable)

@@ -75,25 +75,25 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 6] = [
     (
         "sign-in-issuer",
         "Issuer",
-        "The issuer URL of the provider, for example a Keycloak realm URL.",
+        "Issuer URL of the provider, like a Keycloak realm URL.",
         "https://id.example.com/realms/data",
     ),
     (
         "sign-in-client-id",
         "Client ID",
-        "The ID of the public client at the provider. No client secret is necessary.",
+        "ID of the public client. No client secret is needed.",
         "desktop-app",
     ),
     (
         "sign-in-scopes",
         "Scopes",
-        "Optional. Other scopes that the provider requires, separated by spaces.",
+        "Optional. Extra scopes, separated by spaces.",
         "offline_access",
     ),
     (
         "sign-in-resource",
         "Resource",
-        "Optional. The resource URI, if the provider requires one.",
+        "Optional. The resource URI, if the provider needs one.",
         "https://db.example.com",
     ),
     (

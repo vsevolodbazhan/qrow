@@ -48,13 +48,51 @@ pub(super) fn connection_row(
 }
 
 /// A text input of the connection form, by field index.
-pub(super) fn form_input(form: &ProfileEditor, index: usize, label: &'static str) -> AnyElement {
-    Input::new(&form.fields[index])
+pub(super) fn form_input(
+    form: &ProfileEditor,
+    index: usize,
+    label: &'static str,
+    cx: &App,
+) -> AnyElement {
+    let input = Input::new(&form.fields[index])
         .focus_ring(false)
         .id(connection_form::FIELD_IDS[index])
         .w_full()
         .disabled(form.saving.is_some())
-        .aria_label(label)
+        .aria_label(label);
+    field_with_error(form, index, input, cx)
+}
+
+/// `control` with the validation error of the field `index` below it.
+pub(super) fn field_with_error(
+    form: &ProfileEditor,
+    index: usize,
+    control: Input,
+    cx: &App,
+) -> AnyElement {
+    let error = form
+        .error
+        .clone()
+        .filter(|_| form.invalid_field == Some(index));
+    let Some(error) = error else {
+        return control.into_any_element();
+    };
+    v_flex()
+        .w_full()
+        .gap_1()
+        .child(control.border_color(cx.theme().danger))
+        .child(
+            h_flex()
+                .id("connection-form-error-accessibility")
+                .test_support()
+                .role(Role::Alert)
+                .aria_label(error.clone())
+                .gap_1()
+                .text_sm()
+                .text_color(cx.theme().danger)
+                .child(gpui_kit::component::Icon::new(IconName::CircleX).xsmall())
+                .child(error),
+        )
         .into_any_element()
 }
 
@@ -198,7 +236,7 @@ impl Qrow {
                 "Shown in the connections sidebar.",
                 &["connection"],
                 false,
-                |_, form, _, _| form_input(form, 0, "Name"),
+                |_, form, _, cx| form_input(form, 0, "Name", cx),
             ))
             .item(connection_row(
                 qrow,
@@ -206,7 +244,7 @@ impl Qrow {
                 "Hostname or IP address of the server.",
                 &["server", "address", "kyuubi"],
                 false,
-                |_, form, _, _| form_input(form, 1, "Host"),
+                |_, form, _, cx| form_input(form, 1, "Host", cx),
             ))
             .item(connection_row(
                 qrow,
@@ -214,7 +252,7 @@ impl Qrow {
                 "Port on that host.",
                 &["server"],
                 false,
-                |_, form, _, _| form_input(form, 2, "Port"),
+                |_, form, _, cx| form_input(form, 2, "Port", cx),
             ))
             .items(postgres.then(|| {
                 connection_row(
@@ -251,9 +289,9 @@ impl Qrow {
                     qrow,
                     "TLS",
                     if (uses_sign_in || uses_external) && !form.tls {
-                        "Without TLS, others on the network can read and use the access token."
+                        "Without TLS, the network can see the access token."
                     } else {
-                        "Encrypts the connection. The server must accept TLS on this port."
+                        "Encrypts the connection. The port must accept TLS."
                     },
                     &["ssl", "encryption", "security"],
                     false,
@@ -310,7 +348,7 @@ impl Qrow {
                 "The database account used to connect.",
                 &["user", "account", "login"],
                 false,
-                |_, form, _, _| form_input(form, 3, "Username"),
+                |_, form, _, cx| form_input(form, 3, "Username", cx),
             ))
             .items((!uses_sign_in && !uses_external).then(|| {
                 connection_row(
@@ -323,7 +361,7 @@ impl Qrow {
                     },
                     &["ldap", "secret"],
                     false,
-                    |_, form, _, _| form_input(form, 4, "Password"),
+                    |_, form, _, cx| form_input(form, 4, "Password", cx),
                 )
             }))
             .item(connection_row(
@@ -336,7 +374,7 @@ impl Qrow {
                 "Selected when the session opens.",
                 &["schema", "database", "use"],
                 false,
-                move |_, form, _, _| {
+                move |_, form, _, cx| {
                     form_input(
                         form,
                         5,
@@ -345,6 +383,7 @@ impl Qrow {
                         } else {
                             "Initial Database"
                         },
+                        cx,
                     )
                 },
             ))
@@ -355,7 +394,7 @@ impl Qrow {
                     "Optional schema in the initial catalog.",
                     &["schema", "trino"],
                     false,
-                    |_, form, _, _| form_input(form, 15, "Initial Schema"),
+                    |_, form, _, cx| form_input(form, 15, "Initial Schema", cx),
                 )
             }))
             .item(connection_row(
@@ -378,18 +417,18 @@ impl Qrow {
                 qrow,
                 "Response Timeout",
                 if postgres {
-                    "Seconds to wait for setup and cancellation, from 10 to 3600."
+                    "Seconds for setup and cancellation, from 10 to 3600."
                 } else {
                     "Seconds to wait for a server response, from 10 to 3600."
                 },
                 &["timeout", "seconds"],
                 false,
-                |_, form, _, _| form_input(form, 14, "Response Timeout in Seconds"),
+                |_, form, _, cx| form_input(form, 14, "Response Timeout in Seconds", cx),
             ))
             .item(connection_row(
                 qrow,
                 "Idle Behavior",
-                "Releasing keeps SQL and results, but drops temporary views and unfetched rows.",
+                "Releasing drops temporary views and unfetched rows.",
                 &["idle", "disconnect", "keep-alive", "release"],
                 false,
                 |_, form, _, _| {
@@ -409,7 +448,7 @@ impl Qrow {
                     "Seconds of inactivity before the session is released.",
                     &["idle", "seconds"],
                     false,
-                    |_, form, _, _| form_input(form, 7, "Idle Timeout in Seconds"),
+                    |_, form, _, cx| form_input(form, 7, "Idle Timeout in Seconds", cx),
                 )
             }))
             .items(if keep {
@@ -420,15 +459,15 @@ impl Qrow {
                         "Seconds between keep-alive queries.",
                         &["idle", "seconds"],
                         false,
-                        |_, form, _, _| form_input(form, 8, "Keep-Alive Interval in Seconds"),
+                        |_, form, _, cx| form_input(form, 8, "Keep-Alive Interval in Seconds", cx),
                     ),
                     connection_row(
                         qrow,
                         "Keep-Alive Query",
-                        "A light, read-only query that keeps the engine active while idle.",
+                        "A light read-only query that keeps the engine awake.",
                         &["idle", "sql"],
                         false,
-                        |_, form, _, _| form_input(form, 9, "Keep-Alive Query"),
+                        |_, form, _, cx| form_input(form, 9, "Keep-Alive Query", cx),
                     ),
                 ]
             } else {
@@ -500,7 +539,7 @@ impl Qrow {
             .gap_2()
             .key_context("ConnectionSettings")
             .on_action(cx.listener(|this, _: &SaveConnection, _, cx| this.save_profile(cx)))
-            .when_some(form.error.clone(), |el, error| {
+            .when_some(form.error.clone().filter(|_| form.invalid_field.is_none()), |el, error| {
                 el.child(
                     div()
                         .id("connection-form-error-accessibility")

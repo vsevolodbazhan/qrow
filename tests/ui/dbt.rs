@@ -118,7 +118,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
     let app = launch(cx, directory, profile);
 
     edit(&app, cx, id);
-    wait_label_starting(&app, cx, "connection-dbt-status", "The manifest.json file");
+    app.wait_for(cx, "connection-dbt-manifest");
     app.fill(cx, "connection-dbt-manifest", manifest.to_str().unwrap());
     wait_label(&app, cx, "connection-dbt-status", "Read after you save.");
     rules(&app, cx, "analytics_* = *");

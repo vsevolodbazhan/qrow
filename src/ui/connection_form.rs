@@ -45,7 +45,7 @@ impl RefreshMode {
             Self::Disabled => "Never introspect schemas.",
             Self::Manual => "Introspect schemas on demand.",
             Self::WhileConnected => {
-                "Introspect schemas on demand and periodically while a tab is connected."
+                "Introspect schemas on demand and on a schedule."
             }
         }
     }
@@ -153,6 +153,26 @@ pub(super) const FIELD_IDS: [&str; 16] = [
     "connection-response-timeout",
     "connection-trino-schema",
 ];
+/// The index in [`FIELD_IDS`] of the field that a validation error is
+/// about, or `None` when the error is not about one text field.
+pub(super) fn field_of_error(error: &str) -> Option<usize> {
+    const PREFIXES: [(&str, usize); 9] = [
+        ("Give this connection a name", 0),
+        ("Connection name must", 0),
+        ("A connection with this name", 0),
+        ("Enter a host", 1),
+        ("Port must", 2),
+        ("Enter a username", 3),
+        ("Username contains", 3),
+        ("Enter an initial database", 5),
+        ("Session parameters must", 6),
+    ];
+    PREFIXES
+        .iter()
+        .find(|(prefix, _)| error.starts_with(prefix))
+        .map(|(_, field)| *field)
+}
+
 const PASSWORD: &str = "Password";
 const SIGN_IN: &str = "Sign-in";
 const DISCONNECT_AFTER: &str = "Disconnect after";
@@ -638,7 +658,7 @@ fn notes_description(bytes: usize) -> String {
             group_digits(MAX_ASSISTANT_NOTES_BYTES)
         )
     } else {
-        "Sent to the assistant and saved as plain text. Do not enter secrets.".to_owned()
+        "Sent to the assistant as plain text. Omit secrets.".to_owned()
     }
 }
 
@@ -661,7 +681,7 @@ pub(super) fn assistant_page(qrow: &WeakEntity<Qrow>) -> SettingPage {
         .group(SettingGroup::new().item(connection_row(
             qrow,
             "Assistant Notes",
-            "Sent to the assistant and saved as plain text. Do not enter secrets.",
+            "Sent to the assistant as plain text. Omit secrets.",
             &["assistant", "notes", "codex", "claude", "context"],
             true,
             |_, form, _, cx| {
@@ -725,10 +745,10 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             connection_row(
                 qrow,
                 "Refresh Period",
-                "Minutes between automatic schema refreshes, from 5 to 10080.",
+                "Minutes between schema refreshes, from 5 to 10080.",
                 &["schemas", "minutes", "automatic"],
                 false,
-                |_, form, _, _| form_input(form, 12, "Refresh Period in Minutes"),
+                |_, form, _, cx| form_input(form, 12, "Refresh Period in Minutes", cx),
             )
         }))
         .items(browses.then(|| {
@@ -738,14 +758,14 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                 "Minutes before a schema refresh stops, from 1 to 1440.",
                 &["schemas", "minutes"],
                 false,
-                |_, form, _, _| form_input(form, 13, "Refresh Timeout in Minutes"),
+                |_, form, _, cx| form_input(form, 13, "Refresh Timeout in Minutes", cx),
             )
         }))
         .items(browses.then(|| {
             connection_row(
                 qrow,
                 "Column Reads",
-                "Per-relation reads use less driver memory; schema reads send fewer requests.",
+                "One relation saves memory; whole schema saves requests.",
                 &["columns", "memory", "driver", "requests"],
                 false,
                 |_, form, _, _| {
@@ -763,9 +783,9 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             qrow,
             "Schema Catalog",
             if shared {
-                "Connections that share this catalog must read the same metastore with the same permissions."
+                "Its connections must see the same metastore."
             } else {
-                "Connections that read the same metastore can share one catalog."
+                "Connections on one metastore can share a catalog."
             },
             &["shared", "catalog", "metastore"],
             false,
@@ -774,7 +794,7 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
         .items(if browses && shared { vec![connection_row(
                     qrow,
                     "Shared Catalog Name",
-                    "Shown in the settings of each connection that uses the catalog.",
+                    "Shown in each connection that uses the catalog.",
                     &["shared", "catalog"],
                     false,
                     |_, form, _, _| {
@@ -789,7 +809,7 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                 ), connection_row(
                     qrow,
                     "Preferred Connection",
-                    "Automatic refreshes use this connection first while it is connected.",
+                    "Automatic refreshes use this connection first.",
                     &["shared", "catalog", "refresh"],
                     false,
                     |_, form, _, _| {
@@ -805,18 +825,18 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
         .items(browses.then(|| connection_row(
             qrow,
             "Visible Schemas",
-            "Patterns separated by commas, for example sales_*. Empty shows all schemas.",
+            "Patterns like sales_*. Empty shows all schemas.",
             &["schemas", "filter", "patterns", "include"],
             false,
-            |_, form, _, _| form_input(form, 10, "Visible Schemas"),
+            |_, form, _, cx| form_input(form, 10, "Visible Schemas", cx),
         )))
         .items(browses.then(|| connection_row(
             qrow,
             "Hidden Schemas",
-            "Patterns separated by commas. Hides a schema also when Visible Schemas matches it.",
+            "Patterns like tmp_*. Wins over Visible Schemas.",
             &["schemas", "filter", "patterns", "exclude"],
             false,
-            |_, form, _, _| form_input(form, 11, "Hidden Schemas"),
+            |_, form, _, cx| form_input(form, 11, "Hidden Schemas", cx),
         )));
     SettingPage::new("Catalog").resettable(false).group(fields)
 }

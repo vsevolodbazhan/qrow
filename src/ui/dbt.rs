@@ -440,7 +440,7 @@ impl Qrow {
                         )
                     }),
             )
-            .child(
+            .when(!view.status.is_empty(), |el| el.child(
                 div()
                     .id("connection-dbt-status")
                     .test_support()
@@ -449,7 +449,7 @@ impl Qrow {
                     .text_sm()
                     .text_color(muted)
                     .child(view.status.clone()),
-            )
+            ))
             .into_any_element()
     }
 
@@ -889,9 +889,9 @@ fn expand_home(path: &str) -> String {
 
 /// The line below the manifest field.
 fn manifest_status(typed: &str, saved: bool, state: Option<&ManifestState>) -> String {
+    // The help of the field already says what to enter.
     if typed.is_empty() {
-        return "The manifest.json file that dbt writes in the target folder of the project."
-            .into();
+        return String::new();
     }
     if !saved {
         return "Read after you save.".into();
@@ -956,7 +956,7 @@ mod tests {
 
     #[test]
     fn the_status_follows_the_field_and_the_manifest() {
-        assert!(manifest_status("", false, None).starts_with("The manifest.json file"));
+        assert!(manifest_status("", false, None).is_empty());
         assert_eq!(
             manifest_status("/m.json", false, None),
             "Read after you save."
