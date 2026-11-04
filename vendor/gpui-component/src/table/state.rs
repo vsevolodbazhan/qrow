@@ -2525,8 +2525,11 @@ where
                             .flex_grow_1()
                             .size_full()
                             .min_h_0()
-                            // A gutter beside the rows keeps them clear of the
-                            // vertical scrollbar, which overlays the body.
+                            // Gutters below and beside the rows keep them clear
+                            // of the scrollbars, which overlay the body.
+                            .when(self.options.scrollbar_visible.bottom, |this| {
+                                this.pb(SCROLLBAR_GUTTER)
+                            })
                             .when(self.options.scrollbar_visible.right, |this| {
                                 this.pr(SCROLLBAR_GUTTER)
                             })

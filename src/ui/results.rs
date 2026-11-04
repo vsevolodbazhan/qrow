@@ -28,7 +28,9 @@ actions!(
         ExtendSelectionUp,
         ExtendSelectionDown,
         ExtendSelectionLeft,
-        ExtendSelectionRight
+        ExtendSelectionRight,
+        SelectFirstRow,
+        SelectLastRow
     ]
 );
 
@@ -36,10 +38,16 @@ actions!(
 const CONTEXT: &str = "Results";
 
 /// Key bindings of the results table. The table binds the plain arrow keys;
-/// the results view handles those actions before the table does.
-pub(super) fn bindings() -> [KeyBinding; 6] {
+/// the results view handles those actions before the table does. Like other
+/// macOS grids, ⌘↑ and ⌘Home go to the first row and ⌘↓ and ⌘End to the
+/// last row of the page; Home and End go to the first and last column.
+pub(super) fn bindings() -> [KeyBinding; 10] {
     let context = Some("Results > DataTable");
     [
+        KeyBinding::new("cmd-up", SelectFirstRow, context),
+        KeyBinding::new("cmd-home", SelectFirstRow, context),
+        KeyBinding::new("cmd-down", SelectLastRow, context),
+        KeyBinding::new("cmd-end", SelectLastRow, context),
         KeyBinding::new("shift-up", ExtendSelectionUp, context),
         KeyBinding::new("shift-down", ExtendSelectionDown, context),
         KeyBinding::new("shift-left", ExtendSelectionLeft, context),
@@ -1082,6 +1090,8 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
         .capture_action(step!(SelectNextColumn, 0, 1, false))
         .capture_action(step!(SelectFirst, 0, -far, false))
         .capture_action(step!(SelectLast, 0, far, false))
+        .capture_action(step!(SelectFirstRow, -far, 0, false))
+        .capture_action(step!(SelectLastRow, far, 0, false))
         .capture_action(step!(ExtendSelectionUp, -1, 0, true))
         .capture_action(step!(ExtendSelectionDown, 1, 0, true))
         .capture_action(step!(ExtendSelectionLeft, 0, -1, true))
