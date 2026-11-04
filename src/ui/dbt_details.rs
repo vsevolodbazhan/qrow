@@ -1311,7 +1311,7 @@ impl DbtDetailsView {
                             .gap_2()
                             .child(div().font_semibold().child(column.name.clone()))
                             .when_some(column.data_type.clone(), |row, data_type| {
-                                row.child(div().text_color(muted).child(data_type))
+                                row.child(div().text_color(muted).child(data_type.to_lowercase()))
                             }),
                     )
                     .when(!column.description.is_empty(), |row| {

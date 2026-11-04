@@ -123,6 +123,8 @@ pub struct Results {
     export_profile: Option<(uuid::Uuid, u8)>,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
+    /// Whether each column holds numbers, which align on the trailing edge.
+    numeric: Vec<bool>,
     pub selection: Option<Selection>,
     drag: Option<Point<Pixels>>,
     drag_hitbox: Option<HitboxId>,
@@ -140,6 +142,7 @@ impl Default for Results {
             export_profile: None,
             empty_message: None,
             headers: vec![],
+            numeric: vec![],
             selection: None,
             drag: None,
             drag_hitbox: None,
@@ -213,6 +216,10 @@ impl Results {
                     .paddings(padding)
                     .movable(false)
             }));
+        self.numeric = columns
+            .iter()
+            .map(|column| is_numeric(&column.data_type))
+            .collect();
         self.columns = columns;
     }
     pub fn clear(&mut self) {
@@ -467,13 +474,63 @@ impl HeaderMeasure {
     fn width(&self, column: &DataColumn) -> Pixels {
         let scale = self.scale;
         let name = self.text(&column.name, false);
-        let data_type = self.text(&column.data_type, true);
+        let data_type = self.text(&display_type(&column.data_type), true);
         // Two `px_1` insets and one `gap_2` are 1 rem, the column paddings
         // are 4px, and the table keeps 6px less the right padding for its
         // sort icon. Two more pixels absorb the cell border and rounding.
         let cell = px(scale * 4.) + (px(6.) - px(scale * 2.)).max(px(0.)) + px(2.);
         name + data_type + self.rem + cell
     }
+}
+
+impl Results {
+    /// Whether the table column `c` holds numbers. The row numbers count.
+    fn is_numeric_column(&self, c: usize) -> bool {
+        c == 0 || self.numeric.get(c - 1).copied().unwrap_or(false)
+    }
+}
+
+/// Whether a column of `data_type` holds numbers.
+fn is_numeric(data_type: &str) -> bool {
+    let base = data_type
+        .split(['(', ' '])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "tinyint"
+            | "smallint"
+            | "int"
+            | "integer"
+            | "bigint"
+            | "int2"
+            | "int4"
+            | "int8"
+            | "float"
+            | "float4"
+            | "float8"
+            | "real"
+            | "double"
+            | "decimal"
+            | "numeric"
+            | "number"
+            | "money"
+    )
+}
+
+/// The data type as the catalog tree shows it: drivers report some types in
+/// uppercase.
+fn display_type(data_type: &str) -> String {
+    data_type.to_lowercase()
+}
+
+/// Digits of equal width, so that numbers in a column line up.
+fn tabular_numbers() -> FontFeatures {
+    thread_local! {
+        static FEATURES: FontFeatures = FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)]));
+    }
+    FEATURES.with(Clone::clone)
 }
 
 impl TableDelegate for Results {
@@ -524,13 +581,21 @@ impl TableDelegate for Results {
                 window.focus(&state.focus_handle(cx), cx);
                 cx.notify();
             }))
-            .child(self.headers[c].name.clone())
+            .when(self.is_numeric_column(c), |el| el.justify_end())
+            .child(
+                div()
+                    .truncate()
+                    .text_color(cx.theme().foreground)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(self.headers[c].name.clone()),
+            )
             .when(c > 0, |el| {
                 el.child(
                     div()
+                        .flex_shrink_0()
                         .text_size(rems(10. / 14.))
                         .text_color(cx.theme().muted_foreground)
-                        .child(self.columns[c - 1].data_type.clone()),
+                        .child(display_type(&self.columns[c - 1].data_type)),
                 )
             })
     }
@@ -565,6 +630,8 @@ impl TableDelegate for Results {
             .flex()
             .items_center()
             .text_size(rems(12. / 14.))
+            .font_features(tabular_numbers())
+            .when(self.is_numeric_column(c) && !null, |el| el.justify_end())
             .overflow_hidden()
             .text_color(cx.theme().foreground)
             .when(c == 0 || null, |el| {
@@ -910,7 +977,7 @@ pub(super) fn view(
         .overflow_hidden()
         .child(
             DataTable::new(table)
-                .small()
+                .xsmall()
                 .stripe(true)
                 .bordered(false)
                 .scrollbar_visible(true, true),
