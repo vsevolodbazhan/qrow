@@ -2728,6 +2728,19 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_context_menu_from(position, None, items, window, cx);
+    }
+
+    /// Open a context menu like [`Self::open_context_menu`]. The menu shows
+    /// the shortcuts that `trigger`, the focus of the clicked view, binds.
+    pub(crate) fn open_context_menu_from(
+        &mut self,
+        position: Point<Pixels>,
+        trigger: Option<FocusHandle>,
+        items: impl FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Ask the window rather than mirroring "a dialog is up" into a flag of
         // our own: a flag only stays true until some close path forgets to
         // clear it, and then no menu ever opens again.
@@ -2751,6 +2764,9 @@ impl Qrow {
                 cx.notify();
             }
         });
+        if trigger.is_some() {
+            view.update(cx, |menu, cx| menu.set_trigger_focus(trigger, cx));
+        }
         view.focus_handle(cx).focus(window, cx);
         self.menu = Some(ContextMenu {
             position,
@@ -2940,8 +2956,10 @@ impl Qrow {
                 this.refresh_catalog(id, crate::catalog::Scope::Connection, cx);
             }
         });
-        self.open_context_menu(
+        let tree = self.catalog.state.read(cx).focus_handle(cx);
+        self.open_context_menu_from(
             position,
+            Some(tree),
             move |menu, _, _| {
                 // Labeled sections: what the row is, then what it contains.
                 menu.item(menu_section("Connection"))

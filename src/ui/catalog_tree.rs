@@ -1418,8 +1418,10 @@ impl Qrow {
             }
             _ => None,
         };
-        self.open_context_menu(
+        let tree = self.catalog.state.read(cx).focus_handle(cx);
+        self.open_context_menu_from(
             position,
+            Some(tree),
             move |menu, _, _| {
                 let menu = match refresh {
                     Some(refresh) => menu.item(
@@ -1712,6 +1714,38 @@ impl RowContext {
     }
 
     /// Records the laid-out width of the label `key` during prepaint.
+    /// Records the bottom edge of the row `key`, so that its context menu
+    /// opens below the row and leaves its label visible. The probe covers
+    /// its parent, which must be positioned.
+    fn bottom_probe(&self, key: SharedString) -> impl IntoElement + use<> {
+        let widths = self.widths.clone();
+        canvas(
+            move |bounds, _, _| {
+                let mut widths = widths.borrow_mut();
+                if widths.len() >= MAX_LABEL_WIDTHS && !widths.contains_key(&key) {
+                    widths.clear();
+                }
+                widths.insert(key, bounds.bottom());
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Where the context menu of the row `key` opens for a click at
+    /// `position`: below the row, at the pointer column.
+    fn menu_position(
+        &self,
+        key: SharedString,
+    ) -> impl Fn(Point<Pixels>) -> Point<Pixels> + use<> {
+        let widths = self.widths.clone();
+        move |position| {
+            let bottom = widths.borrow().get(&key).copied();
+            point(position.x, bottom.unwrap_or(position.y).max(position.y))
+        }
+    }
+
     fn record_width(
         &self,
         key: SharedString,
@@ -2183,8 +2217,9 @@ fn render_entry(
         .on_mouse_down(MouseButton::Left, focus)
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
+            let menu_position = context.menu_position(child_id(&id, "bottom"));
             move |event, window, cx| {
-                let (id, position) = (menu_id.clone(), event.position);
+                let (id, position) = (menu_id.clone(), menu_position(event.position));
                 let _ = weak.update(cx, |_, cx| {
                     cx.defer_in(window, move |this, window, cx| {
                         this.open_catalog_menu(id, position, window, cx)
@@ -2193,10 +2228,12 @@ fn render_entry(
             }
         });
     div()
+        .relative()
         .w_full()
         .h(ui_px(ROW_HEIGHT))
         .py_0p5()
         .child(row)
+        .child(context.bottom_probe(child_id(&id, "bottom")))
         .into_any_element()
 }
 
@@ -2638,10 +2675,13 @@ fn connection_row(
         .when(keyboard_position, |el| el.child(focus_outline(cx)))
         .child(connection_drop_target(id, false, weak.clone()))
         .child(connection_drop_target(id, true, weak.clone()))
+        .child(context.bottom_probe(SharedString::from(format!("{entry}:bottom"))))
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
+            let menu_position =
+                context.menu_position(SharedString::from(format!("{entry}:bottom")));
             move |event, window, cx| {
-                let position = event.position;
+                let position = menu_position(event.position);
                 let _ = weak.update(cx, |_, cx| {
                     cx.defer_in(window, move |this, window, cx| {
                         this.open_profile_menu(id, position, window, cx)

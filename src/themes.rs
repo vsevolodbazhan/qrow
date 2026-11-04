@@ -108,14 +108,31 @@ fn strengthen_overlay(cx: &mut App) {
     }
 }
 
-/// Give SQL comments of the default light theme the muted text color. GPUI
-/// Kit paints them in a saturated blue that outweighs the SQL.
+/// The highest saturation of a SQL comment in a light theme. A more colorful
+/// comment outweighs the SQL around it.
+const MAX_LIGHT_COMMENT_SATURATION: f32 = 0.35;
+
+/// Give saturated SQL comments of a light theme the muted text color. The
+/// GPUI Kit default and macOS Classic paint them in a strong blue.
 fn quiet_light_comments(cx: &mut App) {
+    use gpui_kit::HighlightStyle;
     use gpui_kit::component::highlighter::HighlightTheme;
     use std::sync::Arc;
 
     let theme = Theme::global_mut(cx);
     if theme.is_dark() {
+        return;
+    }
+    let saturated = theme
+        .highlight_theme
+        .style
+        .syntax
+        .comment
+        .clone()
+        .map(HighlightStyle::from)
+        .and_then(|style| style.color)
+        .is_some_and(|color| color.s > MAX_LIGHT_COMMENT_SATURATION);
+    if !saturated {
         return;
     }
     let muted = theme.muted_foreground.to_rgb();
@@ -138,9 +155,7 @@ pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bo
     let applied = apply_theme(name, window, cx);
     if applied {
         strengthen_overlay(cx);
-        if name == SYSTEM_THEME {
-            quiet_light_comments(cx);
-        }
+        quiet_light_comments(cx);
     }
     applied
 }

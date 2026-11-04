@@ -193,6 +193,12 @@ pub struct TreeState {
 
 impl EventEmitter<TreeEvent> for TreeState {}
 
+impl gpui::Focusable for TreeState {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl TreeState {
     pub fn new(cx: &mut App) -> Self {
         Self {
