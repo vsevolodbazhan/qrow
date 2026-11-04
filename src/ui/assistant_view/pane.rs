@@ -505,7 +505,7 @@ impl AssistantPane {
                             .h(action_size)
                             .icon(IconName::Ellipsis)
                             .accessibility_label("Conversation Actions")
-                            .tooltip("Conversation Actions")
+                            .tooltip("More")
                             .disabled(displayed.is_none() || busy)
                             .dropdown_menu({
                                 let menu = qrow.conversation_menu(selected, &self.qrow);
@@ -521,7 +521,7 @@ impl AssistantPane {
                             .flex_shrink_0()
                             .icon(IconName::Menu)
                             .accessibility_label("Toggle conversation list")
-                            .tooltip("Toggle conversation list")
+                            .tooltip("Conversations")
                             .on_click(cx.listener(move |pane, _, window, cx| {
                                 pane.thread_list_override = Some(!show_threads);
                                 pane.read_visible_reply(window, cx);
