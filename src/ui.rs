@@ -35,7 +35,7 @@ pub use workspace_view::WindowView;
 use crate::themes;
 use crate::{
     connector::DatabaseConnector,
-    logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
+    logs::{ExecutionId, LogEntry, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
         AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
@@ -273,7 +273,10 @@ struct Tab {
     started: Option<Instant>,
     output: LogHistory,
     panel: PanelState,
-    output_scroll: ScrollHandle,
+    /// The rows of the Logs, one for each entry of `output`. Only the rows
+    /// on screen are laid out and painted, so a long log keeps a drag
+    /// selection fast. At the end, the list follows new entries.
+    output_list: ListState,
     current_execution: Option<ExecutionId>,
     result_session: Option<Uuid>,
     next_execution_id: u64,
@@ -728,6 +731,9 @@ pub struct Qrow {
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
     tab_scroll: ScrollHandle,
+    /// The Logs font, size, and line height that the Logs rows were measured
+    /// with.
+    output_typography: Option<(SharedString, Pixels, f32)>,
     form: Option<ProfileEditor>,
     tab_form: Option<TabEditor>,
     result_form: Option<result_tabs::ResultEditor>,
@@ -840,8 +846,7 @@ impl Qrow {
         let mut unavailable_font = !font_available(&workspace.settings.editor_font_family, &fonts);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
-            let warning =
-                "The saved editor font is unavailable, so Qrow is using JetBrains Mono.";
+            let warning = "The saved editor font is unavailable, so Qrow is using JetBrains Mono.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -993,6 +998,7 @@ impl Qrow {
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),
+            output_typography: None,
             form: None,
             tab_form: None,
             result_form: None,
@@ -1146,7 +1152,7 @@ impl Qrow {
             started: None,
             output: LogHistory::default(),
             panel: PanelState::default(),
-            output_scroll: ScrollHandle::new(),
+            output_list: output::output_list(),
             current_execution: None,
             result_session: None,
             submitted_sql: None,
@@ -1450,15 +1456,15 @@ impl Qrow {
         let _ = self.wake.try_send(());
         // The UI scale and the Logs font settings change here.
         self.sync_activity_typography(cx);
+        self.sync_output_typography();
         cx.notify();
     }
     fn record_log(tab: &mut Tab, event: LogEvent) {
-        let at_bottom =
-            tab.output_scroll.offset().y <= -tab.output_scroll.max_offset().y + px(8. * 1.);
+        let before: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
         tab.output.record(event);
-        if at_bottom {
-            tab.output_scroll.scroll_to_bottom();
-        }
+        // A new entry can also remove old groups, from any place in the log.
+        let after: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
+        output::splice_rows(&tab.output_list, &before, &after);
     }
     fn record_local_log(tab: &mut Tab, severity: Severity, kind: LogKind, text: impl Into<String>) {
         Self::record_log(
@@ -1467,7 +1473,7 @@ impl Qrow {
         );
     }
     fn record_failure(tab: &mut Tab, active: bool) {
-        tab.output_scroll.scroll_to_bottom();
+        tab.output_list.scroll_to_end();
         tab.panel.failure(active);
     }
     fn allocate_execution_id(tab: &mut Tab) -> ExecutionId {
@@ -1478,7 +1484,7 @@ impl Qrow {
     fn clear_output(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
         tab.output.clear();
-        tab.output_scroll.set_offset(point(px(0.), px(0.)));
+        tab.output_list.reset(0);
         cx.notify();
     }
     fn copy_output(&self, cx: &mut App) {

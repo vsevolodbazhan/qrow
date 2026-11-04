@@ -2,7 +2,7 @@
 //! and actions in fixed lanes, so that entries scan as rows. Time and SQL use
 //! the Logs font; the message and the source use the interface font.
 
-use gpui_kit::base::SelectableText;
+use gpui_kit::base::{SelectableText, TextSelectionEvent, TextSelectionHandle};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -14,6 +14,51 @@ use crate::logs::timestamp_label;
 const PARTS: u64 = 4;
 /// The hover group of a row, for actions that show on hover.
 pub(super) const ROW_GROUP: &str = "log-row";
+
+/// The selection of one part of a row, kept while the row is drawn. A change
+/// of it draws the list again, so that a drag shows the selection while it
+/// grows.
+struct PartSelection {
+    handle: TextSelectionHandle,
+    text: SharedString,
+    _changes: Subscription,
+}
+
+/// The selectable text `text` of the part `key` of the current row.
+fn selectable(
+    key: &'static str,
+    text: impl Into<SharedString>,
+    order: u64,
+    window: &mut Window,
+    cx: &mut App,
+) -> SelectableText {
+    let text = text.into();
+    let state = window.use_keyed_state(key, cx, |_, cx| {
+        let handle = TextSelectionHandle::new(text.clone(), cx);
+        let this = cx.weak_entity();
+        let changes = handle.subscribe(
+            move |event, cx| {
+                if matches!(event, TextSelectionEvent::SelectionChanged(_)) {
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }
+            },
+            cx,
+        );
+        PartSelection {
+            handle,
+            text: text.clone(),
+            _changes: changes,
+        }
+    });
+    let handle = state.update(cx, |state, cx| {
+        if state.text != text {
+            state.handle.set_fallback_copy_text(text.clone(), cx);
+            state.text = text.clone();
+        }
+        state.handle.clone()
+    });
+    SelectableText::with_handle(key, handle, text).document_order(order)
+}
 
 #[derive(IntoElement)]
 pub(super) struct LogRow {
@@ -81,27 +126,37 @@ impl LogRow {
 }
 
 impl RenderOnce for LogRow {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (header, body) = match self.message.split_once('\n') {
             Some((header, body)) => (header.to_owned(), Some(body.to_owned())),
             None => (self.message.to_string(), None),
         };
-        // Lanes that hold one line share the height of an extra-small button,
-        // so rows with and without actions have the same height.
-        let lane = || h_flex().h_5().flex_shrink_0();
-        let time = self.time.map(|time| {
+        let clock = self.time.map(|time| {
             let label = timestamp_label(time);
             // The date is the same for nearly all entries of a session; the
             // copied text keeps it.
-            let clock = label.split_once(' ').map_or(label.clone(), |(_, t)| t.into());
+            let clock = label
+                .split_once(' ')
+                .map_or(label.clone(), |(_, t)| t.into());
+            format!("{clock} ")
+        });
+        let (clock, header, body) = window.with_id(self.id.clone(), |window| {
+            (
+                clock.map(|clock| selectable("time", clock, self.order, window, cx)),
+                selectable("header", header, self.order + 1, window, cx),
+                body.map(|body| selectable("body", body, self.order + 2, window, cx)),
+            )
+        });
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        // Lanes that hold one line share the height of an extra-small button,
+        // so rows with and without actions have the same height.
+        let lane = || h_flex().h_5().flex_shrink_0();
+        let time = clock.map(|clock| {
             lane()
                 .font_family(self.font_family.clone())
                 .text_color(muted)
-                .child(
-                    SelectableText::new("time", format!("{clock} ")).document_order(self.order),
-                )
+                .child(clock)
         });
         h_flex()
             .id(self.id)
@@ -117,15 +172,13 @@ impl RenderOnce for LogRow {
             .text_size(self.font_size)
             .line_height(relative(self.line_height))
             .children(time)
-            .child(
-                lane().w_4().justify_center().when(self.error, |el| {
-                    el.child(
-                        Icon::new(IconName::CircleX)
-                            .xsmall()
-                            .text_color(theme.danger),
-                    )
-                }),
-            )
+            .child(lane().w_4().justify_center().when(self.error, |el| {
+                el.child(
+                    Icon::new(IconName::CircleX)
+                        .xsmall()
+                        .text_color(theme.danger),
+                )
+            }))
             .when_some(self.source, |el, source| {
                 el.child(
                     lane()
@@ -142,15 +195,12 @@ impl RenderOnce for LogRow {
                     .min_w_0()
                     .whitespace_normal()
                     .when(self.error, |el| el.text_color(theme.danger))
-                    .child(
-                        div().min_h_5().flex().items_center().child(
-                            SelectableText::new("header", header)
-                                .document_order(self.order + 1),
-                        ),
-                    )
+                    .child(div().min_h_5().flex().items_center().child(header))
                     .when_some(body, |el, body| {
                         el.child(
                             div()
+                                .id("sql")
+                                .test_support()
                                 .mt_1()
                                 .mb_1()
                                 .px_2()
@@ -159,10 +209,7 @@ impl RenderOnce for LogRow {
                                 .bg(theme.muted)
                                 .font_family(self.font_family.clone())
                                 .text_color(theme.foreground)
-                                .child(
-                                    SelectableText::new("body", body)
-                                        .document_order(self.order + 2),
-                                ),
+                                .child(body),
                         )
                     }),
             )

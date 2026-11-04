@@ -927,3 +927,88 @@ fn format_sql_uses_each_connections_quoting_rules(cx: &mut TestAppContext) {
         assert_eq!(app.credentials.reads(), 0);
     }
 }
+
+#[gpui_kit::test]
+fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut TestAppContext) {
+    use gpui_kit::{
+        InputEvent as _, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+        point,
+    };
+
+    // The demo runs the query of its first tab at launch; each run adds
+    // the submitted query and its outcome.
+    let app = TestApp::launch_demo(cx);
+    app.click(cx, "output-panel-tab");
+    app.wait_for(cx, "output-count");
+    for _ in 0..30 {
+        let before = app.update(cx, |window, _| label(window, "output-count"));
+        app.click(cx, "sql-editor");
+        app.dispatch(cx, qrow::ui::RunQuery);
+        app.wait_until(cx, "a new entry", Duration::from_secs(20), |window, _| {
+            label(window, "output-count") != before
+        });
+        app.click(cx, "output-panel-tab");
+    }
+    app.settle(cx);
+    let sql_blocks = |window: &gpui_kit::Window| {
+        crate::support::elements(window)
+            .into_iter()
+            .filter(|element| element.path().last() == Some(&"sql".into()))
+            .collect::<Vec<_>>()
+    };
+    // A frame lays out and paints the rows on screen and a band around
+    // them, not all 30 queries, so a drag stays fast in a long log.
+    let (drawn, sql) = app.update(cx, |window, _| {
+        let blocks = sql_blocks(window);
+        let visible = blocks
+            .iter()
+            .rfind(|block| block.visible())
+            .unwrap()
+            .bounds();
+        (blocks.len(), visible)
+    });
+    assert!(drawn < 30, "The Logs drew {drawn} of 30 queries");
+    let start = point(sql.left() + px(12.), sql.top() + px(8.));
+    let end = point(sql.right() - px(12.), sql.bottom() - px(8.));
+    app.update(cx, |window, cx| {
+        window.activate_window();
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position: start,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: end,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position: end,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        let selected = gpui_kit::base::TextSelection::selected_text(window, cx);
+        assert!(
+            selected.contains("FROM avia.flight_events"),
+            "The drag must select the logged SQL: {selected:?}"
+        );
+    });
+}
