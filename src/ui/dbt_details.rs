@@ -1313,12 +1313,19 @@ impl DbtDetailsView {
             Row::Column(position) => {
                 let column = &data.columns[position];
                 let id = format!("dbt-details-column-{}", column.name);
-                v_flex()
+                // Each column is a card, so its name, description, and tests
+                // read as one item. The list row holds the gap above it.
+                let card = v_flex()
                     .id(SharedString::from(id.clone()))
                     .test_support()
                     .role(Role::Label)
                     .aria_label(column.name.clone())
-                    .pt_3()
+                    .px_3()
+                    .py_2()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().group_box)
                     .gap_1()
                     .text_sm()
                     // The name and the description share a line height, so
@@ -1356,8 +1363,8 @@ impl DbtDetailsView {
                             &self.code_font,
                             muted,
                         )))
-                    })
-                    .into_any_element()
+                    });
+                div().pt_2().child(card).into_any_element()
             }
             Row::Parent(position) => linked_row(
                 ("dbt-details-parent", position),
