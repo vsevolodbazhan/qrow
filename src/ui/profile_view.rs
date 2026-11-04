@@ -71,9 +71,10 @@ pub(super) fn field_with_error(
     cx: &App,
 ) -> AnyElement {
     let error = form
-        .error
-        .clone()
-        .filter(|_| form.invalid_field == Some(index));
+        .field_errors
+        .iter()
+        .find(|(field, _)| *field == index)
+        .map(|(_, error)| error.clone());
     let Some(error) = error else {
         return control.into_any_element();
     };
@@ -166,6 +167,9 @@ impl Qrow {
         let Some(form) = &self.form else {
             return div().into_any_element();
         };
+        if let Some(field) = form.focus_field.take() {
+            form.fields[field].update(cx, |input, cx| input.focus(window, cx));
+        }
         // A new choice in the Schema catalog list loads the settings of that
         // catalog into the fields.
         let catalog =
@@ -558,7 +562,7 @@ impl Qrow {
             .gap_2()
             .key_context("ConnectionSettings")
             .on_action(cx.listener(|this, _: &SaveConnection, _, cx| this.save_profile(cx)))
-            .when_some(form.error.clone().filter(|_| form.invalid_field.is_none()), |el, error| {
+            .when_some(form.error.clone(), |el, error| {
                 el.child(
                     div()
                         .id("connection-form-error-accessibility")

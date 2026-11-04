@@ -568,9 +568,11 @@ struct ProfileEditor {
     dbt: dbt::DbtForm,
     is_new: bool,
     error: Option<String>,
-    /// The index in `fields` of the field that `error` is about. The error
-    /// shows below that field, else in the footer.
-    invalid_field: Option<usize>,
+    /// The errors of single fields, by index in `fields`. Each shows below
+    /// its field; `error` holds an error of the whole form for the footer.
+    field_errors: Vec<(usize, String)>,
+    /// The field to focus in the next frame: the first invalid one.
+    focus_field: std::cell::Cell<Option<usize>>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
 }
 struct ProfileSave {
@@ -3501,7 +3503,8 @@ impl Qrow {
             fields,
             is_new,
             error: None,
-            invalid_field: None,
+            field_errors: Vec::new(),
+            focus_field: Default::default(),
             saving: None,
         });
         self.open_profile_dialog(window, cx);
@@ -3625,6 +3628,14 @@ impl Qrow {
         profile.username = values[3].trim().into();
         profile.database = values[5].trim().into();
         profile.trino_schema = values[15].trim().into();
+        // Report every invalid text field at once, and focus the first one.
+        form.field_errors = connection_form::field_errors(&values);
+        if let Some((first, _)) = form.field_errors.first() {
+            form.focus_field.set(Some(*first));
+            form.error = None;
+            cx.notify();
+            return;
+        }
         let parse = (|| -> anyhow::Result<()> {
             profile.transfer = form
                 .transfer
@@ -3765,8 +3776,14 @@ impl Qrow {
         })();
         if let Err(e) = parse {
             let error = e.to_string();
-            form.invalid_field = connection_form::field_of_error(&error);
-            form.error = Some(error);
+            match connection_form::field_of_error(&error) {
+                Some(field) => {
+                    form.field_errors = vec![(field, error)];
+                    form.focus_field.set(Some(field));
+                    form.error = None;
+                }
+                None => form.error = Some(error),
+            }
             cx.notify();
             return;
         }
@@ -3783,8 +3800,8 @@ impl Qrow {
             && profile.database_type != crate::model::DatabaseType::Trino
             && !self.demo
         {
-            form.error = Some("Enter the password for this connection.".into());
-            form.invalid_field = Some(4);
+            form.field_errors = vec![(4, "Enter the password for this connection.".into())];
+            form.focus_field.set(Some(4));
             cx.notify();
             return;
         }
@@ -3792,7 +3809,7 @@ impl Qrow {
         form.saving = Some(recv);
         let _ = self.wake.try_send(());
         form.error = None;
-        form.invalid_field = None;
+        form.field_errors.clear();
         let demo = self.demo;
         let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();

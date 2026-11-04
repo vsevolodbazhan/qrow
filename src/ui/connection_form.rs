@@ -153,6 +153,37 @@ pub(super) const FIELD_IDS: [&str; 16] = [
     "connection-response-timeout",
     "connection-trino-schema",
 ];
+/// The errors of the text fields that every connection needs, by index in
+/// [`FIELD_IDS`], in field order. Save shows all of them at once.
+pub(super) fn field_errors(values: &[String]) -> Vec<(usize, String)> {
+    let mut errors = Vec::new();
+    let name = values[0].trim();
+    if name.is_empty() {
+        errors.push((0, "Give this connection a name.".to_owned()));
+    } else if name.chars().count() > crate::model::MAX_PROFILE_NAME {
+        errors.push((
+            0,
+            format!(
+                "Connection name must be {} characters or fewer.",
+                crate::model::MAX_PROFILE_NAME
+            ),
+        ));
+    }
+    if values[1].trim().is_empty() {
+        errors.push((1, "Enter a host.".to_owned()));
+    }
+    if !values[2].trim().parse::<u16>().is_ok_and(|port| port != 0) {
+        errors.push((2, "Port must be a number from 1 to 65535.".to_owned()));
+    }
+    if values[3].trim().is_empty() {
+        errors.push((3, "Enter a username.".to_owned()));
+    }
+    if values[5].trim().is_empty() {
+        errors.push((5, "Enter an initial database.".to_owned()));
+    }
+    errors
+}
+
 /// The index in [`FIELD_IDS`] of the field that a validation error is
 /// about, or `None` when the error is not about one text field.
 pub(super) fn field_of_error(error: &str) -> Option<usize> {
