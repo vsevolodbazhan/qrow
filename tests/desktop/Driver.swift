@@ -321,6 +321,27 @@ final class Driver {
             try click(element)
         }
     }
+    func selectLogsPanel() throws {
+        // AccessKit publishes Role::Tab as AXRadioButton on macOS.
+        try activate(try waitExact("Logs Panel", role: kAXRadioButtonRole))
+    }
+    func selectOnlyResultPanel() throws {
+        let logs = try waitExact("Logs Panel", role: kAXRadioButtonRole)
+        guard let parent = attribute(logs, kAXParentAttribute),
+              CFGetTypeID(parent) == AXUIElementGetTypeID() else {
+            throw Failure("Logs has no accessible parent")
+        }
+        let group = parent as! AXUIElement
+        try require(attribute(group, kAXRoleAttribute) as? String == kAXTabGroupRole,
+                    "Logs does not belong to the result tab group")
+        // These demo scenarios have one result. Its generated title can change
+        // after Run, so choose it by its role within this specific tab group.
+        let results = ((attribute(group, kAXChildrenAttribute) as? [AXUIElement]) ?? []).filter {
+            attribute($0, kAXRoleAttribute) as? String == kAXRadioButtonRole && $0 != logs
+        }
+        try require(results.count == 1, "Expected exactly one result tab in the demo")
+        try activate(results[0])
+    }
     func pressMenuItem(_ label: String) throws {
         // Menu items are transient. Use their accessibility action instead of
         // a screen coordinate that can be stale on scaled or multi-display
@@ -561,7 +582,7 @@ final class Driver {
         let sql = "SELECT 'Привет 🦀' AS greeting;"
         try query(sql)
         try waitInputValue("SQL Editor", sql)
-        try press("Logs")
+        try selectLogsPanel()
         // Selectable log text does not expose AXStaticText nodes. Check the
         // native Copy action and preserve the user's full pasteboard contents.
         let clipboard = NSPasteboard.general
@@ -585,7 +606,7 @@ final class Driver {
             try require(monotonicSeconds() < deadline, "Copied logs do not contain the submitted Unicode SQL")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
-        try press("Results")
+        try selectOnlyResultPanel()
         _ = try wait("Singapore Airlines", timeout: 20, role: kAXCellRole)
         try snapshot("software-input")
         print("PASS: Rendering accepts Unicode SQL; native Copy confirms the submitted demo query")
@@ -689,9 +710,9 @@ final class Driver {
         try require(shifted.x > point.x + 20, "Sidebar splitter did not move")
         drag(from: CGPoint(x: shifted.x - 1, y: shifted.y + 80), to: CGPoint(x: shifted.x - 41, y: shifted.y + 80))
         // A released splitter must allow the next click to reach its control.
-        try press("Logs")
+        try selectLogsPanel()
         _ = try wait("Copy all logs", timeout: 10)
-        try press("Results")
+        try selectOnlyResultPanel()
         _ = try wait("Singapore Airlines", timeout: 10, role: kAXCellRole)
         print("PASS: Both result scroll axes, both splitters, release, and the next click")
     }
