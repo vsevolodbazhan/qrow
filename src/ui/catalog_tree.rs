@@ -2079,34 +2079,46 @@ fn render_entry(
                 }),
         )
         .child(
-            div()
-                .id(label_key.clone())
-                .test_support()
-                .relative()
+            h_flex()
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .child(label)
-                .on_prepaint(context.record_width(label_key)),
+                .overflow_hidden()
+                .gap(ui_px(ROW_GAP))
+                .child(
+                    div()
+                        .id(label_key.clone())
+                        .test_support()
+                        .relative()
+                        .when(schema_detail, |el| el.flex_1().min_w_0())
+                        .when(!schema_detail, |el| el.flex_shrink_0())
+                        .max_w_full()
+                        .truncate()
+                        .child(label)
+                        .on_prepaint(context.record_width(label_key)),
+                )
+                .when_some(detail, |el, detail| {
+                    el.child(
+                        div()
+                            .id(detail_key.clone())
+                            .test_support()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_right()
+                            .when(schema_detail, |el| {
+                                el.flex_none()
+                                    .w(ui_px(STATUS_SLOT_WIDTH))
+                                    .flex()
+                                    .justify_center()
+                            })
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(detail)
+                            .on_prepaint(context.record_width(detail_key)),
+                    )
+                }),
         )
-        .when_some(detail, |el, detail| {
-            el.child(
-                div()
-                    .id(detail_key.clone())
-                    .test_support()
-                    .relative()
-                    .flex_shrink_0()
-                    .max_w(ui_px(120.))
-                    .truncate()
-                    .when(schema_detail, |el| {
-                        el.min_w(ui_px(STATUS_SLOT_WIDTH)).flex().justify_center()
-                    })
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(detail)
-                    .on_prepaint(context.record_width(detail_key)),
-            )
-        })
         .when(loading && error_status.is_none(), |el| {
             el.child(
                 status_lane(child_id(&id, "busy"), ui_px(STATUS_SLOT_WIDTH))

@@ -1231,7 +1231,7 @@ impl DbtDetailsView {
                     .test_support()
                     .gap_1()
                     .children(data.facts.iter().map(|(label, value)| {
-                        let value = if *label == "Manifest" && changed {
+                        let value = if *label == "Generated At" && changed {
                             SharedString::from(format!("{value} (changed since the last read)"))
                         } else {
                             value.clone()
@@ -1366,6 +1366,24 @@ impl DbtDetailsView {
             Part::Parents => data.parents.len(),
             Part::Children => data.children.len(),
         };
+        if count == 0 {
+            return v_flex()
+                .map(|header| self.group_spacing(header, Row::Part(part)))
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "dbt-details-{}-empty",
+                            part.id()
+                        )))
+                        .test_support()
+                        .role(Role::Label)
+                        .aria_label(format!("{} (0)", part.title()))
+                        .text_sm()
+                        .text_color(muted)
+                        .child(format!("{} (0)", part.title())),
+                )
+                .into_any_element();
+        }
         let header = disclosure(
             format!("dbt-details-{}-toggle", part.id()),
             format!("{} ({count})", part.title()).into(),
@@ -1614,7 +1632,10 @@ fn data(state: &ManifestState, project: &DbtProject, unique_id: &str) -> Option<
         let tags: Vec<&str> = entry.tags.iter().map(|tag| index.symbol(*tag)).collect();
         facts.push(("Tags", tags.join(", ").into()));
     }
-    facts.push(("Manifest", shared(&index.generated_at)));
+    let generated_at = chrono::DateTime::parse_from_rfc3339(&index.generated_at)
+        .map(|time| time.format("%Y-%m-%d %H:%M:%S %:z").to_string())
+        .unwrap_or_else(|_| index.generated_at.to_string());
+    facts.push(("Generated At", shared(&generated_at)));
 
     let description = entry.description.trim();
     let sql = match (entry.kind, entry.compiled_code, entry.raw_code) {

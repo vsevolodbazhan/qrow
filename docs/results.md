@@ -55,6 +55,9 @@ and logs and does not stop a running query.
 
 ## Browse and copy
 
+Column names use the main text color. Types use smaller, muted text. Numeric
+columns align to the right, including their headers and NULL values.
+
 Each page contains up to 1,000 rows. **Next page** fetches another page when needed.
 The bar above the table shows neutral tags for the visible row range,
 downloaded row count, column count, and query duration. **Loaded** counts the

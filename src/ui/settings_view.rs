@@ -965,7 +965,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
         )
         .group(
             SettingGroup::new()
-                .title("Assistant")
+                .title("Assistant Text")
                 .item(setting_item(
                     "Font Family",
                     "Font of messages in assistant conversations.",
@@ -1150,7 +1150,8 @@ fn keyword_case_label(case: KeywordCase) -> &'static str {
 /// Kit's own item row does not let the label column shrink. GPUI measures the
 /// minimum width of text as one unwrapped line, so a long description holds
 /// the column wide and pushes the control past the page edge. Here the column
-/// shrinks, and the description wraps instead. Search matches the title and
+/// shrinks, and the description truncates to one line instead. The tooltip
+/// keeps the full help available. Search matches the title and
 /// description through the keywords, as it does for Kit's row.
 fn setting_item<E: IntoElement>(
     title: &'static str,
@@ -1189,6 +1190,14 @@ pub(super) fn setting_row<E: IntoElement>(
                             .aria_label(description.clone())
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
+                            .truncate()
+                            .tooltip({
+                                let description = description.clone();
+                                move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(description.clone())
+                                        .build(window, cx)
+                                }
+                            })
                             .child(description.clone()),
                     )
                 },

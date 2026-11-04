@@ -46,7 +46,11 @@ last selected tab. The other tabs keep their unread outcomes.
 
 ## Create a profile
 
-Connection Settings has pages in a sidebar: **General**, **Catalog**, **dbt**,
+The form is **New Connection** when you add a connection. It is **Connection
+Settings** when you edit one. Field help stays on one line. Point to the help
+to read its full text.
+
+The form has pages in a sidebar: **General**, **Catalog**, **dbt**,
 and **Assistant**. The **Assistant** page shows only while the
 [assistant](assistant.md) is on. Click a page to show its fields. Type in the
 search field above the pages to find a field.
@@ -660,7 +664,8 @@ schemas of the connection first.
 
 In the schema tree, a table or view that a dbt model, seed, snapshot, or
 source builds shows its kind after its name, for example `dbt incremental` or
-`dbt source`. Its tooltip shows the name in bold, then the first paragraph
+`dbt source`. The name has priority when the sidebar is narrow. The kind
+uses the remaining width. Its tooltip shows the name in bold, then the first paragraph
 of the dbt description, cut to a few lines. The tooltip shows the Markdown of
 the description, for example code and bold text. A cut description has a
 small note below it that tells you to open the dbt details.
@@ -677,11 +682,13 @@ details**. A panel opens at the right side of the window. It shows:
 
 - The kind, the materialization, the relation, the unique ID, and the tags of
   the resource.
+- The manifest creation time, with its UTC offset.
 - The full description.
 - Parts that you open with a click. All parts are closed when the panel
   opens, so you can go to a part without a scroll through the others. The
   titles of **Tests**, **Columns**, **Parents**, and **Children** show the
-  count of their items:
+  count of their items. Empty parts show a muted count without a disclosure
+  button:
   - **Compiled SQL** has the SQL that dbt compiled, without Jinja, and
     **Raw SQL** has the SQL of the model file, with Jinja. Click the copy
     button of a part to copy the SQL. Both parts show the SQL with syntax

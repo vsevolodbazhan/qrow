@@ -527,12 +527,17 @@ impl Runner {
         execution.execution_completed = true;
         let duration = execution.started.elapsed();
         let execution_id = execution.id;
+        let outcome = if has_results {
+            "Query completed on the server with a result set"
+        } else {
+            "Statement completed on the server without a result set"
+        };
         self.log(
             Some(execution_id),
             Severity::Info,
             LogKind::ExecutionCompleted,
             format!(
-                "Execution completed on the server, result set: {has_results} (client measurement: {})",
+                "{outcome} (client measurement: {})",
                 format_duration(duration)
             ),
             Some(duration),

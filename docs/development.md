@@ -77,6 +77,9 @@ Use these rules for UI text:
 
 ### Fields
 
+Keep field help on one line. The shared settings row truncates long help
+and shows the full text in a tooltip.
+
 Text fields, text areas, selects, and comboboxes show their focus with a
 tinted border only. Call `.focus_ring(false)` on each new field. The ring of
 GPUI Kit is painted outside the border, so a list or a panel that clips its

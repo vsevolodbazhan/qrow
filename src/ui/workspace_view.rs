@@ -286,6 +286,13 @@ impl Qrow {
                     .small()
                     .label("Disconnect")
                     .disabled(!tab.can_disconnect())
+                    .tooltip(if self.demo {
+                        "The demo has no server connection"
+                    } else if tab.busy {
+                        "Wait for the query to finish before disconnecting"
+                    } else {
+                        "Disconnect the session of this tab"
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
             )
             .when(authenticating, |el| {

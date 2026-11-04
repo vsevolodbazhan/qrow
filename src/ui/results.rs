@@ -1,4 +1,5 @@
 use crate::{
+    export::ValueKind,
     model::{Column as DataColumn, CopyFormat},
     pagination::Pagination,
     worker::Event,
@@ -210,6 +211,9 @@ impl Results {
                 };
                 Column::new(i.to_string(), c.name.clone())
                     .width(px(scale * width).max(header.width(c)))
+                    .when(ValueKind::of(&c.data_type) == ValueKind::Number, |column| {
+                        column.text_right()
+                    })
                     .paddings(padding)
                     .movable(false)
             }));
@@ -513,6 +517,10 @@ impl TableDelegate for Results {
             .px_1()
             .overflow_hidden()
             .text_size(rems(12. / 14.))
+            .text_color(cx.theme().foreground)
+            .when(self.headers[c].align == TextAlign::Right, |el| {
+                el.justify_end()
+            })
             .aria_label(self.headers[c].name.clone())
             .on_click(cx.listener(move |state, event: &ClickEvent, window, cx| {
                 let data = state.delegate_mut();
@@ -567,6 +575,9 @@ impl TableDelegate for Results {
             .text_size(rems(12. / 14.))
             .overflow_hidden()
             .text_color(cx.theme().foreground)
+            .when(self.headers[c].align == TextAlign::Right, |el| {
+                el.justify_end()
+            })
             .when(c == 0 || null, |el| {
                 el.text_color(cx.theme().muted_foreground)
             })

@@ -3917,7 +3917,7 @@ impl Qrow {
                 Some(execution_id),
                 Severity::Info,
                 LogKind::ExecutionCompleted,
-                "Execution completed on the server, result set: true (demo)",
+                "Query completed on the server with a result set (demo)",
             ),
             LogEvent::new(
                 Some(execution_id),

@@ -1394,7 +1394,7 @@ fn a_failed_later_page_keeps_delivered_rows_and_never_resubmits_sql() {
     assert!(
         execution_outcomes[0]
             .text
-            .contains("Execution completed on the server")
+            .contains("Query completed on the server with a result set")
     );
     assert!(logs.iter().any(|event| {
         event.kind == LogKind::Error && event.text.contains("Fetch transport failed")

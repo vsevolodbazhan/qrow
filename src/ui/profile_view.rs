@@ -76,7 +76,18 @@ impl Qrow {
             let (width, height) = settings_dialog_size(window);
             let viewport = window.viewport_size();
             dialog
-                .title("Connection Settings")
+                .title(
+                    if weak
+                        .read_with(cx, |this, _| {
+                            this.form.as_ref().is_some_and(|form| form.is_new)
+                        })
+                        .unwrap_or(false)
+                    {
+                        "New Connection"
+                    } else {
+                        "Connection Settings"
+                    },
+                )
                 .w(width)
                 .h(height)
                 .margin_top((viewport.height - height) / 2.)
@@ -251,9 +262,9 @@ impl Qrow {
                     qrow,
                     "TLS",
                     if (uses_sign_in || uses_external) && !form.tls {
-                        "Without TLS, others on the network can read and use the access token."
+                        "Without TLS, the token is exposed."
                     } else {
-                        "Encrypts the connection. The server must accept TLS on this port."
+                        "Requires a TLS-enabled port."
                     },
                     &["ssl", "encryption", "security"],
                     false,
@@ -435,9 +446,6 @@ impl Qrow {
                 vec![]
             });
         SettingPage::new("General")
-            .description(database_type.label())
-            // Space the engine name like the help text under a field.
-            .header_style(&StyleRefinement::default().gap_0())
             .default_open(true)
             .resettable(false)
             .group(fields)
