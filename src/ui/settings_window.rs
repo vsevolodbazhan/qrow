@@ -88,7 +88,10 @@ pub(super) fn open(qrow: WeakEntity<Qrow>, cx: &mut App) {
             traffic_light_position: None,
         }),
         window_min_size: Some(gpui_kit::size(px(MIN_WIDTH), px(MIN_HEIGHT))),
-        is_minimizable: false,
+        // Like other macOS Settings windows: it can be minimized, but it has
+        // a fixed size, so the zoom button and full screen are off.
+        is_minimizable: true,
+        is_resizable: false,
         ..WindowOptions::default()
     };
     let opened = cx.open_window(options, |window, cx| {

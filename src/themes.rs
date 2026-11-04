@@ -190,9 +190,23 @@ fn visible_dark_stripes(cx: &mut App) {
     theme.tokens.table_even = stripe.into();
 }
 
+/// Give the native parts of every window, like the title bar and its
+/// buttons, the appearance of the theme. The System theme follows macOS.
+fn match_window_appearance(name: &str, cx: &mut App) {
+    let appearance = (name != SYSTEM_THEME).then(|| {
+        if Theme::global(cx).is_dark() {
+            gpui_kit::WindowAppearance::Dark
+        } else {
+            gpui_kit::WindowAppearance::Light
+        }
+    });
+    cx.set_window_appearance(appearance);
+}
+
 pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
     let applied = apply_theme(name, window, cx);
     if applied {
+        match_window_appearance(name, cx);
         strengthen_overlay(cx);
         quiet_light_comments(cx);
         unify_sql_keywords(cx);

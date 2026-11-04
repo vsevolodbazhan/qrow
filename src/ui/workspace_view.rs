@@ -291,15 +291,9 @@ impl Qrow {
                         connection_name(&self.profiles, tab.saved.profile)
                     ))
                     .min_w_0()
-                    .gap_1()
                     .px_1()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(
-                        Icon::new(AssetIconName::Database)
-                            .xsmall()
-                            .text_color(cx.theme().muted_foreground),
-                    )
                     .child(
                         div()
                             .truncate()

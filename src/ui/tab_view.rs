@@ -82,8 +82,10 @@ impl Qrow {
         if let Some((input, _)) = (spec.form)(self) {
             let input = input.clone();
             cx.defer_in(window, move |_, window, cx| {
-                input.update(cx, |input, cx| input.focus(window, cx));
-                window.dispatch_action(Box::new(gpui_kit::component::input::SelectAll), cx);
+                input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                    input.select_all(window, cx);
+                });
             });
         }
     }
