@@ -763,8 +763,9 @@ impl Qrow {
                     content.children(panel)
                 })
                 .when_some(footer, |dialog, footer| dialog.footer(footer))
-                .on_close(move |_, _, cx| {
+                .on_close(move |_, window, cx| {
                     let _ = close.update(cx, |this, cx| {
+                        this.commit_settings_form(window, cx);
                         this.settings_open = false;
                         this.settings_form = None;
                         cx.notify();
@@ -883,6 +884,36 @@ impl Qrow {
             .into_any_element()
     }
 
+    /// Keep the edits that apply only when they are complete: numbers that
+    /// are still being typed and the executable paths. Settings has no Save:
+    /// closing it with ⌘W, Escape, or the close button keeps every change.
+    fn commit_settings_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending: Vec<_> = self
+            .settings_form
+            .iter()
+            .flat_map(|form| form.numbers.iter())
+            .map(|(setting, input, _)| (*setting, input.clone()))
+            .collect();
+        for (setting, input) in pending {
+            self.commit_number_setting(&input, setting, 0., window, cx);
+        }
+        if let Some(form) = &self.settings_form {
+            let read = |input: &Entity<InputState>| {
+                let path = input.read(cx).value().trim().to_owned();
+                (!path.is_empty()).then_some(path)
+            };
+            let codex = read(&form.assistant_executable);
+            let claude = read(&form.claude_executable);
+            if self.settings.assistant.codex_executable != codex
+                || self.settings.assistant.claude_executable != claude
+            {
+                self.settings.assistant.codex_executable = codex;
+                self.settings.assistant.claude_executable = claude;
+                self.changed(cx);
+            }
+        }
+    }
+
     fn settings_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
@@ -891,46 +922,6 @@ impl Qrow {
                 Button::new("reset-settings")
                     .label("Restore defaults")
                     .on_click(cx.listener(|this, _, window, cx| this.reset_settings(window, cx))),
-            )
-            .child(div().flex_1())
-            .child(
-                // Settings apply as they change, so the dialog has no
-                // Cancel. Done also saves the executable paths.
-                Button::new("save-settings")
-                    .primary()
-                    .label("Done")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // Commit pending numeric edits before disposing their subscriptions.
-                        let pending: Vec<_> = this
-                            .settings_form
-                            .iter()
-                            .flat_map(|form| form.numbers.iter())
-                            .map(|(setting, input, _)| (*setting, input.clone()))
-                            .collect();
-                        for (setting, input) in pending {
-                            this.commit_number_setting(&input, setting, 0., window, cx);
-                        }
-                        if let Some(form) = &this.settings_form {
-                            let read = |input: &Entity<InputState>| {
-                                let path = input.read(cx).value().trim().to_owned();
-                                (!path.is_empty()).then_some(path)
-                            };
-                            let codex = read(&form.assistant_executable);
-                            let claude = read(&form.claude_executable);
-                            if this.settings.assistant.codex_executable != codex
-                                || this.settings.assistant.claude_executable != claude
-                            {
-                                this.settings.assistant.codex_executable = codex;
-                                this.settings.assistant.claude_executable = claude;
-                                this.changed(cx);
-                            }
-                        }
-                        // Programmatic close_dialog does not invoke Dialog::on_close.
-                        this.settings_open = false;
-                        this.settings_form = None;
-                        window.close_dialog(cx);
-                        cx.notify();
-                    })),
             )
             .into_any_element()
     }

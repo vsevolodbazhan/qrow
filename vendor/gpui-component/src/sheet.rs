@@ -52,6 +52,7 @@ pub struct Sheet {
     children: Vec<AnyElement>,
     overlay: bool,
     overlay_closable: bool,
+    margin_bottom: Pixels,
 }
 
 impl Sheet {
@@ -69,8 +70,16 @@ impl Sheet {
             children: Vec::new(),
             overlay: true,
             overlay_closable: true,
+            margin_bottom: px(0.),
             on_close: Rc::new(|_, _, _| {}),
         }
+    }
+
+    /// Keeps a band of this height free at the bottom of the window, for
+    /// example for a status bar. Applies to left and right sheets.
+    pub fn margin_bottom(mut self, margin_bottom: Pixels) -> Self {
+        self.margin_bottom = margin_bottom;
+        self
     }
 
     /// Sets the title of the sheet.
@@ -183,9 +192,19 @@ impl RenderOnce for Sheet {
             })
             .map(|this| match self.placement {
                 Placement::Top => this.top(top).left_0().right_0().border_b_1(),
-                Placement::Right => this.top(top).right_0().bottom_0().border_l_1(),
+                Placement::Right => this
+                    .top(top)
+                    .right_0()
+                    .bottom(self.margin_bottom)
+                    .border_l_1()
+                    .when(self.margin_bottom > px(0.), |this| this.border_b_1()),
                 Placement::Bottom => this.bottom_0().left_0().right_0().border_t_1(),
-                Placement::Left => this.top(top).left_0().bottom_0().border_r_1(),
+                Placement::Left => this
+                    .top(top)
+                    .left_0()
+                    .bottom(self.margin_bottom)
+                    .border_r_1()
+                    .when(self.margin_bottom > px(0.), |this| this.border_b_1()),
             })
             .child(
                 // TitleBar

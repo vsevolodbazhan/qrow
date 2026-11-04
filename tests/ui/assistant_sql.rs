@@ -158,8 +158,9 @@ fn requests_target_one_statement_and_edits_use_the_sql_style(cx: &mut TestAppCon
     app.fill_labelled(cx, "Search...", "keyword");
     app.wait_for(cx, "setting-sql-keyword-case");
     app.select(cx, "setting-sql-keyword-case", "Uppercase");
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "cmd-w");
+    app.wait_gone(cx, "reset-settings");
     app.send(cx, "Report the SQL style");
     app.wait_reply(cx, "SQL style: uppercase, 5 spaces");
 

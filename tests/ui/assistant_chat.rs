@@ -193,7 +193,9 @@ fn widening_the_window_reads_the_revealed_assistant_reply(cx: &mut TestAppContex
     app.wait_label(cx, "Toggle assistant, reply ready");
     app.wait_gone(cx, "assistant-transcript");
 
-    cx.simulate_window_resize(app.window, size(px(1280.), px(820.)));
+    // At 1280 pixels the pane is too narrow for the list beside the
+    // conversation, so the list still covers it.
+    cx.simulate_window_resize(app.window, size(px(1600.), px(820.)));
     app.wait_reply(cx, "I can help with this query");
     app.wait_label(cx, "Toggle assistant");
 }

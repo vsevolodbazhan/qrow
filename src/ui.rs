@@ -141,6 +141,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-+", IncreaseUiScale, None),
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
+        // ⌘W closes the topmost dialog, like a macOS window, before it
+        // closes a query tab.
+        KeyBinding::new("cmd-w", gpui_kit::base::actions::Cancel, Some("Dialog")),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
         KeyBinding::new("cmd-enter", SaveSignIn, Some("SignInSettings")),
         KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
@@ -741,6 +745,9 @@ pub struct Qrow {
     dbt: dbt::DbtProjects,
     /// The dbt resource of the open dbt details sheet.
     dbt_details: Option<Entity<dbt_details::DbtDetailsView>>,
+    /// The height of the status bar in the last frame. Side sheets end
+    /// above it.
+    status_bar_height: std::rc::Rc<std::cell::Cell<Pixels>>,
     _demo_manifest: Option<tempfile::NamedTempFile>,
 }
 impl Qrow {
@@ -990,6 +997,7 @@ impl Qrow {
             _activity_events: activity_events,
             dbt,
             dbt_details: None,
+            status_bar_height: Default::default(),
             _demo_manifest: demo_manifest,
         };
         for tab in workspace.tabs {

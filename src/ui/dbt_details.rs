@@ -110,11 +110,16 @@ impl Qrow {
                             }),
                     )
                 });
+            let status_bar = close
+                .read_with(cx, |this, _| this.status_bar_height.get())
+                .unwrap_or_default();
             sheet
                 .size(
                     (window.viewport_size().width * SHEET_WIDTH)
                         .clamp(px(MIN_SHEET_WIDTH), px(MAX_SHEET_WIDTH)),
                 )
+                // The status bar stays visible below the sheet.
+                .margin_bottom(status_bar)
                 .title(title_bar)
                 .child(view.clone())
                 .on_close(move |_, _, cx| {

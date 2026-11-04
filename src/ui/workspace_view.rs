@@ -783,6 +783,11 @@ fn changed_view(view: AnyView, window: &Window) -> AnyElement {
     }
 }
 
+/// The least width that the assistant pane leaves to the editor and the
+/// results. Below it, the pane narrows, which also collapses its
+/// conversation list.
+const MIN_WORK_AREA_WIDTH: f32 = 560.;
+
 impl Qrow {
     /// The width of the sidebar in a window that is `viewport` wide. A
     /// narrow window narrows the sidebar to its least width before the work
@@ -795,7 +800,7 @@ impl Qrow {
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
         let available = viewport
-            - self.ui_px(420.)
+            - self.ui_px(MIN_WORK_AREA_WIDTH)
             - if self.sidebar {
                 self.shown_sidebar_width(viewport)
             } else {
@@ -870,7 +875,7 @@ impl Qrow {
                         return;
                     }
                     let available = window.viewport_size().width
-                        - this.ui_px(420.)
+                        - this.ui_px(MIN_WORK_AREA_WIDTH)
                         - if this.sidebar {
                             this.shown_sidebar_width(window.viewport_size().width)
                         } else {
@@ -978,7 +983,18 @@ impl Qrow {
                         .child(Alert::warning("workspace-alert", message).banner()),
                 )
             })
-            .child(self.status_bar(cx))
+            .child({
+                let height = self.status_bar_height.clone();
+                div()
+                    .relative()
+                    .w_full()
+                    .flex_shrink_0()
+                    .child(self.status_bar(cx))
+                    .map(|el| {
+                        use gpui_kit::component::ElementExt as _;
+                        el.on_prepaint(move |bounds, _, _| height.set(bounds.size.height))
+                    })
+            })
     }
 }
 impl Render for Qrow {

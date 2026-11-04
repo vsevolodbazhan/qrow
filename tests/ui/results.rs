@@ -374,8 +374,9 @@ fn the_copy_format_setting_applies_to_command_c_and_the_menu_but_not_copy_as(
         );
     });
     app.select(cx, "setting-copy-format", "Plain text");
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "cmd-w");
+    app.wait_gone(cx, "reset-settings");
     // A new result keeps the format.
     app.press(cx, "cmd-enter");
     app.wait_until(
