@@ -48,7 +48,7 @@ with a colleague. Drag connections to change their order. See
 
 Each connection has its own query tabs, and each tab has its own session.
 Tabs run queries at the same time, also when you select another connection.
-Press **⌘Enter** to run the statement at the cursor or the selected SQL. A
+Press **⌘Enter** to run the statement at the cursor or the selected SQL. A light tint shows the statement that runs. A
 status dot on each tab and connection shows work, unread results, and errors.
 
 Results show in pages of 1,000 rows as they arrive. Copy a cell or a row with
@@ -95,7 +95,7 @@ See [attach a dbt project](docs/connections.md#attach-a-dbt-project).
 Qrow can open an AI assistant beside your query tab. It runs on a separately
 installed Codex or Claude Code executable with your own sign-in, so you can
 use your OpenAI or Claude subscription. The assistant is off by default.
-Enable it in **Qrow → Settings… → Assistant**, then press **⌘J**.
+Enable it in **Qrow → Settings… → Assistant**, then press **⌘R**.
 
 - Each conversation writes SQL in its own query tab, so you can work on it
   together. Several conversations can work at the same time.
@@ -261,7 +261,7 @@ Intel build. Existing Homebrew releases contain only the ARM64 app.
 
 Launch the demo to inspect the SQL editor, results, schema catalog, and dbt
 details. The first connection opens with the columns of `avia.bookings`.
-Expand other tables or use **Search tables…** to inspect the catalog.
+Expand other tables or use **Search relations…** to inspect the catalog.
 In either Rivendell connection, right-click a table and select **Show dbt
 details** to read its description, columns, tests, lineage, and SQL.
 

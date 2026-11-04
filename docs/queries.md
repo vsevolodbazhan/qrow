@@ -1,7 +1,7 @@
 # Queries
 
-Each query tab contains SQL, a selected connection, a result preview, and a
-Logs panel. A tab can run one query at a time. Other tabs can run
+Each query tab contains SQL, a selected connection, one or more
+[result tabs](results.md#result-tabs), and a Logs panel. A tab can run one query at a time. Other tabs can run
 concurrently.
 
 ## Run SQL
@@ -25,6 +25,12 @@ If you select text, Qrow runs that text. Each execution must contain one SQL
 statement. Qrow rejects a selection with multiple statements before it sends
 SQL to the server.
 
+The editor shows the statement that **Run** uses with a light tint. On a line
+that contains only that statement, the tint goes across the full width. When
+the cursor is on a blank line or a comment between statements, there is no
+tint. When you select text, the selection shows the SQL to run, and there is
+no tint.
+
 After a query finishes, use **Export results…** in Results to save all rows.
 If the result cursor is unavailable, review the original SQL before an export
 rerun. See [Rerun for export](results.md#rerun-for-export) for session checks
@@ -39,8 +45,9 @@ controls and keyboard use. Action tooltips show
 the command name and its keyboard shortcut on one line. The name and shortcut
 share a vertical center.
 
-A new accepted execution clears the previous preview and the unread outcome
-of that tab. The blue dot shows that the execution continues. Results appear
+A new accepted execution clears the unpinned result tab and the unread outcome
+of that tab. Pinned result tabs keep their rows. See
+[Result tabs](results.md#result-tabs). The blue dot shows that the execution continues. Results appear
 as Qrow fetches them. Switching connections does not clear the preview or
 close the tab's session.
 The Logs panel remains across executions in the tab. A successful execution
@@ -49,7 +56,7 @@ also clears the unread error, even if you selected Logs after the failure. See
 
 ## Logs
 
-Select **Logs** beside **Results** to inspect the work of the tab. The history shows
+Select the **Logs** tab before the result tabs to inspect the work of the tab. The history shows
 connection and session events, the exact SQL submitted to the tab's owning
 connection, execution completion, preview page fetches, cancellation, and
 errors. Selecting a connection or query tab does not add a log entry. Each
@@ -72,10 +79,10 @@ all stored entries with the timestamps that Logs shows. **Copy error** copies
 the latest error with its timestamp. Text selection and both copy commands
 preserve multiline text and Unicode error details.
 
-Qrow selects Logs when a query fails. It selects Results when a query succeeds,
-after the first preview fetch or completion without a result set. This applies
-even if you selected Logs before completion. You can select either panel again
-after completion. Background queries update their own panel without changing
+Qrow selects Logs when a query fails. It selects the result tab of the query
+when the query succeeds, after the first preview fetch or completion without a
+result set. This applies even if you selected Logs before completion. You can
+select Logs or any result tab again after completion. Background queries update their own panel without changing
 the active query tab. A failed background query shows a red dot on its tab.
 A successful background query shows a green dot until its Results show.
 
@@ -173,6 +180,22 @@ SQL, Logs history, and downloaded rows remain available after a query or
 fetch failure. Reconnection requires an explicit Run and does not restore
 session settings from earlier SQL statements.
 
+## Format SQL
+
+Right-click in the SQL editor and choose **Format**, or press **⌥⌘L**.
+If you select text, the command formats each statement in that selection.
+Otherwise, it formats the statement at the cursor. Text between statements
+stays the same. Press **⌘Z** once to undo the command.
+
+The command uses **Tab Size** and **SQL Keyword Case** from
+[Editor settings](workspace.md#appearance-and-layout). It does not run SQL
+or open a connection. Formatting runs only when you request it.
+
+The formatter checks that SQL tokens stay the same. If the check fails,
+the command keeps that statement and shows a warning. Unsupported statements
+also stay the same. The command uses the quoting rules of the connection
+type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
+
 ## Syntax
 
 The editor highlights SQL syntax and the full width of the active line.
@@ -184,6 +207,8 @@ The [UI](../src/ui.rs) reads selected text through the native input handler.
 Native selection ranges use UTF-16 offsets. Rust string offsets use bytes.
 Using the input handler preserves selections that contain emoji or non-Latin
 text. The [SQL validator](../src/sql.rs) checks statement boundaries locally.
+The tint and **Run** use the same statement search, so the tint shows the SQL
+that **Run** sends.
 
 The [worker](../src/worker.rs) runs connection, execution, and fetch work outside
 the UI thread. The [connector](../src/connector/hive.rs) sends cancellation over

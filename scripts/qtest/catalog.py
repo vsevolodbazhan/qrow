@@ -208,19 +208,25 @@ SUITES = {
               prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "integration")),)),
         Suite("e2e", "The real Qrow window, headless, against the real servers.",
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/) & not test(/^trino::/)", "--run-ignored", "only"),),
+              # `--test e2e` builds only the binary of the prepare step.
+              (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/) & not test(/^trino::/)",
+                       "--test", "e2e", "--run-ignored", "only"),),
               macos_only=True, explicit_only=True, fixture="any",
               prepare=(E2E_BUILD,)),
         Suite("perf-ui", "Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build.",
               ("cargo", "cargo-nextest", "macos"),
               (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
               macos_only=True, explicit_only=True),
-        Suite("perf-e2e", "Window query latency and Kyuubi export transfer against the real servers.",
+        Suite("perf-e2e", "Window query latency against the real servers.",
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              (nextest("binary(e2e) & test(/^perf::/)", "--test", "e2e", "--run-ignored", "only", "--no-capture"),
-               nextest("binary(integration) & test(/^transfer_perf::kyuubi$/)", "--cargo-profile", "perf", "--no-default-features", "--test", "integration", "--run-ignored", "only", "--no-capture")),
+              (nextest("binary(e2e) & test(/^perf::/)", "--test", "e2e", "--run-ignored", "only", "--no-capture"),),
               macos_only=True, explicit_only=True, fixture="any",
-              prepare=(E2E_BUILD, TRANSFER_PERF_BUILD)),
+              prepare=(E2E_BUILD,)),
+        Suite("perf-kyuubi", "Kyuubi export transfer measurements against the real servers.",
+              ("cargo", "cargo-nextest", "fixture-runtime"),
+              (nextest("binary(integration) & test(/^transfer_perf::kyuubi$/)", "--cargo-profile", "perf",
+                       "--no-default-features", "--test", "integration", "--run-ignored", "only", "--no-capture"),),
+              explicit_only=True, fixture="any", prepare=(TRANSFER_PERF_BUILD,)),
         Suite("perf-postgres", "Postgres export transfer and COPY measurements against a disposable server.",
               ("cargo", "cargo-nextest", "docker"),
               (Step((PYTHON, "scripts/e2e/postgres.py", "--perf")),), explicit_only=True),
@@ -231,6 +237,11 @@ SUITES = {
               ("cargo", "uv", "macos"),
               (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
                Step((PYTHON, "scripts/perf/app.py"))),
+              macos_only=True, explicit_only=True),
+        # perf-app on a package from another job, without a release build.
+        Suite("perf-package", "Launch time, idle memory, and idle CPU of the packaged app on the desktop.",
+              ("macos",),
+              (Step((PYTHON, "scripts/perf/app.py", "--package")),),
               macos_only=True, explicit_only=True),
         Suite("package", "The release app package, built in the target directory, and its size budget.",
               ("cargo", "uv", "macos", "xcode"),
@@ -248,7 +259,8 @@ SUITES = {
         Suite("software-ui", "CPU rendering of the real editor and results on the desktop, with synthetic demo data.",
               ("uv", "cargo", "macos", "xcode", "desktop"),
               (Step(("sh", "scripts/package/macos.sh"),
-                    env=(("QROW_DIST_DIR", "{artifacts}/software-ui/package"),), timeout=40 * 60),
+                    env=(("QROW_DIST_DIR", "{artifacts}/software-ui/package"), ("QROW_BUILD_PROFILE", "release"),
+                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
                Step(("sh", "scripts/e2e/software.sh"),
                     env=(("QROW_E2E_ARTIFACTS", "{artifacts}/software-ui"),)),),
               macos_only=True, explicit_only=True),
@@ -271,7 +283,8 @@ SUITES = {
         Suite("opengl-ui", "Hardware OpenGL rendering and native input in a separate demo package.",
               ("uv", "cargo", "macos", "xcode", "desktop"),
               (Step(("sh", "scripts/package/macos.sh"),
-                    env=(("QROW_DIST_DIR", "{artifacts}/opengl-ui/package"),), timeout=40 * 60),
+                    env=(("QROW_DIST_DIR", "{artifacts}/opengl-ui/package"), ("QROW_BUILD_PROFILE", "release"),
+                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
                Step((PYTHON, "scripts/core/size.py"),
                     env=(("QROW_DIST_DIR", "{artifacts}/opengl-ui/package"),)),
                Step(("sh", "scripts/e2e/software.sh"),
@@ -281,7 +294,8 @@ SUITES = {
         Suite("perf-renderers", "Compare native release CPU and hardware OpenGL composition and scrolling.",
               ("uv", "cargo", "macos", "xcode", "desktop"),
               (Step(("sh", "scripts/package/macos.sh"),
-                    env=(("QROW_DIST_DIR", "{artifacts}/perf-renderers/package"),), timeout=40 * 60),
+                    env=(("QROW_DIST_DIR", "{artifacts}/perf-renderers/package"), ("QROW_BUILD_PROFILE", "release"),
+                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
                Step((PYTHON, "scripts/core/size.py"),
                     env=(("QROW_DIST_DIR", "{artifacts}/perf-renderers/package"),)),
                Step((PYTHON, "scripts/perf/renderers.py"),
@@ -341,57 +355,88 @@ def suites_for_hook(hook, paths):
     return [name for name in suites_for_changes(paths) if name in HOOKS[hook][1]]
 
 
+# The events that start a CI job. Each scope includes the events of the scopes
+# before it: a push runs the pull request jobs too.
+SCOPES = ("pull_request", "push", "manual")
+
+
 @dataclass(frozen=True)
 class CiJob:
     """One job of the checks workflow. `./qtest ci NAME` runs its suites."""
     name: str
     runner: str
     suites: tuple[str, ...]
-    # Suites that run and report their measurements, but do not fail the job.
+    # The minutes that the suites of the job may take, without the runner
+    # setup. A slower run shows a warning. Most jobs stay under 10 minutes.
+    budget: int
+    # Suites that measure and do not fail the job. They run only when the run
+    # measures: on pushes, manual runs, and releases. Pull request measurements
+    # are not kept, so pull requests skip them.
     report_only: tuple[str, ...] = ()
-    # Jobs whose failure predicts a failure of this job, or whose output it uses.
+    # Jobs whose output this job uses. The other jobs start at once.
     needs: tuple[str, ...] = ()
     # A pull request runs the job when it changes a path that matches.
     paths: str = r"^"
-    # False keeps the job out of pull requests. Pushes, manual runs, and releases run every job.
-    pull_requests: bool = True
+    # "pull_request": every run. "push": pushes, manual runs, and releases.
+    # "manual": manual runs and releases.
+    scope: str = "pull_request"
     runtime: str = "auto"
-    # Hosted macOS can lack CGL hardware. Record only that capability as
-    # unsupported, while keeping GPU-independent renderer coverage required.
+    # Environment variables of the job, like CARGO_BUILD_TARGET for a cross build.
+    env: tuple[tuple[str, str], ...] = ()
+    # Only a known missing CGL hardware pixel format permits a CI GPU-suite skip.
     probe_opengl: bool = False
 
 
 LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
 E2E_PATHS = r"^(tests/fixture/|scripts/e2e/)"
+# The desktop suite of the e2e job tests a debug app with the executable that
+# the E2E test build makes, so that the job does not wait for the release
+# package. The desktop-package job tests the release package.
+DEBUG_APP = (("QROW_BUILD_PROFILE", "debug"), ("QROW_PACKAGE_PREBUILT", "true"))
 CI_JOBS = {
     job.name: job
     for job in [
-        CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc")),
-        CiJob("core", LINUX, ("coverage",), paths=RUST_PATHS),
-        CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
-        CiJob("package", MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
+        CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc"), budget=3),
+        CiJob("core", LINUX, ("coverage",), budget=5, paths=RUST_PATHS),
+        CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), budget=7, paths=RUST_PATHS),
+        CiJob("package", MACOS_RUNNER, ("package",), budget=8, report_only=("perf-app",),
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
-        CiJob("backend", LINUX, ("backend", "postgres", "trino"), needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}",
-              report_only=("perf-postgres", "perf-trino"), runtime="docker"),
-        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), report_only=("perf-e2e",), needs=("package",),
-              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native", probe_opengl=True),
-        CiJob("perf", MACOS_RUNNER, ("perf",), report_only=("perf-ui", "perf-renderers"), needs=("core",),
-              paths=rf"{RUST_PATHS}|^scripts/perf/renderers\.py$", probe_opengl=True),
-        # The Intel runners are slower, so pull requests do not use them.
-        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), needs=("core",), pull_requests=False),
-        CiJob("package-intel", "macos-15-intel", ("package",), report_only=("perf-app",), needs=("core",),
-              pull_requests=False),
-        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), report_only=("perf-e2e",),
-              needs=("package-intel",), runtime="native", pull_requests=False, probe_opengl=True),
+        CiJob("backend", LINUX, ("backend", "postgres", "trino"), budget=8, paths=rf"{RUST_PATHS}|{E2E_PATHS}",
+              runtime="docker"),
+        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), budget=8, report_only=("perf-e2e",),
+              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/|^scripts/package/", runtime="native",
+              env=DEBUG_APP, probe_opengl=True),
+        # The benchmarks need no Mac, and Linux runners are not limited to a few at a time.
+        CiJob("perf", LINUX, ("perf",), budget=5, paths=RUST_PATHS),
+        CiJob("perf-ui", MACOS_RUNNER, (), budget=8, report_only=("perf-ui", "perf-renderers"), scope="push",
+              probe_opengl=True),
+        CiJob("perf-backend", LINUX, (), budget=14, report_only=("perf-postgres", "perf-trino", "perf-kyuubi"),
+              scope="push", runtime="docker"),
+        CiJob("desktop-package", MACOS_RUNNER, ("desktop",), budget=5, needs=("package",), scope="manual",
+              runtime="native"),
+        # The Intel runners are slow, and the account runs few macOS jobs at a
+        # time, so only releases and manual runs start the Intel jobs.
+        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), budget=15, scope="manual"),
+        # An ARM64 runner builds the Intel package in about half the time.
+        CiJob("package-intel", MACOS_RUNNER, ("package",), budget=10, scope="manual",
+              env=(("CARGO_BUILD_TARGET", "x86_64-apple-darwin"),)),
+        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), budget=15, report_only=("perf-e2e", "perf-package"),
+              needs=("package-intel",), runtime="native", scope="manual", probe_opengl=True),
     ]
 }
 # A change to these paths can change any job, so it runs all of them.
 CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest$|scripts/core/|pyproject\.toml$|uv\.lock$)"
 
 
+def ci_jobs_for_event(event):
+    """Return the jobs that an event starts: "pull_request" (all paths), "push", or "manual"."""
+    events = SCOPES[:SCOPES.index(event) + 1]
+    return [name for name, job in CI_JOBS.items() if job.scope in events]
+
+
 def ci_jobs_for_changes(paths):
     """Return the pull request jobs for the changed paths, with the jobs that they wait for."""
-    jobs = {name: job for name, job in CI_JOBS.items() if job.pull_requests}
+    jobs = {name: CI_JOBS[name] for name in ci_jobs_for_event("pull_request")}
     selected = {"static"}
     for path in paths:
         if re.search(CI_ALL_PATHS, path):

@@ -1,9 +1,11 @@
 //! The assistant on Claude Code, and conversations of both harnesses in one
 //! workspace, with the synthetic Codex and Claude Code of `tests/desktop/`.
 use crate::support::assistant::{FakeClaude, FakeCodex, REPLY_TIMEOUT, composer_text, transcript};
-use crate::support::{MemoryCredentials, TestApp, label, labels, offline_profile, present};
+use crate::support::{
+    MemoryCredentials, TestApp, label, labelled, labels, offline_profile, present,
+};
 use gpui_kit::{ElementId, TestAppContext};
-use qrow::model::{AssistantHarness, SavedTab, Workspace};
+use qrow::model::{AssistantExecutionMode, AssistantHarness, SavedTab, Workspace};
 use qrow::ui::{OpenSettings, ToggleAssistant};
 
 /// A workspace with an offline connection and an empty tab.
@@ -231,6 +233,9 @@ fn a_conversation_of_the_other_harness_shows_its_saved_copy(cx: &mut TestAppCont
     );
     app.show_threads(cx);
     app.wait_label(cx, "Codex");
+    app.wait_saved(cx, "the saved conversation", |saved| {
+        !saved.assistant.conversations.is_empty()
+    });
     let thread = app.saved().assistant.conversations[0].thread_id.clone();
     assert_eq!(
         app.update(cx, |window, _| label(
@@ -289,4 +294,138 @@ fn a_claude_code_conversation_stays_read_only_while_claude_code_is_signed_out(
     // Use Claude Code leads to its sign-in.
     app.click(cx, "assistant-use-harness");
     app.wait_for(cx, "assistant-claude-sign-in-command");
+}
+
+#[gpui_kit::test]
+fn a_web_search_shows_as_a_card_and_holds_automatic_runs(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let claude = FakeClaude::beside(&directory);
+    let mut settings = claude.select(codex.settings());
+    settings.assistant.web_search = true;
+    settings.assistant.default_execution_mode = AssistantExecutionMode::RunAutomatically;
+    let workspace = Workspace {
+        settings,
+        ..with_connection()
+    };
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_claude(cx);
+    app.send(cx, "Search the web and write SELECT 1 into this tab");
+    // The conversation runs queries automatically, but not after a search.
+    app.wait_approval(cx, "Run in Query 1 on Synthetic? SELECT 1");
+    app.update(cx, |window, _| {
+        assert!(has(window, "assistant-approval-web-search"))
+    });
+    // The card shows the search text and its links when it opens.
+    let card = "Tool Call: Search the web: 2 links";
+    app.wait_until(cx, card, REPLY_TIMEOUT, |window, _| {
+        labelled(window, card).is_some()
+    });
+    app.click_labelled(cx, card);
+    app.wait_until(cx, "the search detail", REPLY_TIMEOUT, |window, _| {
+        labels(window).iter().any(|label| {
+            label.starts_with("Search:\npostgres generate_series\n\nLinks:\nSet Returning Functions\nhttps://www.postgresql.org/docs/current/functions-srf.html")
+        })
+    });
+    app.click(cx, "assistant-cancel-query");
+    app.wait_reply(
+        cx,
+        "See https://www.postgresql.org/docs/current/functions-srf.html",
+    );
+    assert!(
+        claude
+            .log()
+            .iter()
+            .any(|line| line.starts_with("run result") && line.contains("approval_cancelled")),
+        "{:?}",
+        claude.log()
+    );
+}
+
+#[gpui_kit::test]
+fn web_search_asks_first_and_restarts_claude_code_with_it(cx: &mut TestAppContext) {
+    let (app, claude) = launch_claude(cx, |_| {});
+    app.open_claude(cx);
+    app.send(cx, "Say hello");
+    app.wait_reply(cx, "Claude reply: Say hello");
+    app.wait_idle(cx);
+    let tools = |arguments: &[String]| {
+        let index = arguments
+            .iter()
+            .position(|argument| argument == "--tools")
+            .unwrap();
+        arguments[index + 1].clone()
+    };
+    assert_eq!(
+        claude
+            .session_arguments()
+            .iter()
+            .map(|arguments| tools(arguments))
+            .collect::<Vec<_>>(),
+        [""]
+    );
+
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "web search");
+    app.click(cx, "assistant-web-search");
+    // Cancel keeps web search off.
+    app.wait_for(cx, "cancel-assistant-web-search");
+    app.click(cx, "cancel-assistant-web-search");
+    app.wait_gone(cx, "cancel-assistant-web-search");
+    assert!(!app.saved().settings.assistant.web_search);
+    app.click(cx, "assistant-web-search");
+    app.wait_for(cx, "confirm-assistant-web-search");
+    app.click(cx, "confirm-assistant-web-search");
+    app.wait_saved(cx, "web search on", |saved| {
+        saved.settings.assistant.web_search
+    });
+    app.click(cx, "save-settings");
+    app.wait_gone(cx, "save-settings");
+
+    // The next message starts Claude Code again with its search tool.
+    app.wait_claude(cx);
+    app.send_when_ready(cx, "Say again");
+    app.wait_reply(cx, "Claude reply: Say again");
+    assert!(
+        claude
+            .session_arguments()
+            .iter()
+            .any(|arguments| tools(arguments) == "WebSearch"),
+        "{:?}",
+        claude.session_arguments()
+    );
+}
+
+#[gpui_kit::test]
+fn turning_off_web_search_during_a_search_asks_and_cancels_its_card(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let claude = FakeClaude::beside(&directory);
+    let mut settings = claude.select(codex.settings());
+    settings.assistant.web_search = true;
+    let workspace = Workspace {
+        settings,
+        ..with_connection()
+    };
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_claude(cx);
+    app.send(cx, "Search the web and hold");
+    let running = "Tool Call: Search the web: Searching";
+    app.wait_until(cx, running, REPLY_TIMEOUT, |window, _| {
+        labelled(window, running).is_some()
+    });
+
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "web search");
+    app.click(cx, "assistant-web-search");
+    // The change stops the running turn, so Qrow asks first.
+    app.wait_for(cx, "confirm-assistant-web-search");
+    app.click(cx, "confirm-assistant-web-search");
+    app.wait_saved(cx, "web search off", |saved| {
+        !saved.settings.assistant.web_search
+    });
+    app.click(cx, "save-settings");
+    app.wait_gone(cx, "save-settings");
+    let cancelled = "Tool Call: Search the web: Cancelled";
+    app.wait_until(cx, cancelled, REPLY_TIMEOUT, |window, _| {
+        labelled(window, cancelled).is_some()
+    });
 }

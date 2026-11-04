@@ -5,6 +5,7 @@ use crate::support::fixture::{
 };
 use crate::support::{
     TestApp, assert_connection_dot, assert_tab_dot, cell, connection_row, label, labelled, shows,
+    shows_tab_dot,
 };
 use gpui_kit::TestAppContext;
 use gpui_kit::component::ActiveTheme;
@@ -242,8 +243,14 @@ fn a_connection_shows_one_dot_while_another_tab_runs_after_an_error(cx: &mut Tes
     // Reading the failed tab exposes the work on the same connection.
     app.click_labelled(cx, "Query 1, unread error");
     app.wait_label(cx, "Alpha, running");
+    // A keep-alive of the failed tab's session shows it as running for a moment.
+    app.wait_until(
+        cx,
+        "the idle dot of the failed tab",
+        QUERY_TIMEOUT,
+        |window, cx| shows_tab_dot(window, failed, Some(cx.theme().info.opacity(0.4))),
+    );
     app.update(cx, |window, cx| {
-        assert_tab_dot(window, failed, Some(cx.theme().info.opacity(0.4)));
         assert_connection_dot(window, profile.id, cx.theme().info);
     });
     app.click(cx, format!("connection-status-{}", profile.id));
@@ -321,4 +328,24 @@ fn cancel_stops_spark_and_keeps_the_partial_preview(cx: &mut TestAppContext) {
     app.click(cx, "disconnect");
     app.run_sql(cx, "SELECT 'reconnect-works' AS result");
     app.wait_cell(cx, 0, 1, "reconnect-works");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn minimized_results_keep_completion_unread_until_restored(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, &["Minimized results"]);
+    app.run_complete(cx, REGISTER_BLOCKING);
+    let query = token("minimized-results");
+    app.run_sql(cx, &blocking(&query, 1500));
+    app.wait_evidence(cx, &query, "started", QUERY_TIMEOUT);
+    app.click(cx, "toggle-results");
+    wait_tab(&app, cx, "Query 1, unread query result");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+    });
+    app.click(cx, "toggle-results");
+    wait_tab(&app, cx, "Query 1");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "Query 1, unread query result").is_none());
+    });
 }

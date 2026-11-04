@@ -31,7 +31,7 @@ pub use gpui_base::input::{
     TabSize, TextDecoration, TextDecorationCollection, TextareaState, ToggleCodeActions, Undo,
     WrappingIndent,
 };
-pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
+pub use gpui_base::input::{EMPHASIS_OPACITY, EditorMode, InputMode, InputModeKind, TextareaMode};
 #[doc(hidden)]
 mod editor;
 mod group;

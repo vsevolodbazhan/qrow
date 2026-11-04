@@ -2,6 +2,100 @@
 use super::*;
 
 impl Qrow {
+    /// Shows a web search of the harness as a card in its turn. The first
+    /// event adds the card, and the end of the search updates it. A search
+    /// also makes the queries of its turn wait for approval.
+    fn record_web_search(&mut self, search: WebSearch, cx: &mut Context<Self>) {
+        let WebSearch {
+            thread_id,
+            turn_id,
+            id,
+            query,
+            status,
+        } = search;
+        if self.assistant.conversation(&thread_id).is_none()
+            || self
+                .thread_run(&thread_id)
+                .and_then(|run| run.active_turn.as_deref())
+                != Some(turn_id.as_str())
+        {
+            return;
+        }
+        let state = match &status {
+            WebSearchStatus::Running => ToolState::Running("Searching".into()),
+            WebSearchStatus::Completed(links) => ToolState::Done(match links.len() {
+                0 => None,
+                1 => Some("1 link".into()),
+                count => Some(format!("{count} links")),
+            }),
+            WebSearchStatus::Failed(_) => ToolState::Failed,
+        };
+        let detail = web_search_detail(&query, &status);
+        let run = self.thread_run_mut(&thread_id);
+        run.web_search_turn = Some(turn_id.clone());
+        let card = if matches!(status, WebSearchStatus::Running) {
+            run.web_searches.get(&id).copied()
+        } else {
+            run.web_searches.remove(&id)
+        };
+        let entries = self
+            .assistant_state
+            .transcripts
+            .entry(thread_id.clone())
+            .or_default();
+        match card.and_then(|card| entries.iter_mut().find(|entry| entry.id == card)) {
+            Some(entry) => {
+                entry.detail = Some(detail);
+                entry.set_tool_state(state);
+            }
+            None => {
+                let running = matches!(state, ToolState::Running(_));
+                let tool = ToolActivity {
+                    kind: ToolKind::WebSearch,
+                    target: None,
+                    state,
+                };
+                let entry = TranscriptEntry::tool(tool, turn_id).with_detail(detail);
+                if running {
+                    self.thread_run_mut(&thread_id)
+                        .web_searches
+                        .insert(id, entry.id);
+                }
+                self.assistant_state
+                    .transcripts
+                    .entry(thread_id.clone())
+                    .or_default()
+                    .push(entry);
+                if self.displayed_thread().as_deref() == Some(thread_id.as_str()) {
+                    self.scroll_assistant_to_bottom(cx);
+                }
+            }
+        }
+        self.schedule_transcript_save(cx);
+        cx.notify();
+    }
+
+    /// Shows the web searches in `cards` as cancelled. Their turn ended or
+    /// their harness stopped before they gave a result.
+    pub(super) fn cancel_web_search_cards(
+        &mut self,
+        thread_id: &str,
+        cards: &BTreeMap<String, Uuid>,
+    ) {
+        if cards.is_empty() {
+            return;
+        }
+        if let Some(entries) = self.assistant_state.transcripts.get_mut(thread_id) {
+            for entry in entries
+                .iter_mut()
+                .filter(|entry| cards.values().any(|id| *id == entry.id))
+            {
+                entry.set_tool_state(ToolState::Cancelled);
+            }
+        }
+        self.save_transcripts(Some(thread_id));
+    }
+
     /// Gives a conversation the title that the user chose.
     pub(super) fn apply_assistant_rename(&mut self, id: &str, title: &str, cx: &mut Context<Self>) {
         let Some(conversation) = self
@@ -372,6 +466,8 @@ impl Qrow {
                 }
                 run.active_turn = None;
                 run.target = None;
+                run.web_search_turn = None;
+                let searches = std::mem::take(&mut run.web_searches);
                 if !viewed {
                     run.unread = Some(if error.is_some() {
                         Unread::Error
@@ -385,6 +481,7 @@ impl Qrow {
                         "The turn ended before the query ran.",
                     );
                 }
+                self.cancel_web_search_cards(&thread_id, &searches);
                 // The final text of a reply can be longer than the streamed text.
                 if self.harness_features().history {
                     self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
@@ -503,6 +600,9 @@ impl Qrow {
             }
             AssistantServiceEvent::Harness(AssistantEvent::ToolCall(call)) => {
                 self.handle_assistant_tool(call, window, cx)
+            }
+            AssistantServiceEvent::Harness(AssistantEvent::WebSearch(search)) => {
+                self.record_web_search(search, cx)
             }
             AssistantServiceEvent::Harness(AssistantEvent::Other { method, params }) => {
                 if method == "account/login/completed" {
@@ -682,4 +782,23 @@ impl Qrow {
             _ => {}
         }
     }
+}
+
+/// The search text and the links of a web search card.
+fn web_search_detail(query: &str, status: &WebSearchStatus) -> String {
+    let mut detail = format!("Search:\n{}", if query.is_empty() { "…" } else { query });
+    match status {
+        WebSearchStatus::Running => {}
+        WebSearchStatus::Completed(links) if links.is_empty() => {
+            detail.push_str("\n\nNo links.");
+        }
+        WebSearchStatus::Completed(links) => {
+            detail.push_str("\n\nLinks:");
+            for link in links {
+                detail.push_str(&format!("\n{}\n{}", link.title, link.url));
+            }
+        }
+        WebSearchStatus::Failed(error) => detail.push_str(&format!("\n\nError: {error}")),
+    }
+    detail
 }

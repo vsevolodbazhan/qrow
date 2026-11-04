@@ -5,6 +5,11 @@ source has an Apache 2.0 license. See `LICENSE-APACHE`.
 
 Qrow changes these files:
 
+- `src/input/input.rs` and `src/input/editor.rs`: `context_menu_with_capabilities`
+  passes the current selection and edit state to a custom context menu.
+  The input entity is borrowed during the callback, so the callback cannot
+  read that entity. The editor uses this snapshot for Format SQL and the
+  clipboard commands. The Qrow UI test checks the callback after a right-click.
 - `src/form/form.rs`: forms apply caller styles after their default styles.
   The export form uses a 16-point gap between columns.
 
@@ -12,6 +17,8 @@ Qrow changes these files:
   Before, clicking a disabled input moved keyboard focus to its frame.
   The sign-in UI and E2E tests check that the locked account field cannot
   receive keyboard focus.
+- `src/input/mod.rs`: exports `EMPHASIS_OPACITY` of the GPUI Base patch, so
+  Qrow tests can find the tint of the SQL editor.
 - `src/menu/popup_menu.rs` and `src/menu/menu_item.rs`: standard menu items
   accept a tooltip, including when disabled. Dismissing a menu hides the
   tooltip. This gives a disabled Delete action a reason without an extra row.

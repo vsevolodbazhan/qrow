@@ -1046,7 +1046,7 @@ final class Driver {
     /// text keeps its color. A selection painted over the glyphs dimmed them,
     /// and One Dark's earlier selection color matched the bubble.
     func testAssistantSelection() throws {
-        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        key(15, flags: .maskCommand) // Cmd+R opens the docked assistant.
         _ = try wait("Model: Synthetic Model", timeout: 20)
         try fill("Assistant Message", "Count the weekend before last.")
         try press("Send")
@@ -1264,7 +1264,7 @@ final class Driver {
         print("PASS: The application menu opens and closes Settings")
     }
     func testAssistantDeleteMenu() throws {
-        key(38, flags: .maskCommand)
+        key(15, flags: .maskCommand)
         _ = try wait("Model: Synthetic Model", timeout: 20)
         if find("Search conversations") != nil {
             try press("Toggle conversation list")
@@ -1293,7 +1293,7 @@ final class Driver {
     /// Pixel checks of assistant messages at the scale and width at which the
     /// transcript cut them off. The headless UI tests check their geometry.
     func testAssistantLayout() throws {
-        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        key(15, flags: .maskCommand) // Cmd+R opens the docked assistant.
         _ = try wait("Model: Synthetic Model", timeout: 20)
         if find("Search conversations") != nil {
             try press("Toggle conversation list")

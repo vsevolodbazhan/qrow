@@ -1,10 +1,12 @@
 """Command line of qtest. Run `./qtest help` for the guide."""
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import tarfile
+import time
 
 import catalog
 import runner  # Adds scripts/e2e to the import path for fixture.
@@ -150,17 +152,24 @@ def command_hook(args):
     return summary["exit_code"]
 
 
+SCOPE_NOTES = {"pull_request": "", "push": "  not in pull requests", "manual": "  releases and manual runs only"}
+
+
 def command_ci(args):
     """List the CI jobs, print the jobs for the changed paths, or run the suites of one job."""
     if args.job is None:
         for job in catalog.CI_JOBS.values():
             suites = ", ".join([*job.suites, *(f"{name} (report only)" for name in job.report_only)])
             needs = f"  waits for {', '.join(job.needs)}" if job.needs else ""
-            scope = "" if job.pull_requests else "  not in pull requests"
-            print(f"{job.name:<13} {job.runner:<14} {suites}{needs}{scope}")
+            print(f"{job.name:<15} {job.runner:<14} {job.budget:>2} min  {suites}{needs}{SCOPE_NOTES[job.scope]}")
         return EXIT_PASSED
     if args.job == "plan":
-        names = list(catalog.CI_JOBS) if args.all else catalog.ci_jobs_for_changes(runner.changed_paths_from_git())
+        if args.all:
+            names = catalog.ci_jobs_for_event("manual")
+        elif args.push:
+            names = catalog.ci_jobs_for_event("push")
+        else:
+            names = catalog.ci_jobs_for_changes(runner.changed_paths_from_git())
         plan = json.dumps({name: name in names for name in catalog.CI_JOBS})
         print(plan)
         if args.github_output:
@@ -168,14 +177,24 @@ def command_ci(args):
                 output.write(f"jobs={plan}\n")
         return EXIT_PASSED
     job = catalog.CI_JOBS[args.job]
-    names = [*job.suites, *job.report_only]
+    measure = args.measure or os.environ.get("QROW_CI_MEASURE") == "true"
+    report_only = job.report_only if measure else ()
+    names = [*job.suites, *report_only]
+    os.environ.update(job.env)
     if args.install:
         tools = [tool for tool in catalog.TOOLS if any(tool in catalog.SUITES[name].requires for name in names)]
         if install_tools(tools):
             return EXIT_FAILED
-    selected, _ = runner.resolve(names)
+        target = dict(job.env).get("CARGO_BUILD_TARGET")
+        if target and subprocess.run(("rustup", "target", "add", target), cwd=ROOT).returncode:
+            return EXIT_FAILED
     output = runner.Output(quiet=False)
+    if not names:
+        output.note(f"CI job {job.name} only measures, and this run does not measure. Use --measure.")
+        return EXIT_PASSED
+    selected, _ = runner.resolve(names)
     output.note(f"CI job {job.name}: {', '.join(names)}")
+    started = time.monotonic()
     # A CI job stops at once when a prerequisite is missing, for example the
     # automation permissions of the desktop suite, so it builds nothing.
     options = {"runtime": job.runtime, "repeat": 1}
@@ -183,7 +202,7 @@ def command_ci(args):
     # Keep the existing preflight contract: missing required tools/session
     # permissions stop the job before compiling the capability probe.
     prerequisites = [runner.precheck(item, options) for item in selected] if job.probe_opengl else []
-    missing = any(result and result.status == "missing" and result.name not in job.report_only
+    missing = any(result and result.status == "missing" and result.name not in report_only
                   for result in prerequisites)
     if job.probe_opengl and not missing:
         run_dir = runner.new_run_dir()
@@ -191,9 +210,22 @@ def command_ci(args):
         log.parent.mkdir(parents=True, exist_ok=True)
         options["ci_opengl_capability"] = opengl.probe(runner.execute, log, output)
     summary = runner.run(selected, options, [], output,
-                         report_only=job.report_only, require_all=True, run_dir=run_dir)
+                         report_only=report_only, require_all=True, run_dir=run_dir)
     print_summary(summary)
+    report_budget(job, (time.monotonic() - started) / 60)
     return summary["exit_code"]
+
+
+def report_budget(job, minutes):
+    """Warn when the suites of a CI job took longer than its budget."""
+    if minutes <= job.budget:
+        return
+    message = (f"The suites of {job.name} took {minutes:.1f} min, over the budget of {job.budget} min "
+               "in scripts/qtest/catalog.py. Find what got slower before you raise the budget.")
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::warning title=CI budget::{message}")
+    else:
+        print(f"[qtest] {message}", file=sys.stderr)
 
 
 def print_summary(summary):
@@ -479,7 +511,12 @@ def parser():
         description="Without JOB, list the jobs of the checks workflow. `plan` prints the jobs that "
                     "the changed paths select, as JSON. JOB runs the suites of that job, as CI does.")
     ci.add_argument("job", nargs="?", choices=[*catalog.CI_JOBS, "plan"])
-    ci.add_argument("--all", action="store_true", help="plan: select every job.")
+    plan = ci.add_mutually_exclusive_group()
+    plan.add_argument("--all", action="store_true", help="plan: select every job, as releases and manual runs do.")
+    plan.add_argument("--push", action="store_true", help="plan: select the jobs of a push to main.")
+    ci.add_argument("--measure", action="store_true",
+                    help="Also run the report-only suites, as pushes and releases do. "
+                         "QROW_CI_MEASURE=true does the same.")
     ci.add_argument("--github-output", metavar="FILE", help="plan: also write `jobs=JSON` to FILE.")
     ci.add_argument("--install", action="store_true", help="Install the pinned tools of the job first.")
 

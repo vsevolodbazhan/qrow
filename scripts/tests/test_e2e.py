@@ -2,6 +2,7 @@
 import http.server
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import socketserver
@@ -37,6 +38,33 @@ class FakeServers:
 
 
 class FixtureTests(unittest.TestCase):
+    def test_ldap_bootstrap_waits_for_a_bind_and_fails_after_bounded_attempts(self):
+        for ready_after, expected_code, expected_calls in [(0, 0, 1), (3, 0, 4), (100, 1, 100)]:
+            with self.subTest(ready_after=ready_after), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                probe = root / "ldapwhoami"
+                probe.write_text(
+                    '#!/bin/sh\n'
+                    'test "$*" = "-Y EXTERNAL -Q -H ldapi:/// -o nettimeout=1" || exit 2\n'
+                    'count=$(cat "$CALLS" 2>/dev/null || echo 0)\n'
+                    'count=$((count + 1))\n'
+                    'echo "$count" > "$CALLS"\n'
+                    'test "$count" -gt "$READY_AFTER"\n'
+                )
+                probe.chmod(0o755)
+                delay = root / "sleep"
+                delay.write_text('#!/bin/sh\ntest "$1" = "0.1"\n')
+                delay.chmod(0o755)
+                calls = root / "calls"
+                env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}",
+                           CALLS=str(calls), READY_AFTER=str(ready_after))
+                result = subprocess.run(["sh", str(fixture.SERVER / "ldap-ready.sh")],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, expected_code, result.stderr)
+                self.assertEqual(int(calls.read_text()), expected_calls)
+                if expected_code:
+                    self.assertIn("before schema import", result.stderr)
+
     def test_both_runtimes_share_the_evidence_directory_with_tests(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = str((Path(directory) / "executor-evidence").resolve())

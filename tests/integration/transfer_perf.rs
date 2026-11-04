@@ -700,7 +700,7 @@ fn measure(engine: &str) -> Result<()> {
     Ok(())
 }
 #[test]
-#[ignore = "performance probe: ./qtest run perf-e2e"]
+#[ignore = "performance probe: ./qtest run perf-kyuubi"]
 fn kyuubi() -> Result<()> {
     measure("kyuubi")
 }

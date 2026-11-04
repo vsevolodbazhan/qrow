@@ -363,7 +363,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
         |window, _| labelled(window, &schema).is_none(),
     );
 
-    app.fill_labelled(cx, "Search tables", &format!("{schema}.bookings"));
+    app.fill_labelled(cx, "Search relations", &format!("{schema}.bookings"));
     app.wait_until(cx, "the qualified match", QUERY_TIMEOUT, |window, _| {
         labelled(window, "bookings").is_some() && labelled(window, "daily").is_none()
     });
@@ -371,7 +371,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.choose(cx, "popup-menu", "Copy qualified name");
     let name = cx.read_from_clipboard().unwrap().text().unwrap();
     assert_eq!(name, format!("`{schema}`.`bookings`"));
-    app.fill_labelled(cx, "Search tables", &name);
+    app.fill_labelled(cx, "Search relations", &name);
     app.wait_until(
         cx,
         "the copied name to match",
@@ -379,7 +379,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
         |window, _| labelled(window, "bookings").is_some() && labelled(window, "daily").is_none(),
     );
 
-    app.fill_labelled(cx, "Search tables", &format!("{schema}.missing"));
+    app.fill_labelled(cx, "Search relations", &format!("{schema}.missing"));
     app.toggle_connection(cx, profile.id);
     app.wait_until(cx, "the empty search notice", QUERY_TIMEOUT, |window, _| {
         labelled(window, "No matches").is_some() && labelled(window, "bookings").is_none()
@@ -398,7 +398,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
         QUERY_TIMEOUT,
         |window, _| labelled(window, "No matches").is_none(),
     );
-    app.fill_labelled(cx, "Search tables", &name);
+    app.fill_labelled(cx, "Search relations", &name);
     app.wait_until(cx, "the table to return", QUERY_TIMEOUT, |window, _| {
         labelled(window, "bookings").is_some() && labelled(window, "No matches").is_none()
     });
@@ -649,7 +649,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
                 })
             },
         );
-        app.fill_labelled(cx, "Search tables", &format!("{schema}.fourth"));
+        app.fill_labelled(cx, "Search relations", &format!("{schema}.fourth"));
         app.wait_until(cx, "the refreshed table", QUERY_TIMEOUT, |window, _| {
             labelled(window, "fourth").is_some()
         });
@@ -669,7 +669,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
         app.wait_until(cx, "the table to collapse", QUERY_TIMEOUT, |window, _| {
             labelled(window, "c0 int").is_none()
         });
-        app.fill_labelled(cx, "Search tables", "");
+        app.fill_labelled(cx, "Search relations", "");
     }
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }

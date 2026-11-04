@@ -81,6 +81,34 @@ fn command_c_copies_postgres_selection_as_pretty_markdown(cx: &mut TestAppContex
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run postgres"]
+fn copy_as_plain_text_copies_a_date_value(cx: &mut TestAppContext) {
+    use crate::support::{find_in, pointer_click_with};
+    use gpui_kit::{ClipboardItem, Modifiers, MouseButton};
+    let (workspace, credentials) = workspace("SELECT DATE '2026-11-03' AS pdate");
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_cell(cx, 0, 1, "2026-11-03");
+    app.update(cx, |window, cx| {
+        let cell = find_in(window, ("row", 0usize), ("cell", 1usize)).unwrap();
+        pointer_click_with(window, &cell, MouseButton::Right, Modifiers::default(), cx);
+    });
+    app.wait_for(cx, "popup-menu");
+    cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+    app.choose_in_submenu(cx, "Copy as", "Plain text");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("2026-11-03")
+    );
+    assert_eq!(
+        app.saved().settings.copy_format,
+        qrow::model::CopyFormat::Markdown
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
 fn menu_copy_commands_use_the_saved_copy_format(cx: &mut TestAppContext) {
     use crate::support::{find_in, pointer_click_with};
     use gpui_kit::{ClipboardItem, Modifiers, MouseButton};
@@ -528,4 +556,32 @@ fn parquet_non_iso_dates_remain_text_and_keep_the_session_setting(cx: &mut TestA
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
     app.run_complete(cx, "SELECT current_setting('DateStyle') AS style");
     app.wait_cell(cx, 0, 1, "SQL, DMY");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
+    let sql = r#"select $body$日本語😀; select$body$ as "Mixed Case""#;
+    let (workspace, credentials) = workspace(sql);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(
+        cx,
+        "formatted SQL",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql.starts_with("SELECT"),
+    );
+    app.press(cx, "cmd-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀; select");
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-z");
+    app.wait_until(
+        cx,
+        "format undo",
+        std::time::Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == sql,
+    );
 }

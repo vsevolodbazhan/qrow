@@ -164,6 +164,8 @@ pub struct Settings {
     pub export_replay_limit_mib: u32,
     /// Format of ⌘C and the Copy commands of the results menu.
     pub copy_format: CopyFormat,
+    /// Collapse the Results and Logs panel to its header in every tab.
+    pub results_minimized: bool,
 }
 
 impl Default for Settings {
@@ -186,6 +188,7 @@ impl Default for Settings {
             export: crate::export::Settings::default(),
             export_replay_limit_mib: 2048,
             copy_format: CopyFormat::default(),
+            results_minimized: false,
         }
     }
 }
@@ -387,6 +390,9 @@ pub struct AssistantSettings {
     pub codex: AssistantModelChoice,
     pub claude: AssistantModelChoice,
     pub sql_keyword_case: KeywordCase,
+    /// Lets the harness search the web. Codex uses its cached index, and
+    /// Claude Code uses its search tool. Neither can open other URLs.
+    pub web_search: bool,
 }
 
 impl Default for AssistantSettings {
@@ -402,6 +408,7 @@ impl Default for AssistantSettings {
             codex: AssistantModelChoice::default(),
             claude: AssistantModelChoice::default(),
             sql_keyword_case: KeywordCase::default(),
+            web_search: false,
         }
     }
 }
@@ -2579,6 +2586,7 @@ mod tests {
             export: crate::export::Settings::default(),
             export_replay_limit_mib: 2048,
             copy_format: CopyFormat::Markdown,
+            results_minimized: false,
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());

@@ -21,6 +21,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Pushes, manual runs, and releases run the report-only suites of each job
+  # and keep their measurements. Pull requests skip them.
+  QROW_CI_MEASURE: ${{ github.event_name != 'pull_request' }}
+
 jobs:
   plan:
     name: plan
@@ -38,19 +43,21 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
-      # A pull request runs the jobs that its changes select. Pushes, manual
-      # runs, and releases run every job.
+      # A pull request runs the jobs that its changes select. A push also runs
+      # the measurement jobs. Manual runs and releases run every job.
       - id: plan
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          if [ "$EVENT" = pull_request ]; then
-            QROW_CHANGED_FILES="$(git diff --name-only HEAD^1 HEAD)"
-            export QROW_CHANGED_FILES
-            ./qtest ci plan --github-output "$GITHUB_OUTPUT"
-          else
-            ./qtest ci plan --all --github-output "$GITHUB_OUTPUT"
-          fi
+          case "$EVENT" in
+            pull_request)
+              QROW_CHANGED_FILES="$(git diff --name-only HEAD^1 HEAD)"
+              export QROW_CHANGED_FILES
+              ./qtest ci plan --github-output "$GITHUB_OUTPUT"
+              ;;
+            push) ./qtest ci plan --push --github-output "$GITHUB_OUTPUT" ;;
+            *) ./qtest ci plan --all --github-output "$GITHUB_OUTPUT" ;;
+          esac
 
   static:
     name: static
@@ -107,11 +114,9 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # The jobs below wait for core: its compile and unit failures predict their
-  # failures, and it takes about 2 minutes.
   ui:
     name: ui
-    needs: [plan, core]
+    needs: plan
     if: fromJSON(needs.plan.outputs.jobs).ui
     runs-on: macos-15
     timeout-minutes: 30
@@ -139,7 +144,7 @@ jobs:
 
   package:
     name: package
-    needs: [plan, core]
+    needs: plan
     if: fromJSON(needs.plan.outputs.jobs).package
     runs-on: macos-15
     timeout-minutes: 40
@@ -161,7 +166,7 @@ jobs:
         with:
           version: "0.12.10"
       - run: ./qtest ci package --install
-      # The E2E job tests this package, and a release publishes it.
+      # desktop-package tests this package, and a release publishes it.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-package
@@ -185,7 +190,7 @@ jobs:
 
   backend:
     name: backend
-    needs: [plan, core]
+    needs: plan
     # E2E jobs run repository code in Docker and through macOS accessibility
     # APIs, so they skip pull requests from forks.
     if: >
@@ -216,9 +221,11 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # The desktop suite tests a debug app from the E2E test build, so this job
+  # does not wait for the release package. desktop-package tests that package.
   e2e:
     name: e2e
-    needs: [plan, package]
+    needs: plan
     if: >
       fromJSON(needs.plan.outputs.jobs).e2e &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -243,10 +250,6 @@ jobs:
           qrow_java_home="$(/usr/libexec/java_home -v 17)"
           echo "JAVA_HOME=$qrow_java_home" >> "$GITHUB_ENV"
           echo "$qrow_java_home/bin" >> "$GITHUB_PATH"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: macos-package
-          path: target/macos-package
       # Keep the fixed 992x652 test viewport clear of the Dock. Its size can
       # change as the native scenarios launch additional app bundles.
       - name: Prepare desktop work area
@@ -256,9 +259,6 @@ jobs:
             killall Dock
           fi
       - run: ./qtest ci e2e --install
-        env:
-          QROW_E2E_REUSE_MACOS_PACKAGE: true
-          QROW_MACOS_PACKAGE: target/macos-package/Qrow-macos.zip
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -278,9 +278,9 @@ jobs:
 
   perf:
     name: perf
-    needs: [plan, core]
+    needs: plan
     if: fromJSON(needs.plan.outputs.jobs).perf
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -288,7 +288,6 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.ref }}
       - run: rustup show
-      # The perf profile has no LTO, so with this cache only Qrow builds again.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: perf
@@ -296,14 +295,6 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
-      # Keep the fixed 992x652 test viewport clear of the Dock. Its size can
-      # change as the native scenarios launch additional app bundles.
-      - name: Prepare desktop work area
-        run: |
-          defaults write com.apple.dock autohide -bool true
-          if pgrep -x Dock >/dev/null; then
-            killall Dock
-          fi
       - run: ./qtest ci perf --install
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -320,12 +311,131 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
+  perf-ui:
+    name: perf-ui
+    needs: plan
+    if: fromJSON(needs.plan.outputs.jobs)['perf-ui']
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      # The perf profile has no LTO, so with this cache only Qrow builds again.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: perf-ui
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      # Keep the fixed 992x652 test viewport clear of the Dock. Its size can
+      # change as the native scenarios launch additional app bundles.
+      - name: Prepare desktop work area
+        run: |
+          defaults write com.apple.dock autohide -bool true
+          if pgrep -x Dock >/dev/null; then
+            killall Dock
+          fi
+      - run: ./qtest ci perf-ui --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: perf-ui-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: performance-perf-ui
+          path: target/qtest/runs/latest/perf.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  perf-backend:
+    name: perf-backend
+    needs: plan
+    if: fromJSON(needs.plan.outputs.jobs)['perf-backend']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: perf-backend
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: ./qtest ci perf-backend --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: perf-backend-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: performance-backend
+          path: target/qtest/runs/latest/perf.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  # The desktop suite on the release package, which a release publishes.
+  desktop-package:
+    name: desktop-package
+    needs: [plan, package]
+    if: fromJSON(needs.plan.outputs.jobs)['desktop-package']
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: Select Java 17
+        run: |
+          qrow_java_home="$(/usr/libexec/java_home -v 17)"
+          echo "JAVA_HOME=$qrow_java_home" >> "$GITHUB_ENV"
+          echo "$qrow_java_home/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-package
+          path: target/macos-package
+      - run: ./qtest ci desktop-package --install
+        env:
+          QROW_E2E_REUSE_MACOS_PACKAGE: true
+          QROW_MACOS_PACKAGE: target/macos-package/Qrow-macos.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: desktop-package-evidence
+          path: |
+            target/qtest/runs/
+            target/e2e-tools/preflight.log
+          retention-days: 1
+          if-no-files-found: error
+
+  # After a dependency change, the Intel runner compiles the optimized
+  # dependencies two times, for Clippy and for the tests: about an hour.
   ui-intel:
     name: ui-intel
-    needs: [plan, core]
+    needs: plan
     if: fromJSON(needs.plan.outputs.jobs)['ui-intel']
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -348,15 +458,14 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # The catalog sets CARGO_BUILD_TARGET, so this ARM64 runner builds the Intel package.
   package-intel:
     name: package-intel
-    needs: [plan, core]
+    needs: plan
     if: fromJSON(needs.plan.outputs.jobs)['package-intel']
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 40
     env:
-      # The package and the release build of perf-app use the same version,
-      # so perf-app does not build again.
       QROW_RELEASE_VERSION: ${{ inputs.release-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -372,7 +481,7 @@ jobs:
         with:
           version: "0.12.10"
       - run: ./qtest ci package-intel --install
-      # The E2E job tests this package, and a release publishes it.
+      # e2e-intel tests this package, and a release publishes it.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-package-x86_64
@@ -386,13 +495,6 @@ jobs:
           path: target/qtest/runs/
           retention-days: 1
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: github.ref == 'refs/heads/main'
-        with:
-          name: performance-package-intel
-          path: target/qtest/runs/latest/perf.json
-          retention-days: 90
-          if-no-files-found: warn
 
   e2e-intel:
     name: e2e-intel

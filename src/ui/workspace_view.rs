@@ -303,23 +303,74 @@ impl Qrow {
             .child(div().flex_1())
     }
 
-    fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.tabs[self.active].panel.selected == Panel::Output {
-            return self.output_panel(cx);
+    fn toggle_results(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            return;
         }
-        let tab = &self.tabs[self.active];
-        results::selection_boundary(&tab.table)
+        self.settings.results_minimized = !self.settings.results_minimized;
+        self.resize = None;
+        if !self.settings.results_minimized {
+            self.tabs[self.active].panel.content_visible();
+        }
+        self.changed(cx);
+    }
+
+    pub(super) fn restore_results(&mut self, cx: &mut Context<Self>) {
+        if self.settings.results_minimized {
+            self.settings.results_minimized = false;
+            self.changed(cx);
+        }
+    }
+
+    pub(super) fn results_toggle_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let minimized = self.settings.results_minimized;
+        let label = if minimized { "Expand" } else { "Collapse" };
+        Button::new("toggle-results")
+            .ghost()
+            .small()
+            .icon(if minimized {
+                IconName::ChevronUp
+            } else {
+                IconName::ChevronDown
+            })
+            .accessibility_label(label)
+            .map(|mut button| {
+                button
+                    .interactivity()
+                    .tooltip(StatusTooltip::new(label, "").for_action(&ToggleResults, None));
+                button
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_results(window, cx)))
+    }
+
+    fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.settings.results_minimized {
+            return self.result_tabs(cx).into_any_element();
+        }
+        let content = if self.tabs[self.active].panel.selected == Panel::Output {
+            self.output_panel(cx)
+        } else {
+            let table = &self.tabs[self.active].shown_result().table;
+            results::selection_boundary(table)
+                .size_full()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .child(self.result_toolbar(cx))
+                .child(div().flex_1().min_h_0().min_w_0().child(results::view(
+                    table,
+                    self.dialog_open(),
+                    self.settings.ui_scale,
+                    cx,
+                )))
+                .into_any_element()
+        };
+        v_flex()
             .size_full()
-            .flex()
-            .flex_col()
+            .min_h_0()
             .overflow_hidden()
-            .child(self.result_toolbar(cx))
-            .child(div().flex_1().min_h_0().min_w_0().child(results::view(
-                &tab.table,
-                self.dialog_open(),
-                self.settings.ui_scale,
-                cx,
-            )))
+            .child(self.result_tabs(cx))
+            .child(div().flex_1().min_h_0().min_w_0().child(content))
             .into_any_element()
     }
 
@@ -764,6 +815,7 @@ impl Qrow {
             .text_color(cx.theme().foreground)
             .text_sm()
             .on_action(cx.listener(Self::run))
+            .on_action(cx.listener(Self::format_sql))
             .on_action(
                 cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
             )
@@ -782,6 +834,9 @@ impl Qrow {
             .on_action(cx.listener(|this, _: &ShowSignIns, window, cx| {
                 this.show_sidebar_panel(SidebarPanel::SignIns, window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &ToggleResults, window, cx| this.toggle_results(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
             }))
@@ -958,21 +1013,44 @@ impl Render for Qrow {
                         div()
                             .id("sql-editor")
                             .test_support()
-                            .h(editor_height)
-                            .flex_shrink_0()
+                            .when(self.settings.results_minimized, |el| el.flex_1().min_h_0())
+                            .when(!self.settings.results_minimized, |el| {
+                                el.h(editor_height).flex_shrink_0()
+                            })
                             .min_w_0()
                             .line_height(relative(self.settings.editor_line_height))
                             .child(
                                 Editor::new(&self.tabs[self.active].input)
                                     .appearance(false)
+                                    .context_menu_with_capabilities(|_, capabilities, _, cx| {
+                                        gpui_kit::component::native_menu::NativeMenu::from(
+                                            format_sql::editor_menu(
+                                                capabilities,
+                                                cx.read_from_clipboard().is_some(),
+                                            ),
+                                        )
+                                    })
                                     .font_family(self.settings.editor_font_family.clone())
                                     .text_size(self.ui_px(self.settings.editor_font_size))
                                     .size_full()
                                     .aria_label("SQL Editor"),
                             ),
                     )
-                    .child(self.splitter(false, cx))
-                    .child(div().flex_1().min_h_0().child(self.query_panel(cx))),
+                    .when(!self.settings.results_minimized, |el| {
+                        el.child(self.splitter(false, cx))
+                    })
+                    .when(self.settings.results_minimized, |el| {
+                        el.child(div().h(self.ui_px(1.)).bg(cx.theme().border))
+                    })
+                    .child(
+                        div()
+                            .when(self.settings.results_minimized, |el| {
+                                el.h(self.ui_px(result_tabs::RESULT_TAB_BAR_HEIGHT))
+                                    .flex_shrink_0()
+                            })
+                            .when(!self.settings.results_minimized, |el| el.flex_1().min_h_0())
+                            .child(self.query_panel(cx)),
+                    ),
             )
     }
 }

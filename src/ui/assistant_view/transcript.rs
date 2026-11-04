@@ -32,6 +32,8 @@ pub(in crate::ui) enum ToolKind {
     DescribeModel,
     ReadLineage,
     ReadModelSql,
+    /// A web search of the harness. Qrow shows it but does not run it.
+    WebSearch,
     Other,
 }
 
@@ -56,11 +58,13 @@ impl ToolKind {
             "dbt-describe-model" => Self::DescribeModel,
             "dbt-read-lineage" => Self::ReadLineage,
             "dbt-read-sql" => Self::ReadModelSql,
+            "web-search" => Self::WebSearch,
             _ => Self::Other,
         }
     }
 
-    /// The canonical Qrow tool name. `Other` has no Qrow tool.
+    /// The canonical Qrow tool name. `WebSearch` and `Other` have no Qrow
+    /// tool.
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Workspace => "workspace-read-context",
@@ -80,6 +84,7 @@ impl ToolKind {
             Self::DescribeModel => "dbt-describe-model",
             Self::ReadLineage => "dbt-read-lineage",
             Self::ReadModelSql => "dbt-read-sql",
+            Self::WebSearch => "web-search",
             Self::Other => "other",
         }
     }
@@ -103,6 +108,7 @@ impl ToolKind {
             Self::DescribeModel => "Describe dbt model",
             Self::ReadLineage => "Read dbt lineage",
             Self::ReadModelSql => "Read dbt model SQL",
+            Self::WebSearch => "Search the web",
             Self::Other => "Use tool",
         }
     }
@@ -126,6 +132,7 @@ impl ToolKind {
             Self::DescribeModel => AssetIconName::BookOpen,
             Self::ReadLineage => AssetIconName::Network,
             Self::ReadModelSql => AssetIconName::FileCode,
+            Self::WebSearch => AssetIconName::Globe,
             Self::Other => AssetIconName::SquareTerminal,
         }
     }
@@ -502,6 +509,7 @@ mod tests {
             ToolKind::DescribeModel,
             ToolKind::ReadLineage,
             ToolKind::ReadModelSql,
+            ToolKind::WebSearch,
             ToolKind::Other,
         ];
         for kind in kinds {
@@ -524,6 +532,7 @@ mod tests {
                 | ToolKind::DescribeModel
                 | ToolKind::ReadLineage
                 | ToolKind::ReadModelSql
+                | ToolKind::WebSearch
                 | ToolKind::Other => {}
             }
             let path = kind.icon().path();

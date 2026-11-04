@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import plistlib
 import subprocess
 import tempfile
@@ -216,7 +217,10 @@ def build(app: Path, output: Path, volume_name: str) -> None:
         try:
             background = mount / ".background" / BACKGROUND_NAME
             write_layout(mount, app_name, Alias.for_file(str(background)).to_bytes())
-            subprocess.run(["sync"], check=False)
+            # Flush this image's Finder metadata, not every mounted volume.
+            # The normal detach below unmounts the image before conversion.
+            with (mount / ".DS_Store").open("rb+") as metadata:
+                os.fsync(metadata.fileno())
         finally:
             detach(device)
         # The zlib level only costs seconds on a build this size.

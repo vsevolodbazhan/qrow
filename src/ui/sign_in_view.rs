@@ -782,9 +782,7 @@ impl Qrow {
         tab.sign_in_wait = Some(SignInWait { sign_in, sql });
         tab.busy = true;
         tab.cancelling = false;
-        tab.more = false;
-        tab.pending_page = None;
-        tab.elapsed = None;
+        tab.close_cursor();
         tab.started = Some(Instant::now());
         Self::record_local_log(
             tab,
@@ -853,7 +851,9 @@ impl Qrow {
             })
             .collect();
         for index in waiting {
-            let active = index == self.active && !self.activity.read(cx).is_open();
+            let active = index == self.active
+                && !self.activity.read(cx).is_open()
+                && !self.settings.results_minimized;
             let tab = &mut self.tabs[index];
             let Some(wait) = tab.sign_in_wait.take() else {
                 continue;
@@ -1868,8 +1868,7 @@ pub(super) fn release_session(tab: &mut Tab) {
     tab.worker_profile = None;
     tab.connected = false;
     tab.cancelling = false;
-    tab.more = false;
-    tab.pending_page = None;
+    tab.close_cursor();
     tab.set_status("Not connected");
 }
 

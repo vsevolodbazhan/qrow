@@ -454,8 +454,7 @@ impl Qrow {
         let conversation_tab = self.thread_tab_index(thread_id);
         let selected_tab = conversation_tab.map(|index| {
             let tab = &self.tabs[index];
-            let results = tab.table.read(cx);
-            let results = results.delegate();
+            let (columns, rows) = tab.live_rows(cx);
             let selection = tab.input.read(cx).selected_range();
             let error = tab
                 .output
@@ -482,12 +481,8 @@ impl Qrow {
                 statement_ranges_truncated,
                 editor_revision: tab.revision,
                 results: ResultSummary {
-                    columns: results
-                        .columns
-                        .iter()
-                        .map(|column| column.name.clone())
-                        .collect(),
-                    downloaded_rows: results.rows.len(),
+                    columns: columns.into_iter().map(str::to_owned).collect(),
+                    downloaded_rows: rows.row_count(),
                     more_rows_available: tab.more,
                 },
                 latest_error: error,

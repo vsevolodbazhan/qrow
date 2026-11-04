@@ -1,6 +1,6 @@
 [package]
 name = "qrow"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "An SQL workbench for macOS."
 license = "MIT"
@@ -105,6 +105,13 @@ gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 
 # Performance probes build like the release, without link-time optimization,
 # so that they compile faster.
+# Optimize dependencies, like GPUI, in debug and test builds. The UI tests run
+# about 5 times faster and the E2E tests 3 times faster. Qrow itself stays
+# unoptimized, so a change to it compiles as fast as before.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
 [profile.perf]
 inherits = "release"
 lto = false

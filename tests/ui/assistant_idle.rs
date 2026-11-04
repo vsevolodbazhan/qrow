@@ -134,7 +134,9 @@ fn codex_stops_after_the_pane_stays_closed(cx: &mut TestAppContext) {
             == 2
     });
     app.wait_idle(cx);
-    assert_eq!(app.saved().assistant.conversations.len(), 1);
+    app.wait_saved(cx, "one saved conversation", |saved| {
+        saved.assistant.conversations.len() == 1
+    });
 }
 
 #[gpui_kit::test]

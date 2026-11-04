@@ -107,44 +107,56 @@ impl Drop for ExportDialog {
 impl Qrow {
     pub(super) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab = &self.tabs[self.active];
-        let data = tab.table.read(cx).delegate();
+        let shown = tab.shown_result();
+        let data = shown.table.read(cx).delegate();
         if data.columns.is_empty() {
             return;
         }
         let source = match Snapshot::new(&data.columns, &data.rows) {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                window.push_notification(error.to_string(), cx);
+                window.push_notification(Notification::error(error.to_string()), cx);
                 return;
             }
         };
         let settings = self.settings.export.clone();
         let filename = tab.saved.title.clone();
-        let incomplete = !tab.preview_complete;
-        let result = ExportResult {
-            tab: tab.saved.id,
-            execution: tab.current_execution,
-            cursor: tab.cursor,
-            replay: tab
-                .replay
-                .clone()
-                .or_else(|| self.export_spool(tab.saved.id, tab.current_execution, None, cx)),
+        let incomplete = !tab.result_complete(shown.id);
+        // Only the live result has a cursor and a replay spool. An earlier
+        // result exports its loaded rows, or runs its query again.
+        let result = if tab.live == Some(shown.id) {
+            ExportResult {
+                tab: tab.saved.id,
+                execution: tab.current_execution,
+                cursor: tab.cursor,
+                replay: tab
+                    .replay
+                    .clone()
+                    .or_else(|| self.export_spool(tab.saved.id, tab.current_execution, None, cx)),
+            }
+        } else {
+            ExportResult {
+                tab: tab.saved.id,
+                execution: None,
+                cursor: crate::worker::Cursor::Unavailable,
+                replay: None,
+            }
         };
         let owner = cx.weak_entity();
-        let intent = self.export_result_intent(tab);
+        let intent = self.export_result_intent(shown);
         let profile = self
             .profiles
             .iter()
             .find(|profile| {
                 Some(profile.id)
-                    == tab
-                        .result_profile
+                    == shown
+                        .profile
                         .as_ref()
                         .map(|profile| profile.id)
                         .or(tab.saved.profile)
             })
             .cloned()
-            .or_else(|| tab.result_profile.clone());
+            .or_else(|| shown.profile.clone());
         let view = cx.new(|cx| {
             let mut view = ExportDialog::new(
                 source, settings, filename, incomplete, result, profile, owner, window, cx,
@@ -164,8 +176,8 @@ impl Qrow {
 
     fn remember_export(&mut self, settings: export::Settings, cx: &mut Context<Self>) {
         self.settings.export = settings;
-        for tab in &self.tabs {
-            tab.table.update(cx, |table, _| {
+        for table in self.tabs.iter().flat_map(Tab::result_tables) {
+            table.update(cx, |table, _| {
                 table.delegate_mut().export = self.settings.export.clone();
             });
         }
@@ -1031,62 +1043,211 @@ impl Render for ExportDialog {
             ),
         ];
         let custom_null = format == Format::Csv && matches!(options.null, NullMarker::Custom(_));
-        v_flex().id("export-form").gap_4().w_full()
-            .child(v_form().columns(2).gap_x_4().children([4,0,1,2,3,5,9,6,7,8].into_iter()
-                .filter(|index| *index == 4 || format == Format::Csv && (0..=3).contains(index) || format == Format::Markdown && *index == 5 || matches!(format, Format::Json | Format::JsonLines) && *index == 9 || format == Format::Parquet && (6..=8).contains(index))
-                .map(|index| field().label(labels[index]).child(
-                    Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
-                        .disabled(busy || index == 8 && self.settings.parquet.column_types == export::parquet::ColumnTypes::Text).w_full().accessibility_label(labels[index])))))
-            .when(custom_null, |view| view.child(field().label("Null Marker")
-                .description("Exclude separators, quotes, and line breaks.")
-                .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
-            .when(format == Format::Csv, |view| view.child(v_flex().gap_2().children(
-                flags.into_iter().enumerate().map(|(index,(id,label,checked))|
-                    Checkbox::new(id).small().label(label).checked(checked).disabled(busy)
-                        .on_click(cx.listener(move |this,checked,window,cx| {
-                            match index {0 => this.settings.csv.header = *checked,
-                                1 => this.settings.csv.byte_order_mark = *checked,
-                                2 => this.settings.csv.quote_all = *checked,
-                                3 => this.settings.csv.escape_formulas = *checked, _ => unreachable!()}
-                            this.sync(window,cx);
-                        }))))))
-            .when(format == Format::Markdown, |view| view
-                .when(self.settings.markdown.style == export::markdown::Style::CodeBlock, |view| view.child(
-                    field().label("Maximum Cell Width").description("Use 1 to 1000 display columns.")
-                        .child(Input::new(&self.cell_width).id("export-cell-width").focus_ring(false).disabled(busy).aria_label("Maximum Cell Width"))))
-                .child(v_flex().gap_2()
-                    .when(self.settings.markdown.style == export::markdown::Style::Table, |view| view.child(
-                        Checkbox::new("export-markdown-pretty").small().label("Pretty output").checked(self.settings.markdown.pretty).disabled(busy)
-                            .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.pretty = *checked; this.sync(window,cx);}))))
-                    .child(Checkbox::new("export-row-numbers").small().label("Include row numbers").checked(self.settings.markdown.row_numbers).disabled(busy)
-                        .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.row_numbers = *checked; this.sync(window,cx);})))))
-            .when(matches!(format, Format::Json | Format::JsonLines), |view| view.child(v_flex().gap_2().children(
-                json_flags.into_iter().enumerate().filter(|(index,_)| *index != 1 || format == Format::Json).map(|(index,(id,label,checked))|
-                    Checkbox::new(id).small().label(label).checked(checked).disabled(busy || index == 2 && !self.settings.json.typed)
-                        .on_click(cx.listener(move |this,checked,window,cx| {
-                            match index {0 => this.settings.json.typed = *checked, 1 => this.settings.json.pretty = *checked,
-                                2 => this.settings.json.decimals_as_numbers = *checked, _ => unreachable!()}
-                            this.sync(window,cx);
-                        }))))))
-            .when(format == Format::Parquet && self.settings.parquet.column_types == export::parquet::ColumnTypes::Typed && self.settings.parquet.numeric == export::parquet::Numeric::Double, |view| view.child(div().text_sm().text_color(cx.theme().warning).child("Double can change numeric values.")))
-            .when(format == Format::Parquet && !self.source.table(None).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
-                .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
-                .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
-            .when(self.scope.executes(), |view| view.children(self.run.as_ref().and_then(transfer::notice).map(|text|
-                div().id("export-incremental-notice").test_support().role(Role::Label).aria_label(text.clone())
-                    .text_sm().text_color(cx.theme().muted_foreground).child(text)))
-                .when(self.run.as_ref().is_some_and(transfer::save_to_file), |view| view.child(
-                    div().id("export-save-to-file-warning").test_support().role(Role::Alert)
-                        .aria_label("saveToFile is enabled in this connection. It can change how incremental collect works.")
-                        .text_sm().text_color(cx.theme().warning).child("saveToFile is enabled in this connection. It can change how incremental collect works."))))
-            .when(self.large_copy, |view| view.child(div().id("export-copy-warning").test_support().role(Role::Alert)
-                .aria_label("Markdown exceeds 40,000 characters. It can exceed message limits.")
-                .text_sm().text_color(cx.theme().warning).child("Markdown exceeds 40,000 characters. It can exceed message limits.")))
-            .when_some(self.error.clone(), |view,error| view.child(div().id("export-error").test_support().role(Role::Alert)
-                .aria_label(error.clone()).child(Alert::error("export-error-alert", error))))
-            .when(busy, |view| view.child(div().id("export-progress").test_support().role(Role::Status)
-                .aria_label(self.status_text()).w_full().text_sm().text_color(cx.theme().muted_foreground).child(self.status_text())))
+        v_flex()
+            .id("export-form")
+            .gap_4()
+            .w_full()
+            .child(
+                v_form().columns(2).gap_x_4().children(
+                    [4, 0, 1, 2, 3, 5, 9, 6, 7, 8]
+                        .into_iter()
+                        .filter(|index| {
+                            *index == 4
+                                || format == Format::Csv && (0..=3).contains(index)
+                                || format == Format::Markdown && *index == 5
+                                || matches!(format, Format::Json | Format::JsonLines) && *index == 9
+                                || format == Format::Parquet && (6..=8).contains(index)
+                        })
+                        .map(|index| {
+                            field().label(labels[index]).child(
+                                Select::new(&self.controls[index])
+                                    .id(ids[index])
+                                    .focus_ring(false)
+                                    .disabled(
+                                        busy || index == 8
+                                            && self.settings.parquet.column_types
+                                                == export::parquet::ColumnTypes::Text,
+                                    )
+                                    .w_full()
+                                    .accessibility_label(labels[index]),
+                            )
+                        }),
+                ),
+            )
+            .when(custom_null, |view| {
+                view.child(
+                    field()
+                        .label("Null Marker")
+                        .description("Exclude separators, quotes, and line breaks.")
+                        .child(
+                            Input::new(&self.null_text)
+                                .id("export-null-text")
+                                .focus_ring(false)
+                                .disabled(busy)
+                                .aria_label("Null Marker"),
+                        ),
+                )
+            })
+            .when(format == Format::Csv, |view| {
+                view.child(v_flex().gap_2().children(flags.into_iter().enumerate().map(
+                    |(index, (id, label, checked))| {
+                        Checkbox::new(id)
+                            .small()
+                            .label(label)
+                            .checked(checked)
+                            .disabled(busy)
+                            .on_click(cx.listener(move |this, checked, window, cx| {
+                                match index {
+                                    0 => this.settings.csv.header = *checked,
+                                    1 => this.settings.csv.byte_order_mark = *checked,
+                                    2 => this.settings.csv.quote_all = *checked,
+                                    3 => this.settings.csv.escape_formulas = *checked,
+                                    _ => unreachable!(),
+                                }
+                                this.sync(window, cx);
+                            }))
+                    },
+                )))
+            })
+            .when(format == Format::Markdown, |view| {
+                view.when(
+                    self.settings.markdown.style == export::markdown::Style::CodeBlock,
+                    |view| {
+                        view.child(
+                            field()
+                                .label("Maximum Cell Width")
+                                .description("Use 1 to 1000 display columns.")
+                                .child(
+                                    Input::new(&self.cell_width)
+                                        .id("export-cell-width")
+                                        .focus_ring(false)
+                                        .disabled(busy)
+                                        .aria_label("Maximum Cell Width"),
+                                ),
+                        )
+                    },
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .when(
+                            self.settings.markdown.style == export::markdown::Style::Table,
+                            |view| {
+                                view.child(
+                                    Checkbox::new("export-markdown-pretty")
+                                        .small()
+                                        .label("Pretty output")
+                                        .checked(self.settings.markdown.pretty)
+                                        .disabled(busy)
+                                        .on_click(cx.listener(|this, checked, window, cx| {
+                                            this.settings.markdown.pretty = *checked;
+                                            this.sync(window, cx);
+                                        })),
+                                )
+                            },
+                        )
+                        .child(
+                            Checkbox::new("export-row-numbers")
+                                .small()
+                                .label("Include row numbers")
+                                .checked(self.settings.markdown.row_numbers)
+                                .disabled(busy)
+                                .on_click(cx.listener(|this, checked, window, cx| {
+                                    this.settings.markdown.row_numbers = *checked;
+                                    this.sync(window, cx);
+                                })),
+                        ),
+                )
+            })
+            .when(matches!(format, Format::Json | Format::JsonLines), |view| {
+                view.child(
+                    v_flex().gap_2().children(
+                        json_flags
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(index, _)| *index != 1 || format == Format::Json)
+                            .map(|(index, (id, label, checked))| {
+                                Checkbox::new(id)
+                                    .small()
+                                    .label(label)
+                                    .checked(checked)
+                                    .disabled(busy || index == 2 && !self.settings.json.typed)
+                                    .on_click(cx.listener(move |this, checked, window, cx| {
+                                        match index {
+                                            0 => this.settings.json.typed = *checked,
+                                            1 => this.settings.json.pretty = *checked,
+                                            2 => this.settings.json.decimals_as_numbers = *checked,
+                                            _ => unreachable!(),
+                                        }
+                                        this.sync(window, cx);
+                                    }))
+                            }),
+                    ),
+                )
+            })
+            .when(
+                format == Format::Parquet
+                    && self.settings.parquet.column_types == export::parquet::ColumnTypes::Typed
+                    && self.settings.parquet.numeric == export::parquet::Numeric::Double,
+                |view| {
+                    view.child(warning(
+                        "export-double-warning",
+                        "Double can change numeric values.",
+                    ))
+                },
+            )
+            .when(
+                format == Format::Parquet && !self.source.table(None).rows.context().iso_dates(),
+                |view| {
+                    view.child(warning(
+                        "export-date-style-warning",
+                        "The result uses a non-ISO DateStyle. Dates and timestamps remain text.",
+                    ))
+                },
+            )
+            .when(self.large_copy, |view| {
+                view.child(warning(
+                    "export-copy-warning",
+                    "Markdown exceeds 40,000 characters. It can exceed message limits.",
+                ))
+            })
+            .when_some(self.error.clone(), |view, error| {
+                view.child(
+                    div()
+                        .id("export-error")
+                        .test_support()
+                        .role(Role::Alert)
+                        .aria_label(error.clone())
+                        .child(Alert::error("export-error-alert", error)),
+                )
+            })
+            .when(busy, |view| {
+                view.child(
+                    div()
+                        .id("export-progress")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(self.status_text())
+                        .w_full()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(self.status_text()),
+                )
+            })
     }
+}
+
+/// Wraps a warning alert so tests and assistive technology can find it.
+fn warning(id: &'static str, text: &'static str) -> impl IntoElement {
+    div()
+        .id(id)
+        .test_support()
+        .role(Role::Alert)
+        .aria_label(text)
+        .child(Alert::warning(
+            SharedString::from(format!("{id}-alert")),
+            text,
+        ))
 }
 
 impl ExportDialog {
@@ -1152,7 +1313,7 @@ pub(super) fn copy_format(
     let guard = match guard {
         Ok(guard) => guard,
         Err(error) => {
-            window.push_notification(error.to_string(), cx);
+            window.push_notification(Notification::error(error.to_string()), cx);
             return;
         }
     };
@@ -1205,7 +1366,7 @@ pub(super) fn copy_format(
                 }
             }
             Ok(_) => {}
-            Err(error) => window.push_notification(error.to_string(), cx),
+            Err(error) => window.push_notification(Notification::error(error.to_string()), cx),
         });
     })
     .detach();
@@ -1220,7 +1381,10 @@ fn confirm_markdown_copy(
         if request.is_current(cx) {
             copy_text(text.into_string(), cx);
         } else {
-            window.push_notification("The clipboard changed. Choose Copy to try again.", cx);
+            window.push_notification(
+                Notification::error("The clipboard changed. Choose Copy to try again."),
+                cx,
+            );
         }
     }
 }
@@ -1336,7 +1500,7 @@ mod tests {
                 let (source, mut result) = owner
                     .update(cx, |owner, cx| {
                         let tab = &owner.tabs[0];
-                        let data = tab.table.read(cx).delegate();
+                        let data = tab.shown_result().table.read(cx).delegate();
                         (
                             Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
                             ExportResult {
@@ -1470,7 +1634,7 @@ mod tests {
                     .update(cx, |owner, cx| {
                         let tab = &mut owner.tabs[0];
                         tab.cursor = crate::worker::Cursor::Available;
-                        let data = tab.table.read(cx).delegate();
+                        let data = tab.shown_result().table.read(cx).delegate();
                         (
                             Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
                             ExportResult {
@@ -1549,7 +1713,7 @@ mod tests {
             let (source, mut result) = owner
                 .update(cx, |owner, cx| {
                     let tab = &owner.tabs[0];
-                    let data = tab.table.read(cx).delegate();
+                    let data = tab.shown_result().table.read(cx).delegate();
                     (
                         Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
                         ExportResult {
@@ -1732,7 +1896,7 @@ mod tests {
                     );
                     let tab = &owner.tabs[0];
                     assert!(tab.preview_complete);
-                    let data = tab.table.read(cx).delegate();
+                    let data = tab.shown_result().table.read(cx).delegate();
                     (
                         Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
                         ExportResult {
@@ -1913,6 +2077,8 @@ mod tests {
             assert!(window.try_find("keep-working").is_some());
             assert!(window.try_find("export-save").is_none());
             assert!(owner.upgrade().unwrap().read(cx).quit_warning_open);
+            // The alert slides in. A click while it moves can miss the button.
+            wait_until_still(window, "keep-working".into(), cx);
             window.click("keep-working", cx);
             window.render_frame(cx);
             assert!(!owner.upgrade().unwrap().read(cx).quit_warning_open);

@@ -1,5 +1,6 @@
 use super::process::protocol_head;
 use super::*;
+use crate::assistant::WebLink;
 use std::{fs, io::Cursor};
 
 fn write_executable(path: &Path, script: &str) {
@@ -1085,12 +1086,18 @@ done
         "workspace-read-context"
     );
     assert_eq!(start["params"]["sandbox"], "read-only");
-    assert_eq!(start["params"]["baseInstructions"], BASE_INSTRUCTIONS);
+    assert_eq!(
+        start["params"]["baseInstructions"],
+        crate::assistant::BASE_INSTRUCTIONS
+    );
     let resume = requests
         .iter()
         .find(|request| request["method"] == "thread/resume")
         .unwrap();
-    assert_eq!(resume["params"]["baseInstructions"], BASE_INSTRUCTIONS);
+    assert_eq!(
+        resume["params"]["baseInstructions"],
+        crate::assistant::BASE_INSTRUCTIONS
+    );
     let turn_start = requests
         .iter()
         .find(|request| request["method"] == "turn/start")
@@ -1238,7 +1245,8 @@ done
     );
     let (commands, inbox) = Inbox::channel(1);
     let mut harness =
-        CodexHarness::launch_with_inbox(&executable, directory.path(), inbox, |_| {}).unwrap();
+        CodexHarness::launch_with_inbox(&executable, directory.path(), inbox, false, |_| {})
+            .unwrap();
     commands.stop();
     let error = harness
         .delete_conversations_on_shutdown(["thread-1".into(), "thread-2".into()])
@@ -1255,4 +1263,162 @@ done
         "{error:#}"
     );
     harness.shutdown().unwrap();
+}
+
+#[test]
+fn web_search_items_become_search_events() {
+    let event = |method: &str, item: Value| {
+        CodexHarness::event_from_message(json!({
+            "method": method,
+            "params": {"threadId": "thread-1", "turnId": "turn-1", "item": item, "startedAtMs": 1},
+        }))
+        .unwrap()
+    };
+    let search = |id: &str, query: &str, status: WebSearchStatus| {
+        AssistantEvent::WebSearch(WebSearch {
+            thread_id: "thread-1".into(),
+            turn_id: "turn-1".into(),
+            id: id.into(),
+            query: query.into(),
+            status,
+        })
+    };
+    // Codex can start a search before it knows the text.
+    assert_eq!(
+        event(
+            "item/started",
+            json!({"type": "webSearch", "id": "ws-1", "query": "", "action": null})
+        ),
+        search("ws-1", "", WebSearchStatus::Running)
+    );
+    // Only web links with a URL stay, once each.
+    assert_eq!(
+        event(
+            "item/completed",
+            json!({
+                "type": "webSearch", "id": "ws-1", "query": "",
+                "action": {"type": "search", "query": "postgres  generate_series", "queries": null},
+                "results": [
+                    {"title": "Set Returning Functions", "url": "https://www.postgresql.org/docs/current/functions-srf.html"},
+                    {"title": "Again", "url": "https://www.postgresql.org/docs/current/functions-srf.html"},
+                    {"title": "Script", "url": "javascript:alert(1)"},
+                    {"title": "No URL"},
+                ],
+            })
+        ),
+        search(
+            "ws-1",
+            "postgres generate_series",
+            WebSearchStatus::Completed(vec![WebLink {
+                title: "Set Returning Functions".into(),
+                url: "https://www.postgresql.org/docs/current/functions-srf.html".into(),
+            }])
+        )
+    );
+    assert_eq!(
+        event(
+            "item/completed",
+            json!({"type": "webSearch", "id": "ws-2", "query": "",
+                   "action": {"type": "search", "queries": ["trino unnest", "trino arrays"]}})
+        ),
+        search(
+            "ws-2",
+            "trino unnest; trino arrays",
+            WebSearchStatus::Completed(Vec::new())
+        )
+    );
+    assert_eq!(
+        event(
+            "item/completed",
+            json!({"type": "webSearch", "id": "ws-3", "query": "",
+                   "action": {"type": "openPage", "url": "https://trino.io/docs/current/"}})
+        ),
+        search(
+            "ws-3",
+            "Open https://trino.io/docs/current/",
+            WebSearchStatus::Completed(Vec::new())
+        )
+    );
+    assert_eq!(
+        event(
+            "item/completed",
+            json!({"type": "webSearch", "id": "ws-4", "query": "",
+                   "action": {"type": "findInPage", "url": "https://trino.io/docs/current/", "pattern": "UNNEST"}})
+        ),
+        search(
+            "ws-4",
+            "Find \"UNNEST\" in https://trino.io/docs/current/",
+            WebSearchStatus::Completed(Vec::new())
+        )
+    );
+    // Other items stay ordinary notifications.
+    assert!(matches!(
+        event(
+            "item/completed",
+            json!({"type": "agentMessage", "id": "m-1", "text": "Done"})
+        ),
+        AssistantEvent::Other { .. }
+    ));
+}
+
+#[test]
+fn web_search_setting_selects_the_cached_index_and_its_instructions() {
+    for web_search in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        write_executable(
+            &executable,
+            r#"#!/bin/sh
+printf '%s\n' "$@" > arguments.txt
+while IFS= read -r line; do
+printf '%s\n' "$line" >> requests.jsonl
+id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+case "$line" in
+    *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"thread/start"'*) printf '{"id":%s,"result":{"thread":{"id":"thread-1","name":null,"updatedAt":1,"turns":[]}}}\n' "$id" ;;
+esac
+done
+"#,
+        );
+        let (_commands, inbox) = Inbox::channel(1);
+        let mut harness = CodexHarness::launch_with_inbox(
+            &executable,
+            directory.path(),
+            inbox,
+            web_search,
+            |_| {},
+        )
+        .unwrap();
+        harness
+            .create_conversation(&crate::assistant::tools::definitions())
+            .unwrap();
+        harness.shutdown().unwrap();
+        let arguments = fs::read_to_string(directory.path().join("arguments.txt")).unwrap();
+        let mode = if web_search { "cached" } else { "disabled" };
+        assert!(
+            arguments
+                .lines()
+                .any(|line| line == format!("web_search=\"{mode}\"")),
+            "{arguments}"
+        );
+        // The live web stays off in every mode.
+        assert!(!arguments.contains("live"), "{arguments}");
+        let requests = fs::read_to_string(directory.path().join("requests.jsonl")).unwrap();
+        let start: Value = requests
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|request| request["method"] == "thread/start")
+            .unwrap();
+        assert_eq!(
+            start["params"]["baseInstructions"],
+            crate::assistant::instructions(web_search).as_ref()
+        );
+        assert_eq!(
+            start["params"]["baseInstructions"]
+                .as_str()
+                .unwrap()
+                .contains(crate::assistant::WEB_SEARCH_INSTRUCTIONS),
+            web_search
+        );
+    }
 }

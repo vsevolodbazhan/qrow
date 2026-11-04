@@ -223,7 +223,7 @@ impl CatalogTree {
     pub(super) fn new(workspace: Option<PathBuf>, window: &mut Window, cx: &mut App) -> Self {
         Self {
             state: cx.new(|cx| TreeState::new(cx)),
-            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search tables…")),
+            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search relations…")),
             expanded: HashSet::new(),
             collapsed: HashSet::new(),
             connections: HashMap::new(),
@@ -1593,15 +1593,23 @@ impl Qrow {
             .when(!self.profiles.is_empty(), |el| {
                 // Match the query toolbar band so the search box and the Run
                 // button share a centerline. The bottom padding stands in for
-                // the toolbar border.
+                // the toolbar border. The first row adds its own top padding,
+                // so the tree moves up by that padding and the border to make
+                // the gap below the search box match the gap above it.
                 el.child(
-                    h_flex().h_12().px_2().pb_px().flex_shrink_0().child(
-                        Input::new(&self.catalog.search)
-                            .focus_ring(false)
-                            .small()
-                            .w_full()
-                            .aria_label("Search tables"),
-                    ),
+                    h_flex()
+                        .h_12()
+                        .px_2()
+                        .pb_px()
+                        .mb(-(px(1.) + window.rem_size() * 0.125))
+                        .flex_shrink_0()
+                        .child(
+                            Input::new(&self.catalog.search)
+                                .focus_ring(false)
+                                .small()
+                                .w_full()
+                                .aria_label("Search relations"),
+                        ),
                 )
             })
             .child(

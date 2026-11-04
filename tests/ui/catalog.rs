@@ -177,7 +177,7 @@ fn reordering_connections_keeps_expanded_schemas_and_the_selected_column(cx: &mu
         |_, _| app.saved().profiles[0].id == other.id,
     );
     // Search rebuilds the tree in the same saved order.
-    app.fill_labelled(cx, "Search tables", "bookings");
+    app.fill_labelled(cx, "Search relations", "bookings");
     app.update(cx, |window, _| {
         assert!(
             window.find(connection_row(other.id)).bounds().top()
@@ -264,7 +264,9 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                 wait_shows(&app, cx, "daily");
                 app.click_labelled(cx, "daily");
             }
-            app.wait_for(cx, format!("{}\u{1f}notice\u{1f}label", parents[depth]));
+            // The notice says "Loading…" until the catalog cache loads in the
+            // background. Only the "Not loaded" notice has Refresh.
+            app.wait_for(cx, format!("{}\u{1f}notice\u{1f}refresh", parents[depth]));
             assert_notice_alignment(&app, cx, &parents[depth]);
             app.update(cx, |window, _| {
                 let lane = bounds_of(window, "add-connection").center().x;
@@ -691,6 +693,32 @@ fn a_connection_click_selects_it_and_the_disclosure_expands_it(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn the_search_field_has_equal_gaps_above_and_below_at_each_zoom(cx: &mut TestAppContext) {
+    for scale in [0.75, 1., 1.5] {
+        let profile = offline_profile("Warehouse");
+        let mut workspace = workspace(vec![profile.clone()]);
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch_in(
+            cx,
+            tempfile::tempdir().unwrap(),
+            workspace,
+            MemoryCredentials::default(),
+        );
+        app.update(cx, |window, _| {
+            let header = bounds_of(window, "sidebar-header");
+            let search = bounds_of(window, "Search relations");
+            let row = window.find(connection_row(profile.id)).bounds();
+            let above = search.top() - header.bottom();
+            let below = row.top() - search.bottom();
+            assert!(
+                (above - below).abs() <= gpui_kit::px(0.5),
+                "The gap above the search ({above:?}) must match the gap below it ({below:?})"
+            );
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppContext) {
     let first = offline_profile("First");
     let second = offline_profile("Second");
@@ -724,7 +752,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
         MemoryCredentials::default(),
     );
 
-    app.fill_labelled(cx, "Search tables", "orders");
+    app.fill_labelled(cx, "Search relations", "orders");
     wait_shows(&app, cx, "orders");
     wait_shows(&app, cx, "orders_2020");
     app.update(cx, |window, _| {
@@ -733,7 +761,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
     });
 
     for search in ["t", "wide.t"] {
-        app.fill_labelled(cx, "Search tables", search);
+        app.fill_labelled(cx, "Search relations", search);
         app.wait_until(
             cx,
             "the match limit",
@@ -761,7 +789,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
         assert!(!shows(window, "Refine your search"));
     });
 
-    app.fill_labelled(cx, "Search tables", "");
+    app.fill_labelled(cx, "Search relations", "");
     app.wait_until(
         cx,
         "the search to end",
@@ -814,7 +842,7 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
         "`integrations`.`bookings`",
         "tions.book",
     ] {
-        app.fill_labelled(cx, "Search tables", search);
+        app.fill_labelled(cx, "Search relations", search);
         wait_shows(&app, cx, "bookings");
         app.update(cx, |window, _| {
             assert!(labelled(window, "finance").is_none());
@@ -830,17 +858,17 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
         }
     }
 
-    app.fill_labelled(cx, "Search tables", "integrations.daily");
+    app.fill_labelled(cx, "Search relations", "integrations.daily");
     wait_shows(&app, cx, "daily");
     app.update(cx, |window, _| {
         assert!(labelled(window, "bookings").is_none())
     });
 
-    app.fill_labelled(cx, "Search tables", "bookings");
+    app.fill_labelled(cx, "Search relations", "bookings");
     wait_shows(&app, cx, "bookings_other");
     wait_shows(&app, cx, "bookings_archive");
 
-    app.fill_labelled(cx, "Search tables", "missing.bookings");
+    app.fill_labelled(cx, "Search relations", "missing.bookings");
     app.update(cx, |window, _| {
         assert!(labelled(window, "integrations").is_none());
         assert!(labelled(window, "bookings").is_none());
@@ -860,7 +888,7 @@ fn expanding_a_connection_without_search_matches_shows_a_notice(cx: &mut TestApp
         MemoryCredentials::default(),
     );
 
-    app.fill_labelled(cx, "Search tables", "missing.bookings");
+    app.fill_labelled(cx, "Search relations", "missing.bookings");
     app.toggle_connection(cx, profile.id);
     wait_shows(&app, cx, "No matches");
     app.update(cx, |window, _| {
@@ -878,12 +906,12 @@ fn expanding_a_connection_without_search_matches_shows_a_notice(cx: &mut TestApp
     app.toggle_connection(cx, profile.id);
     wait_shows(&app, cx, "No matches");
 
-    app.fill_labelled(cx, "Search tables", "avia.bookings");
+    app.fill_labelled(cx, "Search relations", "avia.bookings");
     wait_shows(&app, cx, "bookings");
     app.update(cx, |window, _| {
         assert!(labelled(window, "No matches").is_none())
     });
-    app.fill_labelled(cx, "Search tables", "");
+    app.fill_labelled(cx, "Search relations", "");
     wait_shows(&app, cx, "avia");
     app.update(cx, |window, _| {
         assert!(labelled(window, "No matches").is_none())
@@ -927,7 +955,7 @@ fn plain_notices_align_with_the_parent_label_at_each_zoom(cx: &mut TestAppContex
                 "Schema notice is too far right at scale {scale}"
             );
         });
-        app.fill_labelled(cx, "Search tables", "missing.bookings");
+        app.fill_labelled(cx, "Search relations", "missing.bookings");
         wait_shows(&app, cx, "No matches");
         app.update(cx, |window, _| {
             let notice = bounds_of(
@@ -1141,9 +1169,9 @@ fn the_search_limit_does_not_apply_without_a_search(cx: &mut TestAppContext) {
         assert!(!shows(window, "Refine your search"));
     });
     // The 600th schema is in the tree: a search for its table finds it.
-    app.fill_labelled(cx, "Search tables", "schema_599");
+    app.fill_labelled(cx, "Search relations", "schema_599");
     wait_shows(&app, cx, "schema_599");
-    app.fill_labelled(cx, "Search tables", "");
+    app.fill_labelled(cx, "Search relations", "");
     app.wait_until(cx, "the full tree", Duration::from_secs(10), |window, _| {
         labelled(window, "schema_000").is_some() && !shows(window, "Refine your search")
     });
@@ -1594,7 +1622,7 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
     wait_shows(&app, cx, "avia");
 
     // A search expands the schemas with matches. Collapse closes them too.
-    app.fill_labelled(cx, "Search tables", "book");
+    app.fill_labelled(cx, "Search relations", "book");
     wait_shows(&app, cx, "bookings");
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Collapse");
@@ -2186,7 +2214,7 @@ fn the_demo_catalog_supports_search_columns_and_copy(cx: &mut TestAppContext) {
             .as_deref(),
         Some("`avia`.`bookings`")
     );
-    app.fill_labelled(cx, "Search tables", "finance.payments");
+    app.fill_labelled(cx, "Search relations", "finance.payments");
     app.click_labelled(cx, "payments");
     app.wait_until(
         cx,
@@ -2194,7 +2222,7 @@ fn the_demo_catalog_supports_search_columns_and_copy(cx: &mut TestAppContext) {
         Duration::from_secs(10),
         |window, _| labelled(window, "payment_id bigint").is_some(),
     );
-    app.fill_labelled(cx, "Search tables", "avia.flight_events");
+    app.fill_labelled(cx, "Search relations", "avia.flight_events");
     app.click_labelled(cx, "flight_events");
     app.wait_until(
         cx,

@@ -40,10 +40,12 @@ accept a test filter.
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
 | `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
-| `perf-e2e` * | Window query latency and Kyuubi export transfer against the real servers. | macOS, Docker or Java 17 |
+| `perf-e2e` * | Window query latency against the real servers. | macOS, Docker or Java 17 |
+| `perf-kyuubi` * | Kyuubi export transfer measurements against the real servers. | Docker or Java 17 |
 | `perf-postgres` | Postgres export transfer and COPY measurements. | Docker, cargo-nextest |
 | `perf-trino` | Trino export transfer measurements. | Docker, cargo-nextest |
 | `perf-app` | Launch time, idle memory, and idle CPU of the release app on the desktop. | macOS desktop |
+| `perf-package` | Launch time, idle memory, and idle CPU of the packaged app on the desktop. | macOS desktop |
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
@@ -61,7 +63,7 @@ accept a test filter.
 
 On Linux, `unit` and `clippy` use only the core library. These suites need
 macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
-`perf-e2e`, `perf-app`, `package`, `desktop`, `software-ui`, `opengl-unit`, `opengl-renderer`,
+`perf-e2e`, `perf-app`, `perf-package`, `package`, `desktop`, `software-ui`, `opengl-unit`, `opengl-renderer`,
 `opengl-ui`, and `perf-renderers`. `clippy-app` is the second
 pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
@@ -129,7 +131,7 @@ require Accessibility and Screen Recording permission.
 These suites run only when selected by name. They need no database or credentials.
 
 Hosted macOS runners can lack a hardware CGL pixel format. The `e2e`,
-`e2e-intel`, and `perf` CI jobs probe production context creation and hardware
+`e2e-intel`, and `perf-ui` CI jobs probe production context creation and hardware
 limits before selecting hardware suites. An unavailable pixel format (CGL
 error 10002) records `opengl-renderer`, `opengl-ui`, or `perf-renderers` as
 `skipped`, with the diagnostic in `opengl-capability.json` in the run directory.
@@ -444,7 +446,9 @@ copies the server logs and evidence to `fixture/` in its artifact directory.
 Two runtimes are available:
 
 - `docker` starts the [Compose project](../tests/fixture/compose.yml) with a
-  random loopback port.
+  random loopback port. LDAP waits for a successful local EXTERNAL bind before
+  it imports schemas. If the bind fails 100 times, LDAP startup fails and
+  the fixture saves the container logs.
 - `native` starts local Java processes from [verified
   downloads](../tests/fixture/native-downloads.json). It needs a Java 17 JDK
   in `JAVA_HOME`. Hosted macOS CI runners use it because they have no Docker.
@@ -589,7 +593,7 @@ passwords. The driver restores the clipboard after it types text. It sets the
 Qrow window to 992 by 652 points, the window size on a hosted macOS runner,
 so local and CI runs show the same layout. The main display must fit this
 window with 16 points of space on each side. Hosted `e2e`, `e2e-intel`, and
-`perf` jobs enable Dock auto-hide before the native checks, so Dock resizing
+`perf-ui` jobs enable Dock auto-hide before the native checks, so Dock resizing
 as additional app bundles start cannot reduce the usable work area. This
 configuration applies only to the disposable CI desktop. Local runs do not
 change Dock settings. The driver keeps the fixed viewport and checks that the
@@ -640,17 +644,21 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 | --- | --- |
 | `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding and CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
 | `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
-| `perf-e2e` | The time from **Run** to the first result row and to the next page. Kyuubi export throughput and peak memory for each preset. |
+| `perf-e2e` | The time from **Run** to the first result row and to the next page. |
+| `perf-kyuubi` | Kyuubi export throughput and peak memory for each preset. |
 | `perf-postgres` | Postgres export throughput and peak memory for each preset. Normal protocol and server CSV `COPY` comparison. |
 | `perf-trino` | Trino export throughput and peak memory for each preset. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 18 seconds before the measurement, so the caret no longer blinks and Qrow has returned its free memory to macOS. The first launch after a build warms up, and the median of the next three counts. |
 | `perf-renderers` | Three native release runs per backend. Reports composition p95 and the process CPU ratio for result and editor scrolling. [OpenGL checks](#check-opengl-rendering) describe the measurement limits and the full comparison file. |
+| `perf-package` | The `perf-app` probes on the app in a package zip, without a build. The zip is `QROW_MACOS_PACKAGE`, or `target/macos-package/Qrow-macos.zip`. |
 
-CI runs `perf` with its budgets. It runs the other probes as report-only
-suites, because the hosted runners are slower and less steady than a
-developer computer. Runs on `main` keep the measurements for 90 days. To get
-the measurements of a run, download its `performance-package`,
-`performance-e2e`, or `performance-perf` artifact, for example:
+CI runs `perf` with its budgets on Linux. It runs the other probes as
+report-only suites, because the hosted runners are slower and less steady
+than a developer computer. Pull requests skip the report-only suites. Runs
+on `main` keep the measurements for 90 days. To get the measurements of a
+run, download its `performance-package`, `performance-backend`,
+`performance-e2e`, `performance-perf`, or `performance-perf-ui` artifact,
+for example:
 
 ```sh
 gh run download RUN_ID -n performance-perf
@@ -704,7 +712,7 @@ normal Worker, spool, and CSV Save path on 50,000 rows with a different
 1 KiB text value in each row. Run all engines with:
 
 ```sh
-./qtest run perf-e2e perf-postgres perf-trino --runtime docker
+./qtest run perf-kyuubi perf-postgres perf-trino --runtime docker
 ```
 
 Each case uses a fresh client process and a warmed connection. One warm-up
@@ -752,9 +760,9 @@ These cases compare local CSV formatting with server CSV formatting. They do
 not measure the complete Worker and spool path. Production export continues
 to use the normal protocol.
 
-CI runs Kyuubi probes with `perf-e2e` on the macOS native fixture. It runs
-Postgres and Trino probes on the Linux Docker job. These probes report
-measurements without enforced throughput budgets.
+CI runs the Kyuubi, Postgres, and Trino probes in the Linux `perf-backend`
+job with Docker. These probes report measurements without enforced throughput
+budgets.
 
 The [dbt benchmark](../benches/dbt.rs) makes synthetic manifests with the
 [generator](../tests/support/dbt_manifest.rs) and reports the median of 7
@@ -954,43 +962,65 @@ disk space back. The next hook then builds the dependencies again.
 The [checks workflow](../.github/workflows/checks.yml) checks one commit. The
 [test workflow](../.github/workflows/test.yml) and the
 [release workflow](../.github/workflows/release.yml) call it. The qtest
-catalog defines its jobs: the suites of each job, the jobs that it waits
-for, and the paths that select it. The workflow prepares each runner and runs
-`./qtest ci JOB`. To run the suites of a job on your computer, run the same
-command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
+catalog defines its jobs: the suites of each job, its time budget, the jobs
+that it waits for, the events that start it, and the paths that select it.
+The workflow prepares each runner and runs `./qtest ci JOB`. To run the
+suites of a job on your computer, run the same command, for example
+`./qtest ci ui`. Add `--measure` to also run its report-only suites.
+`./qtest ci` lists the jobs:
 
-| Job | Runner | Suites | Waits for |
+| Job | Runner | Suites | Runs in |
 | --- | --- | --- | --- |
-| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | |
-| `core` | Linux | `coverage`, which runs the unit tests of the core library | |
-| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
-| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
-| `backend` | Linux | `backend`, `postgres`, `trino`, and `perf-postgres`, `perf-trino` (report only), with Docker | `core` |
-| `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, renderer checks (`software-ui`, `opengl-unit`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | `package` |
-| `perf` | macOS ARM64 | `perf`, and `perf-ui`, `perf-renderers` (report only) | `core` |
-| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |
-| `package-intel` | macOS x86_64 | `package`, and `perf-app` (report only) | `core` |
-| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, renderer checks (`software-ui`, `opengl-unit`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | `package-intel` |
+| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | all runs |
+| `core` | Linux | `coverage`, which runs the unit tests of the core library | all runs |
+| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | all runs |
+| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
+| `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
+| `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, renderer checks (`software-ui`, `opengl-unit`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | all runs |
+| `perf` | Linux | `perf` | all runs |
+| `perf-ui` | macOS ARM64 | `perf-ui`, `perf-renderers` (report only) | pushes, manual runs, releases |
+| `perf-backend` | Linux | `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | pushes, manual runs, releases |
+| `desktop-package` | macOS ARM64 | `desktop` on the package of `package` | manual runs, releases |
+| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | manual runs, releases |
+| `package-intel` | macOS ARM64 | `package` for x86_64 | manual runs, releases |
+| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package of `package-intel`, renderer checks (`software-ui`, `opengl-unit`, `opengl-renderer`, `opengl-ui`), and `perf-e2e`, `perf-package` (report only), with local Java servers | manual runs, releases |
 
-The failures of `core` predict the failures of the macOS and server jobs, so
-these jobs wait for it. `e2e` also waits for the package that it tests. A
-failed job skips the jobs that wait for it. `static` lints the core library,
-and the two `ui` jobs lint the application on their Mac architecture. A
-report-only suite runs, and its measurements go into the run summary. Its
-failure does not fail the job.
+A pull request run takes about 10 minutes. To keep it there, the jobs start
+at once and run in parallel. Only `desktop-package` and `e2e-intel` wait,
+for the package that they test. A failed job skips the jobs that wait for
+it. Each job has a time budget for its suites, most of them 8 minutes or
+less. When the suites take longer, the job shows a warning. Find the cause
+before you raise the budget. `static` lints the core library, and the two
+`ui` jobs lint the application on their Mac architecture.
+
+A report-only suite runs, and its measurements go into the run summary. Its
+failure does not fail the job. Pull requests do not keep measurements, so
+they skip the report-only suites and the measurement jobs `perf-ui` and
+`perf-backend`. Pushes, manual runs, and releases run them.
+
+The `desktop` suite of the `e2e` job tests a debug app. The app contains
+the executable that the E2E test build makes, so the job does not wait for
+the release package and does not compile again. `desktop-package` tests the
+release package that a release publishes. The isolated `software-ui` and
+`opengl-ui` scenarios build release apps even when the E2E job uses a debug app.
+Renderer measurements run in the macOS `perf-ui` job, not the Linux `perf` job.
 
 A `plan` job selects the jobs of a pull request from its changed files.
-Pull requests do not run the Intel jobs, because the Intel runners are slower.
-Pushes, manual runs, and releases run all jobs, so the run on `main` after a
-merge finds Intel failures. To run the Intel jobs before a merge, start the
-test workflow manually on the branch.
+Pull requests and pushes do not run the Intel jobs. The Intel runners are
+slow, and GitHub runs only a small number of macOS jobs at the same time for
+the account. Manual runs and releases run all jobs, so a release finds Intel
+failures. To run the Intel jobs before a merge or a release, start the test
+workflow manually on the branch. `package-intel` builds the Intel package on
+an ARM64 runner with `CARGO_BUILD_TARGET=x86_64-apple-darwin`. This takes
+about half the time of a build on an Intel runner. `e2e-intel` tests the
+package on an Intel runner, and `perf-package` measures its launch there.
 
 For a pull request, the plan always selects `static`. Changes to Rust
 sources or `.cargo/config.toml` select all pull request jobs. Changes to the
 server fixture or the E2E scripts select `backend` and `e2e`. Changes under
 `tests/desktop/` select `e2e`. Changes to the packaging or probe scripts,
-`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the
-native renderer performance script also select `perf`. Changes to the
+`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the packaging
+scripts also select `e2e`, because it packages its debug app. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
 pull request jobs. A selected job also selects the jobs that it waits for. A
 job that the plan does not select shows as skipped. To see the plan of your
@@ -998,24 +1028,25 @@ changes, run `./qtest ci plan`.
 
 In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
-accessibility APIs. The ARM64 jobs use `macos-15`, and the Intel jobs use
-`macos-15-intel`.
-Each E2E job tests the package for its architecture and shares one set of
-servers between its suites. The native archives download from the
+accessibility APIs. The ARM64 jobs and `package-intel` use `macos-15`. The
+other Intel jobs use `macos-15-intel`.
+Each E2E job shares one set of servers between its suites. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Each Rust build
 cache belongs to one job, and only that job saves it. Each E2E job also
-restores the cache of its UI job, which builds the E2E test binary. Runs on
+restores the cache of its UI job, which builds the same dependencies. Runs on
 `main` save the build caches. Other runs only restore them. A change to
 `Cargo.lock` or to the toolchain gives a cache a new name, and the old cache
 stays. After the checks of a run on `main`, the `cache-cleanup` job of the test
-workflow deletes the old caches. For each job, it keeps the newest cache. A
+workflow and of the release workflow deletes the old caches. It also runs
+after failed or cancelled checks. A cancelled job saves no cache, so a newer
+push to `main` does not cancel the run in progress. For each job, it keeps the newest cache. A
 release of an older commit with another `Cargo.lock` saves a newer cache that
 `main` does not use, so the next run on `main` builds the dependencies again.
 To see the caches that it deletes, run
 `python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`.
 CI keeps its artifacts for one day. Runs on `main` also keep the measurements of the
-package, E2E, and `perf` jobs for 90 days, in the `performance-JOB`
-artifacts. See [Check performance](#check-performance). See
+package, E2E, `perf`, `perf-ui`, and `perf-backend` jobs for 90 days, in
+the `performance-NAME` artifacts. See [Check performance](#check-performance). See
 [Development](development.md#hooks-and-continuous-integration) for workflow
 events, required checks, and releases.
 

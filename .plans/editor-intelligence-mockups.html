@@ -1,0 +1,99 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Editor completion mockups</title><style>
+/* Approximate dark theme colors so the file also opens in a plain browser. */
+:root{color-scheme:dark;--background:#0a0a0a;--foreground:#e5e5e5;--muted-foreground:#8a8a8a;--card:#141414;--popover:#1a1a1a;--border:#2a2a2a;--accent:#3b6ff5;--accent-foreground:#fff;--primary:#3b6ff5;--chart-1:#5b8cff;--chart-2:#2fc6b0;--radius:10px;--font-sans:-apple-system,BlinkMacSystemFont,sans-serif;--font-mono:"SF Mono",Menlo,monospace}
+body{margin:24px;max-width:728px;background:var(--background);color:var(--foreground);font-family:var(--font-sans)}
+h1{font-size:16px;margin:0 0 4px}
+.sub{font-size:13px;color:var(--muted-foreground);margin:0 0 20px}
+.wrap{display:flex;flex-direction:column;gap:22px}
+.cap{font-size:13px;margin:0 0 8px}
+.cap b{font-weight:600}
+.cap span{color:var(--muted-foreground)}
+.ed{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;font-family:var(--font-mono);font-size:13px;line-height:20px;position:relative;min-height:100px}
+.ln{display:flex;gap:14px;white-space:pre}
+.no{color:var(--muted-foreground);opacity:.6;width:14px;text-align:right}
+.kw{color:var(--chart-2)}.id{color:var(--foreground)}
+.cur{display:inline-block;width:2px;height:16px;background:var(--primary);vertical-align:-3px}
+.pop{position:absolute;display:flex;gap:6px;align-items:flex-start;font-family:var(--font-sans)}
+.menu,.doc{background:var(--popover);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.35);padding:4px;font-size:12px}
+.menu{min-width:120px;max-width:340px}
+.it{display:flex;gap:8px;padding:4px;border-radius:4px;line-height:12px;white-space:nowrap}
+.it.sel{background:var(--accent);color:var(--accent-foreground)}
+.it .m{color:var(--chart-1)}
+.it.sel .m{color:inherit;font-weight:600}
+.it i{color:var(--muted-foreground)}
+.it.sel i{color:inherit;opacity:.75}
+.foot{display:flex;gap:6px;align-items:center;padding:6px 4px 4px;margin-top:4px;border-top:1px solid var(--border);color:var(--muted-foreground);white-space:nowrap}
+.foot.only{border-top:0;margin-top:0;padding-top:4px}
+.foot a{color:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.foot a:hover{color:var(--foreground)}
+.ic{width:12px;height:12px;border:1.2px solid currentColor;border-radius:50%;font-size:9px;line-height:12px;text-align:center;font-style:normal;flex:none}
+.spin{width:11px;height:11px;border:1.5px solid var(--border);border-top-color:var(--muted-foreground);border-radius:50%;flex:none}
+.doc{width:220px;padding:6px 10px;line-height:17px}
+.doc .t{font-family:var(--font-mono)}
+.doc .s{color:var(--muted-foreground)}
+</style></head><body>
+<h1>Catalog completion: approved mockups</h1>
+<p class="sub">Phase 2 of editor-intelligence.md. Rows show the column type only. The side panel shows the fully qualified name and the description. The note at the bottom tells the user when the cache is missing data.</p>
+<div class="wrap">
+
+<div><p class="cap"><b>1. No columns in the cache.</b> <span>The menu opens with only the note.</span></p>
+<div class="ed">
+<div class="ln"><span class="no">1</span><span><span class="kw">SELECT</span> <span class="id">o.</span><span class="cur"></span></span></div>
+<div class="ln"><span class="no">2</span><span><span class="kw">FROM</span> <span class="id">sales.orders o</span></span></div>
+<div class="pop" style="left:108px;top:40px"><div class="menu">
+<div class="foot only"><i class="ic">i</i><span>Columns of sales.orders are not loaded. <a>Refresh</a>.</span></div>
+</div></div>
+</div></div>
+
+<div><p class="cap"><b>1a. After a click on Refresh.</b> <span>The menu stays open; the columns appear in place when loading ends.</span></p>
+<div class="ed">
+<div class="ln"><span class="no">1</span><span><span class="kw">SELECT</span> <span class="id">o.</span><span class="cur"></span></span></div>
+<div class="ln"><span class="no">2</span><span><span class="kw">FROM</span> <span class="id">sales.orders o</span></span></div>
+<div class="pop" style="left:108px;top:40px"><div class="menu">
+<div class="foot only"><span class="spin"></span>Loading columns of sales.orders…</div>
+</div></div>
+</div></div>
+
+<div><p class="cap"><b>2. Some columns missing.</b> <span>Known columns as usual; the note names the table without columns.</span></p>
+<div class="ed" style="min-height:150px">
+<div class="ln"><span class="no">1</span><span><span class="kw">SELECT</span> <span class="id">am</span><span class="cur"></span></span></div>
+<div class="ln"><span class="no">2</span><span><span class="kw">FROM</span> <span class="id">sales.orders o</span></span></div>
+<div class="ln"><span class="no">3</span><span><span class="kw">JOIN</span> <span class="id">sales.refunds r</span> <span class="kw">USING</span> <span class="id">(order_id)</span></span></div>
+<div class="pop" style="left:122px;top:40px">
+<div class="menu">
+<div class="it sel"><span><span class="m">am</span>ount</span><i>decimal(18,2)</i></div>
+<div class="it"><span><span class="m">am</span>ount_eur</span><i>decimal(18,2)</i></div>
+<div class="it"><span>s<span class="m">am</span>ple_rate</span><i>double</i></div>
+<div class="foot"><i class="ic">i</i><span>Columns of sales.refunds are not loaded. <a>Refresh</a>.</span></div>
+</div>
+<div class="doc"><div class="t">sales.orders.amount</div><div style="margin-top:4px">Order total in the order currency.</div></div>
+</div>
+</div></div>
+
+<div><p class="cap"><b>2a. Column without a description.</b></p>
+<div class="ed" style="min-height:150px">
+<div class="ln"><span class="no">1</span><span><span class="kw">SELECT</span> <span class="id">am</span><span class="cur"></span></span></div>
+<div class="ln"><span class="no">2</span><span><span class="kw">FROM</span> <span class="id">sales.orders o</span></span></div>
+<div class="ln"><span class="no">3</span><span><span class="kw">JOIN</span> <span class="id">sales.refunds r</span> <span class="kw">USING</span> <span class="id">(order_id)</span></span></div>
+<div class="pop" style="left:122px;top:40px">
+<div class="menu">
+<div class="it"><span><span class="m">am</span>ount</span><i>decimal(18,2)</i></div>
+<div class="it sel"><span><span class="m">am</span>ount_eur</span><i>decimal(18,2)</i></div>
+<div class="it"><span>s<span class="m">am</span>ple_rate</span><i>double</i></div>
+<div class="foot"><i class="ic">i</i><span>Columns of sales.refunds are not loaded. <a>Refresh</a>.</span></div>
+</div>
+<div class="doc"><div class="t">sales.orders.amount_eur</div><div class="s" style="margin-top:4px;font-style:italic">No description</div></div>
+</div>
+</div></div>
+
+<div><p class="cap"><b>3. Table not in the cache.</b> <span>Refresh reads that one table; it is added if it exists.</span></p>
+<div class="ed">
+<div class="ln"><span class="no">1</span><span><span class="kw">SELECT</span> <span class="id">t.</span><span class="cur"></span></span></div>
+<div class="ln"><span class="no">2</span><span><span class="kw">FROM</span> <span class="id">sales.orders_v2 t</span></span></div>
+<div class="pop" style="left:108px;top:40px"><div class="menu">
+<div class="foot only"><i class="ic">i</i><span>sales.orders_v2 is not in the catalog. <a>Refresh</a>.</span></div>
+</div></div>
+</div></div>
+
+</div></body></html>

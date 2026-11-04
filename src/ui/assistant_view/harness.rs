@@ -319,6 +319,7 @@ impl Qrow {
                 harness,
                 executable,
                 working_directory,
+                web_search: self.settings.assistant.web_search,
             },
             Arc::new(move || {
                 let _ = wake.try_send(());
@@ -394,6 +395,27 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) {
         self.settings.assistant.harness = harness;
+        self.restart_assistant_harness(window, cx);
+    }
+
+    /// Saves the web search setting. A running harness starts again with it.
+    pub(in crate::ui) fn apply_assistant_web_search(
+        &mut self,
+        on: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.assistant.web_search = on;
+        if self.assistant_state.service.is_some() {
+            self.restart_assistant_harness(window, cx);
+        } else {
+            self.changed(cx);
+        }
+    }
+
+    /// Stops the harness and its running turns, and starts the harness of
+    /// the settings when the pane is open.
+    fn restart_assistant_harness(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.assistant_state.stop();
         self.reset_assistant_runs(window, cx);
         self.assistant_state.snapshot = None;

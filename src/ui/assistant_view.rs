@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     assistant::{
         AssistantEvent, HarnessSnapshot, HistoryTurn, MAX_MESSAGE_BYTES, TitleRequest, ToolCall,
-        TurnRequest,
+        TurnRequest, WebSearch, WebSearchStatus,
         broker::{
             ActionTarget, ConnectionContext, ConnectionState, MAX_CONTEXT_SQL_BYTES, QueryState,
             ResultSummary, SelectedTabContext, TabSummary, WorkspaceContext, bound_text,

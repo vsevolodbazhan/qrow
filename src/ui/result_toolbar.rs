@@ -1,5 +1,6 @@
 use super::*;
-use gpui_kit::component::{h_flex, popover::Popover, tag::Tag, v_flex};
+use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::component::{Icon, Selectable, h_flex, popover::Popover, tag::Tag, v_flex};
 
 const VISIBLE_ROWS: &str = "Visible Rows";
 const LOADED_ROWS: &str = "Loaded Rows";
@@ -15,7 +16,8 @@ struct ResultSummary {
 
 impl ResultSummary {
     fn new(tab: &Tab, cx: &App) -> Self {
-        let data = tab.table.read(cx).delegate();
+        let result = tab.shown_result();
+        let data = result.table.read(cx).delegate();
         let range = data.pagination.range(data.rows.len());
         Self {
             range: if range.is_empty() {
@@ -25,7 +27,7 @@ impl ResultSummary {
             },
             loaded: data.rows.len(),
             columns: data.columns.len(),
-            elapsed: tab
+            elapsed: result
                 .elapsed
                 .map(|elapsed| format!("{:.2} s", elapsed.as_secs_f64())),
         }
@@ -171,11 +173,15 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tab = &self.tabs[self.active];
-        let data = tab.table.read(cx).delegate();
+        let result = tab.shown_result();
+        let (tab_id, result_id) = (tab.saved.id, result.id);
+        let data = result.table.read(cx).delegate();
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
         let export_disabled = data.columns.is_empty();
-        let draining = tab.download.is_some() || tab.cursor == crate::worker::Cursor::Draining;
+        // A cursor drain reads only the live result.
+        let draining = tab.live == Some(result_id)
+            && (tab.download.is_some() || tab.cursor == crate::worker::Cursor::Draining);
         let summary = ResultSummary::new(tab, cx);
         let page_label = format!("Page {}", page + 1);
         h_flex()
@@ -187,8 +193,26 @@ impl Qrow {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(self.panel_switcher(cx))
             .when(show_range, |row| row.child(summary.tags(compact, cx)))
+            // The tag stays at every toolbar width: it changes what the rows mean.
+            .when(result.unfetched, |row| {
+                row.child(
+                    div()
+                        .id("result-partial")
+                        .test_support()
+                        .role(Role::Label)
+                        .flex_shrink_0()
+                        .whitespace_nowrap()
+                        .aria_label("Partial result")
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(
+                                "The result does not hold all rows of the query.",
+                            )
+                            .build(window, cx)
+                        })
+                        .child(ResultSummary::neutral_tag(cx).child("Partial")),
+                )
+            })
             .when(compact, |row| {
                 let qrow = cx.entity().downgrade();
                 let tab_id = tab.saved.id;
@@ -219,19 +243,62 @@ impl Qrow {
             })
             .child(div().flex_1().min_w_0())
             .child(
-                Button::new("export-results")
-                    .small()
-                    .ghost()
-                    .icon(gpui_kit::assets::IconName::Download)
-                    .tooltip("Export results…")
-                    .accessibility_label("Export results…")
-                    .disabled(export_disabled || draining)
-                    .on_click(cx.listener(|this, _, window, cx| this.open_export(window, cx))),
-            )
-            .child(
                 h_flex()
                     .flex_shrink_0()
                     .gap_2()
+                    // Related icon buttons sit closer than the page controls.
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new("export-results")
+                                    .small()
+                                    .ghost()
+                                    .icon(gpui_kit::assets::IconName::Download)
+                                    .tooltip("Export results…")
+                                    .accessibility_label("Export results…")
+                                    .disabled(export_disabled || draining)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_export(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("copy-result-query")
+                                    .ghost()
+                                    .small()
+                                    .icon(Icon::new(AssetIconName::FileCode))
+                                    .tooltip("Copy query")
+                                    .accessibility_label("Copy query")
+                                    .disabled(result.sql.is_none())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.copy_result_query(tab_id, result_id, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("pin-result")
+                                    .ghost()
+                                    .small()
+                                    .icon(Icon::new(AssetIconName::Pin))
+                                    .selected(result.pinned)
+                                    .tooltip(if result.pinned {
+                                        "Unpin result"
+                                    } else {
+                                        "Pin result"
+                                    })
+                                    .accessibility_label(if result.pinned {
+                                        "Unpin result"
+                                    } else {
+                                        "Pin result"
+                                    })
+                                    .disabled(
+                                        !result.pinned
+                                            && tab.pinned_results() >= MAX_PINNED_RESULTS,
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.toggle_result_pin(tab_id, result_id, window, cx)
+                                    })),
+                            ),
+                    )
                     .child(
                         div()
                             .id("page-label")
@@ -258,7 +325,10 @@ impl Qrow {
                             .icon(IconName::ChevronRight)
                             .tooltip("Next page")
                             .accessibility_label("Next page")
-                            .disabled(draining || page + 1 >= pages && (!tab.more || tab.busy))
+                            .disabled(
+                                draining
+                                    || page + 1 >= pages && (!tab.can_fetch(result_id) || tab.busy),
+                            )
                             .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
                         cx,
                     )),

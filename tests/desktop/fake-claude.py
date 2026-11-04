@@ -36,6 +36,9 @@ effort = argument("--effort")
 
 with open(os.path.join(state_dir, "processes"), "a") as processes:
     processes.write(f"{os.getpid()} {'control' if control else session_id}\n")
+# The tests read the built-in tools, the allowed tools, and the system prompt.
+with open(os.path.join(state_dir, f"arguments-{'control' if control else session_id}"), "w") as arguments:
+    json.dump(sys.argv[1:], arguments)
 
 if resumed and not os.path.exists(os.path.join(state_dir, "sessions", session_id)):
     print(f"No conversation found with session ID: {session_id}", file=sys.stderr)
@@ -143,6 +146,50 @@ def run_turn(turn, text):
         log(f"tool result {content}")
         stream(turn, "I updated the SQL.")
         result(turn, "I updated the SQL.")
+    elif message.startswith("Search the web"):
+        # Like Claude Code 2.1.295: the WebSearch tool use, then its result
+        # with the links as text and as tool_use_result.
+        stream(turn, "Searching the documentation.")
+        query = "postgres generate_series"
+        links = [
+            {"title": "Set Returning Functions", "url": "https://www.postgresql.org/docs/current/functions-srf.html"},
+            {"title": "Generate series", "url": "https://example.com/generate-series"},
+        ]
+        send({"type": "assistant", "parent_tool_use_id": None, "session_id": session_id, "message": {
+            "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_search_1", "name": "WebSearch",
+                                              "input": {"query": query, "mode": "standard"}}]}})
+        if message.startswith("Search the web and hold"):
+            # The search waits until the test releases it or Qrow stops the process.
+            wait_for("release")
+        failed = message.startswith("Search the web and fail")
+        result_block = {"tool_use_id": "toolu_search_1", "type": "tool_result"}
+        if failed:
+            result_block.update({"is_error": True, "content": "Web search error: unavailable"})
+        else:
+            result_block["content"] = (f'Web search results for query: "{query}"\n\nLinks: {json.dumps(links)}'
+                                       "\n\nThe function is in the set returning functions section.")
+        user = {"type": "user", "parent_tool_use_id": None, "session_id": session_id,
+                "message": {"role": "user", "content": [result_block]}}
+        if not failed:
+            user["tool_use_result"] = {"query": query, "results": [
+                {"tool_use_id": "srvtoolu_1", "content": links}, "The function is in the set returning functions section."],
+                "durationSeconds": 0.5}
+        send(user)
+        if message.startswith("Search the web and write SELECT 1"):
+            tab = context["selected_tab"]
+            answer = mcp({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
+                "name": "tab-append-sql",
+                "arguments": {"version": 1, "tab_id": tab["id"], "connection_id": tab["connection_id"],
+                              "editor_revision": tab["editor_revision"], "sql": "SELECT 1"}}})
+            content = json.loads(answer.get("result", {}).get("content", [{}])[0].get("text", "{}"))
+            answer = mcp({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {
+                "name": "query-run",
+                "arguments": {"version": 1, "tab_id": tab["id"], "connection_id": tab["connection_id"],
+                              "editor_revision": content.get("editor_revision")}}})
+            log(f"run result {answer.get('result', {}).get('content', [{}])[0].get('text', '')}")
+        reply = "Search failed." if failed else "See https://www.postgresql.org/docs/current/functions-srf.html"
+        stream(turn, reply)
+        result(turn, reply)
     elif message.startswith("Hold"):
         stream(turn, "Holding the reply.")
         wait_for("release")

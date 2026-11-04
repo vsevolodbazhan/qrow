@@ -134,9 +134,6 @@ connection's transfer settings.
 
 Incremental collect can reduce Spark driver result memory. It can also
 increase execution time. Server policy can override profile settings.
-The export rerun form shows the configured collection value before
-you choose a file. It also shows a warning when connection parameters enable
-`saveToFile`.
 `kyuubi.engine.spark.operation.incremental.collect` takes precedence over
 `kyuubi.operation.incremental.collect`. The administrator's
 `kyuubi.operation.result.saveToFile.enabled` option conflicts with
@@ -989,8 +986,8 @@ catalog and its copy of the schemas.
 
 ### Search the tree
 
-Type in **Search tables…** to find schemas and tables in all connections. The
-search also finds views. Use a name or part of a name. For a table or view,
+Type in **Search relations…** to find schemas, tables, and views in all
+connections. Use a name or part of a name. For a table or view,
 you can include the schema, for example `integrations.bookings`. The search
 also accepts names from **Copy qualified name**, for example
 `` `integrations`.`bookings` ``. The search ignores letter case and spaces

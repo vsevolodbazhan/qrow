@@ -2,8 +2,6 @@
 use serde::{Deserialize, Serialize};
 
 pub const INCREMENTAL_KEY: &str = "kyuubi.engine.spark.operation.incremental.collect";
-pub const LEGACY_INCREMENTAL_KEY: &str = "kyuubi.operation.incremental.collect";
-pub const SAVE_TO_FILE_KEY: &str = "kyuubi.operation.result.saveToFile.enabled";
 pub const MAX_FETCH_ROWS: usize = 100_000;
 
 /// Settings statements and variable substitution retain their session meaning.

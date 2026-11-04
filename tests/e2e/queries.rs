@@ -389,3 +389,120 @@ fn a_query_result_hidden_by_activity_stays_unread(cx: &mut TestAppContext) {
     app.click_labelled(cx, "Query 1, unread query result");
     app.wait_cell(cx, 0, 1, "42");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let sql = "SELECT id FROM range(1001)";
+    let (workspace, credentials) = kyuubi.workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "pin-result");
+    app.run_complete(cx, "SELECT 7 AS value");
+    app.wait_cell(cx, 0, 1, "7");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-partial").is_none());
+    });
+
+    app.click(cx, "result-tab-1");
+    app.wait_cell(cx, 0, 1, "0");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-partial").as_deref(),
+            Some("Partial result")
+        );
+        assert_eq!(
+            label(window, "result-range").as_deref(),
+            Some("Rows 1–1000")
+        );
+    });
+    // The cursor is closed, so Next page does not fetch.
+    app.click(cx, "next-page");
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(app.status(cx), "Complete");
+        assert_eq!(
+            label(window, "result-range").as_deref(),
+            Some("Rows 1–1000")
+        );
+    });
+    // A compact toolbar shows the Partial tag between the range and the details.
+    cx.simulate_window_resize(app.window, size(px(700.), px(650.)));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        let range = bounds_of(window, "result-range");
+        let partial = bounds_of(window, "result-partial");
+        let details = bounds_of(window, "result-details");
+        assert!(range.right() <= partial.left() && partial.right() <= details.left());
+    });
+    // A narrow toolbar hides result metadata, but not the Partial tag.
+    cx.simulate_window_resize(app.window, size(px(500.), px(650.)));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-range").is_none());
+        let toolbar = bounds_of(window, "query-footer");
+        let partial = bounds_of(window, "result-partial");
+        assert!(partial.left() >= toolbar.left() && partial.right() <= toolbar.right());
+    });
+    app.click(cx, "copy-result-query");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some(sql)
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
+    let sql = "select '日本語😀;' as value";
+    let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "alt-cmd-l");
+    app.wait_until(cx, "formatted query", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == "SELECT '日本語😀;' AS value"
+    });
+    app.press(cx, "cmd-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀;");
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-z");
+    app.wait_until(cx, "original SQL", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    let height = app.update(cx, |window, _| {
+        window.find("sql-editor").bounds().size.height
+    });
+    app.click(cx, "toggle-results");
+    app.update(cx, |window, _| {
+        assert!(window.find("sql-editor").bounds().size.height > height);
+        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+    });
+    app.click(cx, "run");
+    app.wait_cell(cx, 0, 1, "233");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
+        assert_eq!(window.find("sql-editor").bounds().size.height, height);
+    });
+    app.press(cx, "cmd-j");
+    app.press(cx, "cmd-j");
+    app.wait_cell(cx, 0, 1, "233");
+    app.wait_until(
+        cx,
+        "saved restored results",
+        Duration::from_secs(10),
+        |_, _| !app.saved().settings.results_minimized,
+    );
+}
