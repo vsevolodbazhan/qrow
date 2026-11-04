@@ -6,6 +6,7 @@ use gpui_kit::component::{
     alert::Alert,
     h_flex,
     input::Editor,
+    resizable::{h_resizable, resizable_panel, v_resizable},
     shimmer::ShimmerText,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
@@ -215,25 +216,33 @@ impl Qrow {
                 }
             }))
             .suffix(
-                h_flex().h(tab_height).px_2().gap_1().flex_shrink_0().child(
-                    Button::new("new-tab")
-                        .ghost()
-                        .small()
-                        .w(self.ui_px(28.))
-                        .h(self.ui_px(28.))
-                        .icon(IconName::Plus)
-                        .disabled(self.active_profile().is_none())
-                        .accessibility_label("New tab")
-                        .map(|mut button| {
-                            button.interactivity().tooltip(
-                                StatusTooltip::new("New tab", "").for_action(&NewTab, None),
-                            );
-                            button
-                        })
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
-                        ),
-                ),
+                h_flex()
+                    .h(tab_height)
+                    .px_2()
+                    .gap_2()
+                    .flex_shrink_0()
+                    .child(self.query_toolbar(cx))
+                    .child(
+                        Button::new("new-tab")
+                            .ghost()
+                            .small()
+                            .w(self.ui_px(28.))
+                            .h(self.ui_px(28.))
+                            .icon(IconName::Plus)
+                            .disabled(self.active_profile().is_none())
+                            .accessibility_label("New tab")
+                            .map(|mut button| {
+                                button.interactivity().tooltip(
+                                    StatusTooltip::new("New tab", "").for_action(&NewTab, None),
+                                );
+                                button
+                            })
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.new_tab(&NewTab, window, cx)
+                                }),
+                            ),
+                    ),
             )
     }
 
@@ -244,17 +253,14 @@ impl Qrow {
         h_flex()
             .id("query-toolbar")
             .test_support()
-            .h_12()
-            .px_3()
+            .h_full()
             .gap_2()
-            .border_b_1()
-            .border_color(cx.theme().border)
             .when(!tab.busy && !authenticating, |el| {
                 let button = Button::new("run")
-                    .primary()
+                    .outline()
                     .small()
-                    .icon(IconName::ArrowRight)
-                    .label("Run")
+                    .icon(IconName::Play)
+                    .label("Run  ⌘↵")
                     .map(|mut button| {
                         button.interactivity().tooltip(
                             StatusTooltip::new("Run query", "")
@@ -280,21 +286,23 @@ impl Qrow {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
-            .child(
-                Button::new("disconnect")
-                    .ghost()
-                    .small()
-                    .label("Disconnect")
-                    .disabled(!tab.can_disconnect())
-                    .tooltip(if self.demo {
-                        "The demo has no server connection"
-                    } else if tab.busy {
-                        "Wait for the query to finish before disconnecting"
-                    } else {
-                        "Disconnect the session of this tab"
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
-            )
+            .when(tab.can_disconnect(), |el| {
+                el.child(
+                    Button::new("disconnect")
+                        .ghost()
+                        .small()
+                        .label("Disconnect")
+                        .disabled(!tab.can_disconnect())
+                        .tooltip(if self.demo {
+                            "The demo has no server connection"
+                        } else if tab.busy {
+                            "Wait for the query to finish before disconnecting"
+                        } else {
+                            "Disconnect the session of this tab"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+                )
+            })
             .when(authenticating, |el| {
                 el.child(
                     div()
@@ -307,7 +315,6 @@ impl Qrow {
                         .child("Waiting for Trino authentication…"),
                 )
             })
-            .child(div().flex_1())
     }
 
     fn toggle_results(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -461,6 +468,7 @@ impl Qrow {
             .small()
             .selected(shown(SidebarPanel::Connections))
             .icon(Icon::new(AssetIconName::Plug).small())
+            .label("Connections")
             .accessibility_label("Connections")
             .on_click(cx.listener(|this, _, window, cx| {
                 this.show_sidebar_panel(SidebarPanel::Connections, window, cx)
@@ -470,6 +478,7 @@ impl Qrow {
             .small()
             .selected(shown(SidebarPanel::SignIns))
             .icon(Icon::new(AssetIconName::KeyRound).small())
+            .label("Sign-Ins")
             .accessibility_label(label)
             .on_click(cx.listener(|this, _, window, cx| {
                 this.show_sidebar_panel(SidebarPanel::SignIns, window, cx)
@@ -587,6 +596,7 @@ impl Qrow {
         let button = Button::new("toggle-activity")
             .ghost()
             .small()
+            .label("Activity")
             .selected(self.activity.read(cx).is_open())
             .icon(Icon::new(AssetIconName::Activity).small())
             .accessibility_label(label)
@@ -610,6 +620,20 @@ impl Qrow {
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let connection_name = connection_name(&self.profiles, tab.saved.profile);
+        let connection_state = if self.demo {
+            "Demo"
+        } else if tab.cancelling {
+            "Cancelling"
+        } else if tab.busy {
+            "Running"
+        } else if tab.status_label().starts_with("Error") {
+            "Query failed"
+        } else if tab.connected {
+            "Connected"
+        } else {
+            "Not connected"
+        };
+        let connection_label = format!("{connection_name} · {connection_state}");
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
@@ -631,8 +655,8 @@ impl Qrow {
                     .min_w_0()
                     .truncate()
                     .text_center()
-                    .aria_label(format!("Current connection: {connection_name}"))
-                    .child(connection_name.to_owned()),
+                    .aria_label(format!("Current connection: {connection_label}"))
+                    .child(connection_label),
             )
             .child(
                 h_flex()
@@ -919,41 +943,77 @@ impl Qrow {
                         .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
                 ),
             )
-            // Activity covers the workspace and the assistant pane while it
-            // is open.
-            .when(activity_open, |el| {
-                el.child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(changed_view(self.activity.clone().into(), window)),
-                )
-            })
-            .when(!activity_open, |el| {
-                el.child(
-                    h_flex()
-                        .items_stretch()
-                        .flex_1()
-                        .min_h_0()
+            .child(
+                div().flex_1().min_h_0().child(
+                    v_resizable("workspace-activity")
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
+                            resizable_panel()
                                 .min_h_0()
-                                .child(changed_view(cx.entity().into(), window)),
+                                .min_w_0()
+                                .size_range(self.ui_px(220.)..Pixels::MAX)
+                                .child(
+                                    h_flex()
+                                        .items_stretch()
+                                        .size_full()
+                                        .min_h_0()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .min_h_0()
+                                                .child(changed_view(cx.entity().into(), window)),
+                                        )
+                                        .when(
+                                            self.settings.assistant.enabled
+                                                && self.assistant_state.open,
+                                            |el| {
+                                                el.child(self.assistant_splitter(cx)).child(
+                                                    div()
+                                                        .w(assistant_width)
+                                                        .flex_shrink_0()
+                                                        .min_h_0()
+                                                        .child(changed_view(
+                                                            self.assistant_pane.clone().into(),
+                                                            window,
+                                                        )),
+                                                )
+                                            },
+                                        ),
+                                ),
                         )
-                        .when(
-                            self.settings.assistant.enabled && self.assistant_state.open,
-                            |el| {
-                                el.child(self.assistant_splitter(cx)).child(
-                                    div().w(assistant_width).flex_shrink_0().min_h_0().child(
-                                        changed_view(self.assistant_pane.clone().into(), window),
+                        .when(activity_open, |group| {
+                            group.child(
+                                resizable_panel()
+                                    .min_h_0()
+                                    .min_w_0()
+                                    .size(self.ui_px(self.activity_height))
+                                    .size_range(self.ui_px(120.)..self.ui_px(500.))
+                                    .child(
+                                        div()
+                                            .size_full()
+                                            .border_t_1()
+                                            .border_color(cx.theme().border)
+                                            .child(changed_view(
+                                                self.activity.clone().into(),
+                                                window,
+                                            )),
                                     ),
-                                )
-                            },
-                        ),
-                )
-            })
+                            )
+                        })
+                        .on_resize({
+                            let owner = cx.weak_entity();
+                            move |state, _, cx| {
+                                if let Some(height) = state.read(cx).sizes().get(1).copied() {
+                                    let _ = owner.update(cx, |this, cx| {
+                                        this.activity_height =
+                                            f32::from(height) / this.settings.ui_scale;
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                        }),
+                ),
+            )
             .when_some(self.menu.as_ref(), |el, menu| {
                 el.child(
                     deferred(
@@ -984,9 +1044,16 @@ impl Render for Qrow {
         // Split positions are measured window geometry. Clamp without mutating retained state during render.
         let editor_height = self
             .editor_height
-            .min(window.viewport_size().height - self.ui_px(294.))
+            .min(
+                window.viewport_size().height
+                    - self.ui_px(if self.activity.read(cx).is_open() {
+                        244. + self.activity_height
+                    } else {
+                        244.
+                    }),
+            )
             .max(self.ui_px(100.));
-        h_flex()
+        let workspace = h_flex()
             .size_full()
             .items_stretch()
             .when(self.sidebar, |el| {
@@ -1013,7 +1080,6 @@ impl Render for Qrow {
                     .min_h_0()
                     .overflow_hidden()
                     .child(self.query_tabs(cx))
-                    .child(self.query_toolbar(cx))
                     .child(
                         // GPUI Kit's Editor has no ID setter; tests find the
                         // editor through its container.
@@ -1058,7 +1124,47 @@ impl Render for Qrow {
                             .when(!self.settings.results_minimized, |el| el.flex_1().min_h_0())
                             .child(self.query_panel(cx)),
                     ),
-            )
+            );
+        if let Some(view) = self.dbt_details.clone() {
+            let owner = cx.weak_entity();
+            let minimum = self.ui_px(300.)
+                + if self.sidebar {
+                    self.sidebar_width
+                } else {
+                    px(0.)
+                };
+            let inspector_max = (window.viewport_size().width - minimum)
+                .max(self.ui_px(280.))
+                .min(self.ui_px(760.));
+            h_resizable("workspace-inspector")
+                .child(
+                    resizable_panel()
+                        .min_h_0()
+                        .min_w_0()
+                        .size_range(minimum..Pixels::MAX)
+                        .child(workspace),
+                )
+                .child(
+                    resizable_panel()
+                        .min_h_0()
+                        .min_w_0()
+                        .size(self.ui_px(self.settings.dbt_panel_width).min(inspector_max))
+                        .size_range(self.ui_px(280.)..inspector_max)
+                        .child(self.dbt_inspector(view, cx)),
+                )
+                .on_resize(move |state, _, cx| {
+                    if let Some(width) = state.read(cx).sizes().get(1).copied() {
+                        let _ = owner.update(cx, |this, cx| {
+                            this.settings.dbt_panel_width =
+                                f32::from(width) / this.settings.ui_scale;
+                            this.changed(cx);
+                        });
+                    }
+                })
+                .into_any_element()
+        } else {
+            workspace.into_any_element()
+        }
     }
 }
 

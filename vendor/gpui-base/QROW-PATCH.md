@@ -75,3 +75,8 @@ Qrow changes these files:
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.
+
+## Resizable panel alignment
+
+Horizontal resizable groups stretch their panels on the cross axis. A tall
+inspector cannot move its header above the group while it resolves its height.

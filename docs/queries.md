@@ -38,9 +38,8 @@ and cancellation limits.
 
 The dot of a tab shows the state of its work. Point to the dot to read the
 tab name and a short status. The tooltip has no query detail line. The bar
-above Results shows neutral tags for the visible rows, loaded rows, columns,
-and duration of the last query. At small widths, **Result Details** shows
-the values in a popover. See [Results](results.md#browse-and-copy) for the
+above Results shows one summary of visible rows, loaded rows, columns,
+and query duration. **Result Details** shows the full values in a popover. See [Results](results.md#browse-and-copy) for the
 controls and keyboard use. Action tooltips show
 the command name and its keyboard shortcut on one line. The name and shortcut
 share a vertical center.
@@ -60,8 +59,9 @@ Select the **Logs** tab before the result tabs to inspect the work of the tab. T
 connection and session events, the exact SQL submitted to the tab's owning
 connection, execution completion, preview page fetches, cancellation, and
 errors. Selecting a connection or query tab does not add a log entry. Each
-entry starts with a wall-clock timestamp in brackets, followed by its message.
-Errors use the error color. Durations are client measurements.
+entry has separate time, level, and message columns. Point to the time to
+read its full date. **Details…** shows multiline text, including submitted
+SQL. Errors show **Error** and use the error color. Durations are client measurements.
 
 Use **Font Family**, **Font Size**, and **Line Height** in the Logs section of
 Settings to change the Logs text. The default line-height multiplier is 1.2.

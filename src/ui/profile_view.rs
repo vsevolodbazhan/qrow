@@ -148,9 +148,6 @@ impl Qrow {
             .size_full()
             .mt_2()
             .overflow_hidden()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
             .child(panel)
             .into_any_element()
     }

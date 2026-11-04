@@ -5,7 +5,8 @@ to a database until you run SQL.
 
 ## Appearance and layout
 
-Open **Qrow → Settings…** to change the appearance. The Appearance page shows
+Open **Qrow → Settings…**, or press **⌘,**, to change the appearance.
+Settings opens in a separate window. **Done** or **Escape** closes it. The Appearance page shows
 the **Interface**, **Assistant Text**, **Editor**, and **Logs** sections. Interface
 has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant Text have
 **Font Family**, **Font Size**, and **Line Height**. The interface font applies
@@ -46,9 +47,13 @@ the system interface font, and SQL Keyword Case. It does not change the
 Assistant page. If a saved font or theme is unavailable, Qrow uses a default and
 reports the substitution.
 
+The status bar names the connection and shows whether its tab is connected,
+running, cancelling, or failed.
+
 The sidebar at the left of the window shows
 [Connections](connections.md) or [Sign-Ins](connections.md#sign-in-with-openid-connect).
-The two buttons at the left end of the status bar choose the sidebar. Click the
+The labeled **Connections** and **Sign-Ins** buttons at the left end of the
+status bar choose the sidebar. Click the
 button of the visible sidebar to hide it. Press **⌘B** to show or hide the
 Connections sidebar. **View → Toggle sidebar** hides or shows the sidebar that
 was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. When the focused part of

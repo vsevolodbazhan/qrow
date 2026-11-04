@@ -17,7 +17,7 @@ use gpui_kit::base::{
     SelectableText, StyledExt as _, TextSelectionEvent, TextSelectionHandle, input::Rope,
 };
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex,
@@ -36,11 +36,6 @@ use gpui_kit::{
 use std::{cell::RefCell, collections::HashMap, ops::Range, sync::Arc};
 use uuid::Uuid;
 
-/// The part of the window width that the sheet takes, and its limits in
-/// pixels. The sheet of GPUI Kit cannot be resized.
-const SHEET_WIDTH: f32 = 0.45;
-const MIN_SHEET_WIDTH: f32 = 420.;
-const MAX_SHEET_WIDTH: f32 = 760.;
 /// The lines of SQL in one row of the list. The SQL scrolls with the rest
 /// of the sheet, and the list lays out only the rows on screen.
 const SQL_CHUNK_LINES: usize = 30;
@@ -68,65 +63,85 @@ impl Qrow {
                 profile, unique_id, state, project, refresher, code_font, window, cx,
             )
         });
-        self.dbt_details = Some(view.clone());
-        self.open_dbt_details_sheet(view, window, cx);
+        self.dbt_details = Some(view);
+        if window.viewport_size().width < self.sidebar_width + self.ui_px(700.) {
+            self.sidebar = false;
+        }
+        window.focus(&self.dbt_focus, cx);
+        cx.notify();
     }
 
-    /// Open the sheet of the details `view`.
-    fn open_dbt_details_sheet(
-        &mut self,
+    /// The inspector shares space with the editor instead of covering it.
+    pub(super) fn dbt_inspector(
+        &self,
         view: Entity<DbtDetailsView>,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let weak = cx.weak_entity();
-        window.open_sheet(cx, move |sheet, window, cx| {
-            let close = weak.clone();
-            let details = view.read(cx);
-            let title = details.title.clone();
-            let back = details.history.last().map(|visit| visit.title.clone());
-            // The title fills the title bar, so that the back button stands
-            // next to the close button of the sheet.
-            let title_bar = h_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_2()
-                .pr_1()
-                .child(div().flex_1().min_w_0().truncate().child(title))
-                .when_some(back, |bar, back| {
-                    let view = view.clone();
-                    let label = format!("Back to {back}");
-                    bar.child(
-                        Button::new("dbt-details-back")
+    ) -> AnyElement {
+        let details = view.read(cx);
+        let title = details.title.clone();
+        let back = details.history.last().map(|visit| visit.title.clone());
+        v_flex()
+            .id("dbt-inspector")
+            .test_support()
+            .size_full()
+            .min_h_0()
+            .key_context("DbtInspector")
+            .track_focus(&self.dbt_focus)
+            .on_action(cx.listener(|this, _: &super::CloseDbtDetails, window, cx| {
+                this.close_dbt_inspector(window, cx)
+            }))
+            .child(
+                h_flex()
+                    .h_9()
+                    .flex_shrink_0()
+                    .px_3()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(gpui_kit::FontWeight::MEDIUM)
+                            .child(title),
+                    )
+                    .when_some(back, |bar, back| {
+                        let view = view.clone();
+                        let label = format!("Back to {back}");
+                        bar.child(
+                            Button::new("dbt-details-back")
+                                .ghost()
+                                .small()
+                                .icon(IconName::ChevronLeft)
+                                .tooltip(label.clone())
+                                .accessibility_label(label)
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |view, cx| view.back(window, cx))
+                                }),
+                        )
+                    })
+                    .child(
+                        Button::new("dbt-details-close")
                             .ghost()
                             .small()
-                            .icon(IconName::ChevronLeft)
-                            .tooltip(label.clone())
-                            .accessibility_label(label)
-                            .on_click(move |_, window, cx| {
-                                view.update(cx, |view, cx| {
-                                    view.back(window, cx);
-                                });
-                            }),
-                    )
-                });
-            sheet
-                .size(
-                    (window.viewport_size().width * SHEET_WIDTH)
-                        .clamp(px(MIN_SHEET_WIDTH), px(MAX_SHEET_WIDTH)),
-                )
-                .title(title_bar)
-                .child(view.clone())
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(cx));
-                })
-        });
+                            .icon(IconName::Close)
+                            .tooltip("Close dbt details · Escape")
+                            .accessibility_label("Close dbt details")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.close_dbt_inspector(window, cx)
+                            })),
+                    ),
+            )
+            .child(div().flex_1().min_h_0().child(view))
+            .into_any_element()
     }
 
-    /// The user closed the details sheet. The way back through the lineage
-    /// closes with it: only the back button goes back.
-    fn dbt_details_closed(&mut self, cx: &mut Context<Self>) {
+    fn close_dbt_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dbt_details = None;
+        self.tabs[self.active]
+            .input
+            .update(cx, |editor, cx| editor.focus(window, cx));
         cx.notify();
     }
 
@@ -1591,7 +1606,7 @@ impl Render for DbtDetailsView {
                 div()
                     .w_full()
                     .min_w_0()
-                    .pr_3()
+                    .px_3()
                     // An open part ends with space before the next part.
                     .when(this.ends_open_part(position), |row| row.pb_3())
                     .child(this.render_row(position, cx))
@@ -1599,7 +1614,7 @@ impl Render for DbtDetailsView {
             }),
         )
         .size_full()
-        .pb_4();
+        .py_3();
         // The sheet body scrolls its children, so the list takes the height
         // of the body and scrolls by itself.
         div()

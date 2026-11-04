@@ -982,6 +982,41 @@ impl Qrow {
                             ),
                     ),
             )
+            .when(self.sign_ins.is_empty(), |el| {
+                el.child(
+                    v_flex()
+                        .flex_1()
+                        .px_4()
+                        .py_8()
+                        .gap_3()
+                        .child(
+                            div()
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .child("No sign-ins"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(if self.demo {
+                                    "Sign-ins are unavailable in the demo."
+                                } else {
+                                    "Add a sign-in to reuse it across connections."
+                                }),
+                        )
+                        .when(!self.demo, |el| {
+                            el.child(
+                                Button::new("empty-new-sign-in")
+                                    .outline()
+                                    .small()
+                                    .label("New sign-in…")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_sign_in_editor(None, false, window, cx)
+                                    })),
+                            )
+                        }),
+                )
+            })
             .when(!self.sign_ins.is_empty(), |el| {
                 el.child(
                     v_flex()

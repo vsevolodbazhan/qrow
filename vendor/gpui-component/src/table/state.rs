@@ -2592,7 +2592,11 @@ where
             .size_full()
             .children(loading_view)
             .when(!loading, |this| {
-                this.child(inner_table)
+                this.child(
+                    div().size_full()
+                        .when(self.options.scrollbar_visible.bottom, |el| el.pb(Scrollbar::width()))
+                        .child(inner_table),
+                )
                     .child(ScrollableMask::new(
                         Axis::Horizontal,
                         &self.horizontal_scroll_handle,

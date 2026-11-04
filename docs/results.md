@@ -32,7 +32,7 @@ Right-click a result tab for these commands:
 - **Copy query** copies the SQL statement that made the result.
 - **Close** removes the result tab and its downloaded rows.
 
-**Copy query** in the result toolbar also copies the statement. It copies the
+**Copy query** in **Result actions** also copies the statement. It copies the
 statement that Qrow sent, not the current editor text. Point to a result tab
 to see its name and the start of its statement.
 
@@ -59,18 +59,15 @@ Column names use the main text color. Types use smaller, muted text. Numeric
 columns align to the right, including their headers and NULL values.
 
 Each page contains up to 1,000 rows. **Next page** fetches another page when needed.
-The bar above the table shows neutral tags for the visible row range,
-downloaded row count, column count, and query duration. **Loaded** counts the
-rows in the preview. It does not give the total number of rows on the server.
-The tag tooltips use the same names as the rows in **Result Details**:
-**Visible Rows**, **Loaded Rows**, **Columns**, and **Query Duration**.
-When the tags do not fit, the bar keeps the row range and shows an information
-button. Click **Show result details** to read all four values as neutral tags.
-The heading uses semibold text. At the smallest widths, the row range also
-moves into **Result Details**. The page buttons show arrows at all widths.
-Their tooltips show **Previous page** and **Next page**.
-At large UI scales, a wide sidebar can leave too little space for the page
-buttons. Reduce the sidebar width if the buttons do not fit.
+The bar above the table shows the visible row range, the loaded row count,
+the column count, and the query duration in one line. **Loaded** counts only
+downloaded preview rows. It is not the total row count on the server.
+Click **Show result details** for all values. **Export…** opens the export
+form. **Result actions** has **Copy query** and **Pin result**.
+
+For a wide result, click **Columns…** to search column names and types.
+Choose a column to scroll to it. Initial column widths use the header and a
+sample of up to 32 downloaded rows. Long values can still need a wider column.
 
 With focus in the toolbar, use Tab to focus **Show result details**.
 Press Enter or Space to open it.

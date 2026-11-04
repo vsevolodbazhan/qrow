@@ -217,6 +217,35 @@ pub(super) struct SettingsForm {
     claude_executable: Entity<InputState>,
     copy_format: SettingSelect,
     _subscriptions: Vec<Subscription>,
+    _events: Entity<SettingsEvents>,
+}
+
+/// Settings subscriptions belong to the Settings window. Qrow remains the
+/// shared model owner, while every callback receives this window explicitly.
+struct SettingsEvents {
+    owner: WeakEntity<Qrow>,
+}
+
+impl SettingsEvents {
+    fn subscribe<V: EventEmitter<E> + 'static, E: 'static>(
+        events: &Entity<Self>,
+        emitter: &Entity<V>,
+        window: &Window,
+        cx: &mut App,
+        mut callback: impl FnMut(&mut Qrow, &Entity<V>, &E, &mut Window, &mut Context<Qrow>) + 'static,
+    ) -> Subscription {
+        events.update(cx, |_, cx| {
+            cx.subscribe_in(
+                emitter,
+                window,
+                move |events, emitter, event: &E, window, cx| {
+                    let _ = events
+                        .owner
+                        .update(cx, |owner, cx| callback(owner, emitter, event, window, cx));
+                },
+            )
+        })
+    }
 }
 
 impl SettingsForm {
@@ -241,14 +270,18 @@ impl SettingsForm {
 
 impl Qrow {
     pub(super) fn init_settings_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let owner = cx.weak_entity();
+        let events = cx.new(|_| SettingsEvents { owner });
         let mut subscriptions = Vec::new();
         let theme = cx.new(|cx| {
             SelectState::new(SearchableVec::new(themes::options(cx)), None, window, cx)
                 .searchable(true)
         });
-        subscriptions.push(cx.subscribe_in(
+        subscriptions.push(SettingsEvents::subscribe(
+            &events,
             &theme,
             window,
+            cx,
             move |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = event {
                     this.set_theme(value.clone(), window, cx);
@@ -262,9 +295,11 @@ impl Qrow {
                 cx.new(|cx| InputState::new(window, cx).default_value(setting.format(value)));
             // Handle steps here instead of InputState's default one-unit step.
             input.update(cx, |input, cx| input.set_step(None, window, cx));
-            subscriptions.push(cx.subscribe_in(
+            subscriptions.push(SettingsEvents::subscribe(
+                &events,
                 &input,
                 window,
+                cx,
                 move |this, input, event: &NumberInputEvent, window, cx| {
                     let NumberInputEvent::Step(action) = event;
                     let direction = if *action == StepAction::Increment {
@@ -275,9 +310,11 @@ impl Qrow {
                     this.commit_number_setting(input, setting, direction, window, cx);
                 },
             ));
-            subscriptions.push(cx.subscribe_in(
+            subscriptions.push(SettingsEvents::subscribe(
+                &events,
                 &input,
                 window,
+                cx,
                 move |this, input, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
                         this.commit_number_setting(input, setting, 0., window, cx);
@@ -302,9 +339,11 @@ impl Qrow {
                 )
                 .searchable(true)
             });
-            subscriptions.push(cx.subscribe_in(
+            subscriptions.push(SettingsEvents::subscribe(
+                &events,
                 &select,
                 window,
+                cx,
                 move |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
                     if let SelectEvent::Confirm(Some(value)) = event {
                         this.set_font(setting, value.clone(), window, cx);
@@ -327,9 +366,11 @@ impl Qrow {
                 cx,
             )
         });
-        subscriptions.push(cx.subscribe_in(
+        subscriptions.push(SettingsEvents::subscribe(
+            &events,
             &mode,
             window,
+            cx,
             |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = event {
                     this.set_default_assistant_mode(value == "Run automatically", window, cx);
@@ -350,9 +391,11 @@ impl Qrow {
                 cx,
             )
         });
-        subscriptions.push(cx.subscribe_in(
+        subscriptions.push(SettingsEvents::subscribe(
+            &events,
             &keyword_case,
             window,
+            cx,
             |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
                 if let SelectEvent::Confirm(Some(value)) = event {
                     let case = if value == keyword_case_label(KeywordCase::Lowercase) {
@@ -378,9 +421,11 @@ impl Qrow {
                         .unwrap_or_default(),
                 )
         });
-        subscriptions.push(cx.subscribe_in(
+        subscriptions.push(SettingsEvents::subscribe(
+            &events,
             &executable,
             window,
+            cx,
             |this, input, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
                     let value = input.read(cx).value().trim().to_owned();
@@ -407,9 +452,11 @@ impl Qrow {
                 cx,
             )
         });
-        subscriptions.push(cx.subscribe_in(
+        subscriptions.push(SettingsEvents::subscribe(
+            &events,
             &harness,
             window,
+            cx,
             |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = event
                     && let Some(harness) = AssistantHarness::ALL
@@ -431,9 +478,11 @@ impl Qrow {
                         .unwrap_or_default(),
                 )
         });
-        subscriptions.push(cx.subscribe_in(
+        subscriptions.push(SettingsEvents::subscribe(
+            &events,
             &claude_executable,
             window,
+            cx,
             |this, input, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
                     let value = input.read(cx).value().trim().to_owned();
@@ -460,9 +509,11 @@ impl Qrow {
                 cx,
             )
         });
-        subscriptions.push(cx.subscribe_in(
+        subscriptions.push(SettingsEvents::subscribe(
+            &events,
             &copy_format,
             window,
+            cx,
             |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
                 if let SelectEvent::Confirm(Some(value)) = event
                     && let Some(format) = CopyFormat::ALL
@@ -484,6 +535,7 @@ impl Qrow {
             claude_executable,
             copy_format,
             _subscriptions: subscriptions,
+            _events: events,
         });
     }
 
@@ -741,39 +793,50 @@ impl Qrow {
         cx.notify();
     }
 
-    pub(super) fn open_settings_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let close = weak.clone();
-            let body = weak.clone();
-            let footer = weak.update(cx, |this, cx| this.settings_footer(cx)).ok();
-            let (width, height) = settings_dialog_size(window);
-            let viewport = window.viewport_size();
-            dialog
-                .title("Settings")
-                .w(width)
-                .h(height)
-                .margin_top((viewport.height - height) / 2.)
-                .overlay_closable(false)
-                .on_ok(|_, _, _| false)
-                .content(move |content, window, cx| {
-                    let panel = body
-                        .update(cx, |this, cx| this.settings_content(window, cx))
-                        .ok();
-                    content.children(panel)
-                })
-                .when_some(footer, |dialog, footer| dialog.footer(footer))
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |this, cx| {
-                        this.settings_open = false;
-                        this.settings_form = None;
-                        cx.notify();
-                    });
-                })
-        });
+    pub(super) fn open_settings_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Open after the command releases Qrow. The new window's first render
+        // reads the shared settings owner synchronously.
+        let main_window = window.window_handle();
+        cx.spawn(async move |weak, cx| {
+            let _ = cx.update(|cx| {
+                let Some(owner) = weak.upgrade() else {
+                    return;
+                };
+                let bounds = Bounds::centered(None, size(px(820.), px(660.)), cx);
+                let content_owner = owner.clone();
+                let handle = cx
+                    .open_window(
+                        WindowOptions {
+                            titlebar: Some(TitlebarOptions {
+                                title: Some("Settings".into()),
+                                ..gpui_kit::component::TitleBar::title_bar_options()
+                            }),
+                            window_bounds: Some(WindowBounds::Windowed(bounds)),
+                            window_min_size: Some(size(px(700.), px(500.))),
+                            ..gpui_kit::component::TitleBar::window_options()
+                        },
+                        move |window, cx| {
+                            content_owner
+                                .update(cx, |this, cx| this.init_settings_form(window, cx));
+                            let view = cx.new(|cx| {
+                                SettingsWindow::new(&content_owner, main_window, window, cx)
+                            });
+                            cx.new(|cx| Root::new(view, window, cx))
+                        },
+                    )
+                    .expect("open Settings window");
+                owner.update(cx, |this, _| this.settings_window = Some(handle));
+            });
+        })
+        .detach();
     }
 
-    fn settings_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn settings_content(
+        &self,
+        owner: WeakEntity<Qrow>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let Some(form) = &self.settings_form else {
             return div().into_any_element();
         };
@@ -851,9 +914,6 @@ impl Qrow {
             .size_full()
             .mt_2()
             .overflow_hidden()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
             .child(
                 settings_panel("settings", window, cx)
                     .page(appearance_page(form))
@@ -875,7 +935,7 @@ impl Qrow {
                     )
                     .page(assistant_page(
                         form,
-                        cx.weak_entity(),
+                        owner,
                         self.settings.assistant.enabled,
                         self.settings.assistant.web_search,
                     )),
@@ -883,54 +943,37 @@ impl Qrow {
             .into_any_element()
     }
 
-    fn settings_footer(&self, cx: &mut Context<Self>) -> AnyElement {
-        h_flex()
-            .w_full()
-            .gap_2()
-            .child(
-                Button::new("reset-settings")
-                    .label("Restore defaults")
-                    .on_click(cx.listener(|this, _, window, cx| this.reset_settings(window, cx))),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("save-settings")
-                    .primary()
-                    .label("Save")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // Commit pending numeric edits before disposing their subscriptions.
-                        let pending: Vec<_> = this
-                            .settings_form
-                            .iter()
-                            .flat_map(|form| form.numbers.iter())
-                            .map(|(setting, input, _)| (*setting, input.clone()))
-                            .collect();
-                        for (setting, input) in pending {
-                            this.commit_number_setting(&input, setting, 0., window, cx);
-                        }
-                        if let Some(form) = &this.settings_form {
-                            let read = |input: &Entity<InputState>| {
-                                let path = input.read(cx).value().trim().to_owned();
-                                (!path.is_empty()).then_some(path)
-                            };
-                            let codex = read(&form.assistant_executable);
-                            let claude = read(&form.claude_executable);
-                            if this.settings.assistant.codex_executable != codex
-                                || this.settings.assistant.claude_executable != claude
-                            {
-                                this.settings.assistant.codex_executable = codex;
-                                this.settings.assistant.claude_executable = claude;
-                                this.changed(cx);
-                            }
-                        }
-                        // Programmatic close_dialog does not invoke Dialog::on_close.
-                        this.settings_open = false;
-                        this.settings_form = None;
-                        window.close_dialog(cx);
-                        cx.notify();
-                    })),
-            )
-            .into_any_element()
+    fn finish_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Commit pending numeric edits before disposing their subscriptions.
+        let pending: Vec<_> = self
+            .settings_form
+            .iter()
+            .flat_map(|form| form.numbers.iter())
+            .map(|(setting, input, _)| (*setting, input.clone()))
+            .collect();
+        for (setting, input) in pending {
+            self.commit_number_setting(&input, setting, 0., window, cx);
+        }
+        if let Some(form) = &self.settings_form {
+            let read = |input: &Entity<InputState>| {
+                let path = input.read(cx).value().trim().to_owned();
+                (!path.is_empty()).then_some(path)
+            };
+            let codex = read(&form.assistant_executable);
+            let claude = read(&form.claude_executable);
+            if self.settings.assistant.codex_executable != codex
+                || self.settings.assistant.claude_executable != claude
+            {
+                self.settings.assistant.codex_executable = codex;
+                self.settings.assistant.claude_executable = claude;
+                self.changed(cx);
+            }
+        }
+        self.settings_open = false;
+        self.settings_form = None;
+        self.settings_window = None;
+        window.remove_window();
+        cx.notify();
     }
 }
 
@@ -1212,9 +1255,8 @@ pub(super) fn setting_row<E: IntoElement>(
             } else {
                 h_flex()
                     .w_full()
-                    .justify_between()
-                    .gap_3()
-                    .child(label.flex_1().min_w_0().max_w_3_5())
+                    .gap_4()
+                    .child(label.flex_1().min_w_0())
                     .child(control.w(rem * CONTROL_REMS).flex_shrink_0())
             }
         },
@@ -1420,5 +1462,131 @@ mod font_tests {
         for setting in FontSetting::ALL {
             assert_eq!(setting.selected(&settings), SYSTEM_FONT_LABEL);
         }
+    }
+}
+
+struct SettingsWindow {
+    owner: WeakEntity<Qrow>,
+    _observe: Subscription,
+    focus: FocusHandle,
+    main_window: AnyWindowHandle,
+    _owner_release: Subscription,
+}
+
+impl SettingsWindow {
+    fn new(
+        owner: &Entity<Qrow>,
+        main_window: AnyWindowHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let weak = owner.downgrade();
+        cx.on_release(|this, cx| {
+            let _ = this.owner.update(cx, |owner, cx| {
+                owner.settings_open = false;
+                owner.settings_form = None;
+                owner.settings_window = None;
+                cx.notify();
+            });
+        })
+        .detach();
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        Self {
+            owner: weak,
+            _observe: cx.observe_in(owner, window, |_, _, window, cx| {
+                window.refresh();
+                cx.notify();
+            }),
+            focus,
+            main_window,
+            _owner_release: cx
+                .observe_release_in(owner, window, |_, _, window, _| window.remove_window()),
+        }
+    }
+}
+
+impl Render for SettingsWindow {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let weak = self.owner.clone();
+        let body = self
+            .owner
+            .update(cx, |owner, cx| owner.settings_content(weak, window, cx))
+            .ok();
+        let footer = h_flex()
+            .w_full()
+            .gap_2()
+            .child(
+                Button::new("reset-settings")
+                    .label("Restore defaults")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let _ = this
+                            .owner
+                            .update(cx, |owner, cx| owner.reset_settings(window, cx));
+                    })),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("save-settings")
+                    .primary()
+                    .label("Done")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let _ = this
+                            .owner
+                            .update(cx, |owner, cx| owner.finish_settings(window, cx));
+                    })),
+            );
+        v_flex()
+            .size_full()
+            .key_context("SettingsWindow")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|_, _: &CloseSettings, window, _| window.remove_window()))
+            .on_action(cx.listener(|_, _: &CloseTab, window, _| window.remove_window()))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, _| {
+                let _ = this;
+                window.activate_window();
+            }))
+            .on_action(cx.listener(|this, _: &Quit, _, cx| {
+                let owner = this.owner.clone();
+                let _ = this.main_window.update(cx, |_, window, cx| {
+                    window.activate_window();
+                    let _ = owner.update(cx, |owner, cx| owner.request_quit(window, cx));
+                });
+            }))
+            .on_action(cx.listener(|this, _: &OpenAbout, _, cx| {
+                let owner = this.owner.clone();
+                let _ = this.main_window.update(cx, |_, window, cx| {
+                    window.activate_window();
+                    let _ = owner.update(cx, |owner, cx| owner.open_about(&OpenAbout, window, cx));
+                });
+            }))
+            .on_action(cx.listener(|this, _: &IncreaseUiScale, window, cx| {
+                let _ = this.owner.update(cx, |owner, cx| {
+                    owner.adjust_ui_scale(UI_SCALE_STEP, window, cx)
+                });
+            }))
+            .on_action(cx.listener(|this, _: &DecreaseUiScale, window, cx| {
+                let _ = this.owner.update(cx, |owner, cx| {
+                    owner.adjust_ui_scale(-UI_SCALE_STEP, window, cx)
+                });
+            }))
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .child(
+                gpui_kit::component::TitleBar::new()
+                    .child(div().flex_1().pr(px(80.)).text_center().child("Settings")),
+            )
+            .child(div().flex_1().min_h_0().px_4().children(body))
+            .child(
+                div()
+                    .px_4()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(footer),
+            )
+            .children(Root::render_sheet_layer(window, cx))
+            .children(Root::render_dialog_layer(window, cx))
+            .children(Root::render_notification_layer(window, cx))
     }
 }

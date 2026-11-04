@@ -403,7 +403,7 @@ sign-in when it needs authentication. The sidebar has no **Sign in…** button.
 Click a sign-in row to see its account and settings. Its status dot is part
 of the row. In **Connections**, click a red error dot to open **Activity**
 for the connection whose sign-in failed. To open the sidebar,
-click the key button at the left end of the status bar, or select
+click **Sign-Ins** at the left end of the status bar, or select
 **View → Sign-Ins**. Click the button again to hide the sidebar. The button
 shows a yellow dot when sign-ins need attention: a connection uses a sign-in
 that is not signed in, a sign-in has expired, Qrow cannot reach the provider,
@@ -719,8 +719,10 @@ Qrow reads the SQL and prepares the column descriptions when you move the
 pointer onto the title of a closed part, so the part opens quickly. A part
 that you close releases them.
 
-The panel takes almost half of the window width, so make the window wider to
-read long text more easily.
+The panel shares the window with the editor and results. Drag its left divider
+to change its width. Qrow saves this width. A narrow window hides the sidebar
+when the panel opens. Press **Escape** or click **Close dbt details** to close
+the panel and return focus to the editor.
 
 ### dbt limitations
 

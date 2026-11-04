@@ -22,3 +22,14 @@ Qrow changes these files:
 
 Remove the patch when a GPUI release includes the fix. Update the crate with
 the other GPUI crates as one set.
+
+A frame request also starts the frame source of a new visible window. This
+keeps a Settings window responsive if its first visibility callback has not
+yet arrived. The visibility check still prevents frames for hidden windows.
+
+Frame demand also marks the Metal layer for one deferred AppKit display.
+This presents input-driven changes in an auxiliary window after GPUI draws
+them synchronously. AppKit combines repeated requests. No timer or recurring
+redraw is added. The display link still stops after the idle period.
+Frame callbacks do not request another AppKit display. Their animation demand
+stays on the display link. A closed window cannot restart its frame source.

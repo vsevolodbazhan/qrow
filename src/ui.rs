@@ -11,6 +11,7 @@ mod demo;
 mod environment;
 mod export_dialog;
 mod format_sql;
+mod log_row;
 mod output;
 mod profile_view;
 mod result_tabs;
@@ -77,6 +78,7 @@ actions!(
         SendAssistantMessage,
         NewTab,
         CloseTab,
+        CloseDbtDetails,
         ToggleSidebar,
         ShowConnections,
         ShowSignIns,
@@ -85,6 +87,7 @@ actions!(
         ToggleActivity,
         OpenAbout,
         OpenSettings,
+        CloseSettings,
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
@@ -104,6 +107,11 @@ pub fn init(cx: &mut App) {
     cx.set_global(crate::export::Jobs::default());
     themes::init(cx);
     // Wide result sets need a persistent, discoverable horizontal scrollbar.
+    cx.bind_keys([KeyBinding::new(
+        "escape",
+        CloseDbtDetails,
+        Some("DbtInspector"),
+    )]);
     Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
     LanguageRegistry::singleton().register(
         "sql",
@@ -119,6 +127,8 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(results::bindings());
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("escape", CloseSettings, Some("SettingsWindow")),
         KeyBinding::new("alt-cmd-l", FormatSql, None),
         KeyBinding::new(
             "cmd-enter",
@@ -680,6 +690,7 @@ pub struct Qrow {
     assistant_pane: Entity<assistant_view::AssistantPane>,
     fonts: Vec<String>,
     settings_open: bool,
+    settings_window: Option<WindowHandle<Root>>,
     /// The page that Settings shows when it opens.
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
@@ -695,6 +706,10 @@ pub struct Qrow {
     form: Option<ProfileEditor>,
     tab_form: Option<TabEditor>,
     result_form: Option<result_tabs::ResultEditor>,
+    column_picker: Option<(
+        Entity<gpui_kit::component::select::SelectState<SearchableVec<String>>>,
+        Subscription,
+    )>,
     menu: Option<ContextMenu>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
@@ -732,11 +747,13 @@ pub struct Qrow {
     /// The background work of each connection. It covers the main area of
     /// the window while it is open.
     activity: Entity<activity_view::ActivityView>,
+    activity_height: f32,
     _activity_events: Subscription,
     /// The indexes of the dbt manifests of the connections.
     dbt: dbt::DbtProjects,
     /// The dbt resource of the open dbt details sheet.
     dbt_details: Option<Entity<dbt_details::DbtDetailsView>>,
+    dbt_focus: FocusHandle,
     _demo_manifest: Option<tempfile::NamedTempFile>,
 }
 impl Qrow {
@@ -940,6 +957,7 @@ impl Qrow {
             assistant_pane,
             fonts,
             settings_open: false,
+            settings_window: None,
             about_open: false,
             settings_form: None,
             profiles: workspace.profiles,
@@ -952,6 +970,7 @@ impl Qrow {
             form: None,
             tab_form: None,
             result_form: None,
+            column_picker: None,
             menu: None,
             saver,
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
@@ -983,9 +1002,11 @@ impl Qrow {
             catalog,
             _catalog_subscriptions: catalog_subscriptions,
             activity,
+            activity_height: 220.,
             _activity_events: activity_events,
             dbt,
             dbt_details: None,
+            dbt_focus: cx.focus_handle(),
             _demo_manifest: demo_manifest,
         };
         for tab in workspace.tabs {
@@ -1742,7 +1763,13 @@ impl Qrow {
             Event::Rows(rows) => {
                 if let Some(table) = &live {
                     table.update(cx, |t, cx| {
+                        let first = t.delegate().rows.is_empty();
                         t.delegate_mut().rows.extend(rows);
+                        if first {
+                            let columns = t.delegate().columns.clone();
+                            t.delegate_mut().schema(columns, cx);
+                            t.refresh(cx);
+                        }
                         cx.notify();
                     });
                     if let Some(page) = tab.pending_page.take() {
@@ -2092,10 +2119,10 @@ impl Qrow {
     /// A modal owns the window, so tab and profile commands wait for it.
     fn dialog_open(&self) -> bool {
         self.form.is_some()
-            || self.settings_open
             || self.about_open
             || self.tab_form.is_some()
             || self.result_form.is_some()
+            || self.column_picker.is_some()
             || self.assistant_state.rename_form.is_some()
             || self.sign_in_ui.editor.is_some()
     }
@@ -2222,7 +2249,7 @@ impl Qrow {
         self.run_selected_query(window, cx);
     }
     fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.form.is_some() || self.settings_open {
+        if self.form.is_some() {
             return false;
         }
         self.run_tab_query(self.active, window, cx)
@@ -2554,7 +2581,7 @@ impl Qrow {
     }
     fn disconnect_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[index];
-        if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
+        if !tab.can_disconnect() || self.form.is_some() {
             return;
         }
         if tab.worker.is_some() {
@@ -2577,9 +2604,21 @@ impl Qrow {
         cx.notify();
     }
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.settings_window {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+            self.settings_window = None;
+            self.settings_open = false;
+        }
+        if self.settings_open {
+            return;
+        }
         if !self.dialog_open() {
             self.settings_open = true;
-            self.init_settings_form(window, cx);
             self.open_settings_dialog(window, cx);
             cx.notify();
         }
@@ -3997,6 +4036,7 @@ impl Qrow {
                     row
                 })
                 .collect();
+            data.schema(data.columns.clone(), cx);
             t.refresh(cx);
         });
         tab.set_status_detail("Complete", "Demo data");

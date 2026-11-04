@@ -1,6 +1,4 @@
 use super::*;
-use crate::logs::timestamp_label;
-use gpui_kit::base::SelectableText;
 use gpui_kit::component::{h_flex, v_flex};
 
 impl Qrow {
@@ -13,46 +11,35 @@ impl Qrow {
             v_flex()
                 .w_full()
                 .children(tab.output.entries().enumerate().map(|(index, entry)| {
-                    let (first_line, remaining_lines) = entry
-                        .text
-                        .split_once('\n')
-                        .map_or((entry.text.as_str(), None), |(first, rest)| {
-                            (first, Some(rest))
-                        });
-                    let header = if entry.kind == LogKind::HistoryTrimmed {
-                        first_line.to_owned()
-                    } else {
-                        format!("[{}] {first_line}", timestamp_label(entry.timestamp))
-                    };
-                    // A failed keep-alive closed the session. Activity shows
-                    // what else happened on the connection.
                     let show_activity =
                         connection.filter(|_| entry.kind == LogKind::KeepAliveFailed);
-                    let text = v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .font_family(self.settings.logs_font_family.clone())
-                        .text_size(self.ui_px(self.settings.logs_font_size))
-                        .line_height(relative(self.settings.logs_line_height))
-                        .whitespace_normal()
-                        .when(entry.severity == Severity::Error, |el| {
-                            el.text_color(cx.theme().danger)
-                        })
-                        .child(
-                            SelectableText::new("header", header).document_order(index as u64 * 2),
-                        )
-                        .when_some(remaining_lines, |el, text| {
-                            el.child(
-                                SelectableText::new("body", text.to_owned())
-                                    .document_order(index as u64 * 2 + 1),
-                            )
-                        });
                     h_flex()
                         .id(("output-entry", entry.id()))
                         .w_full()
                         .items_start()
                         .gap_2()
-                        .child(text)
+                        .child(if entry.kind == LogKind::HistoryTrimmed {
+                            div()
+                                .py_2()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(entry.text.clone())
+                                .into_any_element()
+                        } else {
+                            super::log_row::LogRow {
+                                id: ("output-log", entry.id()).into(),
+                                timestamp: entry.timestamp,
+                                severity: entry.severity,
+                                text: entry.text.clone(),
+                                order: index as u64 * 2,
+                                typography: super::log_row::Typography {
+                                    family: self.settings.logs_font_family.clone().into(),
+                                    size: self.ui_px(self.settings.logs_font_size),
+                                    line_height: self.settings.logs_line_height,
+                                },
+                            }
+                            .into_any_element()
+                        })
                         .when_some(show_activity, |el, connection| {
                             el.child(
                                 Button::new(("output-show-activity", entry.id()))

@@ -1,5 +1,5 @@
 use gpui::{
-    App, IntoElement, ParentElement as _, SharedString, StyleRefinement, Styled, Window,
+    App, FontWeight, IntoElement, ParentElement as _, SharedString, StyleRefinement, Styled, Window,
     prelude::FluentBuilder as _,
 };
 
@@ -86,6 +86,7 @@ impl SettingGroup {
         GroupBox::new()
             .id(SharedString::from(format!("group-{}", options.group_ix())))
             .with_variant(options.group_variant())
+            .title_style(StyleRefinement::default().text_color(cx.theme().foreground).font_weight(FontWeight::MEDIUM))
             .when_some(self.title.clone(), |this, title| {
                 this.title(v_flex().gap_1().child(title).when_some(
                     self.description.clone(),

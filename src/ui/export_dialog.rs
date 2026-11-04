@@ -1285,7 +1285,7 @@ impl ExportDialog {
             )
             .child(
                 Button::new("export-save")
-                    .label("Save")
+                    .label("Save…")
                     .primary()
                     .disabled(busy || invalid)
                     .on_click(cx.listener(|this, _, window, cx| this.start(true, window, cx))),

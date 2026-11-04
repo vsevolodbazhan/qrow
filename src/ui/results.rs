@@ -204,13 +204,15 @@ impl Results {
         ];
         self.headers
             .extend(columns.iter().enumerate().map(|(i, c)| {
-                let width = match c.data_type.as_str() {
-                    "TIMESTAMP" => 190.,
-                    "STRING" => 180.,
-                    _ => 120.,
-                };
+                let content = (0..self.rows.len().min(32))
+                    .filter_map(|row| self.rows.get(row)?.get(i)?.as_deref())
+                    .map(|value| header.text(&value.chars().take(80).collect::<String>(), false))
+                    .fold(px(0.), Pixels::max);
+                let width = (content + px(scale * 20.))
+                    .max(px(scale * 88.))
+                    .min(px(scale * 280.));
                 Column::new(i.to_string(), c.name.clone())
-                    .width(px(scale * width).max(header.width(c)))
+                    .width(width.max(header.width(c)))
                     .when(ValueKind::of(&c.data_type) == ValueKind::Number, |column| {
                         column.text_right()
                     })
@@ -910,7 +912,7 @@ pub(super) fn view(
         .child(
             DataTable::new(table)
                 .small()
-                .stripe(true)
+                .stripe(false)
                 .bordered(false)
                 .scrollbar_visible(true, true),
         )

@@ -15,8 +15,9 @@ Do one of these steps:
 - Click the status dot on a connection row.
 - Click **Show activity** on a failed keep-alive line in the Logs of a tab.
 
-Activity covers the main area of the window. Press **Esc** or click **Close**
-to go back.
+Activity opens below the workspace. Drag its top divider to change its height.
+The editor and results stay visible. Press **Esc** or click **Close** to close
+the panel.
 
 The status bar opens the connection with the newest unseen refresh error.
 Otherwise, it opens a connection with an unread tab error, if one exists.
@@ -26,9 +27,9 @@ Use the connection list in the Activity header to show another connection.
 ## Read Activity
 
 Each connection has one log. The entries are in the order that they occur,
-with the newest at the end. Each entry starts with a timestamp in brackets,
-like an entry in the [Logs of a tab](queries.md#logs). Errors use the error
-color. The log follows new entries while you are at the end of it. **Jump to
+with the newest at the end. Each entry has separate time, level, and message columns,
+like the [Logs of a tab](queries.md#logs). Errors show **Error** and use the
+error color. Point to a time to read its full date. The log follows new entries while you are at the end of it. **Jump to
 Latest** goes back to the end.
 
 | Work | Entries |
@@ -39,14 +40,14 @@ Latest** goes back to the end.
 | Query | The tab submitted a query, then the query completed, failed, or was cancelled. |
 
 Entries of a tab start with the tab name, for example `Query 3: Submitted a
-query`. Activity does not show SQL text or query errors. Click **Show tab** to
-see the tab of the query and its Logs, which have the details. An entry of a
-closed tab stays, without **Show tab**.
+query`. Activity does not show SQL text or query errors. Open the entry menu and
+select **Show tab** to see the query and its Logs. An entry of a closed tab
+stays, without **Show tab**.
 
 A shared catalog refresh goes to the Activity of the connection that ran it.
 
 Select **Errors only** to show only errors. **All activity** shows all
-entries. **Copy all** copies the entries that show. **Copy** on an error
+entries. **Copy all** copies the entries that show. **Copy error** in the entry menu
 copies that error. Both actions include the recorded timestamps and the full
 text of each entry. **Clear** deletes the log of the connection.
 

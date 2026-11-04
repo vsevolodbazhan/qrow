@@ -66,3 +66,13 @@ Qrow changes these files:
 
 Remove the patch when a GPUI Kit release includes the fixes. Update the crate
 with the other GPUI crates as one set.
+
+## Table scrollbar clearance
+
+The table reserves a bottom gutter for its horizontal scrollbar. The list
+viewport ends above the scrollbar, so it does not cover result text.
+
+## Settings group hierarchy
+
+Settings group headings use the foreground color and medium font weight.
+Field help keeps the muted color, so the section title leads the fields.

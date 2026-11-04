@@ -140,7 +140,7 @@ impl RenderOnce for ResizablePanelGroup {
             window.use_keyed_state(self.id.clone(), cx, |_, _| ResizableState::default()),
         );
         let container = if self.axis.is_horizontal() {
-            h_flex()
+            h_flex().items_stretch()
         } else {
             v_flex()
         };

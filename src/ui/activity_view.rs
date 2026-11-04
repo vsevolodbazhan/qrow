@@ -1,5 +1,5 @@
-//! Activity: the log of the background work of a connection, over the main
-//! area of the window. The status bar button, ⇧⌘U, and the connection menu
+//! Activity: the log of the background work of a connection, docked below
+//! the workspace. The status bar button, ⇧⌘U, and the connection menu
 //! open it.
 
 use super::{Qrow, StatusTooltip, button_pair::button_pair, panel_empty_state};
@@ -11,6 +11,7 @@ use gpui_kit::component::{
     ActiveTheme, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
+    menu::{DropdownMenu, PopupMenuItem},
     message_scroller::{MessageScroller, MessageScrollerState},
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     v_flex,
@@ -107,12 +108,7 @@ enum Row {
 }
 
 /// The text settings of the rows. A change measures the rows again.
-#[derive(Clone, PartialEq)]
-pub(super) struct Typography {
-    pub family: SharedString,
-    pub size: Pixels,
-    pub line_height: f32,
-}
+pub(super) use super::log_row::Typography;
 
 pub(super) enum ActivityViewEvent {
     /// Show the query tab with this ID.
@@ -568,14 +564,6 @@ impl ActivityView {
         let Some(entry) = entry else {
             return div().into_any_element();
         };
-        let (first_line, rest) = entry
-            .text
-            .split_once('\n')
-            .map_or((entry.text.as_str(), None), |(first, rest)| {
-                (first, Some(rest))
-            });
-        let header = format!("[{}] {first_line}", timestamp_label(entry.timestamp));
-        let order = entry.id() * 2;
         let tab = entry.tab.filter(|tab| !self.closed_tabs.contains(tab));
         let error = entry
             .is_error()
@@ -587,41 +575,48 @@ impl ActivityView {
             .items_start()
             .gap_2()
             .child(
-                text(v_flex())
-                    .flex_1()
-                    .min_w_0()
-                    .when(entry.is_error(), |el| el.text_color(cx.theme().danger))
-                    .child(SelectableText::new("header", header).document_order(order))
-                    .when_some(rest, |el, rest| {
-                        el.child(
-                            SelectableText::new("body", rest.to_owned()).document_order(order + 1),
-                        )
-                    }),
+                super::log_row::LogRow {
+                    id: ("activity-log", entry.id()).into(),
+                    timestamp: entry.timestamp,
+                    severity: entry.severity,
+                    text: entry.text.clone(),
+                    order: entry.id() * 2,
+                    typography,
+                }
+                .into_any_element(),
             )
-            .when_some(error, |el, error| {
-                el.child(
-                    Button::new(("activity-copy", entry.id()))
-                        .ghost()
-                        .xsmall()
-                        .label("Copy")
-                        .accessibility_label("Copy error")
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
-                        }),
-                )
-            })
-            .when_some(tab, |el, tab| {
+            .when(tab.is_some() || error.is_some(), |el| {
                 let view = view.downgrade();
                 el.child(
-                    Button::new(("activity-show-tab", entry.id()))
+                    Button::new(("activity-actions", entry.id()))
                         .ghost()
                         .xsmall()
-                        .label("Show tab")
-                        .accessibility_label("Show tab")
-                        .on_click(move |_, _, cx| {
-                            let _ = view.update(cx, |_, cx| {
-                                cx.emit(ActivityViewEvent::ShowTab(tab));
-                            });
+                        .icon(IconName::Ellipsis)
+                        .accessibility_label("Activity entry actions")
+                        .tooltip("Activity entry actions")
+                        .dropdown_menu(move |menu, _, _| {
+                            menu.when_some(tab, |menu, tab| {
+                                let view = view.clone();
+                                menu.item(PopupMenuItem::new("Show tab").on_click(
+                                    move |_, _, cx| {
+                                        let _ = view.update(cx, |_, cx| {
+                                            cx.emit(ActivityViewEvent::ShowTab(tab))
+                                        });
+                                    },
+                                ))
+                            })
+                            .when_some(
+                                error.clone(),
+                                |menu, error| {
+                                    menu.item(PopupMenuItem::new("Copy error").on_click(
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                error.clone(),
+                                            ));
+                                        },
+                                    ))
+                                },
+                            )
                         }),
                 )
             })

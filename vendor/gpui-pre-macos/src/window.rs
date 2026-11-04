@@ -833,6 +833,9 @@ impl MacWindowState {
     }
 
     fn start_display_link(&mut self) {
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
         self.stop_display_link();
         unsafe {
             if !self
@@ -864,14 +867,29 @@ impl MacWindowState {
     /// Delivers a frame request from GPUI. Starts the display link if it
     /// stopped because the window was idle.
     ///
-    /// A window without a frame source is not visible yet, or GPUI released
-    /// it. The first visibility change starts the display link of a new window.
+    /// A newly opened window can receive a frame request after it becomes
+    /// visible but before AppKit delivers its first occlusion-state change.
+    /// Start its frame source here too; `start_display_link` checks visibility.
     fn request_frame(&mut self) {
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
         self.frame_pacing.request();
+        // Input can draw synchronously before the display-link callback runs.
+        // Request one coalesced AppKit presentation for this window as well.
+        // Frame callbacks take this field while they run. Their animation
+        // demand must stay on the display link, not re-enter AppKit display.
+        if self.request_frame_callback.is_some() {
+            if let Some(layer) = self.renderer.layer() {
+                unsafe {
+                    let _: () = msg_send![layer, setNeedsDisplay];
+                }
+            }
+        }
         if self
             .frame_source
             .as_ref()
-            .is_some_and(|frame_source| !frame_source.is_running())
+            .is_none_or(|frame_source| !frame_source.is_running())
         {
             self.start_display_link();
         }
@@ -1394,6 +1412,8 @@ impl MacWindow {
 impl Drop for MacWindow {
     fn drop(&mut self) {
         let mut this = self.0.lock();
+        this.closed.store(true, Ordering::Release);
+        this.request_frame_callback.take();
         // `accesskit_macos::SubclassingAdapter::for_window` strong-retains the
         // window's content view, and that content view keeps the `GPUIView` it
         // hosts alive. Together with the `Arc<Mutex<MacWindowState>>` parked in
@@ -3213,6 +3233,9 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
                 callback(Default::default());
 
                 let mut lock = window_state.lock();
+                if lock.closed.load(Ordering::Acquire) {
+                    return;
+                }
                 lock.request_frame_callback = Some(callback);
                 lock.renderer.set_presents_with_transaction(false);
                 lock.start_display_link();
@@ -3327,13 +3350,22 @@ extern "C" fn set_frame_size(this: &Object, _: Sel, size: NSSize) {
 extern "C" fn display_layer(this: &Object, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.lock();
+    if lock.closed.load(Ordering::Acquire) {
+        return;
+    }
     if let Some(mut callback) = lock.request_frame_callback.take() {
         lock.renderer.set_presents_with_transaction(true);
         lock.stop_display_link();
         drop(lock);
-        callback(Default::default());
+        callback(RequestFrameOptions {
+            require_presentation: true,
+            ..Default::default()
+        });
 
         let mut lock = window_state.lock();
+        if lock.closed.load(Ordering::Acquire) {
+            return;
+        }
         lock.request_frame_callback = Some(callback);
         lock.renderer.set_presents_with_transaction(false);
         lock.start_display_link();
@@ -3344,6 +3376,9 @@ extern "C" fn step(view: *mut c_void) {
     let view = view as id;
     let window_state = unsafe { get_window_state(&*view) };
     let mut lock = window_state.lock();
+    if lock.closed.load(Ordering::Acquire) {
+        return;
+    }
     let now = Instant::now();
     lock.frame_pacing.begin_frame(now);
 
@@ -3351,6 +3386,9 @@ extern "C" fn step(view: *mut c_void) {
         drop(lock);
         callback(Default::default());
         lock = window_state.lock();
+        if lock.closed.load(Ordering::Acquire) {
+            return;
+        }
         lock.request_frame_callback = Some(callback);
     }
 

@@ -166,6 +166,8 @@ pub struct Settings {
     pub copy_format: CopyFormat,
     /// Collapse the Results and Logs panel to its header in every tab.
     pub results_minimized: bool,
+    /// Preferred width of the dbt inspector at 100% interface scale.
+    pub dbt_panel_width: f32,
 }
 
 impl Default for Settings {
@@ -189,6 +191,7 @@ impl Default for Settings {
             export_replay_limit_mib: 2048,
             copy_format: CopyFormat::default(),
             results_minimized: false,
+            dbt_panel_width: 400.,
         }
     }
 }
@@ -230,6 +233,10 @@ impl CopyFormat {
 
 impl Settings {
     pub fn sanitize(&mut self) {
+        if !self.dbt_panel_width.is_finite() {
+            self.dbt_panel_width = 400.;
+        }
+        self.dbt_panel_width = self.dbt_panel_width.clamp(280., 760.);
         self.export_replay_limit_mib = self.export_replay_limit_mib.min(1024 * 1024);
         self.theme = self.theme.trim().into();
         if self.theme.is_empty() {
@@ -2587,6 +2594,7 @@ mod tests {
             export_replay_limit_mib: 2048,
             copy_format: CopyFormat::Markdown,
             results_minimized: false,
+            dbt_panel_width: 400.,
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());
