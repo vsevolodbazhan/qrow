@@ -862,7 +862,7 @@ impl Qrow {
                             .resettable(false)
                             .group(SettingGroup::new().title("Copy").item(setting_item(
                                 "Copy Format",
-                                "Format of ⌘C and Copy cell, selection, or row in results.",
+                                "Default format when copying result cells.",
                                 &["copy", "clipboard", "markdown", "plain", "csv", "tsv", "json"],
                                 select_field(&form.copy_format, "Copy Format"),
                             )))
