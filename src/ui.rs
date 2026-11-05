@@ -1085,7 +1085,12 @@ impl Qrow {
                 } else if notifications.recv().await.is_err() {
                     break;
                 }
-                match weak.update_in(cx, |this, window, cx| this.tick(window, cx)) {
+                // Settings also renders this entity. Its last rendered window
+                // can be closed, so resolve ticks through the main window.
+                match cx
+                    .update(|window, cx| weak.update(cx, |this, cx| this.tick(window, cx)))
+                    .and_then(std::convert::identity)
+                {
                     Ok(keep_polling) => pending = keep_polling,
                     Err(_) => break,
                 }

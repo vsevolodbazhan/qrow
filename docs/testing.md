@@ -470,7 +470,9 @@ events. It checks only what needs the real operating system:
 1. **About Qrow** and **Settings…** open from the menu bar, and **⌘W** closes
    the Settings window.
 2. A connection that you add through the form keeps its password in the real
-   Keychain, and a real query reads it.
+   Keychain, and a real query reads it. This check follows the close of
+   Settings, so it also checks that background results still reach the main
+   window. The driver waits for the saved connection in the sidebar.
 3. Pixels of the selected connection row: when the pointer is on the status
    dot, the focus outline stays above the hover fill of the dot.
 4. When the workspace cannot be saved, **⌘Q** keeps the editor open with its
