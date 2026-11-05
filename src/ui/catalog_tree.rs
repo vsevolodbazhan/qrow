@@ -12,14 +12,16 @@ use crate::catalog::{
     Catalog, CatalogConfig, CatalogIdentity, CatalogWorker, Event as CatalogEvent, RelationKind,
     Scope, Seed, Status, catalog_key, qualified_name,
 };
+use crate::model::SearchScope;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::{
     ElementExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState,
 };
 use gpui_kit::component::{
-    Icon,
+    Icon, Selectable as _,
     button::ButtonCustomVariant,
     h_flex,
+    menu::DropdownMenu as _,
     scroll::ScrollableElement as _,
     spinner::Spinner,
     text::{TextView, TextViewState, TextViewStyle},
@@ -218,13 +220,21 @@ pub(super) struct CatalogTree {
     focus: FocusHandle,
     /// The workspace file. Caches are next to it. `None` keeps them in memory.
     workspace: Option<PathBuf>,
+    /// The connections that the search looks in.
+    pub(super) scope: SearchScope,
+    /// The connection of the active tab when the tree was last built.
+    built_for: Option<Uuid>,
 }
 
 impl CatalogTree {
     pub(super) fn new(workspace: Option<PathBuf>, window: &mut Window, cx: &mut App) -> Self {
         Self {
             state: cx.new(|cx| TreeState::new(cx)),
-            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search relations…")),
+            search: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Search…")
+                    .clean_on_escape()
+            }),
             expanded: HashSet::new(),
             collapsed: HashSet::new(),
             connections: HashMap::new(),
@@ -236,6 +246,8 @@ impl CatalogTree {
             tips: Rc::new(RefCell::new(HashMap::new())),
             focus: cx.focus_handle(),
             workspace,
+            scope: SearchScope::All,
+            built_for: None,
         }
     }
 
@@ -356,6 +368,8 @@ struct Builder<'a> {
     /// The dbt resources of the tables of each connection.
     dbt: &'a HashMap<Uuid, super::dbt::DbtLookup>,
     search: String,
+    /// The connection of the active tab, for the Current connection scope.
+    current: Option<Uuid>,
     nodes: HashMap<SharedString, Node>,
     matches: usize,
 }
@@ -438,43 +452,56 @@ impl Builder<'_> {
             || self.matches(&qualified_name(schema, name))
     }
 
-    fn connection(&mut self, profile: &Profile) -> TreeItem {
+    /// The row of a connection, or `None` when a search hides it: the
+    /// connection is outside the search scope or has no matches.
+    fn connection(&mut self, profile: &Profile) -> Option<TreeItem> {
         let id = connection_id(profile.id);
+        let searching = !self.search.is_empty();
+        if searching && !self.tree.scope.includes(profile.id, self.current) {
+            return None;
+        }
+        // A connection that matches by name shows all its schemas.
+        let filtered = searching && !self.matches(&profile.name);
+        let browses = profile.catalog.browses();
+        if filtered
+            && !(browses
+                && self.tree.catalog(profile.id).is_some_and(|catalog| {
+                    catalog.schemas.iter().any(|(name, schema)| {
+                        self.matches(name)
+                            || schema.relations.as_ref().is_some_and(|relations| {
+                                relations.keys().any(|r| self.matches_relation(name, r))
+                            })
+                    })
+                }))
+        {
+            return None;
+        }
         let item = self.add(
             id.clone(),
             profile.name.clone(),
             Node::Connection(profile.id),
         );
         // A connection without schema browsing is a row without children.
-        if !profile.catalog.browses() {
-            return item;
+        if !browses {
+            return Some(item);
         }
-        let catalog = self.tree.catalog(profile.id);
-        let searching = !self.search.is_empty();
-        let has_matches = searching
-            && catalog.is_some_and(|catalog| {
-                catalog.schemas.iter().any(|(name, schema)| {
-                    self.matches(name)
-                        || schema.relations.as_ref().is_some_and(|relations| {
-                            relations.keys().any(|r| self.matches_relation(name, r))
-                        })
-                })
-            });
-        let expanded = if searching {
-            has_matches && self.search_expands(&id) || self.is_expanded(&id) && !has_matches
+        let expanded = if filtered {
+            self.search_expands(&id)
         } else {
             self.is_expanded(&id)
         };
-        self.folder(item, expanded, profile.id, |builder| {
-            builder.connection_children(profile.id, &id, has_matches)
-        })
+        Some(self.folder(item, expanded, profile.id, |builder| {
+            builder.connection_children(profile.id, &id, filtered)
+        }))
     }
 
+    /// The schemas of a connection. A `filtered` connection shows only the
+    /// schemas that match the search, or that contain matching relations.
     fn connection_children(
         &mut self,
         profile: Uuid,
         id: &SharedString,
-        has_matches: bool,
+        filtered: bool,
     ) -> Vec<TreeItem> {
         let mut children = vec![];
         let status = self.tree.status(profile).cloned().unwrap_or_default();
@@ -506,22 +533,20 @@ impl Builder<'_> {
         } else if catalog.schemas.is_empty() {
             children.push(self.notice(id, profile, "No schemas", Tone::Muted, None));
         }
-        let searching = !self.search.is_empty();
         for (name, schema) in &catalog.schemas {
-            // The match limit applies only to a search. Without a search,
-            // every name matches the empty text.
-            if searching && self.matches >= MAX_SEARCH_MATCHES {
+            // The match limit applies only to a filtered connection.
+            if filtered && self.matches >= MAX_SEARCH_MATCHES {
                 break;
             }
-            let schema_matches = self.matches(name);
-            let relation_matches = searching
+            let schema_matches = !filtered || self.matches(name);
+            let relation_matches = filtered
                 && schema.relations.as_ref().is_some_and(|relations| {
                     relations.keys().any(|r| self.matches_relation(name, r))
                 });
-            if searching && !schema_matches && !relation_matches {
+            if !schema_matches && !relation_matches {
                 continue;
             }
-            if searching && schema_matches {
+            if filtered && schema_matches {
                 self.matches += 1;
             }
             let item_id = schema_id(profile, name);
@@ -539,7 +564,7 @@ impl Builder<'_> {
             );
             // A search shows only the matching relations of a schema that
             // matches through them. A schema that matches by name shows all.
-            let filtered = searching && !schema_matches;
+            let filtered = filtered && !schema_matches;
             let expanded = if filtered {
                 self.search_expands(&item_id)
             } else {
@@ -549,13 +574,9 @@ impl Builder<'_> {
                 builder.schema_children(catalog, profile, name, &item_id, filtered)
             }));
         }
-        if searching && children.is_empty() {
-            let text = if has_matches {
-                "Search limit reached"
-            } else {
-                "No matches"
-            };
-            children.push(self.notice(id, profile, text, Tone::Muted, None));
+        // A filtered connection has matches, so the limit hides them all.
+        if filtered && children.is_empty() {
+            children.push(self.notice(id, profile, "Search limit reached", Tone::Muted, None));
         }
         children
     }
@@ -800,19 +821,36 @@ impl Qrow {
         Rc::make_mut(&mut self.catalog.seen_errors)
             .retain(|profile, _| self.profiles.iter().any(|item| item.id == *profile));
         let search = self.catalog.search.read(cx).value().trim().to_lowercase();
+        let searching = !search.is_empty();
         let dbt = self.dbt_lookups();
+        let current = self.active_profile();
         let mut builder = Builder {
             tree: &self.catalog,
             dbt: &dbt,
             search,
+            current,
             nodes: HashMap::new(),
             matches: 0,
         };
         let mut items: Vec<TreeItem> = self
             .profiles
             .iter()
-            .map(|profile| builder.connection(profile))
+            .filter_map(|profile| builder.connection(profile))
             .collect();
+        if searching && items.is_empty() {
+            let text = "No matches".to_owned();
+            let notice = builder.add(
+                "search-empty".into(),
+                text.clone(),
+                Node::Notice {
+                    profile: Uuid::nil(),
+                    text,
+                    tone: Tone::Muted,
+                    refresh: None,
+                },
+            );
+            items.push(notice);
+        }
         if builder.matches >= MAX_SEARCH_MATCHES {
             // The first row, so it shows without a scroll to the end.
             let text =
@@ -830,6 +868,7 @@ impl Qrow {
             items.insert(0, notice);
         }
         self.catalog.nodes = Rc::new(builder.nodes);
+        self.catalog.built_for = current;
         self.catalog.state.update(cx, |state, cx| {
             let selected = state.selected_item().map(|item| item.id.clone());
             state.set_items(items, cx);
@@ -1104,16 +1143,64 @@ impl Qrow {
         cx.notify();
     }
 
-    /// A search reads every cache, so it can find tables in any connection.
+    /// A search reads the cache of each connection in its scope, so it can
+    /// find tables in any of them.
     pub(super) fn catalog_search_changed(&mut self, cx: &mut Context<Self>) {
         self.catalog.collapsed.clear();
-        if !self.catalog.search.read(cx).value().trim().is_empty() {
-            for index in 0..self.profiles.len() {
-                self.ensure_catalog(self.profiles[index].id);
-            }
-        }
+        self.ensure_search_catalogs(cx);
         self.rebuild_catalog_tree(cx);
         cx.notify();
+    }
+
+    fn ensure_search_catalogs(&mut self, cx: &App) {
+        if self.catalog.search.read(cx).value().trim().is_empty() {
+            return;
+        }
+        let current = self.active_profile();
+        for index in 0..self.profiles.len() {
+            let profile = self.profiles[index].id;
+            if self.catalog.scope.includes(profile, current) {
+                self.ensure_catalog(profile);
+            }
+        }
+    }
+
+    /// Change the connections that the search looks in, and save the choice.
+    pub(super) fn set_search_scope(&mut self, scope: SearchScope, cx: &mut Context<Self>) {
+        let mut scope = scope;
+        scope.sanitize(&self.profiles);
+        if scope == self.catalog.scope {
+            return;
+        }
+        self.catalog.scope = scope;
+        self.catalog_search_changed(cx);
+        self.changed(cx);
+    }
+
+    /// With the Current connection scope, search the connection of the
+    /// active tab after it changes.
+    pub(super) fn sync_search_scope(&mut self, cx: &mut Context<Self>) {
+        if self.catalog.scope == SearchScope::Current
+            && self.catalog.built_for != self.active_profile()
+        {
+            self.ensure_search_catalogs(cx);
+            self.rebuild_catalog_tree(cx);
+        }
+    }
+
+    /// The tooltip of the search scope button: the control and its value.
+    fn search_scope_label(&self) -> String {
+        let value = match &self.catalog.scope {
+            SearchScope::All => "All connections".to_owned(),
+            SearchScope::Current => "Current connection".to_owned(),
+            SearchScope::Connections(ids) if ids.len() == 1 => self
+                .profiles
+                .iter()
+                .find(|profile| ids.contains(&profile.id))
+                .map_or_else(|| "1 connection".to_owned(), |profile| profile.name.clone()),
+            SearchScope::Connections(ids) => format!("{} connections", ids.len()),
+        };
+        format!("Search in: {value}")
     }
 
     /// Bring the catalog workers in line with the saved profiles and shared
@@ -1495,6 +1582,61 @@ impl Qrow {
         )
     }
 
+    /// The button at the end of the search field that picks the connections
+    /// to search. It shows as selected when the search skips connections.
+    fn search_scope_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let scope = self.catalog.scope.clone();
+        let profiles: Vec<(Uuid, String)> = self
+            .profiles
+            .iter()
+            .map(|profile| (profile.id, profile.name.clone()))
+            .collect();
+        let weak = cx.weak_entity();
+        let label = self.search_scope_label();
+        Button::new("search-scope")
+            .ghost()
+            .xsmall()
+            .icon(AssetIconName::ListFilter)
+            .selected(!scope.is_all())
+            .accessibility_label(label.clone())
+            .tooltip(label)
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                let set = |scope: SearchScope| {
+                    let weak = weak.clone();
+                    move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                        let _ =
+                            weak.update(cx, |this, cx| this.set_search_scope(scope.clone(), cx));
+                    }
+                };
+                let mut menu = menu
+                    .scrollable(true)
+                    .max_h(px(360.))
+                    .item(
+                        PopupMenuItem::new("All connections")
+                            .checked(scope.is_all())
+                            .on_click(set(SearchScope::All)),
+                    )
+                    .item(
+                        PopupMenuItem::new("Current connection")
+                            .checked(scope == SearchScope::Current)
+                            .on_click(set(SearchScope::Current)),
+                    )
+                    .separator();
+                for (id, name) in &profiles {
+                    let mut toggled = scope.clone();
+                    toggled.toggle(*id);
+                    menu = menu.item(
+                        PopupMenuItem::new(name.clone())
+                            .checked(
+                                matches!(&scope, SearchScope::Connections(ids) if ids.contains(id)),
+                            )
+                            .on_click(set(toggled)),
+                    );
+                }
+                menu
+            })
+    }
+
     /// The Connections sidebar: its header, the search, and the tree.
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let action_size = self.ui_px(STATUS_SLOT_WIDTH);
@@ -1622,7 +1764,9 @@ impl Qrow {
                             Input::new(&self.catalog.search)
                                 .small()
                                 .w_full()
-                                .aria_label("Search relations"),
+                                .cleanable(true)
+                                .aria_label("Search connections and relations")
+                                .suffix(self.search_scope_button(cx)),
                         ),
                 )
             })
