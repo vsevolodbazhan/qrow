@@ -58,7 +58,9 @@ gpui_kit::assets::icon_assets!(
 );
 
 /// The bundled fonts: IBM Plex Sans for the interface and JetBrains Mono for
-/// SQL and logs, in the weights that the interface uses. See NOTICE.
+/// SQL and logs, in the weights that the interface uses. Code uses only the
+/// regular, bold, and italic styles of JetBrains Mono; a request for another
+/// weight uses the nearest one. See NOTICE.
 pub(crate) fn fonts() -> Vec<Cow<'static, [u8]>> {
     macro_rules! fonts {
         ($($path:literal),+ $(,)?) => {
@@ -72,8 +74,6 @@ pub(crate) fn fonts() -> Vec<Cow<'static, [u8]>> {
         "ibm-plex-sans/IBMPlexSans-Bold.ttf",
         "ibm-plex-sans/IBMPlexSans-Italic.ttf",
         "jetbrains-mono/JetBrainsMono-Regular.ttf",
-        "jetbrains-mono/JetBrainsMono-Medium.ttf",
-        "jetbrains-mono/JetBrainsMono-SemiBold.ttf",
         "jetbrains-mono/JetBrainsMono-Bold.ttf",
         "jetbrains-mono/JetBrainsMono-Italic.ttf",
     ]

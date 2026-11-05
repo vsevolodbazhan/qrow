@@ -59,7 +59,7 @@ are kept.
 The JetBrains Mono fonts in assets/fonts/jetbrains-mono/ are from the
 JetBrains Mono 2.304 release:
 https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304
-Qrow bundles the Regular, Medium, SemiBold, Bold, and Italic TrueType files
+Qrow bundles the Regular, Bold, and Italic TrueType files
 without changes. The fonts use the SIL Open Font License 1.1; the license
 text from the release is also in assets/fonts/jetbrains-mono/OFL.txt.
 

@@ -270,8 +270,10 @@ QROW_COMMIT=dcc75d4fd874 cargo build --locked --release --bin qrow
 ## Bundled fonts
 
 Qrow includes the Regular, Medium, SemiBold, Bold, and Italic files of IBM Plex
-Sans and JetBrains Mono in [assets/fonts](../assets/fonts). The files come
-from the upstream releases: `@ibm/plex-sans` 1.1.0 and JetBrains Mono 2.304.
+Sans, and the Regular, Bold, and Italic files of JetBrains Mono, in
+[assets/fonts](../assets/fonts). Code does not use other weights of JetBrains
+Mono, so they are not included. The files come from the upstream releases:
+`@ibm/plex-sans` 1.1.0 and JetBrains Mono 2.304.
 [Assets](../src/assets.rs) registers them at startup, so they show in the font
 lists of Settings. Both fonts use the SIL Open Font License. Each font folder
 has the license text, and [NOTICE](../NOTICE) has the copyright and license
