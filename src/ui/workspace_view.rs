@@ -71,8 +71,18 @@ impl Qrow {
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
+        // Tabs keep at least 10.5 rems, so a short title shows whole. When
+        // that overflows the strip but 7 rems would not, all tabs shrink to
+        // fit instead, so a few tabs never scroll. The strip width is from
+        // the last frame; the tab bar draws again when it changes.
+        let rem = cx.theme().font_size;
+        let room = self.tab_scroll.bounds().size.width - rem * 0.75;
+        let count = visible.len().max(1) as f32;
+        let fit = (room > px(0.) && rem * 10.5 * count > room && rem * 7. * count <= room)
+            .then(|| room / count);
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
+            .fit_width(fit)
             // Long titles end in an ellipsis, and a short bar shrinks the
             // titles before it scrolls, so a tab keeps its close button whole.
             .max_width(self.ui_px(MAX_QUERY_TAB_WIDTH))

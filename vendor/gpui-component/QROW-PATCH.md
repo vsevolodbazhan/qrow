@@ -78,18 +78,23 @@ Qrow changes these files:
 - `src/tab/tab.rs`: a tab with a maximum width also shrinks when its bar is
   short of room, down to a least width of 10.5 rems, which fits a short label
   like "Query 12" in the large size. The selected tab does not shrink, so it
-  shows its whole label up to the maximum width. A label that does not fit
+  shows its whole label up to the maximum width. `TabBar::fit_width` gives
+  all tabs, the selected one too, a smaller least width, so that a bar that
+  would scroll only a little fits all its tabs. A label that does not fit
   ends in an ellipsis, and the suffix, like a close button, keeps its size.
   Before, the bar scrolled and clipped the close button of the last tab under
   the bar suffix.
 - `src/tab/tab_bar.rs`: a vertical wheel also scrolls a tab bar, which has
   nothing to scroll vertically. Before, only a horizontal swipe scrolled it.
-  A bar of the `Tab` variant that tracks its scroll covers each tab that its
-  edges cut, in the bar color, and fades the next tab, so it shows that it
-  has more tabs and no lone close button or part of a title shows. A press
-  on a cover selects the covered tab, not its hidden close button. The Qrow
-  UI test `tabs::a_full_tab_strip_scrolls_with_the_wheel` checks the wheel
-  and a press on a cover.
+  A bar of the `Tab` variant that tracks its scroll fades each edge with more
+  tabs past it. A tab that an edge cuts to less than half its width is
+  covered in the bar color, so no lone close button or part of a title
+  shows; the selected tab and a tab that shows half or more are never
+  covered. A press on a cover selects the covered tab, not its hidden close
+  button. The bar scrolls the selected tab fully into view when its width,
+  the selection, the tab count, or the width of the selected tab changes,
+  and then draws again. The Qrow UI tests in `tabs` check the wheel, a press
+  on a cover, an Assistant toggle, and a rename to a long title.
 - `src/tooltip.rs`: `ManagedTooltipExt` is public, and `managed_tooltip_when`
   shows its tooltip only while a condition holds when the pointer enters.
   A result column header shows its full name only when its column cuts it.

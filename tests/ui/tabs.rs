@@ -430,3 +430,87 @@ fn a_full_tab_strip_scrolls_with_the_wheel(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// The bounds of the selected query tab and of the strip that shows it,
+/// from the first tab edge after the sidebar to the new-tab button.
+fn selected_tab_in_strip(app: &TestApp, cx: &mut TestAppContext, title: &str) {
+    app.update(cx, |window, _| {
+        let tab = bounds_of(window, title);
+        let strip_left = bounds_of(window, "add-connection").right();
+        let new_tab = bounds_of(window, "new-tab");
+        assert!(
+            tab.left() >= strip_left && tab.right() <= new_tab.left(),
+            "The selected tab {title} {tab:?} must be inside the strip, after {strip_left:?} and before {new_tab:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn the_selected_tab_stays_in_view_when_the_assistant_opens(cx: &mut TestAppContext) {
+    let (directory, codex) = crate::support::assistant::FakeCodex::new();
+    let profile = offline_profile("Two tabs");
+    let mut workspace = codex.workspace(Workspace {
+        tabs: vec![
+            SavedTab {
+                title: "Route overview".into(),
+                ..SavedTab::new(1, Some(profile.id))
+            },
+            SavedTab::new(1, Some(profile.id)),
+        ],
+        active_tab: 1,
+        profiles: vec![profile],
+        ..Workspace::default()
+    });
+    workspace.settings.assistant.panel_width = 536.;
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace,
+        crate::support::MemoryCredentials::default(),
+    );
+    cx.simulate_window_resize(app.window, gpui_kit::size(px(900.), px(770.)));
+    app.settle(cx);
+    selected_tab_in_strip(&app, cx, "Query 1");
+    for _ in 0..2 {
+        app.dispatch(cx, qrow::ui::ToggleAssistant);
+        app.settle(cx);
+        app.settle(cx);
+        selected_tab_in_strip(&app, cx, "Query 1");
+        // Two tabs fit without a scroll, so the other tab shows too.
+        app.update(cx, |window, _| {
+            let other = bounds_of(window, "Route overview");
+            assert!(
+                other.left() >= bounds_of(window, "add-connection").right(),
+                "Route overview {other:?} must not scroll away"
+            );
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn a_renamed_selected_tab_stays_in_view(cx: &mut TestAppContext) {
+    let profile = offline_profile("Long title");
+    let id = profile.id;
+    let tabs: Vec<_> = (1..=7)
+        .map(|number| SavedTab::new(number, Some(id)))
+        .collect();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs,
+            active_tab: 6,
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.settle(cx);
+    selected_tab_in_strip(&app, cx, "Query 7");
+    let title = "Daily bookings by route and gate for the last quarter";
+    rename(&app, cx, "Query 7");
+    app.fill(cx, "rename-tab-name", title);
+    app.click(cx, "rename-tab");
+    app.wait_gone(cx, "rename-tab-name");
+    app.settle(cx);
+    app.settle(cx);
+    selected_tab_in_strip(&app, cx, title);
+}

@@ -420,6 +420,9 @@ pub struct Tab {
     /// restarts in sync with the indicator slide.
     pub(super) indicator_epoch: u64,
     pub(super) max_width: Option<Pixels>,
+    /// Qrow: the least width when the bar fits all tabs, see
+    /// [`super::TabBar::fit_width`].
+    pub(super) fit_width: Option<Pixels>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -473,6 +476,7 @@ impl Default for Tab {
             variant: TabVariant::default(),
             size: Size::default(),
             max_width: None,
+            fit_width: None,
             on_click: None,
         }
     }
@@ -579,6 +583,11 @@ impl Tab {
     /// Set the maximum width of the tab, see [`super::TabBar::max_width`].
     pub(super) fn max_width(mut self, max_width: Option<Pixels>) -> Self {
         self.max_width = max_width;
+        self
+    }
+
+    pub(super) fn fit_width(mut self, fit_width: Option<Pixels>) -> Self {
+        self.fit_width = fit_width;
         self
     }
 }
@@ -806,9 +815,12 @@ impl RenderOnce for Tab {
             // label shrinks to an ellipsis and its suffix, like a close
             // button, keeps its size. Below the least width, the bar scrolls.
             // Qrow: the selected tab keeps its whole label, up to the
-            // maximum width.
-            .map(|this| match max_width {
-                Some(_) if !self.selected => this.flex_shrink_1().min_w(rems(TAB_MIN_WIDTH_REMS)),
+            // maximum width, unless the bar fits all tabs by shrinking them.
+            .map(|this| match (max_width, self.fit_width) {
+                (Some(_), Some(fit)) => this.flex_shrink_1().min_w(fit),
+                (Some(_), None) if !self.selected => {
+                    this.flex_shrink_1().min_w(rems(TAB_MIN_WIDTH_REMS))
+                }
                 _ => this.flex_shrink_0(),
             })
             .h(height)

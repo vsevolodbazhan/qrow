@@ -1,4 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use gpui::{
     Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, HitboxBehavior,
@@ -53,6 +56,7 @@ pub struct TabBar {
     size: Size,
     menu: bool,
     max_width: Option<Pixels>,
+    fit_width: Option<Pixels>,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
 }
 
@@ -75,6 +79,7 @@ impl TabBar {
             on_click: None,
             menu: false,
             max_width: None,
+            fit_width: None,
         }
     }
 
@@ -119,6 +124,14 @@ impl TabBar {
     /// overflow menu still shows the full label.
     pub fn max_width(mut self, width: impl Into<Pixels>) -> Self {
         self.max_width = Some(width.into());
+        self
+    }
+
+    /// Qrow: when set, each tab with a maximum width, the selected one too,
+    /// shrinks down to this width instead of the usual least width. A bar
+    /// that would scroll only a little sets it so that all tabs fit.
+    pub fn fit_width(mut self, width: Option<Pixels>) -> Self {
+        self.fit_width = width;
         self
     }
 
@@ -435,6 +448,13 @@ impl RenderOnce for TabBar {
         let has_suffix_or_menu = self.suffix.is_some() || self.menu;
         // Qrow: a bar with its own background fades the tabs that its edges
         // cut, so a scrolled bar shows that it has more tabs.
+        // Qrow: what the selected tab was last revealed for.
+        let reveal: Rc<Cell<Option<Reveal>>> = window
+            .use_keyed_state(format!("{}-reveal", self.id), cx, |_, _| {
+                Rc::<Cell<Option<Reveal>>>::default()
+            })
+            .read(cx)
+            .clone();
         let edge_fade = self
             .scroll_handle
             .clone()
@@ -457,6 +477,7 @@ impl RenderOnce for TabBar {
                 .ix(ix)
                 .tab_bar_prefix(tab_bar_prefix)
                 .max_width(max_width)
+                .fit_width(self.fit_width)
                 .with_variant(self.variant)
                 .with_size(self.size);
             tab.indicator_active = has_indicator;
@@ -570,11 +591,23 @@ impl RenderOnce for TabBar {
                         this.child(
                             canvas(
                                 move |_, window, _| {
-                                    edge_covers(&handle, num_tabs).map(|cover| {
+                                    reveal_selected(
+                                        &handle,
+                                        selected_index,
+                                        num_tabs,
+                                        &reveal,
+                                        window,
+                                    );
+                                    edge_covers(&handle, num_tabs, selected_index).map(|cover| {
                                         cover.map(|(bounds, ix)| {
-                                            let hitbox = window
-                                                .insert_hitbox(bounds, HitboxBehavior::BlockMouse);
-                                            (bounds, ix, hitbox)
+                                            let hitbox = ix.map(|ix| {
+                                                let hitbox = window.insert_hitbox(
+                                                    bounds,
+                                                    HitboxBehavior::BlockMouse,
+                                                );
+                                                (ix, hitbox)
+                                            });
+                                            (bounds, hitbox)
                                         })
                                     })
                                 },
@@ -583,10 +616,12 @@ impl RenderOnce for TabBar {
                                     let width = px(24.);
                                     let clear = color.opacity(0.);
                                     for (cover, start) in [(left, true), (right, false)] {
-                                        let Some((bounds, ix, hitbox)) = cover else {
+                                        let Some((bounds, hitbox)) = cover else {
                                             continue;
                                         };
-                                        window.paint_quad(fill(bounds, color));
+                                        if hitbox.is_some() {
+                                            window.paint_quad(fill(bounds, color));
+                                        }
                                         let (origin, from, to) = if start {
                                             (bounds.top_right(), color, clear)
                                         } else {
@@ -606,7 +641,9 @@ impl RenderOnce for TabBar {
                                         ));
                                         // A press on a covered tab selects it,
                                         // which shows it.
-                                        if let Some(select) = select.clone() {
+                                        if let (Some(select), Some((ix, hitbox))) =
+                                            (select.clone(), hitbox)
+                                        {
                                             window.on_mouse_event(
                                                 move |event: &MouseDownEvent, phase, window, cx| {
                                                     if phase.bubble()
@@ -663,54 +700,87 @@ impl RenderOnce for TabBar {
     }
 }
 
-/// Qrow: the covers of the tabs that the edges of a scrolled bar cut, at the
-/// start and the end, each with the index of the tab it covers. A cover
-/// starts at the edge and ends where the cut tab ends, so no lone close
-/// button or part of a title shows. An edge with more tabs past it has a
-/// cover, of no width when no tab is cut there. Item bounds leave out the
-/// scroll offset.
-fn edge_covers(handle: &ScrollHandle, num_tabs: usize) -> [Option<(Bounds<Pixels>, usize)>; 2] {
+/// Qrow: the strip width, the selected tab, the tab count, and the width of
+/// the selected tab that the bar last scrolled the selected tab into view for.
+type Reveal = (Pixels, usize, usize, Pixels);
+
+/// Qrow: scrolls the selected tab fully into view when the bar width, the
+/// selection, the number of tabs, or the width of the selected tab changed,
+/// for example after a window resize, a new tab, or a rename. A scroll by
+/// the user between those changes stays. A change draws the bar again.
+fn reveal_selected(
+    handle: &ScrollHandle,
+    selected: Option<usize>,
+    num_tabs: usize,
+    reveal: &Cell<Option<Reveal>>,
+    window: &mut Window,
+) {
+    let Some(selected) = selected.filter(|&ix| ix < num_tabs) else {
+        return;
+    };
+    let Some(item) = handle.bounds_for_item(selected) else {
+        return;
+    };
+    let view = handle.bounds();
+    let key = (view.size.width, selected, num_tabs, item.size.width);
+    if reveal.get() == Some(key) || view.size.width <= px(0.) {
+        return;
+    }
+    reveal.set(Some(key));
+    // The owner of the bar may size the tabs from the bar width, so it
+    // renders again after a change.
+    window.request_animation_frame();
+    let offset = handle.offset();
+    let (start, end) = (item.left() - view.left(), item.right() - view.left());
+    let mut x = offset.x;
+    if start + x < px(0.) {
+        x = -start;
+    } else if end + x > view.size.width {
+        x = view.size.width - end;
+    }
+    let x = x.max(-handle.max_offset().x).min(px(0.));
+    if x != offset.x {
+        handle.set_offset(point(x, offset.y));
+    }
+}
+
+/// Qrow: the fades at the start and the end of a bar with more tabs past
+/// that edge. A tab that the edge cuts to less than half its width is a
+/// sliver: the fade covers it in the bar color, so no lone close button or
+/// part of a title shows, and the cover has the index of the tab. The fade
+/// never covers the selected tab or a tab that shows half or more. Item
+/// bounds leave out the scroll offset.
+fn edge_covers(
+    handle: &ScrollHandle,
+    num_tabs: usize,
+    selected: Option<usize>,
+) -> [Option<(Bounds<Pixels>, Option<usize>)>; 2] {
     let view = handle.bounds();
     let offset = handle.offset().x;
     let (mut left, mut right) = ((view.left(), None), (view.right(), None));
-    for ix in 0..num_tabs {
+    for ix in (0..num_tabs).filter(|&ix| Some(ix) != selected) {
         let Some(item) = handle.bounds_for_item(ix) else {
             continue;
         };
         let (start, end) = (item.left() + offset, item.right() + offset);
-        if start < view.left() - px(0.5) && end > view.left() && end > left.0 {
+        let sliver = item.size.width / 2.;
+        if start < view.left() - px(0.5) && end > view.left() && end - view.left() < sliver {
             left = (end, Some(ix));
         }
-        if end > view.right() + px(0.5) && start < view.right() && start < right.0 {
+        if end > view.right() + px(0.5) && start < view.right() && view.right() - start < sliver {
             right = (start, Some(ix));
         }
     }
-    // An uncut edge with more tabs past it covers the tab just past it.
-    let first = (0..num_tabs).find(|&ix| {
-        handle
-            .bounds_for_item(ix)
-            .is_some_and(|item| item.right() + offset > view.left())
-    });
-    let last = (0..num_tabs).rev().find(|&ix| {
-        handle
-            .bounds_for_item(ix)
-            .is_some_and(|item| item.left() + offset < view.right())
-    });
     let start = (-offset > px(0.5)).then(|| {
-        let ix = left.1.or(first.map(|ix| ix.saturating_sub(1))).unwrap_or(0);
         (
             Bounds::from_corners(view.origin, point(left.0, view.bottom())),
-            ix,
+            left.1,
         )
     });
     let end = (handle.max_offset().x + offset > px(0.5)).then(|| {
-        let ix = right
-            .1
-            .or(last.map(|ix| (ix + 1).min(num_tabs.saturating_sub(1))))
-            .unwrap_or(0);
         (
             Bounds::from_corners(point(right.0, view.top()), view.bottom_right()),
-            ix,
+            right.1,
         )
     });
     [start, end]
