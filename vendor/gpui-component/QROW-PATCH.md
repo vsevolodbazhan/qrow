@@ -76,15 +76,20 @@ Qrow changes these files:
   size of the last frame, so a wider pane left the header cells of the
   revealed columns blank.
 - `src/tab/tab.rs`: a tab with a maximum width also shrinks when its bar is
-  short of room, down to a least width of 8 rems, which keeps a few
-  characters of the label. Its label ends in an ellipsis and its suffix, like
-  a close button, keeps its size. Before, the bar scrolled and clipped the
-  close button of the last tab under the bar suffix.
+  short of room, down to a least width of 10.5 rems, which fits a short label
+  like "Query 12" in the large size. The selected tab does not shrink, so it
+  shows its whole label up to the maximum width. A label that does not fit
+  ends in an ellipsis, and the suffix, like a close button, keeps its size.
+  Before, the bar scrolled and clipped the close button of the last tab under
+  the bar suffix.
 - `src/tab/tab_bar.rs`: a vertical wheel also scrolls a tab bar, which has
   nothing to scroll vertically. Before, only a horizontal swipe scrolled it.
-  A bar of the `Tab` variant that tracks its scroll fades the tabs that its
-  edges cut, so it shows that it has more tabs. The Qrow UI test
-  `tabs::a_full_tab_strip_scrolls_with_the_wheel` checks the wheel.
+  A bar of the `Tab` variant that tracks its scroll covers each tab that its
+  edges cut, in the bar color, and fades the next tab, so it shows that it
+  has more tabs and no lone close button or part of a title shows. A press
+  on a cover selects the covered tab, not its hidden close button. The Qrow
+  UI test `tabs::a_full_tab_strip_scrolls_with_the_wheel` checks the wheel
+  and a press on a cover.
 - `src/tooltip.rs`: `ManagedTooltipExt` is public, and `managed_tooltip_when`
   shows its tooltip only while a condition holds when the pointer enters.
   A result column header shows its full name only when its column cuts it.

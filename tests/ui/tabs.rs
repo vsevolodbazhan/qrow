@@ -1,6 +1,6 @@
 use crate::support::{
     TestApp, assert_workspace_divider_alignment, assert_workspace_header_alignment, bounds_of,
-    offline_profile, value,
+    labelled, offline_profile, value,
 };
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{InputEvent as _, TestAppContext, px};
@@ -370,25 +370,53 @@ fn a_full_tab_strip_scrolls_with_the_wheel(cx: &mut TestAppContext) {
             "The wheel {delta:?} must scroll the tab strip"
         );
     }
-    // A tab that the edge cuts scrolls into view when it is selected, and a
-    // new tab scrolls into view.
+    // The edge covers the tab that it cuts. A press on the cover selects
+    // that tab, not its hidden close button, and the tab scrolls into view.
+    // A new tab scrolls into view too.
     let (strip_left, cut) = app.update(cx, |window, _| {
-        (
-            bounds_of(window, "Query 1").left() + px(240.),
-            bounds_of(window, "Query 3"),
-        )
+        let strip_left = bounds_of(window, "Query 1").left() + px(240.);
+        let cut = (1..=10)
+            .map(|number| format!("Query {number}"))
+            .find(|title| {
+                // A tab outside the strip is not drawn.
+                labelled(window, title).is_some_and(|tab| {
+                    let tab = tab.bounds();
+                    tab.left() < strip_left && tab.right() > strip_left + px(8.)
+                })
+            })
+            .expect("a tab under the left edge");
+        (strip_left, cut)
     });
-    assert!(
-        cut.left() < strip_left,
-        "Query 3 {cut:?} must start under the edge"
-    );
-    app.click_labelled(cx, "Query 3");
+    let cut_bounds = app.update(cx, |window, _| bounds_of(window, &cut));
+    let press = gpui_kit::point(strip_left + px(4.), cut_bounds.center().y);
+    app.update(cx, |window, cx| {
+        for event in [
+            gpui_kit::MouseDownEvent {
+                button: gpui_kit::MouseButton::Left,
+                position: press,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            gpui_kit::MouseUpEvent {
+                button: gpui_kit::MouseButton::Left,
+                position: press,
+                modifiers: Default::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+        ] {
+            window.dispatch_event(event, cx);
+        }
+        window.render_frame(cx);
+    });
     app.settle(cx);
     app.update(cx, |window, _| {
-        let tab = bounds_of(window, "Query 3");
+        let tab = bounds_of(window, &cut);
         assert!(
             tab.left() >= strip_left,
-            "Query 3 {tab:?} must scroll into view"
+            "{cut} {tab:?} must scroll into view"
         );
     });
     app.click(cx, "new-tab");

@@ -9,9 +9,10 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, px, relative, rems,
 };
 
-/// The least width of a tab with a maximum width, in rems: room for a few
-/// characters of its label and a close button.
-const TAB_MIN_WIDTH_REMS: f32 = 8.;
+/// The least width of a tab with a maximum width, in rems: room for a short
+/// label like "Query 12" in the large size, with its padding and a close
+/// button.
+const TAB_MIN_WIDTH_REMS: f32 = 10.5;
 
 /// Tab variants.
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]
@@ -804,9 +805,11 @@ impl RenderOnce for Tab {
             // A capped tab also gives way when the bar is short of room: its
             // label shrinks to an ellipsis and its suffix, like a close
             // button, keeps its size. Below the least width, the bar scrolls.
+            // Qrow: the selected tab keeps its whole label, up to the
+            // maximum width.
             .map(|this| match max_width {
-                Some(_) => this.flex_shrink_1().min_w(rems(TAB_MIN_WIDTH_REMS)),
-                None => this.flex_shrink_0(),
+                Some(_) if !self.selected => this.flex_shrink_1().min_w(rems(TAB_MIN_WIDTH_REMS)),
+                _ => this.flex_shrink_0(),
             })
             .h(height)
             .overflow_hidden()

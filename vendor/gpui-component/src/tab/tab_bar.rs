@@ -1,9 +1,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
-    Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, InteractiveElement, IntoElement,
-    ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, canvas, div, fill, linear_color_stop, linear_gradient, point,
+    Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, HitboxBehavior,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels,
+    RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Window, canvas, div, fill, linear_color_stop, linear_gradient, point,
     prelude::FluentBuilder as _, px, size,
 };
 use gpui_base::spring;
@@ -438,7 +439,7 @@ impl RenderOnce for TabBar {
             .scroll_handle
             .clone()
             .filter(|_| self.variant == TabVariant::Tab)
-            .map(|handle| (handle, cx.theme().tokens.tab_bar));
+            .map(|handle| (handle, gpui::Hsla::from(cx.theme().tokens.tab_bar)));
         let mut item_metas: Vec<(Option<SharedString>, Option<Icon>, bool)> = Vec::new();
         let selected_index = self.selected_index;
         let on_click = self.on_click.clone();
@@ -563,39 +564,61 @@ impl RenderOnce for TabBar {
                             .when(has_suffix_or_menu, |this| this.child(self.last_empty_space)),
                     )
                     .when_some(edge_fade, |this, (handle, color)| {
-                        // Painted after the tabs, from the scroll position of
+                        let select = on_click.clone();
+                        // Laid out after the tabs, from the scroll position of
                         // this frame.
                         this.child(
                             canvas(
-                                |_, _, _| (),
-                                move |_, _, window, _| {
-                                    let bounds = handle.bounds();
-                                    let scrolled = -handle.offset().x;
-                                    let width = px(24.).min(bounds.size.width / 4.);
-                                    let fade = size(width, bounds.size.height);
+                                move |_, window, _| {
+                                    edge_covers(&handle, num_tabs).map(|cover| {
+                                        cover.map(|(bounds, ix)| {
+                                            let hitbox = window
+                                                .insert_hitbox(bounds, HitboxBehavior::BlockMouse);
+                                            (bounds, ix, hitbox)
+                                        })
+                                    })
+                                },
+                                move |_, covers, window, _| {
+                                    let [left, right] = covers;
+                                    let width = px(24.);
                                     let clear = color.opacity(0.);
-                                    if scrolled > px(0.5) {
+                                    for (cover, start) in [(left, true), (right, false)] {
+                                        let Some((bounds, ix, hitbox)) = cover else {
+                                            continue;
+                                        };
+                                        window.paint_quad(fill(bounds, color));
+                                        let (origin, from, to) = if start {
+                                            (bounds.top_right(), color, clear)
+                                        } else {
+                                            (
+                                                point(bounds.left() - width, bounds.top()),
+                                                clear,
+                                                color,
+                                            )
+                                        };
                                         window.paint_quad(fill(
-                                            Bounds::new(bounds.origin, fade),
+                                            Bounds::new(origin, size(width, bounds.size.height)),
                                             linear_gradient(
                                                 90.,
-                                                linear_color_stop(color, 0.),
-                                                linear_color_stop(clear, 1.),
+                                                linear_color_stop(from, 0.),
+                                                linear_color_stop(to, 1.),
                                             ),
                                         ));
-                                    }
-                                    if handle.max_offset().x - scrolled > px(0.5) {
-                                        window.paint_quad(fill(
-                                            Bounds::new(
-                                                point(bounds.right() - width, bounds.top()),
-                                                fade,
-                                            ),
-                                            linear_gradient(
-                                                90.,
-                                                linear_color_stop(clear, 0.),
-                                                linear_color_stop(color, 1.),
-                                            ),
-                                        ));
+                                        // A press on a covered tab selects it,
+                                        // which shows it.
+                                        if let Some(select) = select.clone() {
+                                            window.on_mouse_event(
+                                                move |event: &MouseDownEvent, phase, window, cx| {
+                                                    if phase.bubble()
+                                                        && event.button == MouseButton::Left
+                                                        && hitbox.is_hovered(window)
+                                                    {
+                                                        select(&ix, window, cx);
+                                                        cx.stop_propagation();
+                                                    }
+                                                },
+                                            );
+                                        }
                                     }
                                 },
                             )
@@ -638,6 +661,59 @@ impl RenderOnce for TabBar {
             })
             .when_some(self.suffix, |this, suffix| this.child(suffix))
     }
+}
+
+/// Qrow: the covers of the tabs that the edges of a scrolled bar cut, at the
+/// start and the end, each with the index of the tab it covers. A cover
+/// starts at the edge and ends where the cut tab ends, so no lone close
+/// button or part of a title shows. An edge with more tabs past it has a
+/// cover, of no width when no tab is cut there. Item bounds leave out the
+/// scroll offset.
+fn edge_covers(handle: &ScrollHandle, num_tabs: usize) -> [Option<(Bounds<Pixels>, usize)>; 2] {
+    let view = handle.bounds();
+    let offset = handle.offset().x;
+    let (mut left, mut right) = ((view.left(), None), (view.right(), None));
+    for ix in 0..num_tabs {
+        let Some(item) = handle.bounds_for_item(ix) else {
+            continue;
+        };
+        let (start, end) = (item.left() + offset, item.right() + offset);
+        if start < view.left() - px(0.5) && end > view.left() && end > left.0 {
+            left = (end, Some(ix));
+        }
+        if end > view.right() + px(0.5) && start < view.right() && start < right.0 {
+            right = (start, Some(ix));
+        }
+    }
+    // An uncut edge with more tabs past it covers the tab just past it.
+    let first = (0..num_tabs).find(|&ix| {
+        handle
+            .bounds_for_item(ix)
+            .is_some_and(|item| item.right() + offset > view.left())
+    });
+    let last = (0..num_tabs).rev().find(|&ix| {
+        handle
+            .bounds_for_item(ix)
+            .is_some_and(|item| item.left() + offset < view.right())
+    });
+    let start = (-offset > px(0.5)).then(|| {
+        let ix = left.1.or(first.map(|ix| ix.saturating_sub(1))).unwrap_or(0);
+        (
+            Bounds::from_corners(view.origin, point(left.0, view.bottom())),
+            ix,
+        )
+    });
+    let end = (handle.max_offset().x + offset > px(0.5)).then(|| {
+        let ix = right
+            .1
+            .or(last.map(|ix| (ix + 1).min(num_tabs.saturating_sub(1))))
+            .unwrap_or(0);
+        (
+            Bounds::from_corners(point(right.0, view.top()), view.bottom_right()),
+            ix,
+        )
+    });
+    [start, end]
 }
 
 #[cfg(test)]
