@@ -749,7 +749,12 @@ impl Qrow {
     ) -> AnyElement {
         v_flex()
             .size_full()
-            .child(div().flex_1().min_h_0().child(self.settings_content(window, cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.settings_content(window, cx)),
+            )
             .child(
                 div()
                     .flex_shrink_0()
@@ -855,7 +860,15 @@ impl Qrow {
                             .group(SettingGroup::new().title("Copy").item(setting_item(
                                 "Copy Format",
                                 "Default format when copying result cells.",
-                                &["copy", "clipboard", "markdown", "plain", "csv", "tsv", "json"],
+                                &[
+                                    "copy",
+                                    "clipboard",
+                                    "markdown",
+                                    "plain",
+                                    "csv",
+                                    "tsv",
+                                    "json",
+                                ],
                                 select_field(&form.copy_format, "Copy Format"),
                             )))
                             .group(SettingGroup::new().title("Replay").item(setting_item(

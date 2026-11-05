@@ -964,8 +964,7 @@ fn every_refresh_sends_its_entries() {
     assert!(
         texts
             .iter()
-            .any(|text| text
-                .starts_with("List relations in sales: 2 relations ("))
+            .any(|text| text.starts_with("List relations in sales: 2 relations ("))
     );
     assert!(
         texts

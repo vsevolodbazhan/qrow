@@ -87,10 +87,7 @@ impl Runner {
                 None,
                 Severity::Info,
                 LogKind::KeepAliveCompleted,
-                format!(
-                    "Keep-alive completed ({})",
-                    format_duration(duration)
-                ),
+                format!("Keep-alive completed ({})", format_duration(duration)),
             )
             .with_sql(sql);
             event.duration = Some(duration);

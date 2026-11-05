@@ -647,10 +647,7 @@ impl Runner {
                 self.log_as(
                     LogKind::SchemaRefreshFinished,
                     severity,
-                    format!(
-                        "{outcome} ({})",
-                        format_duration(duration)
-                    ),
+                    format!("{outcome} ({})", format_duration(duration)),
                     Some(duration),
                 );
                 self.save();

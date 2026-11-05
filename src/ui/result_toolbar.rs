@@ -131,7 +131,11 @@ impl ResultSummary {
                         VISIBLE_ROWS,
                         self.range.strip_prefix("Rows ").unwrap_or("0").to_owned(),
                     ),
-                    ("result-detail-loaded", LOADED_ROWS, crate::logs::group_digits(self.loaded)),
+                    (
+                        "result-detail-loaded",
+                        LOADED_ROWS,
+                        crate::logs::group_digits(self.loaded),
+                    ),
                     ("result-detail-columns", COLUMNS, self.columns.to_string()),
                 ]
                 .into_iter()
@@ -200,7 +204,9 @@ impl Qrow {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .when(show_range && !no_result, |row| row.child(summary.tags(compact, cx)))
+            .when(show_range && !no_result, |row| {
+                row.child(summary.tags(compact, cx))
+            })
             // The tag stays at every toolbar width: it changes what the rows mean.
             .when(result.unfetched, |row| {
                 row.child(
@@ -306,39 +312,42 @@ impl Qrow {
                                     })),
                             ),
                     )
-                    .when(!no_result, |row| row.child(
-                        div()
-                            .id("page-label")
-                            .test_support()
-                            .role(Role::Label)
-                            .text_xs()
-                            .whitespace_nowrap()
-                            .aria_label(page_label.clone())
-                            .child(page_label),
-                    )
-                    .child(button_pair::button_pair(
-                        "pagination-buttons",
-                        Button::new("previous-page")
-                            .small()
-                            .ghost()
-                            .icon(IconName::ChevronLeft)
-                            .tooltip("Previous page")
-                            .accessibility_label("Previous page")
-                            .disabled(page == 0 || draining)
-                            .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
-                        Button::new("next-page")
-                            .small()
-                            .ghost()
-                            .icon(IconName::ChevronRight)
-                            .tooltip("Next page")
-                            .accessibility_label("Next page")
-                            .disabled(
-                                draining
-                                    || page + 1 >= pages && (!tab.can_fetch(result_id) || tab.busy),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
-                        cx,
-                    ))),
+                    .when(!no_result, |row| {
+                        row.child(
+                            div()
+                                .id("page-label")
+                                .test_support()
+                                .role(Role::Label)
+                                .text_xs()
+                                .whitespace_nowrap()
+                                .aria_label(page_label.clone())
+                                .child(page_label),
+                        )
+                        .child(button_pair::button_pair(
+                            "pagination-buttons",
+                            Button::new("previous-page")
+                                .small()
+                                .ghost()
+                                .icon(IconName::ChevronLeft)
+                                .tooltip("Previous page")
+                                .accessibility_label("Previous page")
+                                .disabled(page == 0 || draining)
+                                .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
+                            Button::new("next-page")
+                                .small()
+                                .ghost()
+                                .icon(IconName::ChevronRight)
+                                .tooltip("Next page")
+                                .accessibility_label("Next page")
+                                .disabled(
+                                    draining
+                                        || page + 1 >= pages
+                                            && (!tab.can_fetch(result_id) || tab.busy),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
+                            cx,
+                        ))
+                    }),
             )
             .into_any_element()
     }

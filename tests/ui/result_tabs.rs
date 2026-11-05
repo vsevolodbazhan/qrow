@@ -1,7 +1,7 @@
 //! Result tabs: runs replace the unpinned result, and pinned results stay.
 use crate::support::{TestApp, label, labelled};
+use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ClipboardItem, TestAppContext};
 
 /// The labels of the result tabs, in order.
 fn result_tabs(app: &TestApp, cx: &mut TestAppContext) -> Vec<String> {
@@ -173,7 +173,10 @@ fn closing_results_keeps_one_and_pins_are_limited(cx: &mut TestAppContext) {
     assert_eq!(shown(&app, cx), Some(2));
     // An empty result has no toolbar, so no query to copy.
     app.update(cx, |window, _| {
-        assert!(!crate::support::present(window, &"copy-result-query".into()))
+        assert!(!crate::support::present(
+            window,
+            &"copy-result-query".into()
+        ))
     });
 
     for count in 1..=10 {

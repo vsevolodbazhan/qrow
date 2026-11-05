@@ -1004,10 +1004,7 @@ fn connection_help_is_shared_and_does_not_repeat_the_database_type(cx: &mut Test
         }
     });
     app.scroll_to(cx, "connection-response-timeout");
-    app.wait_label(
-        cx,
-        "Seconds for setup and cancellation, from 10 to 3600.",
-    );
+    app.wait_label(cx, "Seconds for setup and cancellation, from 10 to 3600.");
     app.scroll_to(cx, "connection-database-type");
     app.select(cx, "connection-database-type", "Spark (HiveServer2)");
     app.scroll_to(cx, "connection-response-timeout");

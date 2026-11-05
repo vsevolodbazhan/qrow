@@ -159,7 +159,10 @@ impl Qrow {
                 } => {
                     for (profile, key) in &self.dbt.keys {
                         if *key == manifest {
-                            activity.push((*profile, ActivityEntry::new(severity, text.clone()).with_source("dbt")));
+                            activity.push((
+                                *profile,
+                                ActivityEntry::new(severity, text.clone()).with_source("dbt"),
+                            ));
                         }
                     }
                 }
@@ -417,10 +420,12 @@ impl Qrow {
                             .id("connection-dbt-manifest-path")
                             .flex_1()
                             .min_w_0()
-                            .when(!path.is_empty(), |el| el.tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(path.clone())
-                                    .build(window, cx)
-                            }))
+                            .when(!path.is_empty(), |el| {
+                                el.tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(path.clone())
+                                        .build(window, cx)
+                                })
+                            })
                             .child(
                                 Input::new(&form.dbt.manifest)
                                     .id("connection-dbt-manifest")
@@ -449,16 +454,18 @@ impl Qrow {
                         )
                     }),
             )
-            .when(!view.status.is_empty(), |el| el.child(
-                div()
-                    .id("connection-dbt-status")
-                    .test_support()
-                    .role(Role::Status)
-                    .aria_label(view.status.clone())
-                    .text_sm()
-                    .text_color(muted)
-                    .child(view.status.clone()),
-            ))
+            .when(!view.status.is_empty(), |el| {
+                el.child(
+                    div()
+                        .id("connection-dbt-status")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(view.status.clone())
+                        .text_sm()
+                        .text_color(muted)
+                        .child(view.status.clone()),
+                )
+            })
             .into_any_element()
     }
 

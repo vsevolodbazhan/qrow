@@ -43,9 +43,7 @@ impl RefreshMode {
         match self {
             Self::Disabled => "Never introspect schemas.",
             Self::Manual => "Introspect schemas on demand.",
-            Self::WhileConnected => {
-                "Introspect schemas on demand and on a schedule."
-            }
+            Self::WhileConnected => "Introspect schemas on demand and on a schedule.",
         }
     }
 
@@ -795,19 +793,23 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                 },
             )
         }))
-        .items(browses.then(|| connection_row(
-            qrow,
-            "Schema Catalog",
-            if shared {
-                "Its connections must see the same metastore."
-            } else {
-                "Connections on one metastore can share a catalog."
-            },
-            &["shared", "catalog", "metastore"],
-            false,
-            |_, form, _, cx| catalog_field(form, cx),
-        )))
-        .items(if browses && shared { vec![connection_row(
+        .items(browses.then(|| {
+            connection_row(
+                qrow,
+                "Schema Catalog",
+                if shared {
+                    "Its connections must see the same metastore."
+                } else {
+                    "Connections on one metastore can share a catalog."
+                },
+                &["shared", "catalog", "metastore"],
+                false,
+                |_, form, _, cx| catalog_field(form, cx),
+            )
+        }))
+        .items(if browses && shared {
+            vec![
+                connection_row(
                     qrow,
                     "Shared Catalog Name",
                     "Shown in each connection that uses the catalog.",
@@ -821,7 +823,8 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                             .aria_label("Shared Catalog Name")
                             .into_any_element()
                     },
-                ), connection_row(
+                ),
+                connection_row(
                     qrow,
                     "Preferred Connection",
                     "Automatic refreshes use this connection first.",
@@ -835,23 +838,31 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                             .accessibility_label("Preferred Connection")
                             .into_any_element()
                     },
-                )] } else { vec![] })
-        .items(browses.then(|| connection_row(
-            qrow,
-            "Visible Schemas",
-            "Patterns like sales_*. Empty shows all schemas.",
-            &["schemas", "filter", "patterns", "include"],
-            false,
-            |_, form, _, cx| form_input(form, 10, "Visible Schemas", cx),
-        )))
-        .items(browses.then(|| connection_row(
-            qrow,
-            "Hidden Schemas",
-            "Patterns like tmp_*. Wins over Visible Schemas.",
-            &["schemas", "filter", "patterns", "exclude"],
-            false,
-            |_, form, _, cx| form_input(form, 11, "Hidden Schemas", cx),
-        )));
+                ),
+            ]
+        } else {
+            vec![]
+        })
+        .items(browses.then(|| {
+            connection_row(
+                qrow,
+                "Visible Schemas",
+                "Patterns like sales_*. Empty shows all schemas.",
+                &["schemas", "filter", "patterns", "include"],
+                false,
+                |_, form, _, cx| form_input(form, 10, "Visible Schemas", cx),
+            )
+        }))
+        .items(browses.then(|| {
+            connection_row(
+                qrow,
+                "Hidden Schemas",
+                "Patterns like tmp_*. Wins over Visible Schemas.",
+                &["schemas", "filter", "patterns", "exclude"],
+                false,
+                |_, form, _, cx| form_input(form, 11, "Hidden Schemas", cx),
+            )
+        }));
     SettingPage::new("Catalog").resettable(false).group(fields)
 }
 

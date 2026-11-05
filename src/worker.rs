@@ -532,7 +532,10 @@ impl Runner {
             Severity::Info,
             LogKind::ExecutionCompleted,
             if has_results {
-                format!("Query finished on the server ({})", format_duration(duration))
+                format!(
+                    "Query finished on the server ({})",
+                    format_duration(duration)
+                )
             } else {
                 format!(
                     "Query finished on the server without a result set ({})",
@@ -1118,7 +1121,11 @@ impl Runner {
         let range = if fetched == 0 {
             "no rows".to_owned()
         } else {
-            format!("rows {}–{}", group(start_row + 1), group(start_row + fetched))
+            format!(
+                "rows {}–{}",
+                group(start_row + 1),
+                group(start_row + fetched)
+            )
         };
         let mut notes = Vec::new();
         if page > 1 {

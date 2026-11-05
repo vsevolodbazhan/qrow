@@ -1400,7 +1400,7 @@ impl Qrow {
                 ..
             } => {
                 let (profile, unique_id) = (*profile, dbt.unique_id.clone());
-                let origin = id.clone();
+                let origin = id;
                 Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.open_dbt_details(profile, &unique_id, window, cx);
                     this.dbt_details_origin = Some(origin.clone());
@@ -1742,10 +1742,7 @@ impl RowContext {
 
     /// Where the context menu of the row `key` opens for a click at
     /// `position`: below the row, at the pointer column.
-    fn menu_position(
-        &self,
-        key: SharedString,
-    ) -> impl Fn(Point<Pixels>) -> Point<Pixels> + use<> {
+    fn menu_position(&self, key: SharedString) -> impl Fn(Point<Pixels>) -> Point<Pixels> + use<> {
         let widths = self.widths.clone();
         move |position| {
             let bottom = widths.borrow().get(&key).copied();
@@ -2115,7 +2112,12 @@ fn render_entry(
             };
             window
                 .text_system()
-                .shape_line(SharedString::from(text.to_owned()), window.rem_size() * rems, &[run], None)
+                .shape_line(
+                    SharedString::from(text.to_owned()),
+                    window.rem_size() * rems,
+                    &[run],
+                    None,
+                )
                 .width
         };
         let lanes = if leaf { 1. } else { 2. };

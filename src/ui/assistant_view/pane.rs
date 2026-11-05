@@ -424,7 +424,12 @@ impl AssistantPane {
             };
             let width = window
                 .text_system()
-                .shape_line(SharedString::from(text.to_owned()), window.rem_size() * 0.875, &[run], None)
+                .shape_line(
+                    SharedString::from(text.to_owned()),
+                    window.rem_size() * 0.875,
+                    &[run],
+                    None,
+                )
                 .width;
             f32::from(width) / qrow.settings.ui_scale
         };
@@ -936,7 +941,10 @@ mod tests {
         let widths = [Some(148.), Some(100.), Some(68.)];
         // Three icons take 3 × 24 + 2 × 4 = 80 points.
         assert_eq!(assistant_selector_labels(80., widths), [false; 3]);
-        assert_eq!(assistant_selector_labels(204., widths), [true, false, false]);
+        assert_eq!(
+            assistant_selector_labels(204., widths),
+            [true, false, false]
+        );
         assert_eq!(assistant_selector_labels(280., widths), [true, true, false]);
         assert_eq!(assistant_selector_labels(324., widths), [true; 3]);
         // A label that does not fit keeps the next ones as icons too.

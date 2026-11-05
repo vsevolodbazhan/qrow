@@ -5,9 +5,9 @@
 use super::{
     Qrow, StatusTooltip,
     button_pair::{button_pair, segment},
-    result_toolbar::ResultSummary,
     log_row::{self, LogRow},
     panel_empty_state,
+    result_toolbar::ResultSummary,
 };
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
 use crate::logs::timestamp_label;
@@ -582,45 +582,49 @@ impl ActivityView {
             .test_support()
             .w_full()
             .child(
-                LogRow::new(("activity-row", entry.id()), entry.id(), entry.message().to_owned())
-                    .time(entry.timestamp)
-                    .error(entry.is_error())
-                    .source(Some(entry.title.clone().unwrap_or_default()))
-                    .typography(typography.family, typography.size, typography.line_height)
-                    .when_some(error, |row, error| {
-                        row.action(
-                            Button::new(("activity-copy", entry.id()))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Copy)
-                                .tooltip("Copy error")
-                                .accessibility_label("Copy error")
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
-                                }),
-                        )
-                    })
-                    .when_some(tab, |row, tab| {
-                        let view = view.downgrade();
-                        row.action(
-                            // On every row the arrow would repeat, so it shows
-                            // on hover and on keyboard focus only.
-                            Button::new(("activity-show-tab", entry.id()))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::ArrowRight)
-                                .tooltip("Show tab")
-                                .accessibility_label("Show tab")
-                                .opacity(0.)
-                                .group_hover(log_row::ROW_GROUP, |style| style.opacity(1.))
-                                .focus_visible(|style| style.opacity(1.))
-                                .on_click(move |_, _, cx| {
-                                    let _ = view.update(cx, |_, cx| {
-                                        cx.emit(ActivityViewEvent::ShowTab(tab));
-                                    });
-                                }),
-                        )
-                    }),
+                LogRow::new(
+                    ("activity-row", entry.id()),
+                    entry.id(),
+                    entry.message().to_owned(),
+                )
+                .time(entry.timestamp)
+                .error(entry.is_error())
+                .source(Some(entry.title.clone().unwrap_or_default()))
+                .typography(typography.family, typography.size, typography.line_height)
+                .when_some(error, |row, error| {
+                    row.action(
+                        Button::new(("activity-copy", entry.id()))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Copy)
+                            .tooltip("Copy error")
+                            .accessibility_label("Copy error")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
+                            }),
+                    )
+                })
+                .when_some(tab, |row, tab| {
+                    let view = view.downgrade();
+                    row.action(
+                        // On every row the arrow would repeat, so it shows
+                        // on hover and on keyboard focus only.
+                        Button::new(("activity-show-tab", entry.id()))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::ArrowRight)
+                            .tooltip("Show tab")
+                            .accessibility_label("Show tab")
+                            .opacity(0.)
+                            .group_hover(log_row::ROW_GROUP, |style| style.opacity(1.))
+                            .focus_visible(|style| style.opacity(1.))
+                            .on_click(move |_, _, cx| {
+                                let _ = view.update(cx, |_, cx| {
+                                    cx.emit(ActivityViewEvent::ShowTab(tab));
+                                });
+                            }),
+                    )
+                }),
             )
             .into_any_element()
     }

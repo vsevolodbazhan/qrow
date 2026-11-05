@@ -130,7 +130,6 @@ fn quiet_light_comments(cx: &mut App) {
         .style
         .syntax
         .comment
-        .clone()
         .map(HighlightStyle::from)
         .and_then(|style| style.color)
         .is_some_and(|color| color.s > MAX_LIGHT_COMMENT_SATURATION);
@@ -161,7 +160,7 @@ fn unify_sql_keywords(cx: &mut App) {
     use std::sync::Arc;
 
     let theme = Theme::global_mut(cx);
-    let Some(keyword) = theme.highlight_theme.style.syntax.keyword.clone() else {
+    let Some(keyword) = theme.highlight_theme.style.syntax.keyword else {
         return;
     };
     let mut highlight: HighlightTheme = (*theme.highlight_theme).clone();
