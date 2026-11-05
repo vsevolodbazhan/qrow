@@ -12,9 +12,11 @@ dist = os.environ.get("QROW_DIST_DIR", "dist")
 # The ARM executable reached 29.35 MiB before data export. A Parquet writer
 # adds 0.64 MiB to the executable but only 0.22 MiB to the zip, which is the
 # download size.
+# The bundled IBM Plex Sans and JetBrains Mono fonts add about 2 MiB to the
+# executable. The owner set the zip budget to 15 MiB for them and later UI work.
 limits = {
     f"{dist}/Qrow.app/Contents/MacOS/qrow": 40 * 1024 * 1024,
-    f"{dist}/Qrow-macos.zip": 12 * 1024 * 1024,
+    f"{dist}/Qrow-macos.zip": 15 * 1024 * 1024,
 }
 errors = []
 for name, limit in limits.items():

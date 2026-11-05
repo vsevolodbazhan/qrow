@@ -698,7 +698,7 @@ uv run --locked python scripts/core/size.py
 ```
 
 The [size check](../scripts/core/size.py) allows 40 MiB for the executable
-and 12 MiB for the zipped bundle. Find the cause of an increase before you
+and 15 MiB for the zipped bundle. Find the cause of an increase before you
 change a budget.
 
 When you publish performance results, give the build, the hardware, the
