@@ -30,7 +30,7 @@ const STATUS_BAR_ICONS: [&str; 4] = [
 // the icons after `Send`. The status bar uses `Activity`, `Plug`, and
 // `KeyRound`, and the Sign-ins sidebar uses `KeyRound` and `ClipboardPaste`.
 // The result toolbar uses `FileCode` for Copy query and `Pin`, and the Logs
-// toolbar uses `Trash` for Clear.
+// toolbar uses `Trash` for Clear. The Connections search uses `ListFilter`.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
@@ -54,6 +54,7 @@ gpui_kit::assets::icon_assets!(
         Download,
         Pin,
         Trash,
+        ListFilter,
     ]
 );
 
@@ -169,6 +170,11 @@ mod tests {
         for icon in STATUS_BAR_ICONS {
             assert!(Assets.load(icon).unwrap().is_some(), "{icon} is missing");
         }
+    }
+
+    #[test]
+    fn the_search_scope_icon_is_available() {
+        assert!(Assets.load("icons/list-filter.svg").unwrap().is_some());
     }
 
     #[test]

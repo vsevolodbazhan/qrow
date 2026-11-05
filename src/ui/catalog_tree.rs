@@ -15,7 +15,8 @@ use crate::catalog::{
 use crate::model::SearchScope;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::{
-    ElementExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState,
+    ElementExt as _, FocusableExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem,
+    TreeState,
 };
 use gpui_kit::component::{
     Icon, Selectable as _,
@@ -1765,6 +1766,7 @@ impl Qrow {
                             Input::new(&self.catalog.search)
                                 .small()
                                 .w_full()
+                                .focus_ring(false)
                                 .cleanable(true)
                                 .aria_label("Search connections and relations")
                                 .suffix(self.search_scope_button(cx)),
