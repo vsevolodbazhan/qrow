@@ -1024,7 +1024,7 @@ connection matches, the tree shows **No matches**.
 To clear the search, press Escape in the search field, or click **Clear**
 (×) at the end of the field. The full tree shows again.
 
-To search only some connections, click the filter button at the end of the
+To search only some connections, click the filter button to the right of the
 search field, then select:
 
 - **All connections** to search all connections. This is the default.
