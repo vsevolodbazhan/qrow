@@ -1009,7 +1009,7 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
         window.render_frame(cx);
         let selected = gpui_kit::base::TextSelection::selected_text(window, cx);
         assert!(
-            selected.contains("FROM avia.flight_events"),
+            selected.contains("COUNT(*) AS departures"),
             "The drag must select the logged SQL: {selected:?}"
         );
     });

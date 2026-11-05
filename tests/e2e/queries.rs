@@ -143,26 +143,17 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
     let app = TestApp::launch_with(cx, workspace, credentials);
     cx.simulate_window_resize(app.window, size(px(600.), px(650.)));
     app.settle(cx);
-    app.click(cx, "result-details");
+    // Before the first result, the result toolbar and its details do not show.
     app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 0")
-        );
-        assert_eq!(
-            label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded Rows: 0")
-        );
-        assert!(window.try_find("result-detail-elapsed").is_none());
+        assert!(window.try_find("result-details").is_none());
     });
-    app.press(cx, "escape");
     app.click(cx, "run");
     app.wait_status(cx, "Preview: More rows available");
     app.click(cx, "result-details");
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1–1000")
+            Some("Visible Rows: 1–1,000")
         );
         assert_eq!(
             label(window, "result-detail-loaded").as_deref(),
@@ -184,7 +175,7 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1001–1001")
+            Some("Visible Rows: 1,001–1,001")
         );
         assert_eq!(cell(window, 0, 1).as_deref(), Some("1000"));
     });

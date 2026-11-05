@@ -467,7 +467,8 @@ Postgres tests fail if their fixture settings are missing.
 The `desktop` suite operates the packaged app with real keyboard and pointer
 events. It checks only what needs the real operating system:
 
-1. **About Qrow** and **Settings…** open from the menu bar.
+1. **About Qrow** and **Settings…** open from the menu bar, and **⌘W** closes
+   the Settings window.
 2. A connection that you add through the form keeps its password in the real
    Keychain, and a real query reads it.
 3. Pixels of the selected connection row: when the pointer is on the status

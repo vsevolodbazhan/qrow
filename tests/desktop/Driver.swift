@@ -1024,12 +1024,13 @@ final class Driver {
         try require(abs(bubbleRight - composerRight) <= 1,
                     "The user bubble ends \(composerRight - bubbleRight) points left of the composer")
     }
-    /// The application menu opens Settings. The headless UI tests check the
-    /// settings themselves.
+    /// The application menu opens the Settings window, and Cmd+W closes it.
+    /// Settings apply as they change, so the window has no Save button. The
+    /// headless UI tests check the settings themselves.
     func testSettingsMenu() throws {
         try selectApplicationMenuItem("Settings…")
         try waitSettingValue("Theme", "System")
-        try press("Save")
+        key(13, flags: .maskCommand) // Cmd+W closes the Settings window.
         try waitGone("UI Scale")
         print("PASS: The application menu opens and closes Settings")
     }
