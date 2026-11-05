@@ -625,6 +625,9 @@ impl RenderOnce for TabBar {
                                     let view = handle.bounds();
                                     let scrolled = -handle.offset().x;
                                     let clear = color.opacity(0.);
+                                    // Fades and cues stop above the bottom
+                                    // border of the bar, which runs on under
+                                    // the tabs that are not selected.
                                     let hidden = [
                                         scrolled > px(0.5),
                                         handle.max_offset().x - scrolled > px(0.5),
@@ -681,7 +684,7 @@ impl RenderOnce for TabBar {
                                             window.paint_quad(fill(
                                                 Bounds::from_corners(
                                                     point(from, view.top()),
-                                                    point(to, view.bottom()),
+                                                    point(to, view.bottom() - px(1.)),
                                                 ),
                                                 linear_gradient(
                                                     90.,
@@ -707,7 +710,7 @@ impl RenderOnce for TabBar {
                                         window.paint_quad(fill(
                                             Bounds::new(
                                                 point(x, view.top()),
-                                                size(width, view.size.height),
+                                                size(width, view.size.height - px(1.)),
                                             ),
                                             linear_gradient(
                                                 90.,
@@ -791,7 +794,9 @@ fn pin_label(
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
-    let room = visible.size.width - padding * 2.;
+    // The title starts after the tab's left padding and may use the room of
+    // the hidden close button.
+    let room = visible.size.width - padding - px(4.);
     let style = window.text_style();
     let shape = |text: SharedString, window: &mut Window| {
         let run = style.to_run(text.len());

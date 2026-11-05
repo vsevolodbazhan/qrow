@@ -578,10 +578,11 @@ fn the_tab_strip_snaps_to_a_tab_after_a_resize(cx: &mut TestAppContext) {
         );
     });
     // A tab that the left edge cuts at the end of the range has its title
-    // past the edge, so the strip pins the title to the edge when enough of
-    // the tab shows. Some widths cut a wide part.
-    let mut pinned = 0;
-    for width in [900., 930., 960., 990., 1020., 1050.] {
+    // past the edge, so the strip pins the title to the edge when two
+    // characters and an ellipsis fit. Some widths cut a narrow part, some a
+    // wide part.
+    let (mut narrow, mut wide) = (0, 0);
+    for width in (900..=1200).step_by(10).map(|width| width as f32) {
         cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(770.)));
         app.settle(cx);
         app.update(cx, |window, cx| {
@@ -604,7 +605,9 @@ fn the_tab_strip_snaps_to_a_tab_after_a_resize(cx: &mut TestAppContext) {
                 .filter_map(|number| labelled(window, &format!("Query {number}")))
                 .map(|tab| tab.bounds())
                 .find(|tab| tab.left() < strip_left - px(0.5) && tab.right() > strip_left + px(0.5));
-            let Some(cut) = cut.filter(|cut| cut.right() - strip_left >= px(60.)) else {
+            // Two characters, an ellipsis, and the tab padding fit in 45 pt
+            // of the test text system.
+            let Some(cut) = cut.filter(|cut| cut.right() - strip_left >= px(45.)) else {
                 return;
             };
             let titles = gpui_kit::component::tab::pinned_tab_titles();
@@ -614,12 +617,16 @@ fn the_tab_strip_snaps_to_a_tab_after_a_resize(cx: &mut TestAppContext) {
                 }),
                 "At {width} pt, the cut tab {cut:?} must show its title inside the strip: {titles:?}"
             );
-            pinned += 1;
+            if cut.right() - strip_left < px(60.) {
+                narrow += 1;
+            } else {
+                wide += 1;
+            }
         });
     }
     assert!(
-        pinned > 0,
-        "No width cut a wide part of a tab at the end of the range"
+        narrow > 0 && wide > 0,
+        "The widths must cut 45 to 60 pt and over 60 pt of a tab: {narrow} and {wide} cases"
     );
     // A wider window snaps again, and the selected tab stays in view.
     for width in [1280., 1000., 900.] {

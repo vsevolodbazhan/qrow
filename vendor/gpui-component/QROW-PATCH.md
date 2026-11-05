@@ -95,7 +95,8 @@ Qrow changes these files:
   the end edge instead. A tab that the end edge cuts fades into the bar. A
   tab that the start edge cuts has its title past the edge, so the bar
   paints the title from the edge on, cut with an ellipsis, or nothing when
-  not even two characters fit. With `test-support`, `pinned_tab_titles`
+  not even two characters and the ellipsis fit after the tab's left padding.
+  Fades and cues stop above the bottom border of the bar. With `test-support`, `pinned_tab_titles`
   gives the titles that the last frame pinned. The
   Qrow UI tests in `tabs` check the wheel, the snap, the end of the range, a
   resize, an Assistant toggle, a rename, and new tabs.
