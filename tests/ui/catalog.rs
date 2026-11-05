@@ -1051,6 +1051,38 @@ fn search_scope_limits_the_connections_and_is_saved(cx: &mut TestAppContext) {
     assert_eq!(app.credentials.reads(), 0);
 }
 
+#[gpui_kit::test]
+fn deleting_the_only_searched_connection_searches_all_connections(cx: &mut TestAppContext) {
+    let kept = offline_profile("Kept");
+    let deleted = offline_profile("Deleted");
+    let directory = tempfile::tempdir().unwrap();
+    for profile in [&kept, &deleted] {
+        cache(
+            &directory,
+            profile,
+            &[("sales", Some(&[table("orders", RelationKind::Table)]))],
+        );
+    }
+    let mut saved = workspace(vec![kept.clone(), deleted.clone()]);
+    saved.search_scope = SearchScope::Connections(BTreeSet::from([deleted.id]));
+    let app = TestApp::launch_in(cx, directory, saved, MemoryCredentials::default());
+
+    app.fill_labelled(cx, SEARCH, "orders");
+    app.wait_for(cx, connection_row(deleted.id));
+    app.update(cx, |window, _| {
+        assert!(window.try_find(connection_row(kept.id)).is_none())
+    });
+    app.context_menu(cx, connection_row(deleted.id));
+    app.choose(cx, "popup-menu", "Delete");
+    app.click(cx, "confirm-delete-connection");
+    // The search now reads the cache of the kept connection.
+    app.wait_for(cx, connection_row(kept.id));
+    wait_shows(&app, cx, "orders");
+    app.wait_saved(cx, "the All connections scope", |workspace| {
+        workspace.search_scope == SearchScope::All
+    });
+}
+
 fn scope_label_of(app: &TestApp, cx: &mut TestAppContext) -> String {
     app.update(cx, |window, _| {
         labelled_starting(window, "Search in: ")

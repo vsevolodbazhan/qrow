@@ -3964,6 +3964,8 @@ impl Qrow {
         self.active_tabs.remove(&id);
         crate::model::prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
         self.sync_catalogs(None, cx);
+        // A scope without the deleted connection can include more connections.
+        self.ensure_search_catalogs(cx);
         if self.tabs.is_empty() {
             let tab = self.make_tab(
                 SavedTab::new(1, self.profiles.first().map(|profile| profile.id)),

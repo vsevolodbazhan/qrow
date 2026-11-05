@@ -1152,7 +1152,8 @@ impl Qrow {
         cx.notify();
     }
 
-    fn ensure_search_catalogs(&mut self, cx: &App) {
+    /// Read the caches of the connections that the search looks in.
+    pub(super) fn ensure_search_catalogs(&mut self, cx: &App) {
         if self.catalog.search.read(cx).value().trim().is_empty() {
             return;
         }
