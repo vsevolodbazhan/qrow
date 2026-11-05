@@ -533,6 +533,31 @@ fn the_tab_strip_snaps_to_a_tab_after_a_resize(cx: &mut TestAppContext) {
         );
         assert_no_tab_cut_at(window, strip_left, 10);
     });
+    // At the end of the range, the last tab meets the end of the strip, with
+    // no room after it.
+    app.update(cx, |window, cx| {
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-5000.), px(0.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(300));
+    app.settle(cx);
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        let last = bounds_of(window, "Query 10");
+        let new_tab = bounds_of(window, "new-tab");
+        assert!(
+            last.right() <= new_tab.left() && new_tab.left() - last.right() < px(24.),
+            "The last tab {last:?} must end at the strip end, before {new_tab:?}"
+        );
+    });
     // A wider window snaps again, and the selected tab stays in view.
     for width in [1280., 1000., 900.] {
         cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(770.)));

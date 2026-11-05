@@ -458,7 +458,13 @@ impl RenderOnce for TabBar {
             .scroll_handle
             .clone()
             .filter(|_| self.variant == TabVariant::Tab)
-            .map(|handle| (handle, gpui::Hsla::from(cx.theme().tokens.tab_bar)));
+            .map(|handle| {
+                (
+                    handle,
+                    gpui::Hsla::from(cx.theme().tokens.tab_bar),
+                    gpui::Hsla::from(cx.theme().border),
+                )
+            });
         let mut item_metas: Vec<(Option<SharedString>, Option<Icon>, bool)> = Vec::new();
         let selected_index = self.selected_index;
         let on_click = self.on_click.clone();
@@ -581,14 +587,9 @@ impl RenderOnce for TabBar {
                                 this.track_scroll(&scroll_handle)
                             })
                             .children(rendered_tabs)
-                            .when(has_suffix_or_menu, |this| this.child(self.last_empty_space))
-                            // Qrow: room after the last tab, so that the end
-                            // of the scroll range is the start of a tab.
-                            .when(edge_fade.is_some(), |this| {
-                                this.child(div().flex_shrink_0().w(strip.pad.get()))
-                            }),
+                            .when(has_suffix_or_menu, |this| this.child(self.last_empty_space)),
                     )
-                    .when_some(edge_fade, |this, (handle, color)| {
+                    .when_some(edge_fade, |this, (handle, color, edge)| {
                         // Laid out after the tabs, from the scroll position of
                         // this frame.
                         this.child(
@@ -609,29 +610,69 @@ impl RenderOnce for TabBar {
                                 move |_, _, window, _| {
                                     let view = handle.bounds();
                                     let scrolled = -handle.offset().x;
-                                    let width = px(24.).min(view.size.width / 4.);
-                                    let fade = size(width, view.size.height);
                                     let clear = color.opacity(0.);
-                                    if scrolled > px(0.5) {
-                                        window.paint_quad(fill(
-                                            Bounds::new(view.origin, fade),
-                                            linear_gradient(
-                                                90.,
-                                                linear_color_stop(color, 0.),
-                                                linear_color_stop(clear, 1.),
-                                            ),
-                                        ));
-                                    }
-                                    if handle.max_offset().x - scrolled > px(0.5) {
+                                    let hidden = [
+                                        scrolled > px(0.5),
+                                        handle.max_offset().x - scrolled > px(0.5),
+                                    ];
+                                    for (start, hidden) in [true, false].into_iter().zip(hidden) {
+                                        if !hidden {
+                                            continue;
+                                        }
+                                        // A tab that the edge cuts fades into
+                                        // the bar, so no part of it reads as a
+                                        // tab of its own.
+                                        let cut = (0..num_tabs)
+                                            .filter_map(|ix| handle.bounds_for_item(ix))
+                                            .map(|item| {
+                                                (item.left() - scrolled, item.right() - scrolled)
+                                            })
+                                            .find(|&(left, right)| {
+                                                let edge =
+                                                    if start { view.left() } else { view.right() };
+                                                left < edge - px(0.5) && right > edge + px(0.5)
+                                            });
+                                        if let Some((left, right)) = cut {
+                                            let (from, to, stops) = if start {
+                                                (view.left(), right, (color, clear))
+                                            } else {
+                                                (left, view.right(), (clear, color))
+                                            };
+                                            window.paint_quad(fill(
+                                                Bounds::from_corners(
+                                                    point(from, view.top()),
+                                                    point(to, view.bottom()),
+                                                ),
+                                                linear_gradient(
+                                                    90.,
+                                                    linear_color_stop(
+                                                        stops.0,
+                                                        if start { 0.5 } else { 0. },
+                                                    ),
+                                                    linear_color_stop(
+                                                        stops.1,
+                                                        if start { 1. } else { 0.5 },
+                                                    ),
+                                                ),
+                                            ));
+                                        }
+                                        // A scroll shadow at each edge with
+                                        // hidden tabs.
+                                        let width = px(6.);
+                                        let (x, stops) = if start {
+                                            (view.left(), (edge, edge.opacity(0.)))
+                                        } else {
+                                            (view.right() - width, (edge.opacity(0.), edge))
+                                        };
                                         window.paint_quad(fill(
                                             Bounds::new(
-                                                point(view.right() - width, view.top()),
-                                                fade,
+                                                point(x, view.top()),
+                                                size(width, view.size.height),
                                             ),
                                             linear_gradient(
                                                 90.,
-                                                linear_color_stop(clear, 0.),
-                                                linear_color_stop(color, 1.),
+                                                linear_color_stop(stops.0, 0.),
+                                                linear_color_stop(stops.1, 1.),
                                             ),
                                         ));
                                     }
@@ -710,17 +751,16 @@ struct Strip {
     reveal: Cell<Option<Reveal>>,
     /// The last wheel event over the strip, until the strip snaps.
     wheel: Cell<Option<Instant>>,
-    /// The room after the last tab.
-    pad: Cell<Pixels>,
 }
 
 /// Qrow: snaps the scroll so that a tab starts exactly at the start edge, so
 /// no part of a tab shows there. The strip snaps when a wheel or a swipe over
 /// it stops, and when the bar width, the selection, the number of tabs, or
 /// the width of a tab changes, for example after a resize, a new tab, or a
-/// rename. After such a change, the selected tab also scrolls fully
-/// into view. Room after the last tab makes the end of the scroll range the
-/// start of a tab. Item bounds leave out the scroll offset.
+/// rename. After such a change, the selected tab also scrolls fully into
+/// view. At the end of the scroll range, the last tab aligns to the end edge
+/// instead, and the tab that the start edge cuts fades into the bar. Item
+/// bounds leave out the scroll offset.
 fn settle(
     handle: &ScrollHandle,
     selected: Option<usize>,
@@ -734,28 +774,12 @@ fn settle(
     if view.size.width <= px(0.) || num_tabs == 0 || count == 0 {
         return;
     }
-    let Some(spacer) = handle.bounds_for_item(count - 1) else {
-        return;
-    };
     let starts: Vec<Pixels> = (0..num_tabs)
         .filter_map(|ix| handle.bounds_for_item(ix))
         .map(|item| item.left() - view.left())
         .collect();
-    let overflow = spacer.left() - view.left() - view.size.width;
-    let pad = if overflow > px(0.) {
-        starts
-            .iter()
-            .find(|&&start| start >= overflow - px(0.5))
-            .map_or(px(0.), |&start| (start - overflow).max(px(0.)))
-    } else {
-        px(0.)
-    };
-    let padded = (pad - strip.pad.get()).abs() > px(0.5);
-    if padded {
-        strip.pad.set(pad);
-        window.request_animation_frame();
-    }
-    let max = (overflow + pad).max(px(0.));
+    // The end of the scroll range puts the last tab at the end edge.
+    let max = handle.max_offset().x.max(px(0.));
 
     let now = cx.background_executor().now();
     let stopped = strip
@@ -768,8 +792,7 @@ fn settle(
     let selected = selected
         .filter(|&ix| ix < num_tabs)
         .and_then(|ix| Some((ix, handle.bounds_for_item(ix)?)));
-    let content = spacer.left() - view.left();
-    let key = selected.map(|(ix, item)| (view.size.width, ix, num_tabs, item.size.width, content));
+    let key = selected.map(|(ix, item)| (view.size.width, ix, num_tabs, item.size.width, max));
     let changed = key.is_some() && strip.reveal.get() != key;
     if changed {
         strip.reveal.set(key);
@@ -777,14 +800,17 @@ fn settle(
         // renders again after a change.
         window.request_animation_frame();
     }
-    if !(stopped || changed || padded) {
+    if !(stopped || changed) {
         return;
     }
     let current = -handle.offset().x;
+    // Tab starts, and the end of the range, where the last tab aligns to
+    // the end edge instead.
     let boundaries = || {
         std::iter::once(px(0.))
             .chain(starts.iter().copied())
-            .filter(move |&start| start <= max + px(0.5))
+            .filter(move |&start| start < max - px(0.5))
+            .chain(std::iter::once(max))
     };
     let mut target = boundaries()
         .min_by(|a, b| f32::from((*a - current).abs()).total_cmp(&f32::from((*b - current).abs())))

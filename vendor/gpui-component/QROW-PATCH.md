@@ -86,14 +86,15 @@ Qrow changes these files:
   the bar suffix.
 - `src/tab/tab_bar.rs`: a vertical wheel also scrolls a tab bar, which has
   nothing to scroll vertically. Before, only a horizontal swipe scrolled it.
-  A bar of the `Tab` variant that tracks its scroll fades each edge with more
-  tabs past it, and snaps its scroll so that a tab starts exactly at the start
-  edge: when a wheel or a swipe over it stops, and when the bar width, the
-  selection, the tab count, or a tab width changes. After such a change, the
-  selected tab also scrolls fully into view. Room after the last tab makes
-  the end of the scroll range the start of a tab. The Qrow UI tests in
-  `tabs` check the wheel, the snap, a resize, an Assistant toggle, a rename,
-  and new tabs.
+  A bar of the `Tab` variant that tracks its scroll shows a short gradient
+  in the border color at each edge with hidden tabs past it. It snaps its
+  scroll so that a tab starts exactly at the start edge: when a wheel or a
+  swipe over it stops, and when the bar width, the selection, the tab count,
+  or a tab width changes. After such a change, the selected tab also scrolls
+  fully into view. At the end of the scroll range, the last tab aligns to
+  the end edge instead, and a tab that an edge cuts fades into the bar. The
+  Qrow UI tests in `tabs` check the wheel, the snap, the end of the range, a
+  resize, an Assistant toggle, a rename, and new tabs.
 - `src/tooltip.rs`: `ManagedTooltipExt` is public, and `managed_tooltip_when`
   shows its tooltip only while a condition holds when the pointer enters.
   A result column header shows its full name only when its column cuts it.
