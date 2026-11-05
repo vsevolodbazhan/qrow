@@ -56,6 +56,21 @@ When changing table or splitter behavior, check dragging, release, the next clic
 both scroll axes, and modal overlays. Verify SQL selection with emoji and
 non-Latin text. Report an automation failure as a verification gap.
 
+For each visual change, check these points in the demo:
+
+- Check the dark theme and the light theme.
+- Check a window that is 1280 points wide and a window that is 900 points
+  wide, with the Assistant open and closed.
+- For tab strips and tables, check five or more window widths. At each width,
+  scroll to the start, the middle, and the end.
+- Check hover, keyboard focus, selection, and validation errors.
+- Use long non-Latin text, for example a Cyrillic tab title.
+
+UI tests cannot read painted pixels. Check colors, fades, and borders on
+screen, and report these checks. The
+[UI conventions](../.agents/skills/qrow-ui-conventions/SKILL.md) list the
+interface decisions of the project and the known UI bug classes.
+
 Use release builds for performance measurements. `cargo build` does not update
 `dist/Qrow.app`. Follow the [packaging instructions](../README.md#release) when
 you need a new distributable. Do not replace the app while someone is testing it.
