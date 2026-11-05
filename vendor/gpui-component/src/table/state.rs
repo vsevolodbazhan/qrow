@@ -446,7 +446,17 @@ where
             .filter_map(|(col, start)| {
                 let col = col?;
                 let cell = row_ix.and_then(|row| self.delegate.cell_background(row, col, cx));
-                let color = |under: gpui::Hsla| cell.map_or(under, |cell| under.blend(cell));
+                // In a row, the fade covers the cell inside its column paddings,
+                // where cells paint their background; in the header, all but
+                // the bottom border.
+                let inset = match row_ix {
+                    None => (px(0.), px(1.)),
+                    Some(_) => self
+                        .col_groups
+                        .get(col)
+                        .and_then(|col| col.column.paddings)
+                        .map_or((px(0.), px(0.)), |paddings| (paddings.top, paddings.bottom)),
+                };
                 let gradient = move |color: gpui::Hsla| {
                     let (from, to) = if start {
                         (color, color.opacity(0.))
@@ -459,14 +469,16 @@ where
                         gpui::linear_color_stop(to, 1.),
                     )
                 };
-                let (normal, hovered) = (color(row), hover.map(color));
+                // The row color hides the cut content, and the cell background
+                // is painted again over it, as the cell paints it over the row.
+                let (normal, hovered) = (row, hover);
                 Some(
                     div()
                         .id(if start { "fade-left" } else { "fade-right" })
                         .test_support()
                         .absolute()
-                        .top_0()
-                        .bottom(if row_ix.is_none() { px(1.) } else { px(0.) })
+                        .top(inset.0)
+                        .bottom(inset.1)
                         .w(width)
                         .map(|this| {
                             if start {
@@ -480,6 +492,9 @@ where
                             this.group_hover(TABLE_ROW_GROUP, move |style| {
                                 style.bg(gradient(hovered))
                             })
+                        })
+                        .when_some(cell, |this, cell| {
+                            this.child(div().absolute().inset_0().bg(gradient(cell)))
                         })
                         .into_any_element(),
                 )
@@ -2201,6 +2216,29 @@ where
 
         if row_ix < rows_count {
             let is_last_row = row_ix + 1 == rows_count;
+            // Qrow: the cell at the right edge of the shown columns, whose
+            // background the room after the cells continues.
+            let cut_col = self.hidden_edges().1;
+            let edge_cut = cut_col.is_some();
+            let edge_col = cut_col.or_else(|| self.col_groups.len().checked_sub(1));
+            let edge_background =
+                edge_col.and_then(|col| self.delegate.cell_background(row_ix, col, cx));
+            // The cells paint their background inside the column paddings.
+            let edge_inset = edge_col
+                .and_then(|col| self.col_groups.get(col))
+                .and_then(|col| col.column.paddings)
+                .map_or((px(0.), px(0.)), |paddings| (paddings.top, paddings.bottom));
+            let edge_fill = move || {
+                edge_background.map(|color| {
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(edge_inset.0)
+                        .bottom(edge_inset.1)
+                        .bg(color)
+                })
+            };
             let need_render_border = is_selected || !is_last_row || !is_filled;
 
             let mut tr = self.delegate.render_tr(row_ix, window, cx);
@@ -2426,7 +2464,17 @@ where
                             )
                             .with_scroll_handle(&self.horizontal_scroll_handle),
                         )
-                        .child(self.delegate.render_last_empty_col(window, cx))
+                        .child(
+                            // Qrow: the room after the cells shows the background of the
+                            // cell at the edge, such as a selection tint, like the row.
+                            div()
+                                .relative()
+                                .h_full()
+                                .flex_shrink_0()
+                                // A cut cell already reaches under this room.
+                                .when(!edge_cut, |this| this.children(edge_fill()))
+                                .child(self.delegate.render_last_empty_col(window, cx)),
+                        )
                         // Qrow: a column cut by an edge with more columns past
                         // it fades into the row, in the row's own color.
                         .children(self.edge_fades(
@@ -2441,7 +2489,14 @@ where
                 // covers no text, while the row background and line reach the
                 // edge.
                 .when(self.scrollbar_room(cx).0, |this| {
-                    this.child(div().w(SCROLLBAR_GUTTER).h_full().flex_shrink_0())
+                    this.child(
+                        div()
+                            .relative()
+                            .w(SCROLLBAR_GUTTER)
+                            .h_full()
+                            .flex_shrink_0()
+                            .children(edge_fill()),
+                    )
                 })
                 // Row selected style
                 // Note: Don't show row selection if a cell is selected

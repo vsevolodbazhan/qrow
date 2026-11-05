@@ -83,7 +83,11 @@ Qrow changes these files:
   hover, the selected row, or the background of the cut cell from
   `TableDelegate::cell_background` (new, `None` by default). The fades stop
   above the header border, sit inside the scrollbar room, and do not take
-  pointer input. The Qrow UI test
+  pointer input. The fades in rows cover the cells inside their column
+  paddings and paint the cut cell's background again over the row color.
+  The room after the cells, through the scrollbar room, shows the
+  background of the cell at the edge, so a selection tint reaches the
+  right edge like other row backgrounds. The Qrow UI test
   `results::cut_columns_fade_only_where_more_columns_are_hidden` checks
   which sides fade. A new table size
   renders the table again: the header picks its visible columns from the
