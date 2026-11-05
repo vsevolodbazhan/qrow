@@ -741,6 +741,11 @@ More helpers operate controls that GPUI Kit owns:
   search field of Settings. Use it only for elements that GPUI Kit names.
 - `app.dispatch(action)` sends an action, like `OpenSettings`, as its menu
   item does. The menu bar itself is part of the `desktop` suite.
+- `app.hover(id)` and `app.hover_labelled(label)` move the pointer over an
+  element, for controls that show only on hover, like **Show tab** in
+  Activity or the close button of a tab.
+- Settings opens in its own window. While it is open, the helpers operate
+  the Settings window.
 
 Assistant tests use the synthetic Codex server in
 [`tests/desktop/fake-codex.py`](../tests/desktop/fake-codex.py).

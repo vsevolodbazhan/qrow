@@ -114,8 +114,9 @@ See [assistant](docs/assistant.md) for setup, data sharing, and query safety.
 
 Qrow saves your connections, tabs, and SQL automatically. Restored tabs do
 not connect until you run SQL. Select the theme, the interface scale, and the
-fonts of the interface, the editor, the Logs, and the assistant. See
-[workspace](docs/workspace.md).
+fonts of the interface, the editor, the Logs, and the assistant in the
+Settings window (**⌘,**). Qrow includes IBM Plex Sans for the interface and
+JetBrains Mono for SQL and Logs. See [workspace](docs/workspace.md).
 
 ## Metrics
 
