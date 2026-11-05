@@ -951,7 +951,9 @@ impl Qrow {
                 editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
         });
-        let catalog = catalog_tree::CatalogTree::new(environment.workspace().cloned(), window, cx);
+        let mut catalog =
+            catalog_tree::CatalogTree::new(environment.workspace().cloned(), window, cx);
+        catalog.scope = workspace.search_scope.clone();
         let catalog_subscriptions = [
             cx.subscribe(
                 &catalog.state,
@@ -1218,6 +1220,7 @@ impl Qrow {
             active_tab: self.active,
             active_tabs: self.active_tabs.clone(),
             sign_ins: self.sign_ins.clone(),
+            search_scope: self.catalog.scope.clone(),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -1457,6 +1460,7 @@ impl Qrow {
         self.external_auth.configure(&self.profiles);
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
+        self.sync_search_scope(cx);
         // The UI scale and the Logs font settings change here.
         self.sync_activity_typography(cx);
         self.sync_output_typography();
@@ -3956,9 +3960,12 @@ impl Qrow {
         self.activity
             .update(cx, |activity, cx| activity.remove(id, cx));
         self.profiles.retain(|p| p.id != id);
+        self.catalog.scope.sanitize(&self.profiles);
         self.active_tabs.remove(&id);
         crate::model::prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
         self.sync_catalogs(None, cx);
+        // A scope without the deleted connection can include more connections.
+        self.ensure_search_catalogs(cx);
         if self.tabs.is_empty() {
             let tab = self.make_tab(
                 SavedTab::new(1, self.profiles.first().map(|profile| profile.id)),
@@ -4183,6 +4190,7 @@ fn demo_workspace(manifest: Option<&tempfile::NamedTempFile>) -> Workspace {
         active_tabs: BTreeMap::new(),
         shared_catalogs,
         sign_ins: vec![],
+        search_scope: Default::default(),
     }
 }
 

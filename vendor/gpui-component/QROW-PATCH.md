@@ -17,6 +17,10 @@ Qrow changes these files:
   Before, clicking a disabled input moved keyboard focus to its frame.
   The sign-in UI and E2E tests check that the locked account field cannot
   receive keyboard focus.
+- `src/input/clear_button.rs` and `locales/ui.yml`: the clear button of an
+  input, a Select, and a Combobox has the accessibility label and the tooltip
+  "Clear". Before, it was an icon without a name. The Connections search UI
+  test clicks it by this label.
 - `src/input/mod.rs`: exports `EMPHASIS_OPACITY` of the GPUI Base patch, so
   Qrow tests can find the tint of the SQL editor.
 - `src/menu/popup_menu.rs` and `src/menu/menu_item.rs`: standard menu items

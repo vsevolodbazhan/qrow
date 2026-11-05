@@ -1003,20 +1003,41 @@ catalog and its copy of the schemas.
 
 ### Search the tree
 
-Type in **Search relations…** to find schemas, tables, and views in all
-connections. Use a name or part of a name. For a table or view,
-you can include the schema, for example `integrations.bookings`. The search
-also accepts names from **Copy qualified name**, for example
-`` `integrations`.`bookings` ``. The search ignores letter case and spaces
-at the start and end of the search text.
+Type in **Search…** above the tree to find connections, schemas, tables, and
+views. Use a name or part of a name. For a table or view, you can include the
+schema, for example `integrations.bookings`. The search also accepts names
+from **Copy qualified name**, for example `` `integrations`.`bookings` ``.
+The search ignores letter case and spaces at the start and end of the search
+text.
 
-The search does not find columns. Qrow expands the connections and schemas
-that contain matches. If you expand a connection with no matches, the tree
-shows **No matches**. You can collapse and expand the connection again.
-A schema that matches by name shows all its tables when you expand it. The
-search shows the first 500 matches. If the limit hides all matches in a
-connection, the tree shows **Search limit reached**. Clear the search field
-to show the full tree again.
+During a search, the tree shows only the connections that match. If no
+connection matches, the tree shows **No matches**.
+
+- A connection that matches by name shows all its schemas when you expand it.
+- Qrow expands a connection that matches only through its schemas or tables.
+  It shows only the matching schemas and the schemas that contain matching
+  tables. A schema that matches by name shows all its tables when you expand it.
+- The search does not find columns.
+- The search shows the first 500 matches. If the limit hides all matches in
+  a connection, the connection shows **Search limit reached**.
+
+To clear the search, press Escape in the search field, or click **Clear**
+(×) at the end of the field. The full tree shows again.
+
+To search only some connections, click the filter button to the right of the
+search field, then select:
+
+- **All connections** to search all connections. This is the default.
+- **Current connection** to search only the connection of the current query.
+  When you select a query tab of a different connection, the search follows it.
+- A connection name to add the connection to the search, or to remove it.
+  When you remove the last connection, the search goes back to all
+  connections.
+
+The filter button tooltip shows the connections that the search uses. The
+button shows as selected when the search does not use all connections. The
+choice applies only while the search field has text. Qrow saves the choice
+in the workspace. If you delete a connection, Qrow removes it from the choice.
 
 ### Use names in SQL
 

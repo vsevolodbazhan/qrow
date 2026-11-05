@@ -1609,6 +1609,63 @@ pub struct Workspace {
     pub shared_catalogs: Vec<SharedCatalog>,
     #[serde(default)]
     pub sign_ins: Vec<SignIn>,
+    /// The connections that the Connections search looks in.
+    #[serde(default, skip_serializing_if = "SearchScope::is_all")]
+    pub search_scope: SearchScope,
+}
+
+/// The connections that the Connections search looks in.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchScope {
+    #[default]
+    All,
+    /// The connection of the active tab.
+    Current,
+    /// The selected connections. Never empty after `sanitize`.
+    Connections(BTreeSet<Uuid>),
+}
+
+impl SearchScope {
+    pub fn is_all(&self) -> bool {
+        *self == Self::All
+    }
+
+    /// Whether the search looks in `profile`. `current` is the connection
+    /// of the active tab.
+    pub fn includes(&self, profile: Uuid, current: Option<Uuid>) -> bool {
+        match self {
+            Self::All => true,
+            Self::Current => current == Some(profile),
+            Self::Connections(ids) => ids.contains(&profile),
+        }
+    }
+
+    /// Add `profile` to the selected connections, or remove it. Other
+    /// scopes start a new selection with only `profile`.
+    pub fn toggle(&mut self, profile: Uuid) {
+        match self {
+            Self::Connections(ids) => {
+                if !ids.remove(&profile) {
+                    ids.insert(profile);
+                }
+                if ids.is_empty() {
+                    *self = Self::All;
+                }
+            }
+            _ => *self = Self::Connections(BTreeSet::from([profile])),
+        }
+    }
+
+    /// Remove connections that do not exist. An empty selection becomes All.
+    pub fn sanitize(&mut self, profiles: &[Profile]) {
+        if let Self::Connections(ids) = self {
+            ids.retain(|id| profiles.iter().any(|profile| profile.id == *id));
+            if ids.is_empty() {
+                *self = Self::All;
+            }
+        }
+    }
 }
 
 /// Remove the shared catalogs without members, and the references to
@@ -1765,6 +1822,7 @@ impl Workspace {
             catalog.sanitize();
         }
         prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
+        self.search_scope.sanitize(&self.profiles);
         self.version = WORKSPACE_VERSION;
     }
 }
@@ -1781,6 +1839,7 @@ impl Default for Workspace {
             assistant: AssistantWorkspace::default(),
             shared_catalogs: Vec::new(),
             sign_ins: vec![],
+            search_scope: SearchScope::All,
         }
     }
 }
@@ -1841,6 +1900,45 @@ mod tests {
         // A connection saved before the schema tree existed did not browse
         // schemas, and it still does not.
         assert_eq!(restored.catalog, CatalogSettings::default());
+    }
+
+    #[test]
+    fn search_scope_toggles_round_trips_and_drops_missing_connections() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let mut scope = SearchScope::Current;
+        scope.toggle(first.id);
+        assert_eq!(scope, SearchScope::Connections(BTreeSet::from([first.id])));
+        scope.toggle(second.id);
+        assert!(scope.includes(second.id, None));
+        assert!(!scope.includes(Uuid::new_v4(), Some(first.id)));
+        scope.toggle(first.id);
+        scope.toggle(second.id);
+        assert_eq!(scope, SearchScope::All);
+        assert!(SearchScope::Current.includes(first.id, Some(first.id)));
+        assert!(!SearchScope::Current.includes(first.id, None));
+
+        let mut workspace = Workspace {
+            profiles: vec![first.clone()],
+            tabs: vec![SavedTab::new(1, Some(first.id))],
+            search_scope: SearchScope::Connections(BTreeSet::from([first.id, second.id])),
+            ..Workspace::default()
+        };
+        let text = serde_json::to_string(&workspace).unwrap();
+        workspace = serde_json::from_str(&text).unwrap();
+        workspace.normalize();
+        assert_eq!(
+            workspace.search_scope,
+            SearchScope::Connections(BTreeSet::from([first.id]))
+        );
+        workspace.profiles.clear();
+        workspace.normalize();
+        assert_eq!(workspace.search_scope, SearchScope::All);
+        // The default scope is not saved, and files without it read as All.
+        let saved = serde_json::to_value(&workspace).unwrap();
+        assert!(saved.get("search_scope").is_none());
+        let restored: Workspace = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.search_scope, SearchScope::All);
     }
 
     #[test]

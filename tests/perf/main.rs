@@ -256,7 +256,7 @@ fn catalog_tree(cx: &mut TestAppContext) {
     report("ui.catalog.scroll", scroll, "ms", 50.);
 
     // Each search keystroke rebuilds the tree from 2,000 cached tables.
-    app.click_labelled(cx, "Search relations");
+    app.click_labelled(cx, "Search connections and relations");
     let mut toggle = false;
     let search = app.update(cx, |window, cx| {
         let samples = sample(3, 20, || {
