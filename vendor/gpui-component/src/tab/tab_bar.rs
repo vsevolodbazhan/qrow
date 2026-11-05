@@ -57,6 +57,7 @@ pub struct TabBar {
     menu: bool,
     max_width: Option<Pixels>,
     fit_width: Option<Pixels>,
+    grow_selected: bool,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
 }
 
@@ -80,6 +81,7 @@ impl TabBar {
             menu: false,
             max_width: None,
             fit_width: None,
+            grow_selected: false,
         }
     }
 
@@ -124,6 +126,14 @@ impl TabBar {
     /// overflow menu still shows the full label.
     pub fn max_width(mut self, width: impl Into<Pixels>) -> Self {
         self.max_width = Some(width.into());
+        self
+    }
+
+    /// Qrow: the selected tab is not held to the maximum width, only to the
+    /// visible width of a bar that tracks its scroll, so it shows its whole
+    /// label. The other tabs keep the maximum width.
+    pub fn grow_selected(mut self, grow: bool) -> Self {
+        self.grow_selected = grow;
         self
     }
 
@@ -483,13 +493,24 @@ impl RenderOnce for TabBar {
         // Qrow: without a prefix, the first tab starts at the edge of the bar
         // and drops its left border, like a tab bar that says so explicitly.
         let has_prefix = self.prefix.is_some();
+        // The visible width of the tabs in the last frame, without the room
+        // after them; the bar draws again when it changes.
+        let grown_width = self
+            .scroll_handle
+            .as_ref()
+            .filter(|_| self.grow_selected)
+            .map(|handle| handle.bounds().size.width - px(12.))
+            .filter(|width| *width > px(0.));
         for (ix, child) in self.children.into_iter().enumerate() {
             item_metas.push((child.label.clone(), child.icon.clone(), child.disabled));
             let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(has_prefix);
             let mut tab = child
                 .ix(ix)
                 .tab_bar_prefix(tab_bar_prefix)
-                .max_width(max_width)
+                .max_width(match grown_width {
+                    Some(width) if selected_index == Some(ix) => Some(width),
+                    _ => max_width,
+                })
                 .fit_width(self.fit_width)
                 .with_variant(self.variant)
                 .with_size(self.size);

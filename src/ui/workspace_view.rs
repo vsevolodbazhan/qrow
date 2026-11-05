@@ -92,6 +92,8 @@ impl Qrow {
             .filter(|&width| width >= rem * 8.5);
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
+            // The selected tab shows its whole title, up to the visible strip.
+            .grow_selected(true)
             .fit_width(fit)
             // Long titles end in an ellipsis, and a short bar shrinks the
             // titles before it scrolls, so a tab keeps its close button whole.
@@ -134,21 +136,19 @@ impl Qrow {
                     // Constrain it to the same scaled height as the bar and its tools.
                     .min_h(tab_height)
                     .max_h(tab_height)
-                    // A tab without a dot shows its status on the tab itself.
-                    // Tab tooltips use the managed overlay, which hides them
-                    // when the strip scrolls.
-                    .when(tab.dot_status().is_none(), |query_tab| {
-                        query_tab.managed_tooltip(StatusTooltip::live(
-                            cx.entity().downgrade(),
-                            None,
-                            move |qrow, _| {
-                                qrow.tabs
-                                    .iter()
-                                    .find(|tab| tab.saved.id == id)
-                                    .map(Tab::status_tooltip)
-                            },
-                        ))
-                    })
+                    // Every tab shows its full title and its status in a tooltip,
+                    // so a cut title can be read. Tab tooltips use the managed
+                    // overlay, which hides them when the strip scrolls.
+                    .managed_tooltip(StatusTooltip::live(
+                        cx.entity().downgrade(),
+                        None,
+                        move |qrow, _| {
+                            qrow.tabs
+                                .iter()
+                                .find(|tab| tab.saved.id == id)
+                                .map(Tab::status_tooltip)
+                        },
+                    ))
                     // Right click does not activate the tab; the menu names its target.
                     .on_mouse_down(
                         MouseButton::Right,

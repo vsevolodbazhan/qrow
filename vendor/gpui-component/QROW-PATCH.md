@@ -98,7 +98,9 @@ Qrow changes these files:
   like "Query 12" in the large size. The selected tab does not shrink, so it
   shows its whole label up to the maximum width. `TabBar::fit_width` gives
   the tabs other than the selected one a smaller least width, so that a bar
-  that would scroll only a little fits all its tabs. A label that does not fit
+  that would scroll only a little fits all its tabs. `TabBar::grow_selected` lets the
+  selected tab grow past the maximum width to the visible width of the bar,
+  so it shows its whole label. A label that does not fit
   ends in an ellipsis, and the suffix, like a close button, keeps its size.
   Before, the bar scrolled and clipped the close button of the last tab under
   the bar suffix.

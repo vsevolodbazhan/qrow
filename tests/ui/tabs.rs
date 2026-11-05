@@ -660,3 +660,169 @@ fn each_new_tab_shows_in_full(cx: &mut TestAppContext) {
         selected_tab_in_strip(&app, cx, &format!("Query {number}"));
     }
 }
+
+/// The title in the tooltip that shows after the pointer rests on the tab
+/// labelled `label`, or `None`.
+fn tab_tooltip(app: &TestApp, cx: &mut TestAppContext, label: &str) -> Option<String> {
+    use gpui_kit::MouseMoveEvent;
+    let away = app.update(cx, |window, _| bounds_of(window, "sql-editor").center());
+    for (target, wait) in [(None, true), (Some(label), false)] {
+        app.update(cx, |window, cx| {
+            let position = target.map_or(away, |label| {
+                // The status dot has the label of its tab too; the tab is wider.
+                let tab = crate::support::elements(window)
+                    .into_iter()
+                    .filter(|element| element.label() == Some(label))
+                    .map(|element| element.bounds())
+                    .max_by(|a, b| a.size.width.partial_cmp(&b.size.width).unwrap())
+                    .unwrap_or_else(|| panic!("No tab {label}"));
+                gpui_kit::point(tab.left() + px(40.), tab.center().y)
+            });
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        if wait {
+            app.wait_gone(cx, "tooltip");
+        }
+    }
+    app.update(cx, |window, _| {
+        window
+            .try_find("tooltip")
+            .and_then(|_| crate::support::label(window, "status-tooltip-title"))
+    })
+}
+
+#[gpui_kit::test]
+fn every_tab_shows_its_full_title_on_hover(cx: &mut TestAppContext) {
+    const LONG: &str = "Ежедневная стоимость моделей Ривенделла по кластерам";
+    let profile = offline_profile("Tab tooltips");
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![
+                tab(profile.id, LONG, "SELECT 1"),
+                SavedTab {
+                    id: Uuid::new_v4(),
+                    ..SavedTab::new(2, Some(profile.id))
+                },
+            ],
+            active_tab: 0,
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.settle(cx);
+    // The selected tab, and a tab that is not selected.
+    assert_eq!(tab_tooltip(&app, cx, LONG).as_deref(), Some(LONG));
+    assert_eq!(tab_tooltip(&app, cx, "Query 2").as_deref(), Some("Query 2"));
+}
+
+#[gpui_kit::test]
+fn the_selected_tab_with_a_status_dot_shows_its_full_title_on_hover(cx: &mut TestAppContext) {
+    use qrow::storage::Credentials as _;
+
+    const LONG: &str = "Ежедневная стоимость моделей Ривенделла по кластерам";
+    // A server that accepts the connection but never answers keeps the
+    // selected tab connecting, so the tab shows a status dot.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = qrow::model::Profile {
+        name: "Silent".into(),
+        host: "127.0.0.1".into(),
+        port: server.local_addr().unwrap().port(),
+        username: "synthetic-user".into(),
+        database: "default".into(),
+        ..qrow::model::Profile::default()
+    };
+    let credentials = crate::support::MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_with(
+        cx,
+        Workspace {
+            tabs: vec![
+                tab(profile.id, LONG, "SELECT 1"),
+                SavedTab {
+                    id: Uuid::new_v4(),
+                    ..SavedTab::new(2, Some(profile.id))
+                },
+            ],
+            active_tab: 0,
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+        credentials,
+    );
+    app.update(cx, |window, cx| window.click("run", cx));
+    app.wait_until(
+        cx,
+        "the status dot",
+        Duration::from_secs(20),
+        |window, _| {
+            crate::support::elements(window)
+                .into_iter()
+                .any(|element| format!("{:?}", element.path().last()).contains("query-status-"))
+        },
+    );
+    let label = app.update(cx, |window, _| {
+        crate::support::labelled_starting(window, LONG)
+            .into_iter()
+            .filter_map(|element| element.label().map(str::to_owned))
+            .find(|label| label != LONG && !label.starts_with("Close"))
+            .expect("the label of the selected tab with its status")
+    });
+    assert_eq!(tab_tooltip(&app, cx, &label).as_deref(), Some(LONG));
+    assert_eq!(tab_tooltip(&app, cx, "Query 2").as_deref(), Some("Query 2"));
+    drop(server);
+}
+
+#[gpui_kit::test]
+fn the_selected_tab_shows_its_whole_title(cx: &mut TestAppContext) {
+    const LONG: &str = "Ежедневная стоимость моделей Ривенделла";
+    let profile = offline_profile("Wide tabs");
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![
+                tab(profile.id, LONG, "SELECT 1"),
+                SavedTab {
+                    id: Uuid::new_v4(),
+                    ..SavedTab::new(2, Some(profile.id))
+                },
+            ],
+            active_tab: 0,
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.settle(cx);
+    app.settle(cx);
+    let tab_width = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| bounds_of(window, LONG).size.width)
+    };
+    // Selected, the tab is wider than the cap of the other tabs.
+    let selected = tab_width(&app, cx);
+    assert!(selected > px(241.), "The selected tab is {selected:?} wide");
+    selected_tab_in_strip(&app, cx, LONG);
+    // Not selected, it shrinks back to the cap.
+    app.click_labelled(cx, "Query 2");
+    app.settle(cx);
+    app.settle(cx);
+    let unselected = tab_width(&app, cx);
+    assert!(unselected <= px(241.), "The tab is {unselected:?} wide");
+    // Selected again, it grows again.
+    app.click_labelled(cx, LONG);
+    app.settle(cx);
+    app.settle(cx);
+    assert_eq!(tab_width(&app, cx), selected);
+}
