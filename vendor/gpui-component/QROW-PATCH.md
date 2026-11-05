@@ -121,7 +121,9 @@ Qrow changes these files:
   Qrow UI tests in `tabs` check the wheel, the snap, the end of the range, a
   resize, an Assistant toggle, a rename, and new tabs.
 - `src/tooltip.rs`: `ManagedTooltipExt` is public, and `managed_tooltip_when`
-  shows its tooltip only while a condition holds when the pointer enters.
+  shows its tooltip only while a condition holds when the pointer enters. A
+  hover that the condition declines leaves the tooltip of another trigger,
+  for example the close button of a query tab inside the tab, as it is.
   A result column header shows its full name only when its column cuts it.
   The Qrow UI test `results::a_column_name_that_fits_has_no_tooltip` checks
   the condition.

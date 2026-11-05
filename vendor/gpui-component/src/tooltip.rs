@@ -279,7 +279,11 @@ pub trait ManagedTooltipExt: StatefulInteractiveElement + crate::ElementExt + Si
             let build_tooltip = build_tooltip.clone();
             move |hovered, window, cx| {
                 if let Some(overlay) = Root::tooltip_overlay(window, cx) {
-                    if *hovered && show.as_ref().is_none_or(|show| show()) {
+                    if !*hovered {
+                        overlay.update(cx, |o: &mut BaseTooltipOverlay, cx| {
+                            o.request_hide(window, cx);
+                        });
+                    } else if show.as_ref().is_none_or(|show| show()) {
                         let bounds = trigger_bounds_cell.get();
                         overlay.update(cx, |o: &mut BaseTooltipOverlay, cx| {
                             let build = build_tooltip.clone();
@@ -292,11 +296,9 @@ pub trait ManagedTooltipExt: StatefulInteractiveElement + crate::ElementExt + Si
                             };
                             o.request_show(request, window, cx);
                         });
-                    } else {
-                        overlay.update(cx, |o: &mut BaseTooltipOverlay, cx| {
-                            o.request_hide(window, cx);
-                        });
                     }
+                    // A declined hover leaves the tooltip of another trigger,
+                    // like a button inside this one, as it is.
                 }
             }
         })

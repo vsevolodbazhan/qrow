@@ -112,6 +112,9 @@ impl Qrow {
                 let index = *index;
                 let tab = &self.tabs[index];
                 let id = tab.saved.id;
+                // The close button has a tooltip of its own, which the tab
+                // tooltip must not replace when the pointer enters both.
+                let over_close = std::rc::Rc::new(std::cell::Cell::new(false));
                 // A tab that an edge of the strip cuts hides its dot and close
                 // button, so no lone "×" shows at the edge. A click on it
                 // selects it, which scrolls it into view.
@@ -139,16 +142,18 @@ impl Qrow {
                     // Every tab shows its full title and its status in a tooltip,
                     // so a cut title can be read. Tab tooltips use the managed
                     // overlay, which hides them when the strip scrolls.
-                    .managed_tooltip(StatusTooltip::live(
-                        cx.entity().downgrade(),
-                        None,
-                        move |qrow, _| {
+                    .managed_tooltip_when(
+                        {
+                            let over_close = over_close.clone();
+                            move || !over_close.get()
+                        },
+                        StatusTooltip::live(cx.entity().downgrade(), None, move |qrow, _| {
                             qrow.tabs
                                 .iter()
                                 .find(|tab| tab.saved.id == id)
                                 .map(Tab::status_tooltip)
-                        },
-                    ))
+                        }),
+                    )
                     // Right click does not activate the tab; the menu names its target.
                     .on_mouse_down(
                         MouseButton::Right,
@@ -219,27 +224,35 @@ impl Qrow {
                             })
                             .child(
                                 div()
-                                    .id(SharedString::from(format!("close-tab-tip-{id}")))
-                                    .managed_tooltip(
-                                        StatusTooltip::new("Close tab", "")
-                                            .for_action(&CloseTab, None),
-                                    )
+                                    .id(SharedString::from(format!("close-tab-hover-{id}")))
+                                    .on_hover(move |hovered, _, _| over_close.set(*hovered))
                                     .child(
-                                        Button::new(SharedString::from(format!(
-                                            "close-tab-{}",
-                                            tab.saved.id
-                                        )))
-                                        .ghost()
-                                        .small()
-                                        .icon(IconName::Close)
-                                        .accessibility_label(format!("Close {}", tab.saved.title))
-                                        .disabled(tab.busy || assistant_busy)
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                cx.stop_propagation();
-                                                this.close_tab(index, window, cx);
-                                            }),
-                                        ),
+                                        div()
+                                            .id(SharedString::from(format!("close-tab-tip-{id}")))
+                                            .managed_tooltip(
+                                                StatusTooltip::new("Close tab", "")
+                                                    .for_action(&CloseTab, None),
+                                            )
+                                            .child(
+                                                Button::new(SharedString::from(format!(
+                                                    "close-tab-{}",
+                                                    tab.saved.id
+                                                )))
+                                                .ghost()
+                                                .small()
+                                                .icon(IconName::Close)
+                                                .accessibility_label(format!(
+                                                    "Close {}",
+                                                    tab.saved.title
+                                                ))
+                                                .disabled(tab.busy || assistant_busy)
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.close_tab(index, window, cx);
+                                                    },
+                                                )),
+                                            ),
                                     ),
                             ),
                     )
