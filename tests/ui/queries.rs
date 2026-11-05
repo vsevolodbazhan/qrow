@@ -1076,3 +1076,70 @@ fn activity_shows_a_cut_tab_name_in_full_on_hover(cx: &mut TestAppContext) {
         "A name that fits must not show a tooltip"
     );
 }
+
+#[gpui_kit::test]
+fn a_long_logged_query_shows_five_lines_until_it_expands(cx: &mut TestAppContext) {
+    use gpui_kit::ClipboardItem;
+
+    // The demo runs its 11-line query at launch.
+    let app = TestApp::launch_demo(cx);
+    app.click(cx, "output-panel-tab");
+    let found = |window: &gpui_kit::Window, id: &'static str| {
+        crate::support::elements(window)
+            .into_iter()
+            .find(|element| element.path().last() == Some(&id.into()))
+    };
+    app.wait_until(
+        cx,
+        "a logged query",
+        Duration::from_secs(10),
+        |window, _| found(window, "sql").is_some(),
+    );
+    let (collapsed, line) = app.update(cx, |window, _| {
+        assert!(
+            found(window, "sql-fade").is_some(),
+            "A long query must fade out"
+        );
+        (
+            found(window, "sql").unwrap().bounds().size.height,
+            window.line_height(),
+        )
+    });
+    app.click_labelled(cx, "Expand query");
+    app.wait_until(
+        cx,
+        "the full query",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "Collapse query").is_some(),
+    );
+    app.update(cx, |window, _| {
+        assert!(
+            found(window, "sql-fade").is_none(),
+            "A full query has no fade"
+        );
+        let expanded = found(window, "sql").unwrap().bounds().size.height;
+        assert!(
+            expanded > collapsed + line * 4.,
+            "The full query {expanded:?} must show more lines than {collapsed:?}"
+        );
+    });
+    app.click_labelled(cx, "Collapse query");
+    app.wait_until(
+        cx,
+        "the short query",
+        Duration::from_secs(10),
+        |window, _| found(window, "sql-fade").is_some(),
+    );
+    // Copy query copies all of the SQL, also the lines that a collapsed block hides.
+    cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+    app.click_labelled(cx, "Copy query");
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert!(
+        copied.starts_with("-- A quick look at route performance")
+            && copied.trim_end().ends_with("ORDER BY departures DESC;"),
+        "Copy query must copy the full SQL: {copied:?}"
+    );
+}

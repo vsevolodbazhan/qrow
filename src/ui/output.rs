@@ -1,4 +1,4 @@
-use super::log_row::LogRow;
+use super::log_row::{self, LogRow};
 use super::result_toolbar::ResultSummary;
 use super::*;
 use gpui_kit::component::{Icon, h_flex, v_flex};
@@ -111,6 +111,9 @@ impl Qrow {
             .worker_profile
             .or(tab.saved.profile)
             .filter(|_| entry.kind == LogKind::KeepAliveFailed);
+        let id = entry.id();
+        let long = log_row::has_long_code_block(&entry.text);
+        let expanded = tab.expanded_output.contains(&id);
         // GPUI's list lays a row out at the width of its content.
         div()
             .w_full()
@@ -142,9 +145,61 @@ impl Qrow {
                                 this.open_activity(Some(connection), window, cx)
                             })),
                     )
+                })
+                // A submitted query copies its SQL, like Copy query of a result.
+                .when_some(
+                    log_row::code_block(&entry.text)
+                        .filter(|_| entry.kind == LogKind::Submitted)
+                        .map(str::to_owned),
+                    |row, sql| {
+                        row.action(
+                            Button::new(("output-copy-query", entry.id()))
+                                .ghost()
+                                .xsmall()
+                                .icon(Icon::new(gpui_kit::assets::IconName::FileCode))
+                                .tooltip("Copy query")
+                                .accessibility_label("Copy query")
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(sql.clone()))
+                                })),
+                        )
+                    },
+                )
+                // A long code block shows its first lines until it expands.
+                .when(long, |row| {
+                    let label = if expanded {
+                        "Collapse query"
+                    } else {
+                        "Expand query"
+                    };
+                    row.collapsed(!expanded).action(
+                        Button::new(("output-expand", id))
+                            .ghost()
+                            .xsmall()
+                            .icon(if expanded {
+                                IconName::ChevronUp
+                            } else {
+                                IconName::ChevronDown
+                            })
+                            .tooltip(label)
+                            .accessibility_label(label)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_output_entry(id, index, cx)
+                            })),
+                    )
                 }),
             )
             .into_any_element()
+    }
+
+    /// Expand or collapse the code block of the Logs entry `id` at `index`.
+    fn toggle_output_entry(&mut self, id: u64, index: usize, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[self.active];
+        if !tab.expanded_output.remove(&id) {
+            tab.expanded_output.insert(id);
+        }
+        tab.output_list.remeasure_items(index..index + 1);
+        cx.notify();
     }
 
     /// Measure the Logs rows again when their font, size, or line height

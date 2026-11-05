@@ -63,7 +63,7 @@ use results::Results;
 use status_dot::DotStatus;
 use status_tooltip::StatusTooltip;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
@@ -277,6 +277,8 @@ struct Tab {
     /// on screen are laid out and painted, so a long log keeps a drag
     /// selection fast. At the end, the list follows new entries.
     output_list: ListState,
+    /// The Logs entries whose long code block shows in full.
+    expanded_output: HashSet<u64>,
     current_execution: Option<ExecutionId>,
     result_session: Option<Uuid>,
     next_execution_id: u64,
@@ -1153,6 +1155,7 @@ impl Qrow {
             output: LogHistory::default(),
             panel: PanelState::default(),
             output_list: output::output_list(),
+            expanded_output: HashSet::new(),
             current_execution: None,
             result_session: None,
             submitted_sql: None,
@@ -1485,6 +1488,7 @@ impl Qrow {
         let tab = &mut self.tabs[self.active];
         tab.output.clear();
         tab.output_list.reset(0);
+        tab.expanded_output.clear();
         cx.notify();
     }
     fn copy_output(&self, cx: &mut App) {

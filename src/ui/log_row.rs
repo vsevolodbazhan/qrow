@@ -17,6 +17,18 @@ use crate::logs::timestamp_label;
 const PARTS: u64 = 4;
 /// The hover group of a row, for actions that show on hover.
 pub(super) const ROW_GROUP: &str = "log-row";
+/// The lines that a collapsed code block of an entry shows.
+pub(super) const PREVIEW_LINES: usize = 5;
+
+/// The code block of `message`: the lines after its first line, if any.
+pub(super) fn code_block(message: &str) -> Option<&str> {
+    message.split_once('\n').map(|(_, body)| body)
+}
+
+/// Whether the code block of `message` is longer than a collapsed block.
+pub(super) fn has_long_code_block(message: &str) -> bool {
+    code_block(message).is_some_and(|body| body.lines().count() > PREVIEW_LINES)
+}
 
 /// The selection of one part of a row, kept while the row is drawn. A change
 /// of it draws the list again, so that a drag shows the selection while it
@@ -75,6 +87,7 @@ pub(super) struct LogRow {
     font_size: Pixels,
     line_height: f32,
     actions: Vec<AnyElement>,
+    collapsed: bool,
 }
 
 impl LogRow {
@@ -96,6 +109,7 @@ impl LogRow {
             font_size: px(13.),
             line_height: 1.2,
             actions: Vec::new(),
+            collapsed: false,
         }
     }
 
@@ -122,6 +136,12 @@ impl LogRow {
         self
     }
 
+    /// Show only the first lines of a long code block, which fade out.
+    pub(super) fn collapsed(mut self, collapsed: bool) -> Self {
+        self.collapsed = collapsed;
+        self
+    }
+
     pub(super) fn action(mut self, action: impl IntoElement) -> Self {
         self.actions.push(action.into_any_element());
         self
@@ -134,6 +154,18 @@ impl RenderOnce for LogRow {
             Some((header, body)) => (header.to_owned(), Some(body.to_owned())),
             None => (self.message.to_string(), None),
         };
+        // A collapsed block shows its first lines; a fade tells that more follow.
+        let faded = self.collapsed && has_long_code_block(&self.message);
+        let body = body.map(|body| {
+            if faded {
+                body.lines()
+                    .take(PREVIEW_LINES)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                body
+            }
+        });
         let clock = self.time.map(|time| {
             let label = timestamp_label(time);
             // The date is the same for nearly all entries of a session; the
@@ -237,11 +269,30 @@ impl RenderOnce for LogRow {
                                 .mb_1()
                                 .px_2()
                                 .py_1()
+                                .relative()
                                 .rounded(theme.radius)
                                 .bg(theme.muted)
                                 .font_family(self.font_family.clone())
                                 .text_color(theme.foreground)
-                                .child(body),
+                                .child(body)
+                                .when(faded, |el| {
+                                    el.child(
+                                        div()
+                                            .id("sql-fade")
+                                            .test_support()
+                                            .absolute()
+                                            .left_0()
+                                            .right_0()
+                                            .bottom_0()
+                                            .h(self.font_size * self.line_height * 2.)
+                                            .rounded_b(theme.radius)
+                                            .bg(linear_gradient(
+                                                180.,
+                                                linear_color_stop(theme.muted.opacity(0.), 0.),
+                                                linear_color_stop(theme.muted, 1.),
+                                            )),
+                                    )
+                                }),
                         )
                     }),
             )
