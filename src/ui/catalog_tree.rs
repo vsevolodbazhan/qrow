@@ -40,6 +40,8 @@ use std::{
 pub(super) const MAX_SEARCH_MATCHES: usize = 500;
 /// Separates the names in a node ID. Names cannot contain it in practice.
 const SEPARATOR: char = '\u{1f}';
+/// The most connections that the search scope menu shows without a scroll.
+const SCOPE_MENU_CONNECTIONS: usize = 10;
 /// The height of every tree row. The virtual list needs one height for all rows.
 const ROW_HEIGHT: f32 = 30.;
 /// The gap between the columns of a tree row, in pixels at UI scale 1.
@@ -1615,9 +1617,11 @@ impl Qrow {
                             weak.update(cx, |this, cx| this.set_search_scope(scope.clone(), cx));
                     }
                 };
+                // A scrollable menu always shows its scrollbar, so only a long
+                // list of connections scrolls.
                 let mut menu = menu
-                    .scrollable(true)
-                    .max_h(px(360.))
+                    .scrollable(profiles.len() > SCOPE_MENU_CONNECTIONS)
+                    .max_h(px(400.))
                     .item(
                         PopupMenuItem::new("All connections")
                             .checked(scope.is_all())
