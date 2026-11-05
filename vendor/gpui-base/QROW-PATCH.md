@@ -79,6 +79,10 @@ Qrow changes these files:
   already hid on a key press, a mouse press, and a pointer move off the
   trigger. Before, a tooltip stayed on the screen while its trigger scrolled
   away.
+- `src/input/base/element.rs`: the placeholder of an empty multi-line input
+  wraps at its spaces to the text width. Before, a narrow SQL editor cut its
+  placeholder off at the right edge. GPUI tests do not shape real text, so
+  this change has no test.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.

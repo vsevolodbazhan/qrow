@@ -1,6 +1,7 @@
 use crate::input::{InputExtras as _, InputModeKind};
 use gpui::Corners;
 use gpui::Half;
+use gpui::{Font, LineFragment};
 use gpui::{
     AnyElement, App, Bounds, Edges, Element, ElementId, ElementInputHandler, Entity,
     GlobalElementId,
@@ -1929,6 +1930,17 @@ impl<M: InputModeKind> Element for TextElement<M> {
         // Calculate the width of the line numbers
         let (line_number_width, line_number_len) =
             Self::layout_line_numbers(&state, &text, text_size, &text_style, window);
+        // Qrow: the placeholder of an empty editor wraps at its spaces to
+        // the text width, so a narrow editor does not cut it off.
+        let wrapped_placeholder;
+        let display_text = if is_empty && multi_line {
+            let width = bounds.size.width - line_number_width - RIGHT_MARGIN;
+            wrapped_placeholder =
+                Rope::from(wrap_placeholder(&placeholder, text_style.font(), text_size, width, cx));
+            &wrapped_placeholder
+        } else {
+            display_text
+        };
 
         let mut bounds = bounds;
         let wrap_width = if multi_line && state.soft_wrap {
@@ -2655,6 +2667,28 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         self.paint_mouse_listeners(&prepaint.hitbox, window, cx);
     }
+}
+
+/// `text` with the space before each wrap at `width` changed to a line break.
+/// The text keeps its length, so its runs stay valid.
+fn wrap_placeholder(text: &str, font: Font, font_size: Pixels, width: Pixels, cx: &App) -> String {
+    if width <= px(0.) {
+        return text.to_owned();
+    }
+    let mut wrapper = cx.text_system().line_wrapper(font, font_size);
+    let mut bytes = text.as_bytes().to_vec();
+    let mut offset = 0;
+    for line in text.split('\n') {
+        for boundary in wrapper.wrap_line(&[LineFragment::text(line)], width) {
+            // A boundary is the start of the next line.
+            let ix = offset + boundary.ix;
+            if ix > 0 && bytes[ix - 1] == b' ' {
+                bytes[ix - 1] = b'\n';
+            }
+        }
+        offset += line.len() + 1;
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_owned())
 }
 
 /// Split placeholder text into display lines and trim runs to each line.
