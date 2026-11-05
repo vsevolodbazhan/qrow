@@ -28,6 +28,7 @@
 - Prioritize running end-to-end tests using the Docker runtime; fall back to the native environment if needed.
 - If Docker is present on the machine but not running, ask the user to start it.
 - Use GPUI Kit components as much as possible.
+- Follow the `qrow-ui-conventions` skill for UI work and UI reviews.
 - Keep the help text of a form field to one line. Do not name the app in help
   text.
 - Use your Computer Use capabilities to verify UI.
