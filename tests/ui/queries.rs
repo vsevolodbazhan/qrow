@@ -632,6 +632,8 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
+    // Show tab shows when the pointer is over its row.
+    app.hover_labelled(cx, "Show tab");
     app.click_labelled(cx, "Show tab");
     app.wait_gone(cx, "activity");
     app.wait_until(cx, "the first tab", Duration::from_secs(10), |_, _| {
