@@ -1,6 +1,7 @@
 use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::component::tooltip::ManagedTooltipExt as _;
 use gpui_kit::component::{
     Icon, Selectable as _, TitleBar,
     alert::Alert,
@@ -71,8 +72,32 @@ impl Qrow {
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
+        // Tabs keep at least 10.5 rems, so a short title shows whole, and
+        // the selected tab keeps its whole title. When the other tabs
+        // overflow the strip but 8.5 rems each would not, they shrink to
+        // share the rest of the strip instead, so a few tabs never scroll.
+        // The widths are from the last frame; the tab bar draws again when
+        // they change.
+        let rem = cx.theme().font_size;
+        let room = self.tab_scroll.bounds().size.width - rem * 0.75;
+        let selected = visible.iter().position(|index| *index == self.active);
+        let selected_width = selected
+            .and_then(|position| self.tab_scroll.bounds_for_item(position))
+            .map_or(px(0.), |item| item.size.width);
+        let others = visible
+            .len()
+            .saturating_sub(usize::from(selected.is_some())) as f32;
+        let fit = (others > 0. && room > px(0.) && rem * 10.5 * others + selected_width > room)
+            .then(|| (room - selected_width) / others)
+            .filter(|&width| width >= rem * 8.5);
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
+            // The selected tab shows its whole title, up to the visible strip.
+            .grow_selected(true)
+            .fit_width(fit)
+            // Long titles end in an ellipsis, and a short bar shrinks the
+            // titles before it scrolls, so a tab keeps its close button whole.
+            .max_width(self.ui_px(MAX_QUERY_TAB_WIDTH))
             .selected_index(
                 visible
                     .iter()
@@ -83,10 +108,24 @@ impl Qrow {
             .h(tab_height)
             .min_h(tab_height)
             .max_h(tab_height)
-            .children(visible.iter().map(|index| {
+            .children(visible.iter().enumerate().map(|(position, index)| {
                 let index = *index;
                 let tab = &self.tabs[index];
                 let id = tab.saved.id;
+                // The close button has a tooltip of its own, which the tab
+                // tooltip must not replace when the pointer enters both.
+                let over_close = std::rc::Rc::new(std::cell::Cell::new(false));
+                // A tab that an edge of the strip cuts hides its dot and close
+                // button, so no lone "×" shows at the edge. A click on it
+                // selects it, which scrolls it into view.
+                let cut = self
+                    .tab_scroll
+                    .bounds_for_item(position)
+                    .is_some_and(|item| {
+                        let (view, offset) = (self.tab_scroll.bounds(), self.tab_scroll.offset().x);
+                        item.left() + offset < view.left() - px(0.5)
+                            || item.right() + offset > view.right() + px(0.5)
+                    });
                 let assistant_busy = self.settings.assistant.enabled && self.assistant_tab_busy(id);
                 let title_generating =
                     self.assistant
@@ -100,22 +139,21 @@ impl Qrow {
                     // Constrain it to the same scaled height as the bar and its tools.
                     .min_h(tab_height)
                     .max_h(tab_height)
-                    // A tab without a dot shows its status on the tab itself.
-                    .when(tab.dot_status().is_none(), |query_tab| {
-                        query_tab.map(|mut query_tab| {
-                            query_tab.interactivity().tooltip(StatusTooltip::live(
-                                cx.entity().downgrade(),
-                                None,
-                                move |qrow, _| {
-                                    qrow.tabs
-                                        .iter()
-                                        .find(|tab| tab.saved.id == id)
-                                        .map(Tab::status_tooltip)
-                                },
-                            ));
-                            query_tab
-                        })
-                    })
+                    // Every tab shows its full title and its status in a tooltip,
+                    // so a cut title can be read. Tab tooltips use the managed
+                    // overlay, which hides them when the strip scrolls.
+                    .managed_tooltip_when(
+                        {
+                            let over_close = over_close.clone();
+                            move || !over_close.get()
+                        },
+                        StatusTooltip::live(cx.entity().downgrade(), None, move |qrow, _| {
+                            qrow.tabs
+                                .iter()
+                                .find(|tab| tab.saved.id == id)
+                                .map(Tab::status_tooltip)
+                        }),
+                    )
                     // Right click does not activate the tab; the menu names its target.
                     .on_mouse_down(
                         MouseButton::Right,
@@ -161,6 +199,7 @@ impl Qrow {
                         h_flex()
                             .gap_1()
                             .pr_2()
+                            .when(cut, |el| el.invisible())
                             .when_some(tab.dot_status(), |el, status| {
                                 let label = format!("{}{}", tab.saved.title, tab.status_suffix());
                                 let tooltip = StatusTooltip::live(
@@ -179,33 +218,42 @@ impl Qrow {
                                         .test_support()
                                         .role(Role::Status)
                                         .aria_label(label)
-                                        .tooltip(tooltip)
+                                        .managed_tooltip(tooltip)
                                         .child(status.dot(cx)),
                                 )
                             })
                             .child(
-                                Button::new(SharedString::from(format!(
-                                    "close-tab-{}",
-                                    tab.saved.id
-                                )))
-                                .ghost()
-                                .small()
-                                .icon(IconName::Close)
-                                .accessibility_label(format!("Close {}", tab.saved.title))
-                                .map(|mut button| {
-                                    button.interactivity().tooltip(
-                                        StatusTooltip::new("Close tab", "")
-                                            .for_action(&CloseTab, None),
-                                    );
-                                    button
-                                })
-                                .disabled(tab.busy || assistant_busy)
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.close_tab(index, window, cx);
-                                    },
-                                )),
+                                div()
+                                    .id(SharedString::from(format!("close-tab-hover-{id}")))
+                                    .on_hover(move |hovered, _, _| over_close.set(*hovered))
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!("close-tab-tip-{id}")))
+                                            .managed_tooltip(
+                                                StatusTooltip::new("Close tab", "")
+                                                    .for_action(&CloseTab, None),
+                                            )
+                                            .child(
+                                                Button::new(SharedString::from(format!(
+                                                    "close-tab-{}",
+                                                    tab.saved.id
+                                                )))
+                                                .ghost()
+                                                .small()
+                                                .icon(IconName::Close)
+                                                .accessibility_label(format!(
+                                                    "Close {}",
+                                                    tab.saved.title
+                                                ))
+                                                .disabled(tab.busy || assistant_busy)
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.close_tab(index, window, cx);
+                                                    },
+                                                )),
+                                            ),
+                                    ),
                             ),
                     )
             }))
@@ -280,14 +328,17 @@ impl Qrow {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
-            .child(
-                Button::new("disconnect")
-                    .ghost()
-                    .small()
-                    .label("Disconnect")
-                    .disabled(!tab.can_disconnect())
-                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
-            )
+            // Hidden, not disabled, without an open session: a gray label
+            // beside Run reads as a broken control.
+            .when(tab.can_disconnect(), |el| {
+                el.child(
+                    Button::new("disconnect")
+                        .ghost()
+                        .small()
+                        .label("Disconnect")
+                        .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+                )
+            })
             .when(authenticating, |el| {
                 el.child(
                     div()
@@ -351,12 +402,15 @@ impl Qrow {
             self.output_panel(cx)
         } else {
             let table = &self.tabs[self.active].shown_result().table;
+            // Without a result set the toolbar has nothing to count, export,
+            // or pin.
+            let has_result = !table.read(cx).delegate().columns.is_empty();
             results::selection_boundary(table)
                 .size_full()
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .child(self.result_toolbar(cx))
+                .when(has_result, |el| el.child(self.result_toolbar(cx)))
                 .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                     table,
                     self.dialog_open(),
@@ -606,26 +660,32 @@ impl Qrow {
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
-        // Equal-width columns keep the connection name at the window center.
-        // StatusBar centers its middle region only between the left and right
-        // items, so labels of different widths would move it off center.
+        // One line of information: the sidebar panels and the connection of
+        // the tab on the left, the workspace state and tools on the right.
+        let connected = tab.connected.then_some(DotStatus::Connected);
         StatusBar::new()
             .flex_shrink_0()
             // The default padding is a quarter rem, 3.5 pixels, which rounds
             // to an uneven space above and below the Activity button.
             .py(self.ui_px(4.))
-            .child(h_flex().flex_1().min_w_0().child(self.sidebar_buttons(cx)))
             .child(
-                div()
-                    .id("current-connection")
-                    .test_support()
-                    .role(Role::Label)
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_center()
-                    .aria_label(format!("Current connection: {connection_name}"))
-                    .child(connection_name.to_owned()),
+                    .gap_2()
+                    .child(self.sidebar_buttons(cx))
+                    .child(div().w_px().h_4().flex_shrink_0().bg(cx.theme().border))
+                    .child(
+                        h_flex()
+                            .id("current-connection")
+                            .test_support()
+                            .role(Role::Label)
+                            .min_w_0()
+                            .gap_1p5()
+                            .aria_label(format!("Current connection: {connection_name}"))
+                            .when_some(connected, |el, status| el.child(status.dot(cx)))
+                            .child(div().min_w_0().truncate().child(connection_name.to_owned())),
+                    ),
             )
             .child(
                 h_flex()
@@ -678,12 +738,12 @@ impl Qrow {
             })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     this.resize = Some((
                         horizontal,
                         e.position,
                         if horizontal {
-                            this.sidebar_width
+                            this.shown_sidebar_width(window.viewport_size().width)
                         } else {
                             this.editor_height
                         },
@@ -780,13 +840,33 @@ fn changed_view(view: AnyView, window: &Window) -> AnyElement {
     }
 }
 
+/// The widest query tab, in points of the 100% scale.
+const MAX_QUERY_TAB_WIDTH: f32 = 240.;
+
+/// The least width that the assistant pane leaves to the editor and the
+/// results. Below it, the pane narrows, which also collapses its
+/// conversation list.
+const MIN_WORK_AREA_WIDTH: f32 = 560.;
+/// The width of the work area that a narrow window keeps before the sidebar
+/// keeps its own width.
+const SIDEBAR_YIELDS_TO_WIDTH: f32 = 560.;
+
 impl Qrow {
+    /// The width of the sidebar in a window that is `viewport` wide. A
+    /// narrow window narrows the sidebar, down to its least width, before
+    /// the work area gets narrower than [`SIDEBAR_YIELDS_TO_WIDTH`].
+    pub(super) fn shown_sidebar_width(&self, viewport: Pixels) -> Pixels {
+        let least = self.ui_px(180.);
+        self.sidebar_width
+            .min((viewport - self.ui_px(SIDEBAR_YIELDS_TO_WIDTH)).max(least))
+    }
+
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
         let available = viewport
-            - self.ui_px(420.)
+            - self.ui_px(MIN_WORK_AREA_WIDTH)
             - if self.sidebar {
-                self.sidebar_width
+                self.shown_sidebar_width(viewport)
             } else {
                 px(0.)
             };
@@ -859,9 +939,9 @@ impl Qrow {
                         return;
                     }
                     let available = window.viewport_size().width
-                        - this.ui_px(420.)
+                        - this.ui_px(MIN_WORK_AREA_WIDTH)
                         - if this.sidebar {
-                            this.sidebar_width
+                            this.shown_sidebar_width(window.viewport_size().width)
                         } else {
                             px(0.)
                         };
@@ -967,7 +1047,18 @@ impl Qrow {
                         .child(Alert::warning("workspace-alert", message).banner()),
                 )
             })
-            .child(self.status_bar(cx))
+            .child({
+                let height = self.status_bar_height.clone();
+                div()
+                    .relative()
+                    .w_full()
+                    .flex_shrink_0()
+                    .child(self.status_bar(cx))
+                    .map(|el| {
+                        use gpui_kit::component::ElementExt as _;
+                        el.on_prepaint(move |bounds, _, _| height.set(bounds.size.height))
+                    })
+            })
     }
 }
 impl Render for Qrow {
@@ -986,7 +1077,7 @@ impl Render for Qrow {
                 el.child(
                     div()
                         .track_focus(&self.sidebar_focus)
-                        .w(self.sidebar_width)
+                        .w(self.shown_sidebar_width(window.viewport_size().width))
                         .flex_shrink_0()
                         .map(|el| match self.sidebar_panel {
                             SidebarPanel::Connections => {

@@ -802,13 +802,32 @@ impl TestApp {
         app
     }
 
+    /// Runs `f` in the window that has the keyboard: the Settings window
+    /// while it is open, else the main window.
     pub fn update<R>(
+        &self,
+        cx: &mut TestAppContext,
+        f: impl FnOnce(&mut Window, &mut App) -> R,
+    ) -> R {
+        let target = self.settings_window(cx).unwrap_or(self.window);
+        cx.update_window(target, |_, window, cx| f(window, cx))
+            .expect("Qrow window closed")
+    }
+
+    /// Runs `f` in the main window, also while Settings is open.
+    pub fn update_main<R>(
         &self,
         cx: &mut TestAppContext,
         f: impl FnOnce(&mut Window, &mut App) -> R,
     ) -> R {
         cx.update_window(self.window, |_, window, cx| f(window, cx))
             .expect("Qrow window closed")
+    }
+
+    /// The Settings window, while it is open.
+    pub fn settings_window(&self, cx: &mut TestAppContext) -> Option<AnyWindowHandle> {
+        let qrow = self.qrow.upgrade()?;
+        cx.read(|cx| qrow.read(cx).settings_window())
     }
 
     pub fn click(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
@@ -858,9 +877,10 @@ impl TestApp {
         self.update(cx, |window, cx| window.press(key, cx));
     }
 
-    /// Dispatches an action as a key binding or a menu item does.
+    /// Dispatches an action as a key binding or a menu item does, in the main
+    /// window, which handles the application commands.
     pub fn dispatch(&self, cx: &mut TestAppContext, action: impl Action) {
-        self.update(cx, |window, cx| {
+        self.update_main(cx, |window, cx| {
             window.dispatch_action(action.boxed_clone(), cx)
         });
     }

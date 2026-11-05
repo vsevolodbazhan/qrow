@@ -12,7 +12,7 @@ pub(super) struct Intent {
 impl Qrow {
     pub(in crate::ui) fn open_run_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let index = self.active;
-        if self.tabs[index].busy || self.form.is_some() || self.settings_open {
+        if self.tabs[index].busy || self.form.is_some() {
             return;
         }
         let Some(profile) = self

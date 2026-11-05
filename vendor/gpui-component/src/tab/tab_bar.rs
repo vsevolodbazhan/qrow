@@ -1,9 +1,14 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
     Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, InteractiveElement, IntoElement,
-    ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
+    ParentElement, Pixels, RenderOnce, ScrollHandle, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, canvas, div, fill,
+    linear_color_stop, linear_gradient, point, prelude::FluentBuilder as _, px, size,
 };
 use gpui_base::spring;
 use rust_i18n::t;
@@ -13,8 +18,8 @@ use super::{Tab, TabVariant};
 use crate::button::{Button, ButtonVariants as _};
 use crate::menu::{DropdownMenu as _, PopupMenuItem};
 use crate::{
-    ActiveTheme, ElementExt, Icon, InteractiveElementExt as _, Selectable, Sizable, Size,
-    StyledExt, h_flex, styled::raised_shadow,
+    ActiveTheme, ElementExt, Icon, Selectable, Sizable, Size, StyledExt, h_flex,
+    styled::raised_shadow,
 };
 
 struct TabIndicatorBounds {
@@ -51,6 +56,8 @@ pub struct TabBar {
     size: Size,
     menu: bool,
     max_width: Option<Pixels>,
+    fit_width: Option<Pixels>,
+    grow_selected: bool,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
 }
 
@@ -73,6 +80,8 @@ impl TabBar {
             on_click: None,
             menu: false,
             max_width: None,
+            fit_width: None,
+            grow_selected: false,
         }
     }
 
@@ -117,6 +126,22 @@ impl TabBar {
     /// overflow menu still shows the full label.
     pub fn max_width(mut self, width: impl Into<Pixels>) -> Self {
         self.max_width = Some(width.into());
+        self
+    }
+
+    /// Qrow: the selected tab is not held to the maximum width, only to the
+    /// visible width of a bar that tracks its scroll, so it shows its whole
+    /// label. The other tabs keep the maximum width.
+    pub fn grow_selected(mut self, grow: bool) -> Self {
+        self.grow_selected = grow;
+        self
+    }
+
+    /// Qrow: when set, each tab with a maximum width except the selected one
+    /// shrinks down to this width instead of the usual least width. A bar
+    /// that would scroll only a little sets it so that all tabs fit.
+    pub fn fit_width(mut self, width: Option<Pixels>) -> Self {
+        self.fit_width = width;
         self
     }
 
@@ -431,6 +456,25 @@ impl RenderOnce for TabBar {
         let indicator_ready = indicator_element.is_some();
 
         let has_suffix_or_menu = self.suffix.is_some() || self.menu;
+        // Qrow: a bar with its own background fades an edge with more tabs
+        // past it, and snaps its scroll to the start of a tab.
+        let strip: Rc<Strip> = window
+            .use_keyed_state(format!("{}-strip", self.id), cx, |_, _| {
+                Rc::<Strip>::default()
+            })
+            .read(cx)
+            .clone();
+        let edge_fade = self
+            .scroll_handle
+            .clone()
+            .filter(|_| self.variant == TabVariant::Tab)
+            .map(|handle| {
+                (
+                    handle,
+                    gpui::Hsla::from(cx.theme().tokens.tab_bar),
+                    gpui::Hsla::from(cx.theme().border),
+                )
+            });
         let mut item_metas: Vec<(Option<SharedString>, Option<Icon>, bool)> = Vec::new();
         let selected_index = self.selected_index;
         let on_click = self.on_click.clone();
@@ -438,16 +482,36 @@ impl RenderOnce for TabBar {
         let mut rendered_tabs = Vec::with_capacity(self.children.len());
         let max_width = self.max_width;
 
+        // Qrow: the label size and padding of a tab, for the title that the
+        // start edge pins.
+        let (label_rems, label_padding) = match self.size {
+            Size::XSmall => (0.75, px(8.)),
+            Size::Small => (0.875, px(10.)),
+            Size::Large => (1., px(16.)),
+            _ => (0.875, px(12.)),
+        };
         // Qrow: without a prefix, the first tab starts at the edge of the bar
         // and drops its left border, like a tab bar that says so explicitly.
         let has_prefix = self.prefix.is_some();
+        // The visible width of the tabs in the last frame, without the room
+        // after them; the bar draws again when it changes.
+        let grown_width = self
+            .scroll_handle
+            .as_ref()
+            .filter(|_| self.grow_selected)
+            .map(|handle| handle.bounds().size.width - px(12.))
+            .filter(|width| *width > px(0.));
         for (ix, child) in self.children.into_iter().enumerate() {
             item_metas.push((child.label.clone(), child.icon.clone(), child.disabled));
             let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(has_prefix);
             let mut tab = child
                 .ix(ix)
                 .tab_bar_prefix(tab_bar_prefix)
-                .max_width(max_width)
+                .max_width(match grown_width {
+                    Some(width) if selected_index == Some(ix) => Some(width),
+                    _ => max_width,
+                })
+                .fit_width(self.fit_width)
                 .with_variant(self.variant)
                 .with_size(self.size);
             tab.indicator_active = has_indicator;
@@ -495,6 +559,10 @@ impl RenderOnce for TabBar {
             });
         }
 
+        let labels: Vec<Option<SharedString>> = item_metas
+            .iter()
+            .map(|(label, _, _)| label.clone())
+            .collect();
         tabs.group("tab-bar")
             .relative()
             .flex()
@@ -545,14 +613,158 @@ impl RenderOnce for TabBar {
                             // explicit reveals leave space at both ends of the bar.
                             .relative()
                             .gap(gap)
+                            // Qrow: a vertical wheel scrolls the bar too, as
+                            // the bar has nothing to scroll vertically.
                             .overflow_x_scroll()
-                            .lock_scroll_axis()
                             .when_some(self.scroll_handle, |this, scroll_handle| {
                                 this.track_scroll(&scroll_handle)
                             })
                             .children(rendered_tabs)
                             .when(has_suffix_or_menu, |this| this.child(self.last_empty_space)),
-                    ),
+                    )
+                    .when_some(edge_fade, |this, (handle, color, edge)| {
+                        // Laid out after the tabs, from the scroll position of
+                        // this frame.
+                        this.child(
+                            canvas(
+                                {
+                                    let (handle, strip) = (handle.clone(), strip.clone());
+                                    move |_, window, cx| {
+                                        settle(
+                                            &handle,
+                                            selected_index,
+                                            num_tabs,
+                                            &strip,
+                                            window,
+                                            cx,
+                                        )
+                                    }
+                                },
+                                move |_, _, window, cx| {
+                                    #[cfg(feature = "test-support")]
+                                    PINNED_TITLES.with(|titles| titles.borrow_mut().clear());
+                                    let view = handle.bounds();
+                                    let scrolled = -handle.offset().x;
+                                    let clear = color.opacity(0.);
+                                    // Fades and cues stop above the bottom
+                                    // border of the bar, which runs on under
+                                    // the tabs that are not selected.
+                                    let hidden = [
+                                        scrolled > px(0.5),
+                                        handle.max_offset().x - scrolled > px(0.5),
+                                    ];
+                                    for (start, hidden) in [true, false].into_iter().zip(hidden) {
+                                        if !hidden {
+                                            continue;
+                                        }
+                                        // A tab that the edge cuts fades into
+                                        // the bar, so no part of it reads as a
+                                        // tab of its own.
+                                        let cut = (0..num_tabs)
+                                            .filter_map(|ix| {
+                                                let item = handle.bounds_for_item(ix)?;
+                                                Some((
+                                                    ix,
+                                                    item.left() - scrolled,
+                                                    item.right() - scrolled,
+                                                ))
+                                            })
+                                            .find(|&(_, left, right)| {
+                                                let edge =
+                                                    if start { view.left() } else { view.right() };
+                                                left < edge - px(0.5) && right > edge + px(0.5)
+                                            });
+                                        // The start edge pins the title of the
+                                        // tab it cuts, as its title is past the
+                                        // edge.
+                                        let pinned = start
+                                            && cut.is_some_and(|(ix, _, right)| {
+                                                labels.get(ix).cloned().flatten().is_some_and(
+                                                    |label| {
+                                                        pin_label(
+                                                            &label,
+                                                            Bounds::from_corners(
+                                                                view.origin,
+                                                                point(right, view.bottom()),
+                                                            ),
+                                                            label_padding,
+                                                            window.rem_size() * label_rems,
+                                                            color,
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    },
+                                                )
+                                            });
+                                        if let Some((_, left, right)) = cut.filter(|_| !pinned) {
+                                            let (from, to, stops) = if start {
+                                                (view.left(), right, (color, clear))
+                                            } else {
+                                                (left, view.right(), (clear, color))
+                                            };
+                                            window.paint_quad(fill(
+                                                Bounds::from_corners(
+                                                    point(from, view.top()),
+                                                    point(to, view.bottom() - px(1.)),
+                                                ),
+                                                linear_gradient(
+                                                    90.,
+                                                    linear_color_stop(
+                                                        stops.0,
+                                                        if start { 0.5 } else { 0. },
+                                                    ),
+                                                    linear_color_stop(
+                                                        stops.1,
+                                                        if start { 1. } else { 0.5 },
+                                                    ),
+                                                ),
+                                            ));
+                                        }
+                                        // A scroll shadow at each edge with
+                                        // hidden tabs.
+                                        let width = px(6.);
+                                        let (x, stops) = if start {
+                                            (view.left(), (edge, edge.opacity(0.)))
+                                        } else {
+                                            (view.right() - width, (edge.opacity(0.), edge))
+                                        };
+                                        window.paint_quad(fill(
+                                            Bounds::new(
+                                                point(x, view.top()),
+                                                size(width, view.size.height - px(1.)),
+                                            ),
+                                            linear_gradient(
+                                                90.,
+                                                linear_color_stop(stops.0, 0.),
+                                                linear_color_stop(stops.1, 1.),
+                                            ),
+                                        ));
+                                    }
+                                    // The strip snaps when a wheel or a swipe
+                                    // over it stops.
+                                    let strip = strip.clone();
+                                    window.on_mouse_event(
+                                        move |event: &ScrollWheelEvent, phase, window, cx| {
+                                            if !phase.bubble() || !view.contains(&event.position) {
+                                                return;
+                                            }
+                                            strip.wheel.set(Some(cx.background_executor().now()));
+                                            window
+                                                .spawn(cx, async move |cx| {
+                                                    cx.background_executor()
+                                                        .timer(SNAP_DELAY)
+                                                        .await;
+                                                    let _ = cx.update(|window, _| window.refresh());
+                                                })
+                                                .detach();
+                                        },
+                                    );
+                                },
+                            )
+                            .absolute()
+                            .size_full(),
+                        )
+                    }),
             )
             .when(self.menu, |this| {
                 this.child(
@@ -587,6 +799,175 @@ impl RenderOnce for TabBar {
                 )
             })
             .when_some(self.suffix, |this, suffix| this.child(suffix))
+    }
+}
+
+/// Qrow: paints `label` over `visible`, the part of a tab past the start
+/// edge, from the edge on and cut with an ellipsis to fit. Returns false and
+/// paints nothing when not even two characters fit.
+#[allow(clippy::too_many_arguments)]
+fn pin_label(
+    label: &SharedString,
+    visible: Bounds<Pixels>,
+    padding: Pixels,
+    font_size: Pixels,
+    bar: gpui::Hsla,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    // The title starts after the tab's left padding and may use the room of
+    // the hidden close button.
+    let room = visible.size.width - padding - px(4.);
+    let style = window.text_style();
+    let shape = |text: SharedString, window: &mut Window| {
+        let run = style.to_run(text.len());
+        window
+            .text_system()
+            .shape_line(text, font_size, &[run], None)
+    };
+    let mut line = shape(label.clone(), window);
+    if line.width > room {
+        let ends: Vec<usize> = label.char_indices().map(|(ix, _)| ix).skip(2).collect();
+        let fits = ends.into_iter().rev().find_map(|end| {
+            let text: SharedString = format!("{}…", label[..end].trim_end()).into();
+            let line = shape(text, window);
+            (line.width <= room).then_some(line)
+        });
+        let Some(fits) = fits else {
+            return false;
+        };
+        line = fits;
+    }
+    // The bar color hides what shows of the tab, then the title starts at
+    // the edge.
+    // It stops short of the tab border and the bottom border of the bar.
+    window.paint_quad(fill(
+        Bounds::from_corners(
+            visible.origin,
+            point(visible.right() - px(1.), visible.bottom() - px(1.)),
+        ),
+        bar,
+    ));
+    let line_height = font_size * 1.25;
+    let origin = point(
+        visible.left() + padding,
+        visible.top() + (visible.size.height - line_height) / 2.,
+    );
+    let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
+    #[cfg(feature = "test-support")]
+    PINNED_TITLES.with(|titles| {
+        titles.borrow_mut().push((
+            line.text.clone(),
+            Bounds::new(origin, gpui::size(line.width, line_height)),
+        ))
+    });
+    true
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static PINNED_TITLES: RefCell<Vec<(SharedString, Bounds<Pixels>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Qrow, for tests: the titles that tab bars pinned to their start edge in
+/// the last frame, with their painted bounds.
+#[cfg(feature = "test-support")]
+pub fn pinned_tab_titles() -> Vec<(SharedString, Bounds<Pixels>)> {
+    PINNED_TITLES.with(|titles| titles.borrow().clone())
+}
+
+/// Qrow: the strip width, the selected tab, the tab count, the width of the
+/// selected tab, and the width of all tabs that the bar last settled for.
+type Reveal = (Pixels, usize, usize, Pixels, Pixels);
+
+/// Qrow: how long a wheel or a swipe must stop before the strip snaps.
+const SNAP_DELAY: Duration = Duration::from_millis(150);
+
+/// Qrow: the scroll state of a tab bar that tracks its scroll.
+#[derive(Default)]
+struct Strip {
+    reveal: Cell<Option<Reveal>>,
+    /// The last wheel event over the strip, until the strip snaps.
+    wheel: Cell<Option<Instant>>,
+}
+
+/// Qrow: snaps the scroll so that a tab starts exactly at the start edge, so
+/// no part of a tab shows there. The strip snaps when a wheel or a swipe over
+/// it stops, and when the bar width, the selection, the number of tabs, or
+/// the width of a tab changes, for example after a resize, a new tab, or a
+/// rename. After such a change, the selected tab also scrolls fully into
+/// view. At the end of the scroll range, the last tab aligns to the end edge
+/// instead, and the tab that the start edge cuts fades into the bar. Item
+/// bounds leave out the scroll offset.
+fn settle(
+    handle: &ScrollHandle,
+    selected: Option<usize>,
+    num_tabs: usize,
+    strip: &Strip,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let view = handle.bounds();
+    let count = handle.children_count();
+    if view.size.width <= px(0.) || num_tabs == 0 || count == 0 {
+        return;
+    }
+    let starts: Vec<Pixels> = (0..num_tabs)
+        .filter_map(|ix| handle.bounds_for_item(ix))
+        .map(|item| item.left() - view.left())
+        .collect();
+    // The end of the scroll range puts the last tab at the end edge.
+    let max = handle.max_offset().x.max(px(0.));
+
+    let now = cx.background_executor().now();
+    let stopped = strip
+        .wheel
+        .get()
+        .is_some_and(|wheel| now.duration_since(wheel) >= SNAP_DELAY);
+    if stopped {
+        strip.wheel.set(None);
+    }
+    let selected = selected
+        .filter(|&ix| ix < num_tabs)
+        .and_then(|ix| Some((ix, handle.bounds_for_item(ix)?)));
+    let key = selected.map(|(ix, item)| (view.size.width, ix, num_tabs, item.size.width, max));
+    let changed = key.is_some() && strip.reveal.get() != key;
+    if changed {
+        strip.reveal.set(key);
+        // The owner of the bar may size the tabs from the bar width, so it
+        // renders again after a change.
+        window.request_animation_frame();
+    }
+    if !(stopped || changed) {
+        return;
+    }
+    let current = -handle.offset().x;
+    // Tab starts, and the end of the range, where the last tab aligns to
+    // the end edge instead.
+    let boundaries = || {
+        std::iter::once(px(0.))
+            .chain(starts.iter().copied())
+            .filter(move |&start| start < max - px(0.5))
+            .chain(std::iter::once(max))
+    };
+    let mut target = boundaries()
+        .min_by(|a, b| f32::from((*a - current).abs()).total_cmp(&f32::from((*b - current).abs())))
+        .unwrap_or(px(0.));
+    if changed && let Some((_, item)) = selected {
+        let (start, end) = (item.left() - view.left(), item.right() - view.left());
+        if start < target {
+            target = start;
+        } else if end > target + view.size.width {
+            target = boundaries()
+                .find(|&boundary| boundary >= end - view.size.width - px(0.5))
+                .unwrap_or(max);
+        }
+    }
+    let target = target.min(max).max(px(0.));
+    if (target - current).abs() > px(0.5) {
+        handle.set_offset(point(-target, handle.offset().y));
+        window.request_animation_frame();
     }
 }
 

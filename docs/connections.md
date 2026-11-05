@@ -74,8 +74,12 @@ search field above the pages to find a field.
     connection](#give-the-assistant-facts-about-a-connection).
 11. Click **Save**.
 
-Connection names must be unique. If the form contains an error, Qrow keeps the
-form open and shows the error above the form actions.
+Connection names must be unique. **Save** checks **Name**, **Host**, **Port**,
+**Username**, and **Initial Database** together. If a field has an error, Qrow
+keeps the form open, shows the error below that field with a red border, and
+moves the focus to the first field with an error. All field errors show at
+the same time. An error that applies to no single field shows above the form
+actions. A new connection opens as **New Connection**.
 
 For example, a session parameter can select an engine-sharing subdomain:
 
@@ -614,6 +618,9 @@ Qrow reads manifests of schema v12. dbt-core 1.8 and later, and dbt Fusion,
 write this schema. Run a dbt command, for example `dbt parse`, to make the
 file.
 
+When the path is too long for the field, the field shows the end of the
+path. Point to it to see the full path in a tooltip.
+
 Below the path, the form shows the state of the manifest: the time that dbt
 wrote it, the dbt version, and the number of models. It shows an error when
 the file is missing, has another schema version, or is not a valid manifest.
@@ -694,9 +701,10 @@ details**. A panel opens at the right side of the window. It shows:
     SQL.
   - **Tests** has the tests of the table. A test with arguments shows each
     argument under its name.
-  - **Columns** has the documented columns, with their types, descriptions,
-    and tests. Type in **Filter columns** to find columns by name or
-    description. Columns whose name matches come first.
+  - **Columns** has the documented columns. Each column is in a card with its
+    name and type, its description, and its tests. Type in **Filter
+    columns** to find columns by name or description. Columns whose name
+    matches come first.
   - **Parents** and **Children** have the lineage, with the materialization
     of each model or the kind of each other resource. Click a parent or a
     child to show its details in the panel. **Tests**, **Columns**,
@@ -713,7 +721,11 @@ pointer onto the title of a closed part, so the part opens quickly. A part
 that you close releases them.
 
 The panel takes almost half of the window width, so make the window wider to
-read long text more easily.
+read long text more easily. The panel ends above the status bar. It does not
+dim or block the window behind it, so you can use the window while the panel
+is open. When the panel closes, the focus goes back to the tree row that
+opened it. Drag in the SQL to select it, or double-click a word. The selection
+shows while you drag.
 
 ### dbt limitations
 
@@ -762,7 +774,9 @@ connection that browses schemas, the tree shows its schemas, then the tables
 and views of each schema, then the columns of each table or view. A column
 row shows a minus icon under the icon of its table or view, the column name,
 and its type in lowercase. A schema row shows the number of its tables and
-views.
+views. The type of a column, and the dbt kind of a table, show only when they
+fit beside the full name. The columns of one table show their types all
+together or not at all.
 
 Schema browsing is off for a new connection. To turn it on, open the
 connection settings and set **Schema Refresh**, the first field of the
@@ -787,6 +801,9 @@ To use the tree:
 - Click the arrow before a connection to expand or collapse it.
   This does not change the connection of the query.
 - Click a schema, a table, or a view to expand or collapse it.
+- A context menu of a row opens below the row, so the row stays visible. The
+  menu shows the keyboard shortcuts of its commands. When the menu closes,
+  the focus goes back to the tree.
 - To collapse all rows below a connection or a schema, right-click it and
   select **Collapse**. The connection or the schema stays expanded. During
   a search, **Collapse** on a connection also collapses the schemas that

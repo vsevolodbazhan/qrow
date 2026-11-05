@@ -7,7 +7,6 @@ use crate::{
     },
     ui::{ProfileEditor, Qrow, profile_view::connection_row, unit_input::unit_input},
 };
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     input::{Input, InputEvent, InputState},
     select::{Select, SelectEvent},
@@ -230,7 +229,6 @@ fn parse_count(input: &Entity<InputState>, cx: &App) -> anyhow::Result<u8> {
 
 fn count_input(input: &Entity<InputState>, form: &ProfileEditor) -> AnyElement {
     Input::new(input)
-        .focus_ring(false)
         .id("connection-transfer-count")
         .w_full()
         .disabled(form.saving.is_some())
@@ -245,7 +243,6 @@ fn select(
     label: &'static str,
 ) -> AnyElement {
     Select::new(select)
-        .focus_ring(false)
         .id(id)
         .w_full()
         .disabled(form.saving.is_some())
@@ -272,7 +269,6 @@ fn readonly(
 ) -> AnyElement {
     Input::new(input)
         .readonly(true)
-        .focus_ring(false)
         .id(id)
         .w_full()
         .disabled(form.saving.is_some())

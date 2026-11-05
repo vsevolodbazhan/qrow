@@ -2,13 +2,17 @@
 //! area of the window. The status bar button, ⇧⌘U, and the connection menu
 //! open it.
 
-use super::{Qrow, StatusTooltip, button_pair::button_pair, panel_empty_state};
+use super::{
+    Qrow, StatusTooltip,
+    button_pair::{button_pair, segment},
+    log_row::{self, LogRow},
+    panel_empty_state,
+    result_toolbar::ResultSummary,
+};
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
 use crate::logs::timestamp_label;
-use gpui_kit::base::FocusableExt as _;
-use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
+    ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     message_scroller::{MessageScroller, MessageScrollerState},
@@ -433,7 +437,6 @@ impl ActivityView {
             .child(
                 div().w_64().flex_shrink_0().child(
                     Select::new(&self.connection)
-                        .focus_ring(false)
                         .id("activity-connection")
                         .small()
                         .placeholder("No connection")
@@ -442,49 +445,59 @@ impl ActivityView {
             )
             .child(button_pair(
                 "activity-filter",
-                Button::new("activity-all")
-                    .ghost()
-                    .small()
-                    .label("All activity")
-                    .selected(!self.errors_only)
-                    .toggled(!self.errors_only)
-                    .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(false, cx))),
-                Button::new("activity-errors")
-                    .ghost()
-                    .small()
-                    .label("Errors only")
-                    .selected(self.errors_only)
-                    .toggled(self.errors_only)
-                    .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(true, cx))),
+                segment(
+                    Button::new("activity-all").small().label("All activity"),
+                    !self.errors_only,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(false, cx))),
+                segment(
+                    Button::new("activity-errors").small().label("Errors only"),
+                    self.errors_only,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.set_errors_only(true, cx))),
                 cx,
             ))
-            .child(
+            // The same chip and icon buttons as the Logs and Result toolbars.
+            .child({
+                let entries = match self.entry_count() {
+                    1 => "1 entry".to_owned(),
+                    count => format!("{} entries", crate::logs::group_digits(count)),
+                };
                 div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(match self.entry_count() {
-                        1 => "1 entry".to_owned(),
-                        count => format!("{count} entries"),
-                    }),
-            )
+                    .id("activity-count")
+                    .test_support()
+                    .role(Role::Label)
+                    .whitespace_nowrap()
+                    .aria_label(entries.clone())
+                    .child(ResultSummary::neutral_tag(cx).child(entries))
+            })
             .child(div().flex_1())
             .child(
-                Button::new("activity-copy-all")
-                    .ghost()
-                    .small()
-                    .label("Copy all")
-                    .disabled(empty)
-                    .accessibility_label("Copy all activity")
-                    .on_click(cx.listener(|this, _, _, cx| this.copy_all(cx))),
-            )
-            .child(
-                Button::new("activity-clear")
-                    .ghost()
-                    .small()
-                    .label("Clear")
-                    .disabled(log_empty)
-                    .accessibility_label("Clear activity")
-                    .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
+                h_flex()
+                    .flex_shrink_0()
+                    .gap_1()
+                    .child(
+                        Button::new("activity-copy-all")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Copy)
+                            .tooltip("Copy all activity")
+                            .disabled(empty)
+                            .accessibility_label("Copy all activity")
+                            .on_click(cx.listener(|this, _, _, cx| this.copy_all(cx))),
+                    )
+                    .child(
+                        Button::new("activity-clear")
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(gpui_kit::assets::IconName::Trash))
+                            .tooltip("Clear activity")
+                            .disabled(log_empty)
+                            .accessibility_label("Clear activity")
+                            .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
+                    ),
             )
             .child(
                 Button::new("activity-close")
@@ -545,22 +558,14 @@ impl ActivityView {
             size: cx.theme().font_size,
             line_height: 1.2,
         });
-        let text = |el: Div| {
-            el.w_full()
-                .font_family(typography.family.clone())
-                .text_size(typography.size)
-                .line_height(relative(typography.line_height))
-                .whitespace_normal()
-        };
         let entry = match self.rows.get(index) {
             Some(Row::Entry(position)) => self
                 .shown
                 .and_then(|id| self.activity.log(id))
                 .and_then(|log| log.entries().get(*position)),
             Some(Row::Trimmed) => {
-                return text(div())
-                    .id("activity-trimmed")
-                    .child(SelectableText::new("text", TRIMMED_TEXT))
+                return LogRow::new("activity-trimmed", 0, TRIMMED_TEXT)
+                    .typography(typography.family, typography.size, typography.line_height)
                     .into_any_element();
             }
             None => None,
@@ -568,63 +573,59 @@ impl ActivityView {
         let Some(entry) = entry else {
             return div().into_any_element();
         };
-        let (first_line, rest) = entry
-            .text
-            .split_once('\n')
-            .map_or((entry.text.as_str(), None), |(first, rest)| {
-                (first, Some(rest))
-            });
-        let header = format!("[{}] {first_line}", timestamp_label(entry.timestamp));
-        let order = entry.id() * 2;
         let tab = entry.tab.filter(|tab| !self.closed_tabs.contains(tab));
         let error = entry
             .is_error()
             .then(|| format!("[{}] {}", timestamp_label(entry.timestamp), entry.text));
-        h_flex()
+        div()
             .id(("activity-entry", entry.id()))
             .test_support()
             .w_full()
-            .items_start()
-            .gap_2()
             .child(
-                text(v_flex())
-                    .flex_1()
-                    .min_w_0()
-                    .when(entry.is_error(), |el| el.text_color(cx.theme().danger))
-                    .child(SelectableText::new("header", header).document_order(order))
-                    .when_some(rest, |el, rest| {
-                        el.child(
-                            SelectableText::new("body", rest.to_owned()).document_order(order + 1),
-                        )
-                    }),
+                LogRow::new(
+                    ("activity-row", entry.id()),
+                    entry.id(),
+                    entry.message().to_owned(),
+                )
+                .time(entry.timestamp)
+                .error(entry.is_error())
+                .source(Some(entry.title.clone().unwrap_or_default()))
+                .typography(typography.family, typography.size, typography.line_height)
+                .when_some(error, |row, error| {
+                    row.action(
+                        Button::new(("activity-copy", entry.id()))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Copy)
+                            .tooltip("Copy error")
+                            .accessibility_label("Copy error")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
+                            }),
+                    )
+                })
+                .when_some(tab, |row, tab| {
+                    let view = view.downgrade();
+                    row.action(
+                        // On every row the arrow would repeat, so it shows
+                        // on hover and on keyboard focus only.
+                        Button::new(("activity-show-tab", entry.id()))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::ArrowRight)
+                            .tooltip("Show tab")
+                            .accessibility_label("Show tab")
+                            .opacity(0.)
+                            .group_hover(log_row::ROW_GROUP, |style| style.opacity(1.))
+                            .focus_visible(|style| style.opacity(1.))
+                            .on_click(move |_, _, cx| {
+                                let _ = view.update(cx, |_, cx| {
+                                    cx.emit(ActivityViewEvent::ShowTab(tab));
+                                });
+                            }),
+                    )
+                }),
             )
-            .when_some(error, |el, error| {
-                el.child(
-                    Button::new(("activity-copy", entry.id()))
-                        .ghost()
-                        .xsmall()
-                        .label("Copy")
-                        .accessibility_label("Copy error")
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
-                        }),
-                )
-            })
-            .when_some(tab, |el, tab| {
-                let view = view.downgrade();
-                el.child(
-                    Button::new(("activity-show-tab", entry.id()))
-                        .ghost()
-                        .xsmall()
-                        .label("Show tab")
-                        .accessibility_label("Show tab")
-                        .on_click(move |_, _, cx| {
-                            let _ = view.update(cx, |_, cx| {
-                                cx.emit(ActivityViewEvent::ShowTab(tab));
-                            });
-                        }),
-                )
-            })
             .into_any_element()
     }
 }

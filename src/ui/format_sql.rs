@@ -7,7 +7,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.form.is_some() || self.settings_open {
+        if self.form.is_some() {
             return;
         }
         let Some(tab) = self.tabs.get(self.active) else {

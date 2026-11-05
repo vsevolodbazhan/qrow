@@ -531,10 +531,17 @@ impl Runner {
             Some(execution_id),
             Severity::Info,
             LogKind::ExecutionCompleted,
-            format!(
-                "Execution completed on the server, result set: {has_results} (client measurement: {})",
-                format_duration(duration)
-            ),
+            if has_results {
+                format!(
+                    "Query finished on the server ({})",
+                    format_duration(duration)
+                )
+            } else {
+                format!(
+                    "Query finished on the server without a result set ({})",
+                    format_duration(duration)
+                )
+            },
             Some(duration),
         );
     }
@@ -614,7 +621,7 @@ impl Runner {
                 Severity::Info,
                 LogKind::Connected,
                 format!(
-                    "Connected to {} (client measurement: {})",
+                    "Connected to {} ({})",
                     self.profile.as_ref().unwrap().name,
                     format_duration(connect_started.elapsed())
                 ),
@@ -1110,20 +1117,39 @@ impl Runner {
             more,
             limited,
         } = summary;
+        let group = crate::logs::group_digits;
         let range = if fetched == 0 {
-            "no rows".into()
+            "no rows".to_owned()
         } else {
-            format!("rows {}–{}", start_row + 1, start_row + fetched)
+            format!(
+                "rows {}–{}",
+                group(start_row + 1),
+                group(start_row + fetched)
+            )
         };
+        let mut notes = Vec::new();
+        if page > 1 {
+            notes.push(format!("page {page}"));
+        }
+        if self.rows != fetched {
+            notes.push(format!("{} loaded", group(self.rows)));
+        }
+        notes.push(
+            if limited {
+                "preview limit reached"
+            } else if more {
+                "more available"
+            } else {
+                "all rows"
+            }
+            .to_owned(),
+        );
+        notes.push(format_duration(started.elapsed()));
         self.log(
             execution_id,
             Severity::Info,
             LogKind::FetchCompleted,
-            format!(
-                "Fetched preview page {page}: {range}, {fetched} rows, {} retained, more rows: {more}, preview limit: {limited} (client measurement: {})",
-                self.rows,
-                format_duration(started.elapsed())
-            ),
+            format!("Fetched {range} ({})", notes.join(", ")),
             Some(started.elapsed()),
         );
     }

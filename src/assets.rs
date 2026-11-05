@@ -29,7 +29,8 @@ const STATUS_BAR_ICONS: [&str; 4] = [
 // Icons outside the GPUI Kit default set. The assistant tool call cards use
 // the icons after `Send`. The status bar uses `Activity`, `Plug`, and
 // `KeyRound`, and the Sign-ins sidebar uses `KeyRound` and `ClipboardPaste`.
-// The result toolbar uses `FileCode` for Copy query and `Pin`.
+// The result toolbar uses `FileCode` for Copy query and `Pin`, and the Logs
+// toolbar uses `Trash` for Clear.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
@@ -52,8 +53,31 @@ gpui_kit::assets::icon_assets!(
         FileCode,
         Download,
         Pin,
+        Trash,
     ]
 );
+
+/// The bundled fonts: IBM Plex Sans for the interface and JetBrains Mono for
+/// SQL and logs, in the weights that the interface uses. Code uses only the
+/// regular, bold, and italic styles of JetBrains Mono; a request for another
+/// weight uses the nearest one. See NOTICE.
+pub(crate) fn fonts() -> Vec<Cow<'static, [u8]>> {
+    macro_rules! fonts {
+        ($($path:literal),+ $(,)?) => {
+            vec![$(Cow::Borrowed(include_bytes!(concat!("../assets/fonts/", $path)).as_slice())),+]
+        };
+    }
+    fonts![
+        "ibm-plex-sans/IBMPlexSans-Regular.ttf",
+        "ibm-plex-sans/IBMPlexSans-Medium.ttf",
+        "ibm-plex-sans/IBMPlexSans-SemiBold.ttf",
+        "ibm-plex-sans/IBMPlexSans-Bold.ttf",
+        "ibm-plex-sans/IBMPlexSans-Italic.ttf",
+        "jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "jetbrains-mono/JetBrainsMono-Bold.ttf",
+        "jetbrains-mono/JetBrainsMono-Italic.ttf",
+    ]
+}
 
 pub struct Assets;
 

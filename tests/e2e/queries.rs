@@ -143,30 +143,21 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
     let app = TestApp::launch_with(cx, workspace, credentials);
     cx.simulate_window_resize(app.window, size(px(600.), px(650.)));
     app.settle(cx);
-    app.click(cx, "result-details");
+    // Before the first result, the result toolbar and its details do not show.
     app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 0")
-        );
-        assert_eq!(
-            label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded Rows: 0")
-        );
-        assert!(window.try_find("result-detail-elapsed").is_none());
+        assert!(window.try_find("result-details").is_none());
     });
-    app.press(cx, "escape");
     app.click(cx, "run");
     app.wait_status(cx, "Preview: More rows available");
     app.click(cx, "result-details");
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1–1000")
+            Some("Visible Rows: 1–1,000")
         );
         assert_eq!(
             label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded Rows: 1000")
+            Some("Loaded Rows: 1,000")
         );
         assert_eq!(
             label(window, "result-detail-columns").as_deref(),
@@ -179,12 +170,12 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
         cx,
         "the fetched page in Result Details",
         QUERY_TIMEOUT,
-        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded Rows: 1001"),
+        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded Rows: 1,001"),
     );
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1001–1001")
+            Some("Visible Rows: 1,001–1,001")
         );
         assert_eq!(cell(window, 0, 1).as_deref(), Some("1000"));
     });
@@ -415,7 +406,7 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
         );
         assert_eq!(
             label(window, "result-range").as_deref(),
-            Some("Rows 1–1000")
+            Some("Rows 1–1,000")
         );
     });
     // The cursor is closed, so Next page does not fetch.
@@ -425,7 +416,7 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
         assert_eq!(app.status(cx), "Complete");
         assert_eq!(
             label(window, "result-range").as_deref(),
-            Some("Rows 1–1000")
+            Some("Rows 1–1,000")
         );
     });
     // A compact toolbar shows the Partial tag between the range and the details.

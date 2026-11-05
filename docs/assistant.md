@@ -91,9 +91,25 @@ Qrow does not send it. Qrow shows a notice and keeps the text in the message
 field. If the harness does not accept a message, Qrow puts its text back in the
 message field and shows the error in the conversation.
 
-You can draft a message while the harness starts. The model, reasoning, service tier,
-and Send controls stay disabled until the harness is ready. The pane does not show
-routine status text above the message field.
+A new conversation shows **Assistant** in bold and a short description in the
+middle of the pane, until you send the first message. An empty conversation
+list shows **No conversations yet**.
+
+You can draft a message while the harness starts. Until the harness is ready,
+the row below the message field shows `Waiting for Codex…` or `Waiting for
+Claude Code…` in place of the model, reasoning, and service tier selectors, and
+**Send** stays disabled. The pane does not show routine status text above the
+message field.
+
+When the harness is ready, the row shows the model, reasoning, and service tier
+selectors beside the execution mode and **Send**. Each selector shows its
+value when it fits. In a narrow pane, the selectors that do not fit show only
+their icons, so the row stays one line. The tooltip of a selector names its
+value.
+
+The pane header has **New conversation**, **More**, and **Conversations**.
+**More** opens the menu of the conversation. **Conversations** shows or hides
+the conversation list.
 
 While the assistant works on a reply, a shimmering **Working…** line shows at the end of
 the conversation. It shows from the time that you send a message until the
@@ -331,8 +347,9 @@ Open **Conversation Actions** in the pane header to rename the current
 conversation, make a new title, or delete it. To use these actions on a
 conversation in the thread list, right-click it. You cannot rename or delete a
 conversation while it works or waits for approval. Two conversations can have the same title.
-**Rename…** opens the same dialog as a query tab rename. Type a title with 1 to
-120 characters and select **Rename** or press **⌘Enter**.
+**Rename…** opens the **Rename Conversation** dialog with the current title
+selected. Type a title with 1 to 120 characters and select **Rename** or press
+**⌘Enter**.
 Automatic title requests do not replace a title that you set. Select
 **Regenerate title** to ask Codex for a new title from the conversation
 messages. This title replaces a title that you set. If the conversation is not
@@ -534,9 +551,10 @@ assistant runs SQL, the query tab shows its execution state.
 
 ## Pane and connection state
 
-Opening the pane does not hide the Connections sidebar. In a small window, the
-pane uses its minimum width. Press **⌘B** to hide the sidebar if you need more
-space.
+Opening the pane does not hide the Connections sidebar. The pane leaves at
+least 560 points to the work area. In a small window, the pane uses its minimum
+width. Press **⌘B** to hide the sidebar if you need more space. In a window of
+1280 points, the pane is narrow, so the conversation list is closed at first.
 Drag the pane's left edge to change its width. A narrow pane shows either the
 thread list or the current conversation. Qrow saves the width and starts
 with the pane closed. Closing the pane does not stop a database query.

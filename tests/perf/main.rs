@@ -290,7 +290,7 @@ fn activity_entry(n: usize) -> qrow::activity::ActivityEntry {
     } else {
         ActivityEntry::new(
             Severity::Info,
-            format!("List relations in schema_{n:05}: 297 relations (client measurement: 1.22 s)"),
+            format!("List relations in schema_{n:05}: 297 relations (1.22 s)"),
         )
     }
 }

@@ -70,7 +70,7 @@ impl Runner {
                 Severity::Error,
                 LogKind::KeepAliveFailed,
                 format!(
-                    "Keep-alive failed and closed the session: {reason} (client measurement: {})",
+                    "Keep-alive failed and closed the session: {reason} ({})",
                     format_duration(duration)
                 ),
             )
@@ -87,10 +87,7 @@ impl Runner {
                 None,
                 Severity::Info,
                 LogKind::KeepAliveCompleted,
-                format!(
-                    "Keep-alive completed (client measurement: {})",
-                    format_duration(duration)
-                ),
+                format!("Keep-alive completed ({})", format_duration(duration)),
             )
             .with_sql(sql);
             event.duration = Some(duration);

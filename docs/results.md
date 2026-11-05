@@ -26,7 +26,8 @@ the next execution replace the result.
 
 Right-click a result tab for these commands:
 
-- **Rename…** gives the result tab a name. The name must be unique in the
+- **Rename…** opens the **Rename Result** dialog with the current name
+  selected, and gives the result tab a name. The name must be unique in the
   query tab. Renaming also pins the result tab, if the pin limit allows it.
 - **Pin** or **Unpin** changes whether the next execution can replace it.
 - **Copy query** copies the SQL statement that made the result.
@@ -40,7 +41,8 @@ A query tab always has at least one result tab. Closing the last result tab
 creates an empty replacement. The result tab of a running query cannot close.
 
 If a result has no columns, the panel shows a status message without a table
-header. Column headers remain visible when a query returns columns but no rows.
+header and without the result toolbar. Column headers and the toolbar remain
+visible when a query returns columns but no rows.
 
 ## Minimize the panel
 
@@ -83,7 +85,20 @@ the last populated page stays visible. Changing pages clears the selection and r
 the scroll position. New batches preserve the current scroll position.
 
 Scroll vertically to see more rows and horizontally to see more columns.
-The scrollbars overlay the right and bottom edges of the table.
+The scrollbars overlay the right and bottom edges of the table. When rows are
+hidden below, the cells keep room for the vertical scrollbar, so it does not
+cover text. Row stripes, the selection, and the row lines continue to the edge.
+When columns are hidden past an edge, the cut column fades into that edge, in
+the header and in each row. The fade uses the color of the row: a stripe, the
+hover color, or the selection. An edge without hidden columns has no fade.
+
+Each column is at least 190 points wide at 100% scale, also when you drag its
+boundary. This width fits a name of about 18 characters and a short type. A
+column is wider when its name and type need more space. Column names start at
+the left of the header, with the type after the name. Numbers align at the
+right of their cells and use digits of equal width. A header shows a hover
+color. If a column is too narrow for its name, the name ends in an ellipsis.
+Point to the header to see the full name in a tooltip.
 Drag a column boundary to change its width. Drag the divider above Results
 to change the editor height.
 
@@ -101,10 +116,12 @@ Select a rectangle of cells on the current page, then press ⌘C to copy it.
 | Click the `#` header, or press ⌘A in the table | All cells of the current page. |
 | Arrow keys | The next cell. Shift with an arrow key extends the rectangle. |
 | Home, End | The first or last cell of the row. |
+| ⌘↑ or ⌘Home, ⌘↓ or ⌘End | The cell in the first or last row of the page. |
 | Page Up, Page Down | The cell one screen up or down. |
 
-The selected cells use the selection color. In a rectangle, the cell that the
-keys move also has a focus outline. Escape clears the selection. A click
+The selected cells use the selection color. The cell that the keys move has a
+focus outline, also when it is the only selected cell. The other cells of its
+rows get a light tint. Escape clears the selection. A click
 outside the results area or a page change also clears it.
 
 During a drag, keep the pointer at an edge to scroll rows or columns.

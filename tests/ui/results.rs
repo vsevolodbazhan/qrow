@@ -374,8 +374,9 @@ fn the_copy_format_setting_applies_to_command_c_and_the_menu_but_not_copy_as(
         );
     });
     app.select(cx, "setting-copy-format", "Plain text");
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "cmd-w");
+    app.wait_gone(cx, "reset-settings");
     // A new result keeps the format.
     app.press(cx, "cmd-enter");
     app.wait_until(
@@ -439,6 +440,88 @@ fn visible_columns(app: &TestApp, cx: &mut TestAppContext, name: &str) -> BTreeS
             })
             .collect()
     })
+}
+
+#[gpui_kit::test]
+fn a_wider_pane_renders_the_headers_of_the_revealed_columns(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    app.wait_until(cx, "the demo rows", Duration::from_secs(10), |window, _| {
+        cell(window, 0, 1).is_some()
+    });
+    let position = app.update(cx, |window, _| {
+        let column: ElementId = ("cell", 1usize).into();
+        elements(window)
+            .into_iter()
+            .find(|element| element.visible() && element.path().last() == Some(&column))
+            .expect("A visible result cell")
+            .bounds()
+            .center()
+    });
+    // A little horizontal scroll, then the pane gets wider and narrower
+    // while the window keeps its size, as when the Assistant or the sidebar
+    // opens and closes. The pointer does not move over the header, so
+    // nothing but the new width renders it again.
+    app.update(cx, |window, cx| {
+        window.dispatch_event(
+            ScrollWheelEvent {
+                position,
+                delta: ScrollDelta::Pixels(point(px(-120.), px(0.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    app.settle(cx);
+    // The focus leaves the SQL editor, whose blinking caret would draw the
+    // window again and repair a stale header.
+    app.update(cx, |window, cx| {
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    app.settle(cx);
+    for step in 0..4 {
+        app.dispatch(cx, qrow::ui::ToggleSidebar);
+        // Only the frames that the app requests itself: `settle` would
+        // refresh every view and hide a header that the width did not
+        // render again.
+        cx.run_until_parked();
+        let width = if step % 2 == 0 {
+            "a wider pane"
+        } else {
+            "a narrower pane"
+        };
+        let cells = visible_columns(&app, cx, "cell");
+        let headers = visible_columns(&app, cx, "column-header");
+        assert!(
+            cells.iter().filter(|&&c| c > 0).count() > 1,
+            "No visible result columns at {width}: {cells:?}"
+        );
+        assert!(
+            cells.is_subset(&headers),
+            "Columns without a header at {width}: {:?}",
+            cells.difference(&headers).collect::<Vec<_>>()
+        );
+    }
 }
 
 #[gpui_kit::test]
@@ -690,7 +773,9 @@ fn a_held_drag_scrolls_back_to_the_first_row_and_column(cx: &mut TestAppContext)
         app.press(cx, "down");
         app.settle(cx);
     }
-    for _ in 0..14 {
+    // Columns are at least 190 points wide, so the selection at column 11
+    // has the first column outside the view and column 10 beside it.
+    for _ in 0..10 {
         app.press(cx, "right");
         app.settle(cx);
     }
@@ -834,4 +919,158 @@ fn results_toggle_does_not_change_layout_behind_settings(cx: &mut TestAppContext
     app.update(cx, |window, _| {
         assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
     });
+}
+
+#[gpui_kit::test]
+fn a_column_name_that_fits_has_no_tooltip(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.update(cx, |window, cx| {
+        let position = window.find(("column-header", 1usize)).bounds().center();
+        window.dispatch_event(
+            MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(
+            window.try_find("tooltip").is_none(),
+            "The header of a column name that fits must not show a tooltip"
+        )
+    });
+}
+
+#[gpui_kit::test]
+fn column_names_start_at_the_left_also_over_numbers(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.update(cx, |window, _| {
+        // Column 3 of the demo is `departures`, a bigint column whose values
+        // align on the right.
+        for column in [1usize, 3] {
+            let header = window.find(("column-header", column)).bounds();
+            let name = window.find(("column-name", column)).bounds();
+            assert!(
+                name.left() - header.left() < px(8.),
+                "The name of column {column} {name:?} must start at the left of {header:?}"
+            );
+        }
+        let value = find_in(window, ("row", 0usize), ("cell", 3usize))
+            .unwrap()
+            .bounds();
+        let header = window.find(("column-header", 3usize)).bounds();
+        // The header content sits inside the cell paddings of the header.
+        assert!(
+            (value.left() - header.left()).abs() < px(1.)
+                && (value.right() - header.right()).abs() <= px(6.),
+            "The header {header:?} and the cells {value:?} of a column must line up"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn rows_reach_the_right_edge_beside_the_scrollbar(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.update(cx, |window, _| {
+        // The demo result overflows, so the rows keep room for the vertical
+        // scrollbar after their cells, but their background and line reach
+        // the edge of the grid, which is the edge of the window here.
+        let row = window.find(("row", 0usize)).bounds();
+        let edge = window.viewport_size().width;
+        assert!(
+            (row.right() - edge).abs() < px(1.),
+            "Row 0 {row:?} must reach the right edge {edge:?}"
+        );
+    });
+    // At the end of the columns, the last cell stops before the scrollbar.
+    let position = app.update(cx, |window, _| {
+        window.find(("row", 2usize)).bounds().center()
+    });
+    for _ in 0..4 {
+        app.update(cx, |window, cx| {
+            window.dispatch_event(
+                ScrollWheelEvent {
+                    position,
+                    delta: ScrollDelta::Pixels(point(px(-100000.), px(0.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        app.settle(cx);
+    }
+    app.update(cx, |window, _| {
+        let edge = window.viewport_size().width;
+        let last = find_in(window, ("row", 0usize), ("cell", 141usize))
+            .expect("the last column after a scroll to the end")
+            .bounds();
+        assert!(
+            last.right() <= edge - px(15.),
+            "The last cell {last:?} must stop before the scrollbar at {edge:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn cut_columns_fade_only_where_more_columns_are_hidden(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    let fades = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| {
+            let count = |side: &'static str| {
+                crate::support::elements(window)
+                    .into_iter()
+                    .filter(|element| {
+                        element.visible() && element.path().last() == Some(&ElementId::from(side))
+                    })
+                    .count()
+            };
+            (count("fade-left"), count("fade-right"))
+        })
+    };
+    let position = app.update(cx, |window, _| {
+        window.find(("row", 2usize)).bounds().center()
+    });
+    let scroll = |app: &TestApp, cx: &mut TestAppContext, dx: f32| {
+        app.update(cx, |window, cx| {
+            window.dispatch_event(
+                ScrollWheelEvent {
+                    position,
+                    delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        app.settle(cx);
+    };
+    // At the start, only the end has hidden columns, in the header and the rows.
+    let (left, right) = fades(&app, cx);
+    assert!(
+        left == 0 && right > 1,
+        "start: {left} start fades, {right} end fades"
+    );
+    scroll(&app, cx, -600.);
+    let (left, right) = fades(&app, cx);
+    assert!(
+        left > 1 && right > 1,
+        "middle: {left} start fades, {right} end fades"
+    );
+    for _ in 0..4 {
+        scroll(&app, cx, -100000.);
+    }
+    let (left, right) = fades(&app, cx);
+    assert!(
+        left > 1 && right == 0,
+        "end: {left} start fades, {right} end fades"
+    );
 }

@@ -13,7 +13,6 @@ use crate::catalog::{
     Scope, Seed, Status, catalog_key, qualified_name,
 };
 use gpui_kit::assets::IconName as AssetIconName;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::base::{
     ElementExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState,
 };
@@ -46,6 +45,8 @@ const ROW_GAP: f32 = 4.;
 const STATUS_SLOT_WIDTH: f32 = 28.;
 /// The opacity of the accent fill of the current connection row.
 const CURRENT_CONNECTION_FILL: f32 = 0.18;
+/// The key of the width that all tree rows share.
+const ROW_WIDTH_KEY: &str = "tree-row-width";
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
@@ -1399,8 +1400,10 @@ impl Qrow {
                 ..
             } => {
                 let (profile, unique_id) = (*profile, dbt.unique_id.clone());
+                let origin = id;
                 Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.open_dbt_details(profile, &unique_id, window, cx)
+                    this.open_dbt_details(profile, &unique_id, window, cx);
+                    this.dbt_details_origin = Some(origin.clone());
                 }))
             }
             _ => None,
@@ -1418,8 +1421,10 @@ impl Qrow {
             }
             _ => None,
         };
-        self.open_context_menu(
+        let tree = self.catalog.state.read(cx).focus_handle(cx);
+        self.open_context_menu_from(
             position,
+            Some(tree),
             move |menu, _, _| {
                 let menu = match refresh {
                     Some(refresh) => menu.item(
@@ -1439,8 +1444,17 @@ impl Qrow {
                 };
                 let menu = if has_commands { menu.separator() } else { menu };
                 let menu = menu
-                    .item(PopupMenuItem::new(copy_label).on_click(copy))
-                    .item(PopupMenuItem::new("Insert into editor").on_click(insert));
+                    // The actions only show the shortcuts: a click runs the handler.
+                    .item(
+                        PopupMenuItem::new(copy_label)
+                            .action(Box::new(CopyCatalogName))
+                            .on_click(copy),
+                    )
+                    .item(
+                        PopupMenuItem::new("Insert into editor")
+                            .action(Box::new(InsertCatalogName))
+                            .on_click(insert),
+                    );
                 match details {
                     Some(details) => menu
                         .separator()
@@ -1569,6 +1583,7 @@ impl Qrow {
             // A tooltip would cover the open menu.
             menu_open: self.menu.is_some(),
             focused: self.catalog.focus.contains_focused(window, cx),
+            relation_types: RefCell::default(),
         });
         let tree = self.catalog.state.clone();
         v_flex()
@@ -1605,7 +1620,6 @@ impl Qrow {
                         .flex_shrink_0()
                         .child(
                             Input::new(&self.catalog.search)
-                                .focus_ring(false)
                                 .small()
                                 .w_full()
                                 .aria_label("Search relations"),
@@ -1661,6 +1675,10 @@ struct RowContext {
     menu_open: bool,
     /// Whether the tree has the focus. A selection without it is not shown.
     focused: bool,
+    /// For each relation in this frame, whether the data types of all its
+    /// columns fit beside their names. The columns of one relation show
+    /// their types together or not at all.
+    relation_types: RefCell<HashMap<(Uuid, String, String), bool>>,
 }
 
 impl RowContext {
@@ -1703,6 +1721,61 @@ impl RowContext {
     }
 
     /// Records the laid-out width of the label `key` during prepaint.
+    /// Records the bottom edge of the row `key`, so that its context menu
+    /// opens below the row and leaves its label visible. The probe covers
+    /// its parent, which must be positioned.
+    fn bottom_probe(&self, key: SharedString) -> impl IntoElement + use<> {
+        let widths = self.widths.clone();
+        canvas(
+            move |bounds, _, _| {
+                let mut widths = widths.borrow_mut();
+                if widths.len() >= MAX_LABEL_WIDTHS && !widths.contains_key(&key) {
+                    widths.clear();
+                }
+                widths.insert(key, bounds.bottom());
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Where the context menu of the row `key` opens for a click at
+    /// `position`: below the row, at the pointer column.
+    fn menu_position(&self, key: SharedString) -> impl Fn(Point<Pixels>) -> Point<Pixels> + use<> {
+        let widths = self.widths.clone();
+        move |position| {
+            let bottom = widths.borrow().get(&key).copied();
+            point(position.x, bottom.unwrap_or(position.y).max(position.y))
+        }
+    }
+
+    /// Records the width of the tree rows under `key`. Rows decide from it
+    /// whether a detail fits, so a new width, for example after a window or
+    /// sidebar resize, renders the tree again with the current width.
+    fn record_row_width(
+        &self,
+        key: SharedString,
+    ) -> impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + use<> {
+        let widths = self.widths.clone();
+        let weak = self.weak.clone();
+        move |bounds, _, cx| {
+            let width = bounds.size.width;
+            let changed = {
+                let mut widths = widths.borrow_mut();
+                if widths.len() >= MAX_LABEL_WIDTHS && !widths.contains_key(&key) {
+                    widths.clear();
+                }
+                widths.insert(key, width) != Some(width)
+            };
+            if changed {
+                cx.defer(move |cx| {
+                    let _ = weak.update(cx, |_, cx| cx.notify());
+                });
+            }
+        }
+    }
+
     fn record_width(
         &self,
         key: SharedString,
@@ -1835,7 +1908,7 @@ fn render_entry(
     entry: &TreeEntry,
     state: TreeEntryState,
     context: &RowContext,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let RowContext {
@@ -2016,6 +2089,69 @@ fn render_entry(
     let menu_id = id.clone();
     let schema_detail = matches!(node, Node::Schema { .. });
     let detail = detail.filter(|_| !schema_detail || (!loading && error_status.is_none()));
+    let leaf = matches!(node, Node::Column { .. });
+    // The name comes first: a data type or a dbt kind shows only when it fits
+    // next to the full name. The width of the row does not depend on the
+    // detail, so the choice is stable from frame to frame.
+    // All rows of the tree have the same width, so one value serves every
+    // row, also a row that scrolls into view.
+    let row_key = SharedString::new_static(ROW_WIDTH_KEY);
+    let row_width = context.widths.borrow().get(&row_key).copied();
+    let fits = |label: &str, detail: &str| {
+        let Some(row_width) = row_width else {
+            return true;
+        };
+        let measure = |text: &str, rems: f32| {
+            let run = TextRun {
+                len: text.len(),
+                font: font(cx.theme().font_family.clone()),
+                color: cx.theme().foreground,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            window
+                .text_system()
+                .shape_line(
+                    SharedString::from(text.to_owned()),
+                    window.rem_size() * rems,
+                    &[run],
+                    None,
+                )
+                .width
+        };
+        let lanes = if leaf { 1. } else { 2. };
+        let fixed = indent + ui_px((16. + ROW_GAP) * lanes + ROW_GAP + 8.);
+        fixed + measure(label, 0.875) + measure(detail, 0.75) <= row_width
+    };
+    let detail = detail.filter(|detail| match node {
+        _ if schema_detail => true,
+        Node::Column {
+            profile,
+            schema,
+            relation,
+            ..
+        } => {
+            let key = (*profile, schema.clone(), relation.clone());
+            if let Some(fit) = context.relation_types.borrow().get(&key) {
+                return *fit;
+            }
+            let fit = context.nodes.values().all(|sibling| match sibling {
+                Node::Column {
+                    profile: p,
+                    schema: s,
+                    relation: r,
+                    name,
+                    data_type,
+                    ..
+                } if p == profile && s == schema && r == relation => fits(name, data_type),
+                _ => true,
+            });
+            context.relation_types.borrow_mut().insert(key, fit);
+            fit
+        }
+        _ => fits(&label, detail),
+    });
     // Show the tooltip only when it adds text: a name that the row cuts, a
     // comment, or an error.
     let label_key = child_id(&id, "label");
@@ -2044,10 +2180,10 @@ fn render_entry(
     if let Some(text) = &tooltip {
         context.record_tip(&id, text.clone(), truncation);
     }
-    let leaf = matches!(node, Node::Column { .. });
     let row = h_flex()
         .id(id.clone())
         .size_full()
+        .on_prepaint(context.record_row_width(row_key))
         .pl(indent)
         .when(!schema_detail && !loading && error_status.is_none(), |el| {
             el.pr_2()
@@ -2083,7 +2219,9 @@ fn render_entry(
                 .id(label_key.clone())
                 .test_support()
                 .relative()
-                .flex_1()
+                // The name keeps its width before the detail does: the detail
+                // shrinks much faster when the row is short.
+                .flex_grow(1.)
                 .min_w_0()
                 .truncate()
                 .child(label)
@@ -2095,7 +2233,10 @@ fn render_entry(
                     .id(detail_key.clone())
                     .test_support()
                     .relative()
-                    .flex_shrink_0()
+                    .when(!schema_detail, |el| {
+                        el.min_w(ui_px(DETAIL_MIN_WIDTH)).flex_shrink(DETAIL_SHRINK)
+                    })
+                    .when(schema_detail, |el| el.flex_shrink_0())
                     .max_w(ui_px(120.))
                     .truncate()
                     .when(schema_detail, |el| {
@@ -2139,8 +2280,9 @@ fn render_entry(
         .on_mouse_down(MouseButton::Left, focus)
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
+            let menu_position = context.menu_position(child_id(&id, "bottom"));
             move |event, window, cx| {
-                let (id, position) = (menu_id.clone(), event.position);
+                let (id, position) = (menu_id.clone(), menu_position(event.position));
                 let _ = weak.update(cx, |_, cx| {
                     cx.defer_in(window, move |this, window, cx| {
                         this.open_catalog_menu(id, position, window, cx)
@@ -2149,10 +2291,12 @@ fn render_entry(
             }
         });
     div()
+        .relative()
         .w_full()
         .h(ui_px(ROW_HEIGHT))
         .py_0p5()
         .child(row)
+        .child(context.bottom_probe(child_id(&id, "bottom")))
         .into_any_element()
 }
 
@@ -2294,6 +2438,11 @@ pub(super) fn error_summary(error: &str) -> String {
 }
 
 /// The hint under a dbt description that the tooltip cuts.
+/// How much faster the detail of a row shrinks than its name.
+const DETAIL_SHRINK: f32 = 24.;
+/// The narrowest detail, which still shows a letter and the ellipsis.
+const DETAIL_MIN_WIDTH: f32 = 24.;
+
 const DESCRIPTION_HINT: &str = "Open dbt details to see the full description.";
 
 /// The tooltip of a schema, table, or column row.
@@ -2589,10 +2738,13 @@ fn connection_row(
         .when(keyboard_position, |el| el.child(focus_outline(cx)))
         .child(connection_drop_target(id, false, weak.clone()))
         .child(connection_drop_target(id, true, weak.clone()))
+        .child(context.bottom_probe(SharedString::from(format!("{entry}:bottom"))))
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
+            let menu_position =
+                context.menu_position(SharedString::from(format!("{entry}:bottom")));
             move |event, window, cx| {
-                let position = event.position;
+                let position = menu_position(event.position);
                 let _ = weak.update(cx, |_, cx| {
                     cx.defer_in(window, move |this, window, cx| {
                         this.open_profile_menu(id, position, window, cx)

@@ -467,7 +467,8 @@ Postgres tests fail if their fixture settings are missing.
 The `desktop` suite operates the packaged app with real keyboard and pointer
 events. It checks only what needs the real operating system:
 
-1. **About Qrow** and **Settings…** open from the menu bar.
+1. **About Qrow** and **Settings…** open from the menu bar, and **⌘W** closes
+   the Settings window.
 2. A connection that you add through the form keeps its password in the real
    Keychain, and a real query reads it.
 3. Pixels of the selected connection row: when the pointer is on the status
@@ -697,7 +698,7 @@ uv run --locked python scripts/core/size.py
 ```
 
 The [size check](../scripts/core/size.py) allows 40 MiB for the executable
-and 12 MiB for the zipped bundle. Find the cause of an increase before you
+and 15 MiB for the zipped bundle. Find the cause of an increase before you
 change a budget.
 
 When you publish performance results, give the build, the hardware, the
@@ -741,6 +742,11 @@ More helpers operate controls that GPUI Kit owns:
   search field of Settings. Use it only for elements that GPUI Kit names.
 - `app.dispatch(action)` sends an action, like `OpenSettings`, as its menu
   item does. The menu bar itself is part of the `desktop` suite.
+- `app.hover(id)` and `app.hover_labelled(label)` move the pointer over an
+  element, for controls that show only on hover, like **Show tab** in
+  Activity or the close button of a tab.
+- Settings opens in its own window. While it is open, the helpers operate
+  the Settings window.
 
 Assistant tests use the synthetic Codex server in
 [`tests/desktop/fake-codex.py`](../tests/desktop/fake-codex.py).

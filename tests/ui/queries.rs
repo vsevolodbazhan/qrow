@@ -632,6 +632,8 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
+    // Show tab shows when the pointer is over its row.
+    app.hover_labelled(cx, "Show tab");
     app.click_labelled(cx, "Show tab");
     app.wait_gone(cx, "activity");
     app.wait_until(cx, "the first tab", Duration::from_secs(10), |_, _| {
@@ -926,4 +928,218 @@ fn format_sql_uses_each_connections_quoting_rules(cx: &mut TestAppContext) {
         );
         assert_eq!(app.credentials.reads(), 0);
     }
+}
+
+#[gpui_kit::test]
+fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut TestAppContext) {
+    use gpui_kit::{
+        InputEvent as _, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+        point,
+    };
+
+    // The demo runs the query of its first tab at launch; each run adds
+    // the submitted query and its outcome.
+    let app = TestApp::launch_demo(cx);
+    app.click(cx, "output-panel-tab");
+    app.wait_for(cx, "output-count");
+    for _ in 0..30 {
+        let before = app.update(cx, |window, _| label(window, "output-count"));
+        app.click(cx, "sql-editor");
+        app.dispatch(cx, qrow::ui::RunQuery);
+        app.wait_until(cx, "a new entry", Duration::from_secs(20), |window, _| {
+            label(window, "output-count") != before
+        });
+        app.click(cx, "output-panel-tab");
+    }
+    app.settle(cx);
+    let sql_blocks = |window: &gpui_kit::Window| {
+        crate::support::elements(window)
+            .into_iter()
+            .filter(|element| element.path().last() == Some(&"sql".into()))
+            .collect::<Vec<_>>()
+    };
+    // A frame lays out and paints the rows on screen and a band around
+    // them, not all 30 queries, so a drag stays fast in a long log.
+    let (drawn, sql) = app.update(cx, |window, _| {
+        let blocks = sql_blocks(window);
+        let visible = blocks
+            .iter()
+            .rfind(|block| block.visible())
+            .unwrap()
+            .bounds();
+        (blocks.len(), visible)
+    });
+    assert!(drawn < 30, "The Logs drew {drawn} of 30 queries");
+    let start = point(sql.left() + px(12.), sql.top() + px(8.));
+    let end = point(sql.right() - px(12.), sql.bottom() - px(8.));
+    app.update(cx, |window, cx| {
+        window.activate_window();
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position: start,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: end,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position: end,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        let selected = gpui_kit::base::TextSelection::selected_text(window, cx);
+        assert!(
+            selected.contains("COUNT(*) AS departures"),
+            "The drag must select the logged SQL: {selected:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn activity_shows_a_cut_tab_name_in_full_on_hover(cx: &mut TestAppContext) {
+    use gpui_kit::{InputEvent as _, MouseMoveEvent};
+
+    const LONG: &str = "Модели Ривенделла по стоимости";
+    // The demo runs the query of "Route overview" at launch. A rename and
+    // another run add entries under the long name.
+    let app = TestApp::launch_demo(cx);
+    app.wait_for(cx, "toggle-activity");
+    app.context_menu_labelled(cx, "Route overview");
+    app.choose(cx, "popup-menu", "Rename…");
+    app.fill(cx, "rename-tab-name", LONG);
+    app.click(cx, "rename-tab");
+    app.wait_gone(cx, "rename-tab-name");
+    app.click(cx, "sql-editor");
+    app.dispatch(cx, qrow::ui::RunQuery);
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    let source = |window: &gpui_kit::Window, name: &str| {
+        crate::support::elements(window)
+            .into_iter()
+            .filter(|element| {
+                element.path().last() == Some(&"source".into()) && element.label() == Some(name)
+            })
+            .find(|element| element.visible())
+            .map(|element| element.bounds())
+    };
+    app.wait_until(
+        cx,
+        "an entry of the long name",
+        Duration::from_secs(20),
+        |window, _| source(window, LONG).is_some(),
+    );
+    let hover = |app: &TestApp, cx: &mut TestAppContext, name: &str| {
+        app.update(cx, |window, cx| {
+            let bounds = source(window, name).expect(name);
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position: bounds.center(),
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, _| window.try_find("tooltip").is_some())
+    };
+    assert!(
+        hover(&app, cx, LONG),
+        "A cut tab name must show its tooltip"
+    );
+    // Leaving the name hides the tooltip; a name that fits shows none.
+    assert!(
+        !hover(&app, cx, "Route overview"),
+        "A name that fits must not show a tooltip"
+    );
+}
+
+#[gpui_kit::test]
+fn a_long_logged_query_shows_five_lines_until_it_expands(cx: &mut TestAppContext) {
+    use gpui_kit::ClipboardItem;
+
+    // The demo runs its 11-line query at launch.
+    let app = TestApp::launch_demo(cx);
+    app.click(cx, "output-panel-tab");
+    let found = |window: &gpui_kit::Window, id: &'static str| {
+        crate::support::elements(window)
+            .into_iter()
+            .find(|element| element.path().last() == Some(&id.into()))
+    };
+    app.wait_until(
+        cx,
+        "a logged query",
+        Duration::from_secs(10),
+        |window, _| found(window, "sql").is_some(),
+    );
+    let (collapsed, line) = app.update(cx, |window, _| {
+        assert!(
+            found(window, "sql-fade").is_some(),
+            "A long query must fade out"
+        );
+        (
+            found(window, "sql").unwrap().bounds().size.height,
+            window.line_height(),
+        )
+    });
+    app.click_labelled(cx, "Expand query");
+    app.wait_until(
+        cx,
+        "the full query",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "Collapse query").is_some(),
+    );
+    app.update(cx, |window, _| {
+        assert!(
+            found(window, "sql-fade").is_none(),
+            "A full query has no fade"
+        );
+        let expanded = found(window, "sql").unwrap().bounds().size.height;
+        assert!(
+            expanded > collapsed + line * 4.,
+            "The full query {expanded:?} must show more lines than {collapsed:?}"
+        );
+    });
+    app.click_labelled(cx, "Collapse query");
+    app.wait_until(
+        cx,
+        "the short query",
+        Duration::from_secs(10),
+        |window, _| found(window, "sql-fade").is_some(),
+    );
+    // Copy query copies all of the SQL, also the lines that a collapsed block hides.
+    cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+    app.click_labelled(cx, "Copy query");
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert!(
+        copied.starts_with("-- A quick look at route performance")
+            && copied.trim_end().ends_with("ORDER BY departures DESC;"),
+        "Copy query must copy the full SQL: {copied:?}"
+    );
 }

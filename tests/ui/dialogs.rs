@@ -77,8 +77,9 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
         assert!(unit.bounds().left() - input.bounds().left() < window.rem_size() * 4.);
     });
     app.fill(cx, field, "0");
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "cmd-w");
+    app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "disabled replay retention", |workspace| {
         workspace.settings.export_replay_limit_mib == 0
     });
@@ -95,7 +96,7 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
         assert_eq!(value(window, field).as_deref(), Some("1048576"));
     });
     app.fill(cx, field, "300");
-    app.click(cx, "save-settings");
+    app.press(cx, "cmd-w");
     wait_saved(&app, cx, "replay retention", |workspace| {
         workspace.settings.export_replay_limit_mib == 300
     });
@@ -108,8 +109,9 @@ fn copy_format_is_saved(cx: &mut TestAppContext) {
     app.fill_labelled(cx, "Search...", "clipboard");
     app.wait_for(cx, "setting-copy-format");
     app.select(cx, "setting-copy-format", "JSON");
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "cmd-w");
+    app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "the copy format", |workspace| {
         workspace.settings.copy_format == CopyFormat::Json
     });
@@ -128,7 +130,7 @@ fn copy_format_is_saved(cx: &mut TestAppContext) {
 fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, OpenSettings);
-    app.wait_for(cx, "save-settings");
+    app.wait_for(cx, "reset-settings");
     app.update(cx, |window, _| {
         assert_eq!(value(window, "setting-theme").as_deref(), Some("System"));
     });
@@ -220,11 +222,15 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
             Some("Uppercase")
         );
     });
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "cmd-w");
+    app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "the restored default fonts", |w| {
         w.settings.editor_font_size == 13.
             && w.settings.assistant_font_size == 14.
-            && w.settings.editor_font_family == "Menlo"
+            && w.settings.editor_font_family == "JetBrains Mono"
+            && w.settings.logs_font_family == "JetBrains Mono"
+            && w.settings.ui_font_family == "IBM Plex Sans"
+            && w.settings.assistant_font_family == "IBM Plex Sans"
     });
 }

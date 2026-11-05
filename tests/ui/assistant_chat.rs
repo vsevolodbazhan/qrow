@@ -45,18 +45,11 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
             has(window, "add-connection"),
             "Opening the assistant hid the Connections sidebar"
         );
-        for (id, expected) in [
-            ("assistant-model", "Model: waiting for Codex"),
-            ("assistant-reasoning", "Reasoning: waiting for Codex"),
-            ("assistant-tier", "Service Tier: waiting for Codex"),
-        ] {
-            assert_eq!(label(window, id).as_deref(), Some(expected));
-            // A control that waits for Codex does not open its menu.
-            window.click(id, cx);
-            assert!(
-                window.try_find("popup-menu").is_none(),
-                "{id} opened while Codex started"
-            );
+        // The selectors have no values until Codex starts: a status shows
+        // in their place.
+        assert!(has(window, "assistant-controls-waiting"));
+        for id in ["assistant-model", "assistant-reasoning", "assistant-tier"] {
+            assert!(!has(window, id), "{id} showed while Codex started");
         }
         assert!(!labels(window).iter().any(|l| l.contains("Starting Codex")));
     });
@@ -200,7 +193,9 @@ fn widening_the_window_reads_the_revealed_assistant_reply(cx: &mut TestAppContex
     app.wait_label(cx, "Toggle assistant, reply ready");
     app.wait_gone(cx, "assistant-transcript");
 
-    cx.simulate_window_resize(app.window, size(px(1280.), px(820.)));
+    // At 1280 pixels the pane is too narrow for the list beside the
+    // conversation, so the list still covers it.
+    cx.simulate_window_resize(app.window, size(px(1600.), px(820.)));
     app.wait_reply(cx, "I can help with this query");
     app.wait_label(cx, "Toggle assistant");
 }

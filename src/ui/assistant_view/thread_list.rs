@@ -1,6 +1,5 @@
 //! The list of conversations and its search.
 use super::*;
-use gpui_kit::base::FocusableExt as _;
 
 pub(super) fn conversation_age(last_activity: u64, now: u64) -> String {
     if last_activity == 0 {
@@ -68,6 +67,16 @@ impl AssistantPane {
             self.lowercase.borrow_mut().clear();
         }
         let displayed = qrow.displayed_thread();
+        let visible: Vec<_> = conversations
+            .into_iter()
+            .map(|conversation| (conversation, qrow.conversation_place(conversation)))
+            .filter(|(conversation, (place, closed))| {
+                search.is_empty()
+                    || self.search_matches(&conversation.title, &search)
+                    || self.search_matches(place, &search)
+                    || (*closed && self.search_matches("Tab closed", &search))
+            })
+            .collect();
         v_flex()
             .w(if narrow { width } else { qrow.ui_px(230.) })
             .max_w_full()
@@ -102,7 +111,6 @@ impl AssistantPane {
                     })
                     .child(
                         Input::new(&self.thread_search)
-                            .focus_ring(false)
                             .small()
                             .flex_1()
                             .min_w_0()
@@ -119,130 +127,183 @@ impl AssistantPane {
                     .px_2()
                     .py_2()
                     .gap_1()
-                    .children(
-                        conversations
-                            .into_iter()
-                            .map(|conversation| {
-                                (conversation, qrow.conversation_place(conversation))
-                            })
-                            .filter(|(conversation, (place, closed))| {
-                                search.is_empty()
-                                    || self.search_matches(&conversation.title, &search)
-                                    || self.search_matches(place, &search)
-                                    || (*closed && self.search_matches("Tab closed", &search))
-                            })
-                            .map(|(conversation, (place, closed))| {
-                                let id = conversation.thread_id.clone();
-                                let status = qrow.thread_status(&id);
-                                let tooltip_thread = id.clone();
-                                let tooltip = StatusTooltip::live(self.qrow.clone(), None, move |qrow, _| {
-                                    qrow.assistant.conversations.iter().find(|conversation| conversation.thread_id == tooltip_thread).map(|conversation| {
-                                        StatusTooltip::new(conversation.title.clone(), qrow.thread_status(&tooltip_thread).tooltip_status())
+                    .when(visible.is_empty(), |list| {
+                        list.child(
+                            div()
+                                .id("assistant-thread-list-empty")
+                                .test_support()
+                                .px_2()
+                                .py_4()
+                                .text_sm()
+                                .text_center()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(if search.is_empty() {
+                                    "No conversations yet"
+                                } else {
+                                    "No matching conversations"
+                                }),
+                        )
+                    })
+                    .children(visible.into_iter().map(|(conversation, (place, closed))| {
+                        let id = conversation.thread_id.clone();
+                        let status = qrow.thread_status(&id);
+                        let tooltip_thread = id.clone();
+                        let tooltip =
+                            StatusTooltip::live(self.qrow.clone(), None, move |qrow, _| {
+                                qrow.assistant
+                                    .conversations
+                                    .iter()
+                                    .find(|conversation| conversation.thread_id == tooltip_thread)
+                                    .map(|conversation| {
+                                        StatusTooltip::new(
+                                            conversation.title.clone(),
+                                            qrow.thread_status(&tooltip_thread).tooltip_status(),
+                                        )
                                     })
-                                });
-                                let row = h_flex()
-                                    .id(SharedString::from(format!("assistant-thread-row-{id}")))
-                                    .tooltip(tooltip)
+                            });
+                        let row = h_flex()
+                            .id(SharedString::from(format!("assistant-thread-row-{id}")))
+                            .tooltip(tooltip)
+                            .w_full()
+                            .h(qrow.ui_px(48.))
+                            .flex_shrink_0();
+                        let selected = displayed.as_deref() == Some(id.as_str());
+                        let label = conversation.title.clone();
+                        let generating = qrow.assistant_title_generating(&id);
+                        let accessible = format!(
+                            "{label}, {place}{}{}{}",
+                            if closed { ", Tab Closed" } else { "" },
+                            status.accessible_suffix(),
+                            if generating { ", generating title" } else { "" }
+                        );
+                        let menu_thread = id.clone();
+                        let button = Button::new(format!("assistant-thread-{id}"))
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .h_full()
+                            .justify_start()
+                            .accessibility_label(accessible)
+                            .child(
+                                v_flex()
                                     .w_full()
-                                    .h(qrow.ui_px(48.))
-                                    .flex_shrink_0();
-                                let selected = displayed.as_deref() == Some(id.as_str());
-                                let label = conversation.title.clone();
-                                let generating = qrow.assistant_title_generating(&id);
-                                let accessible = format!(
-                                    "{label}, {place}{}{}{}",
-                                    if closed { ", Tab Closed" } else { "" },
-                                    status.accessible_suffix(),
-                                    if generating { ", generating title" } else { "" }
-                                );
-                                let menu_thread = id.clone();
-                                let button = Button::new(format!("assistant-thread-{id}"))
-                                    .ghost()
-                                    .small()
-                                    .w_full()
-                                    .h_full()
-                                    .justify_start()
-                                    .accessibility_label(accessible)
+                                    .min_w_0()
+                                    .gap_0p5()
                                     .child(
-                                        v_flex()
-                                            .w_full()
+                                        h_flex()
                                             .min_w_0()
-                                            .gap_0p5()
+                                            .gap_2()
                                             .child(
-                                                h_flex()
+                                                div()
+                                                    .flex_1()
                                                     .min_w_0()
-                                                    .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .min_w_0()
-                                                            .truncate()
-                                                            .when(generating, |title| {
-                                                                title.child(
-                                                                    ShimmerText::new(label.clone())
-                                                                        .id(format!("assistant-title-row-{id}")),
-                                                                )
-                                                            })
-                                                            .when(!generating, |title| title.child(label)),
-                                                    )
-                                                    .when_some(
-                                                        qrow.assistant_status_dot(status, cx),
-                                                        |row, dot| {
-                                                            row.child(div()
-                                                                .id(SharedString::from(format!("assistant-thread-dot-{id}")))
-                                                                .test_support()
-                                                                .flex_none()
-                                                                .child(dot))
-                                                        },
-                                                    ),
+                                                    .truncate()
+                                                    .when(generating, |title| {
+                                                        title.child(
+                                                            ShimmerText::new(label.clone()).id(
+                                                                format!("assistant-title-row-{id}"),
+                                                            ),
+                                                        )
+                                                    })
+                                                    .when(!generating, |title| title.child(label)),
                                             )
-                                            .child(
-                                                h_flex()
-                                                    .min_w_0()
-                                                    .gap_2()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(div()
-                                                        .id(SharedString::from(format!("assistant-thread-place-{id}")))
-                                                        .test_support().aria_label(place.clone())
-                                                        .flex_1().min_w_0().truncate().child(place))
-                                                    // A conversation of the other harness names it.
-                                                    .when(!qrow.conversation_runs(&id), |row| row.child(div()
-                                                        .id(SharedString::from(format!("assistant-thread-harness-{id}")))
-                                                        .test_support().aria_label(conversation.harness.name())
-                                                        .flex_shrink_0().child(conversation.harness.name())))
-                                                    .when(closed, |row| row.child(div()
-                                                        .id(SharedString::from(format!("assistant-thread-closed-{id}")))
-                                                        .test_support().aria_label("Tab closed")
-                                                        .flex_shrink_0().child("Tab closed")))
-                                                    .child(div()
-                                                        .id(SharedString::from(format!("assistant-thread-age-{id}")))
-                                                        .test_support().flex_shrink_0()
-                                                        .child(conversation_age(conversation.last_activity, unix_now_seconds()))),
+                                            .when_some(
+                                                qrow.assistant_status_dot(status, cx),
+                                                |row, dot| {
+                                                    row.child(
+                                                        div()
+                                                            .id(SharedString::from(format!(
+                                                                "assistant-thread-dot-{id}"
+                                                            )))
+                                                            .test_support()
+                                                            .flex_none()
+                                                            .child(dot),
+                                                    )
+                                                },
                                             ),
                                     )
-                                    .selected(selected)
-                                    .when(selected, |button| {
-                                        button
-                                            .bg(cx.theme().sidebar_accent)
-                                            .text_color(cx.theme().sidebar_accent_foreground)
-                                    })
-                                    .on_click(on_qrow(&self.qrow, move |this, _, window, cx| {
-                                        this.select_assistant_thread(&id, window, cx);
-                                    }));
-                                row.child(button)
-                                    .on_mouse_down(
-                                        MouseButton::Right,
-                                        on_qrow(&self.qrow, move |_, event: &MouseDownEvent, window, cx| {
-                                            let (thread, position) = (menu_thread.clone(), event.position);
-                                            cx.defer_in(window, move |this, window, cx| {
-                                                this.open_thread_menu(&thread, position, window, cx)
-                                            });
-                                        }),
-                                    )
-                                    .into_any_element()
-                            }),
-                    ),
+                                    .child(
+                                        h_flex()
+                                            .min_w_0()
+                                            .gap_2()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "assistant-thread-place-{id}"
+                                                    )))
+                                                    .test_support()
+                                                    .aria_label(place.clone())
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .child(place),
+                                            )
+                                            // A conversation of the other harness names it.
+                                            .when(!qrow.conversation_runs(&id), |row| {
+                                                row.child(
+                                                    div()
+                                                        .id(SharedString::from(format!(
+                                                            "assistant-thread-harness-{id}"
+                                                        )))
+                                                        .test_support()
+                                                        .aria_label(conversation.harness.name())
+                                                        .flex_shrink_0()
+                                                        .child(conversation.harness.name()),
+                                                )
+                                            })
+                                            .when(closed, |row| {
+                                                row.child(
+                                                    div()
+                                                        .id(SharedString::from(format!(
+                                                            "assistant-thread-closed-{id}"
+                                                        )))
+                                                        .test_support()
+                                                        .aria_label("Tab closed")
+                                                        .flex_shrink_0()
+                                                        .child("Tab closed"),
+                                                )
+                                            })
+                                            .child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "assistant-thread-age-{id}"
+                                                    )))
+                                                    .test_support()
+                                                    .flex_shrink_0()
+                                                    .child(conversation_age(
+                                                        conversation.last_activity,
+                                                        unix_now_seconds(),
+                                                    )),
+                                            ),
+                                    ),
+                            )
+                            .selected(selected)
+                            .when(selected, |button| {
+                                button
+                                    .bg(cx.theme().sidebar_accent)
+                                    .text_color(cx.theme().sidebar_accent_foreground)
+                            })
+                            .on_click(on_qrow(&self.qrow, move |this, _, window, cx| {
+                                this.select_assistant_thread(&id, window, cx);
+                            }));
+                        row.child(button)
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                on_qrow(
+                                    &self.qrow,
+                                    move |_, event: &MouseDownEvent, window, cx| {
+                                        let (thread, position) =
+                                            (menu_thread.clone(), event.position);
+                                        cx.defer_in(window, move |this, window, cx| {
+                                            this.open_thread_menu(&thread, position, window, cx)
+                                        });
+                                    },
+                                ),
+                            )
+                            .into_any_element()
+                    })),
             )
     }
 }

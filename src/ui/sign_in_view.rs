@@ -11,7 +11,6 @@ use crate::{
     oidc::{self, Failure, Status},
 };
 use gpui_kit::assets::IconName as AssetIconName;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     ColorName, Icon,
     alert::Alert,
@@ -75,25 +74,25 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 6] = [
     (
         "sign-in-issuer",
         "Issuer",
-        "The issuer URL of the provider, for example a Keycloak realm URL.",
+        "Issuer URL of the provider, like a Keycloak realm URL.",
         "https://id.example.com/realms/data",
     ),
     (
         "sign-in-client-id",
         "Client ID",
-        "The ID of the public client at the provider. No client secret is necessary.",
+        "ID of the public client. No client secret is needed.",
         "desktop-app",
     ),
     (
         "sign-in-scopes",
         "Scopes",
-        "Optional. Other scopes that the provider requires, separated by spaces.",
+        "Optional. Extra scopes, separated by spaces.",
         "offline_access",
     ),
     (
         "sign-in-resource",
         "Resource",
-        "Optional. The resource URI, if the provider requires one.",
+        "Optional. The resource URI, if the provider needs one.",
         "https://db.example.com",
     ),
     (
@@ -339,7 +338,7 @@ impl Qrow {
         self.sign_in_ui.errors.insert(id, message.clone());
         self.record_activity(
             connection,
-            crate::activity::ActivityEntry::new(Severity::Error, message),
+            crate::activity::ActivityEntry::new(Severity::Error, message).with_source("Sign-in"),
             cx,
         );
     }
@@ -1620,7 +1619,6 @@ impl Qrow {
                             Input::new(input)
                                 .id("sign-in-account")
                                 .aria_label("Account")
-                                .focus_ring(false)
                                 .readonly(true)
                                 .disabled(true)
                                 .flex_1()
@@ -1688,7 +1686,6 @@ impl Qrow {
             let (id, label, description, _) = field;
             Field::new().label(label).description(description).child(
                 Input::new(&editor.fields[index])
-                    .focus_ring(false)
                     .id(id)
                     .w_full()
                     .disabled(signed_in && TOKEN_FIELDS.contains(&index))

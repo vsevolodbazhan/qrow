@@ -259,7 +259,15 @@ fn a_connection_shows_one_dot_while_another_tab_runs_after_an_error(cx: &mut Tes
     app.wait_gone(cx, "activity");
     app.click_labelled(cx, "Query 2, running");
     app.wait_cell(cx, 0, 1, "0");
-    app.wait_label(cx, "Alpha");
+    // The tree item of the connection is labelled "Alpha" in every state, so
+    // wait for the label of the connection row, which names its state, and
+    // for both tabs to finish, also a keep-alive that runs for a moment.
+    let idle = cx.update(|cx| cx.theme().info.opacity(0.4));
+    app.wait_until(cx, "the idle connection", QUERY_TIMEOUT, |window, _| {
+        label(window, format!("profile-{}", profile.id)).as_deref() == Some("Alpha")
+            && shows_tab_dot(window, failed, Some(idle))
+            && shows_tab_dot(window, running, Some(idle))
+    });
     app.update(cx, |window, cx| {
         assert_tab_dot(window, failed, Some(cx.theme().info.opacity(0.4)));
         assert_tab_dot(window, running, Some(cx.theme().info.opacity(0.4)));

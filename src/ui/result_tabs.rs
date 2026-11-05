@@ -20,7 +20,8 @@ pub(super) struct ResultEditor {
 
 pub(super) const RESULT_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "result",
-    label: "Result Name",
+    title: "Rename Result",
+    label: "Name",
     tooltip: "Rename result",
     form: |this| {
         this.result_form
@@ -46,6 +47,7 @@ impl Qrow {
     /// Logs and the result tabs of the active query tab.
     pub(super) fn result_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let height = self.ui_px(RESULT_TAB_BAR_HEIGHT);
+        let menu_open = self.menu.is_some();
         let tab = &self.tabs[self.active];
         let selected = match tab.panel.selected {
             Panel::Output => 0,
@@ -107,10 +109,13 @@ impl Qrow {
                         "{title}{}",
                         if result.pinned { ", pinned" } else { "" }
                     ))
+                    // The tooltip would cover the context menu of the tab.
                     .map(|mut panel_tab| {
-                        panel_tab
-                            .interactivity()
-                            .tooltip(move |window, cx| tooltip.build(None, window, cx));
+                        if !menu_open {
+                            panel_tab
+                                .interactivity()
+                                .tooltip(move |window, cx| tooltip.build(None, window, cx));
+                        }
                         panel_tab
                     })
                     .on_mouse_down(

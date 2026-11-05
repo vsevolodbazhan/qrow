@@ -28,6 +28,10 @@ pub struct ActivityEntry {
     pub text: String,
     /// The query tab that the entry is about, if any.
     pub tab: Option<Uuid>,
+    /// What the entry is about, for its source column: the title of the tab
+    /// when the entry arrived, or a name like `dbt`. The text of a tab entry
+    /// starts with the title.
+    pub title: Option<String>,
     /// Whether the entry counts as an unseen error until its Activity shows.
     counts: bool,
     /// Unique in the Activity of all connections, from the order of arrival.
@@ -42,6 +46,7 @@ impl ActivityEntry {
             severity,
             text: text.into(),
             tab: None,
+            title: None,
             counts: severity == Severity::Error,
             id: 0,
         }
@@ -49,6 +54,21 @@ impl ActivityEntry {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// The entry with `source` in its source column.
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.title = Some(source.into());
+        self
+    }
+
+    /// The text without the tab title.
+    pub fn message(&self) -> &str {
+        self.title
+            .as_deref()
+            .and_then(|title| self.text.strip_prefix(title))
+            .and_then(|text| text.strip_prefix(": "))
+            .unwrap_or(&self.text)
     }
 
     pub fn is_error(&self) -> bool {
@@ -71,6 +91,7 @@ pub fn from_refresh(event: LogEvent) -> ActivityEntry {
         counts: event.severity == Severity::Error && event.kind == LogKind::SchemaRefreshFinished,
         text: event.text,
         tab: None,
+        title: Some("Schemas".into()),
         id: 0,
     }
 }
@@ -105,6 +126,7 @@ pub fn from_tab(event: &LogEvent, tab: Uuid, title: &str) -> Option<ActivityEntr
         severity: event.severity,
         text: format!("{title}: {text}"),
         tab: Some(tab),
+        title: Some(title.to_owned()),
         counts: false,
         id: 0,
     })

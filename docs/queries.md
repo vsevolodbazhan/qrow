@@ -59,12 +59,31 @@ also clears the unread error, even if you selected Logs after the failure. See
 Select the **Logs** tab before the result tabs to inspect the work of the tab. The history shows
 connection and session events, the exact SQL submitted to the tab's owning
 connection, execution completion, preview page fetches, cancellation, and
-errors. Selecting a connection or query tab does not add a log entry. Each
-entry starts with a wall-clock timestamp in brackets, followed by its message.
-Errors use the error color. Durations are client measurements.
+errors. Selecting a connection or query tab does not add a log entry.
+
+Each entry is a row. The wall-clock time is at the left, then an error icon
+for an error, the message, and the actions of the entry. The copied text has
+the date and the time in brackets. Errors use the error color. SQL shows in a
+code block below its message. Messages use the interface font. Times and SQL
+use the Logs font. Durations are client measurements, for example
+`Query finished on the server (842 ms)` or `Fetched rows 1–2,250 (all rows)`.
+Numbers group their digits.
 
 Use **Font Family**, **Font Size**, and **Line Height** in the Logs section of
-Settings to change the Logs text. The default line-height multiplier is 1.2.
+Settings to change the times and the SQL. The default font is JetBrains Mono,
+and the default line-height multiplier is 1.2.
+
+A code block of more than 5 lines shows its first 5 lines, which fade out at
+the bottom. Click **Expand query** at the right of the entry to show all lines,
+and **Collapse query** to show 5 lines again. **Copy query** on a submitted
+query copies all of its SQL, also the lines that a collapsed block does not
+show.
+
+Logs show only the rows on the screen and near it, so a long history scrolls
+and selects text without delay. While you are at the end of Logs, the list
+follows new entries. When you scroll up, it keeps its place. Drag in the text
+to select it, or double-click a word. A selection can continue across
+entries.
 
 Logs show only the work that changes something for the tab. A failed
 keep-alive shows with its SQL and the error, because it closed the session.
@@ -74,10 +93,12 @@ Successful keep-alives and schema refreshes show only in
 batches.
 
 Qrow keeps Logs history in memory. Closing the query tab or quitting Qrow
-deletes that history. **Clear** deletes the current history. **Copy all** copies
-all stored entries with the timestamps that Logs shows. **Copy error** copies
-the latest error with its timestamp. Text selection and both copy commands
-preserve multiline text and Unicode error details.
+deletes that history. The Logs toolbar shows the number of entries in a chip,
+and its commands as icon buttons with tooltips. **Copy all logs** copies all
+stored entries with their dates and times. **Copy latest error** copies the
+latest error with its date and time. It shows only when the history has an
+error. **Clear logs** deletes the current history. Text selection and the copy
+commands preserve multiline text and Unicode error details.
 
 Qrow selects Logs when a query fails. It selects the result tab of the query
 when the query succeeds, after the first preview fetch or completion without a
@@ -137,13 +158,37 @@ appears in the entry count and **Copy all** output.
 Press **⌘T** or click **+** in the tab strip to create a tab. The new tab belongs
 to the active connection and has its own session.
 
+A tab that is not selected is at most 240 points wide. A long name ends in an
+ellipsis. The selected tab grows to show its full name. Only a name that is
+wider than the visible strip ends in an ellipsis. When you select another tab,
+the previous tab shrinks back. When the strip is short of room, the tabs that
+are not selected shrink, down to a width that shows a short name like
+`Query 12` in full. When only a little room is missing, they shrink a little
+more, so a few tabs fit without a scroll. Below these widths, the strip
+scrolls:
+
+- Scroll it with a trackpad swipe or the mouse wheel. When the scroll stops,
+  a tab starts exactly at the left edge. At the end of the strip, the last tab
+  ends at the right edge.
+- An edge with more tabs past it shows a short shade. A tab that an edge cuts
+  fades into the strip, and it hides its status dot and close button. A tab
+  cut by the left edge shows the start of its name at the edge.
+- Click a cut tab to select it. The selected tab always shows in full. The
+  strip scrolls to it after you select it, add or close a tab, rename a tab,
+  or change the width of the window, the sidebar, or the assistant pane.
+- Point to a tab to see its full name and its status in a tooltip, for example
+  `Query 5` and `Not connected`. Each tab shows this tooltip, also the selected
+  tab and a tab with a status dot. Tab tooltips close when the pointer moves
+  away, when the strip scrolls, and when the window changes size.
+
 Each connection always has at least one tab. Closing or moving the last tab
 creates a blank replacement. See [Connections](connections.md#manage-tabs-under-a-connection)
 for copy and move actions.
 
-Right-click a tab and choose **Rename…**. Enter a unique name, or leave the
-field empty to keep the current name. Renaming preserves the SQL, connection,
-and downloaded results.
+Right-click a tab and choose **Rename…**. The **Rename Tab** dialog opens with
+the current name selected, so you can type a new name at once. Enter a unique
+name, or leave the field empty to keep the current name. Renaming preserves
+the SQL, connection, and downloaded results.
 
 A busy tab cannot close. A tab also cannot close while its [assistant
 conversation](assistant.md#conversations-and-query-tabs) works or waits for
@@ -198,7 +243,11 @@ type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 
 ## Syntax
 
-The editor highlights SQL syntax and the full width of the active line.
+The editor highlights SQL syntax and the full width of the active line. SQL
+keywords such as `DESC` share one keyword color. In light themes with a
+saturated comment color, comments use the muted text color. An empty editor
+shows the hint `Write SQL, then press ⌘↩ to run`. In a narrow editor, the hint
+wraps.
 Autocomplete, schema exploration, and language server features are not available.
 
 ## Design

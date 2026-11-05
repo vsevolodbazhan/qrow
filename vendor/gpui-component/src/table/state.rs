@@ -22,6 +22,13 @@ use gpui::{
 
 use super::*;
 
+/// The space that the table keeps free for a scrollbar: the full scrollbar
+/// width in `gpui-base`.
+const SCROLLBAR_GUTTER: Pixels = px(16.);
+
+/// Qrow: the hover group of a table row, for the fades of its cut columns.
+const TABLE_ROW_GROUP: &str = "qrow-table-row";
+
 /// How far behind the pointer a resize drag trails the column edge.
 const HANDLE_SIZE: Pixels = px(2.);
 
@@ -404,6 +411,138 @@ where
     /// The height shared by all virtualized rows.
     pub fn row_height(&self) -> Pixels {
         self.options.size.table_row_height()
+    }
+
+    /// Qrow: the fades over the start and the end of the scrolled columns of
+    /// a row, or of the header for `None`, in the background that the row
+    /// shows there: the table, a stripe, a hover, a selected row, or the tint
+    /// of the cut cell. They stop above the row border.
+    fn edge_fades(
+        &self,
+        row_ix: Option<usize>,
+        stripe: bool,
+        selected: bool,
+        insets: (Pixels, Pixels),
+        cx: &App,
+    ) -> Vec<gpui::AnyElement> {
+        let (left, right) = self.hidden_edges();
+        let theme = cx.theme();
+        let base = gpui::Hsla::from(theme.tokens.table);
+        let row = match row_ix {
+            None => base.blend(gpui::Hsla::from(theme.tokens.table_head)),
+            Some(_) if selected => base.blend(if theme.list.active_highlight {
+                gpui::Hsla::from(theme.tokens.table_active)
+            } else {
+                gpui::Hsla::from(theme.tokens.accent)
+            }),
+            Some(_) if stripe => base.blend(gpui::Hsla::from(theme.tokens.table_even)),
+            Some(_) => base,
+        };
+        let hover = (row_ix.is_some() && !selected)
+            .then(|| base.blend(gpui::Hsla::from(theme.tokens.table_hover)));
+        let width = px(28.);
+        [(left, true), (right, false)]
+            .into_iter()
+            .filter_map(|(col, start)| {
+                let col = col?;
+                let cell = row_ix.and_then(|row| self.delegate.cell_background(row, col, cx));
+                // In a row, the fade covers the cell inside its column paddings,
+                // where cells paint their background; in the header, all but
+                // the bottom border.
+                let inset = match row_ix {
+                    None => (px(0.), px(1.)),
+                    Some(_) => self
+                        .col_groups
+                        .get(col)
+                        .and_then(|col| col.column.paddings)
+                        .map_or((px(0.), px(0.)), |paddings| (paddings.top, paddings.bottom)),
+                };
+                let gradient = move |color: gpui::Hsla| {
+                    let (from, to) = if start {
+                        (color, color.opacity(0.))
+                    } else {
+                        (color.opacity(0.), color)
+                    };
+                    gpui::linear_gradient(
+                        90.,
+                        gpui::linear_color_stop(from, 0.),
+                        gpui::linear_color_stop(to, 1.),
+                    )
+                };
+                // The row color hides the cut content, and the cell background
+                // is painted again over it, as the cell paints it over the row.
+                let (normal, hovered) = (row, hover);
+                Some(
+                    div()
+                        .id(if start { "fade-left" } else { "fade-right" })
+                        .test_support()
+                        .absolute()
+                        .top(inset.0)
+                        .bottom(inset.1)
+                        .w(width)
+                        .map(|this| {
+                            if start {
+                                this.left(insets.0)
+                            } else {
+                                this.right(insets.1)
+                            }
+                        })
+                        .bg(gradient(normal))
+                        .when_some(hovered, |this, hovered| {
+                            this.group_hover(TABLE_ROW_GROUP, move |style| {
+                                style.bg(gradient(hovered))
+                            })
+                        })
+                        .when_some(cell, |this, cell| {
+                            this.child(div().absolute().inset_0().bg(gradient(cell)))
+                        })
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+
+    /// Qrow: the column at each edge of the scrolled columns, when more
+    /// columns are hidden past that edge, so the cut content fades there.
+    fn hidden_edges(&self) -> (Option<usize>, Option<usize>) {
+        let fixed = self.fixed_left_cols_count();
+        let Some(cols) = self.col_groups.get(fixed..) else {
+            return (None, None);
+        };
+        let scrolled = -self.horizontal_scroll_handle.offset().x;
+        let view = self.horizontal_scroll_handle.bounds().size.width;
+        let total: Pixels = cols.iter().map(|col| col.width).sum();
+        let column_at = |x: Pixels| {
+            let mut end = px(0.);
+            cols.iter().position(|col| {
+                end += col.width;
+                end > x
+            })
+        };
+        let left = (scrolled > px(0.5)).then(|| column_at(scrolled)).flatten();
+        let right = (view > px(0.) && total - view - scrolled > px(0.5))
+            .then(|| column_at(scrolled + view - px(0.5)))
+            .flatten();
+        (left.map(|ix| ix + fixed), right.map(|ix| ix + fixed))
+    }
+
+    /// Qrow: the room that the rows keep for the scrollbars, beside and
+    /// below their content, from the sizes of the last frame. The vertical
+    /// one is kept only when the rows overflow the body, the bottom one only
+    /// when the columns overflow it and the last row would sit under the
+    /// horizontal scrollbar. Row backgrounds and lines still reach the edges.
+    fn scrollbar_room(&self, cx: &App) -> (bool, Pixels) {
+        let body = self.body_bounds().size;
+        let rows = self.delegate.rows_count(cx) as f32 * self.row_height();
+        let columns: Pixels = self.col_groups.iter().map(|col| col.width).sum();
+        let horizontal = self.options.scrollbar_visible.bottom
+            && columns > body.width + px(0.5)
+            && rows > body.height - SCROLLBAR_GUTTER;
+        let bottom = if horizontal { SCROLLBAR_GUTTER } else { px(0.) };
+        let vertical = self.options.scrollbar_visible.right
+            && body.height > px(0.)
+            && rows + bottom > body.height + px(0.5);
+        (vertical, bottom)
     }
 
     /// Resolve a pointer to a row and column, clamping outside the viewport.
@@ -1836,8 +1975,36 @@ where
         let style = header.style().clone();
         let layout = self.header_layout.clone();
 
+        // The header keeps the same room for the vertical scrollbar as the
+        // rows, so their columns stay aligned, and its border runs on under it.
+        let (vertical_gutter, _) = self.scrollbar_room(cx);
+        // The header fades sit over its scrolled columns: after the fixed
+        // columns and before the room for the scrollbar.
+        let fixed_width = if self.cell_selectable && self.row_header {
+            px(40.)
+        } else {
+            px(0.)
+        } + self.col_groups[..left_columns_count.min(self.col_groups.len())]
+            .iter()
+            .map(|col| col.width)
+            .sum::<Pixels>();
+        let fades = self.edge_fades(
+            None,
+            false,
+            false,
+            (
+                fixed_width,
+                if vertical_gutter {
+                    SCROLLBAR_GUTTER
+                } else {
+                    px(0.)
+                },
+            ),
+            cx,
+        );
         header
             .h_flex()
+            .relative()
             .w_full()
             .flex_shrink_0()
             .bg(cx.theme().tokens.table_head)
@@ -2016,6 +2183,17 @@ where
                         }),
                     )),
             )
+            .when(vertical_gutter, |this| {
+                this.child(
+                    div()
+                        .w(SCROLLBAR_GUTTER)
+                        .h_full()
+                        .flex_shrink_0()
+                        .border_b_1()
+                        .border_color(cx.theme().border),
+                )
+            })
+            .children(fades)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2038,6 +2216,29 @@ where
 
         if row_ix < rows_count {
             let is_last_row = row_ix + 1 == rows_count;
+            // Qrow: the cell at the right edge of the shown columns, whose
+            // background the room after the cells continues.
+            let cut_col = self.hidden_edges().1;
+            let edge_cut = cut_col.is_some();
+            let edge_col = cut_col.or_else(|| self.col_groups.len().checked_sub(1));
+            let edge_background =
+                edge_col.and_then(|col| self.delegate.cell_background(row_ix, col, cx));
+            // The cells paint their background inside the column paddings.
+            let edge_inset = edge_col
+                .and_then(|col| self.col_groups.get(col))
+                .and_then(|col| col.column.paddings)
+                .map_or((px(0.), px(0.)), |paddings| (paddings.top, paddings.bottom));
+            let edge_fill = move || {
+                edge_background.map(|color| {
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(edge_inset.0)
+                        .bottom(edge_inset.1)
+                        .bg(color)
+                })
+            };
             let need_render_border = is_selected || !is_last_row || !is_filled;
 
             let mut tr = self.delegate.render_tr(row_ix, window, cx);
@@ -2046,6 +2247,7 @@ where
             tr.test_support()
                 .role(gpui::Role::Row)
                 .aria_selected(is_selected)
+                .group(TABLE_ROW_GROUP)
                 .h_flex()
                 .w_full()
                 .h(row_height)
@@ -2262,8 +2464,40 @@ where
                             )
                             .with_scroll_handle(&self.horizontal_scroll_handle),
                         )
-                        .child(self.delegate.render_last_empty_col(window, cx)),
+                        .child(
+                            // Qrow: the room after the cells shows the background of the
+                            // cell at the edge, such as a selection tint, like the row.
+                            div()
+                                .relative()
+                                .h_full()
+                                .flex_shrink_0()
+                                // A cut cell already reaches under this room.
+                                .when(!edge_cut, |this| this.children(edge_fill()))
+                                .child(self.delegate.render_last_empty_col(window, cx)),
+                        )
+                        // Qrow: a column cut by an edge with more columns past
+                        // it fades into the row, in the row's own color.
+                        .children(self.edge_fades(
+                            Some(row_ix),
+                            is_stripe_row,
+                            is_selected,
+                            (px(0.), px(0.)),
+                            cx,
+                        )),
                 )
+                // Qrow: room for the vertical scrollbar after the cells, so it
+                // covers no text, while the row background and line reach the
+                // edge.
+                .when(self.scrollbar_room(cx).0, |this| {
+                    this.child(
+                        div()
+                            .relative()
+                            .w(SCROLLBAR_GUTTER)
+                            .h_full()
+                            .flex_shrink_0()
+                            .children(edge_fill()),
+                    )
+                })
                 // Row selected style
                 // Note: Don't show row selection if a cell is selected
                 .when(is_selected && self.selection_mode.is_row(), |this| {
@@ -2489,6 +2723,7 @@ where
             None
         };
 
+        let (_, bottom_room) = self.scrollbar_room(cx);
         let inner_table = v_flex()
             .id("table-inner")
             .size_full()
@@ -2511,79 +2746,89 @@ where
                     this.children(empty_view)
                 } else {
                     this.child(
-                        h_flex().id("table-body").flex_grow_1().size_full().child(
-                            uniform_list(
-                                "table-uniform-list",
-                                render_rows_count,
-                                cx.processor(
-                                    move |table, visible_range: Range<usize>, window, cx| {
-                                        // Use `col.width` (always up-to-date) rather than
-                                        // `col.bounds.size.width`, which is only set after
-                                        // prepaint and is therefore zero on the first frame.
-                                        let col_sizes: Rc<Vec<gpui::Size<Pixels>>> = Rc::new(
-                                            table
-                                                .col_groups
-                                                .iter()
-                                                .skip(left_columns_count)
-                                                .map(|col| gpui::Size {
-                                                    width: col.width,
-                                                    height: px(0.),
-                                                })
-                                                .collect(),
-                                        );
-
-                                        table.load_more_if_need(
-                                            rows_count,
-                                            visible_range.end,
-                                            window,
-                                            cx,
-                                        );
-                                        table.update_visible_range_if_need(
-                                            visible_range.clone(),
-                                            Axis::Vertical,
-                                            window,
-                                            cx,
-                                        );
-
-                                        if visible_range.end > rows_count {
-                                            table.scroll_to_row(
-                                                std::cmp::min(
-                                                    visible_range.start,
-                                                    rows_count.saturating_sub(1),
-                                                ),
-                                                cx,
-                                            );
-                                        }
-
-                                        let mut items = Vec::with_capacity(
-                                            visible_range.end.saturating_sub(visible_range.start),
-                                        );
-
-                                        // Render fake rows to fill the table
-                                        visible_range.for_each(|row_ix| {
-                                            // Render real rows for available data
-                                            items.push(table.render_table_row(
-                                                row_ix,
-                                                rows_count,
-                                                left_columns_count,
-                                                col_sizes.clone(),
-                                                columns_count,
-                                                is_filled,
-                                                window,
-                                                cx,
-                                            ));
-                                        });
-
-                                        items
-                                    },
-                                ),
-                            )
+                        h_flex()
+                            .id("table-body")
                             .flex_grow_1()
                             .size_full()
-                            .with_sizing_behavior(ListSizingBehavior::Auto)
-                            .track_scroll(&self.vertical_scroll_handle)
-                            .into_any_element(),
-                        ),
+                            .min_h_0()
+                            .child(
+                                uniform_list(
+                                    "table-uniform-list",
+                                    render_rows_count,
+                                    cx.processor(
+                                        move |table, visible_range: Range<usize>, window, cx| {
+                                            // Use `col.width` (always up-to-date) rather than
+                                            // `col.bounds.size.width`, which is only set after
+                                            // prepaint and is therefore zero on the first frame.
+                                            let col_sizes: Rc<Vec<gpui::Size<Pixels>>> = Rc::new(
+                                                table
+                                                    .col_groups
+                                                    .iter()
+                                                    .skip(left_columns_count)
+                                                    .map(|col| gpui::Size {
+                                                        width: col.width,
+                                                        height: px(0.),
+                                                    })
+                                                    .collect(),
+                                            );
+
+                                            table.load_more_if_need(
+                                                rows_count,
+                                                visible_range.end,
+                                                window,
+                                                cx,
+                                            );
+                                            table.update_visible_range_if_need(
+                                                visible_range.clone(),
+                                                Axis::Vertical,
+                                                window,
+                                                cx,
+                                            );
+
+                                            if visible_range.end > rows_count {
+                                                table.scroll_to_row(
+                                                    std::cmp::min(
+                                                        visible_range.start,
+                                                        rows_count.saturating_sub(1),
+                                                    ),
+                                                    cx,
+                                                );
+                                            }
+
+                                            let mut items = Vec::with_capacity(
+                                                visible_range
+                                                    .end
+                                                    .saturating_sub(visible_range.start),
+                                            );
+
+                                            // Render fake rows to fill the table
+                                            visible_range.for_each(|row_ix| {
+                                                // Render real rows for available data
+                                                items.push(table.render_table_row(
+                                                    row_ix,
+                                                    rows_count,
+                                                    left_columns_count,
+                                                    col_sizes.clone(),
+                                                    columns_count,
+                                                    is_filled,
+                                                    window,
+                                                    cx,
+                                                ));
+                                            });
+
+                                            items
+                                        },
+                                    ),
+                                )
+                                .flex_grow_1()
+                                .size_full()
+                                // Qrow: room after the last row for the horizontal
+                                // scrollbar, so it covers no text at the end.
+                                .pb(bottom_room)
+                                .with_sizing_behavior(ListSizingBehavior::Auto)
+                                .track_scroll(&self.vertical_scroll_handle)
+                                .into_any_element(),
+                            ),
                     )
                 }
             });
@@ -2616,7 +2861,21 @@ where
             })
             .on_prepaint({
                 let state = cx.entity();
-                move |bounds, _, cx| state.update(cx, |state, _| state.bounds = bounds)
+                move |bounds, _, cx| {
+                    // The header picks its visible columns from these bounds
+                    // when it renders, before this prepaint. A new size, like
+                    // a wider pane, renders it again with the current width;
+                    // the rows measure their own viewport.
+                    let resized = state.update(cx, |state, _| {
+                        let resized = state.bounds.size != bounds.size;
+                        state.bounds = bounds;
+                        resized
+                    });
+                    if resized {
+                        let state = state.clone();
+                        cx.defer(move |cx| state.update(cx, |_, cx| cx.notify()));
+                    }
+                }
             })
             .when(!window.is_inspector_picking(cx), |this| {
                 this.child(

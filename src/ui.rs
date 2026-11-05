@@ -11,6 +11,7 @@ mod demo;
 mod environment;
 mod export_dialog;
 mod format_sql;
+mod log_row;
 mod output;
 mod profile_view;
 mod result_tabs;
@@ -19,6 +20,7 @@ mod results;
 mod run_highlight;
 mod setting_row;
 mod settings_view;
+mod settings_window;
 mod sign_in_view;
 mod status_dot;
 mod status_tooltip;
@@ -33,7 +35,7 @@ pub use workspace_view::WindowView;
 use crate::themes;
 use crate::{
     connector::DatabaseConnector,
-    logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
+    logs::{ExecutionId, LogEntry, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
         AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
@@ -61,7 +63,7 @@ use results::Results;
 use status_dot::DotStatus;
 use status_tooltip::StatusTooltip;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
@@ -101,6 +103,10 @@ actions!(
 /// Call once before opening a Qrow window.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    // Before the themes: they name the bundled monospace font.
+    if let Err(error) = cx.text_system().add_fonts(crate::assets::fonts()) {
+        eprintln!("Could not load the bundled fonts: {error:#}");
+    }
     cx.set_global(crate::export::Jobs::default());
     themes::init(cx);
     // Wide result sets need a persistent, discoverable horizontal scrollbar.
@@ -117,6 +123,7 @@ pub fn init(cx: &mut App) {
         ),
     );
     cx.bind_keys(results::bindings());
+    cx.bind_keys(settings_window::bindings());
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
         KeyBinding::new("alt-cmd-l", FormatSql, None),
@@ -140,6 +147,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-+", IncreaseUiScale, None),
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
+        // ⌘W closes the topmost dialog, like a macOS window, before it
+        // closes a query tab.
+        KeyBinding::new("cmd-w", gpui_kit::base::actions::Cancel, Some("Dialog")),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
         KeyBinding::new("cmd-enter", SaveSignIn, Some("SignInSettings")),
         KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
@@ -262,7 +273,12 @@ struct Tab {
     started: Option<Instant>,
     output: LogHistory,
     panel: PanelState,
-    output_scroll: ScrollHandle,
+    /// The rows of the Logs, one for each entry of `output`. Only the rows
+    /// on screen are laid out and painted, so a long log keeps a drag
+    /// selection fast. At the end, the list follows new entries.
+    output_list: ListState,
+    /// The Logs entries whose long code block shows in full.
+    expanded_output: HashSet<u64>,
     current_execution: Option<ExecutionId>,
     result_session: Option<Uuid>,
     next_execution_id: u64,
@@ -561,6 +577,11 @@ struct ProfileEditor {
     dbt: dbt::DbtForm,
     is_new: bool,
     error: Option<String>,
+    /// The errors of single fields, by index in `fields`. Each shows below
+    /// its field; `error` holds an error of the whole form for the footer.
+    field_errors: Vec<(usize, String)>,
+    /// The field to focus in the next frame: the first invalid one.
+    focus_field: std::cell::Cell<Option<usize>>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
 }
 struct ProfileSave {
@@ -628,8 +649,16 @@ fn truncate_display_name(name: &str) -> String {
 fn installed_fonts(cx: &App) -> Vec<String> {
     let mut fonts = cx.text_system().all_font_names();
     fonts.retain(|font| !font.is_empty());
-    if !fonts.iter().any(|font| font == "Menlo") {
-        fonts.insert(0, "Menlo".into());
+    // The macOS font list has only the installed fonts; the bundled fonts
+    // are in the GPUI text system and are always there.
+    for font in [
+        crate::model::INTERFACE_FONT_FAMILY,
+        crate::model::MONOSPACE_FONT_FAMILY,
+        "Menlo",
+    ] {
+        if !fonts.iter().any(|name| name == font) {
+            fonts.insert(0, font.into());
+        }
     }
     fonts
 }
@@ -658,6 +687,16 @@ fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     gpui_kit::component::Theme::sync_base(cx);
     window.set_rem_size(font_size);
     window.refresh();
+    // The Settings window and the main window share the interface scale.
+    let current = window.window_handle();
+    for handle in cx.windows() {
+        if handle != current {
+            let _ = handle.update(cx, |_, window, _| {
+                window.set_rem_size(font_size);
+                window.refresh();
+            });
+        }
+    }
 }
 
 fn panel_empty_state(message: &'static str, cx: &App) -> Div {
@@ -680,6 +719,8 @@ pub struct Qrow {
     assistant_pane: Entity<assistant_view::AssistantPane>,
     fonts: Vec<String>,
     settings_open: bool,
+    /// The Settings window, while it is open. There is at most one.
+    settings_window: Option<AnyWindowHandle>,
     /// The page that Settings shows when it opens.
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
@@ -692,6 +733,9 @@ pub struct Qrow {
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
     tab_scroll: ScrollHandle,
+    /// The Logs font, size, and line height that the Logs rows were measured
+    /// with.
+    output_typography: Option<(SharedString, Pixels, f32)>,
     form: Option<ProfileEditor>,
     tab_form: Option<TabEditor>,
     result_form: Option<result_tabs::ResultEditor>,
@@ -737,6 +781,12 @@ pub struct Qrow {
     dbt: dbt::DbtProjects,
     /// The dbt resource of the open dbt details sheet.
     dbt_details: Option<Entity<dbt_details::DbtDetailsView>>,
+    /// The schema tree row that opened the dbt details sheet. Closing the
+    /// sheet returns the focus to it.
+    dbt_details_origin: Option<SharedString>,
+    /// The height of the status bar in the last frame. Side sheets end
+    /// above it.
+    status_bar_height: std::rc::Rc<std::cell::Cell<Pixels>>,
     _demo_manifest: Option<tempfile::NamedTempFile>,
 }
 impl Qrow {
@@ -798,7 +848,7 @@ impl Qrow {
         let mut unavailable_font = !font_available(&workspace.settings.editor_font_family, &fonts);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
-            let warning = "The saved editor font is unavailable, so Qrow is using Menlo.";
+            let warning = "The saved editor font is unavailable, so Qrow is using JetBrains Mono.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -809,7 +859,7 @@ impl Qrow {
         if !font_available(&workspace.settings.logs_font_family, &fonts) {
             workspace.settings.logs_font_family = Settings::default().logs_font_family;
             unavailable_font = true;
-            let warning = "The saved Logs font is unavailable, so Qrow is using Menlo.";
+            let warning = "The saved Logs font is unavailable, so Qrow is using JetBrains Mono.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -821,7 +871,7 @@ impl Qrow {
             workspace.settings.assistant_font_family = Settings::default().assistant_font_family;
             unavailable_font = true;
             let warning =
-                "The saved assistant font is unavailable, so Qrow is using the system font.";
+                "The saved assistant font is unavailable, so Qrow is using IBM Plex Sans.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -833,7 +883,7 @@ impl Qrow {
             workspace.settings.ui_font_family = Settings::default().ui_font_family;
             unavailable_font = true;
             let warning =
-                "The saved interface font is unavailable, so Qrow is using the system font.";
+                "The saved interface font is unavailable, so Qrow is using IBM Plex Sans.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -940,6 +990,7 @@ impl Qrow {
             assistant_pane,
             fonts,
             settings_open: false,
+            settings_window: None,
             about_open: false,
             settings_form: None,
             profiles: workspace.profiles,
@@ -949,6 +1000,7 @@ impl Qrow {
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),
+            output_typography: None,
             form: None,
             tab_form: None,
             result_form: None,
@@ -986,6 +1038,8 @@ impl Qrow {
             _activity_events: activity_events,
             dbt,
             dbt_details: None,
+            dbt_details_origin: None,
+            status_bar_height: Default::default(),
             _demo_manifest: demo_manifest,
         };
         for tab in workspace.tabs {
@@ -1059,6 +1113,7 @@ impl Qrow {
                 .language("sql")
                 .soft_wrap(false)
                 .tab_size(editor_tab_size(&self.settings))
+                .placeholder("Write SQL, then press ⌘↩ to run")
                 .default_value(saved.sql.clone())
         });
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {
@@ -1099,7 +1154,8 @@ impl Qrow {
             started: None,
             output: LogHistory::default(),
             panel: PanelState::default(),
-            output_scroll: ScrollHandle::new(),
+            output_list: output::output_list(),
+            expanded_output: HashSet::new(),
             current_execution: None,
             result_session: None,
             submitted_sql: None,
@@ -1403,15 +1459,15 @@ impl Qrow {
         let _ = self.wake.try_send(());
         // The UI scale and the Logs font settings change here.
         self.sync_activity_typography(cx);
+        self.sync_output_typography();
         cx.notify();
     }
     fn record_log(tab: &mut Tab, event: LogEvent) {
-        let at_bottom =
-            tab.output_scroll.offset().y <= -tab.output_scroll.max_offset().y + px(8. * 1.);
+        let before: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
         tab.output.record(event);
-        if at_bottom {
-            tab.output_scroll.scroll_to_bottom();
-        }
+        // A new entry can also remove old groups, from any place in the log.
+        let after: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
+        output::splice_rows(&tab.output_list, &before, &after);
     }
     fn record_local_log(tab: &mut Tab, severity: Severity, kind: LogKind, text: impl Into<String>) {
         Self::record_log(
@@ -1420,7 +1476,7 @@ impl Qrow {
         );
     }
     fn record_failure(tab: &mut Tab, active: bool) {
-        tab.output_scroll.scroll_to_bottom();
+        tab.output_list.scroll_to_end();
         tab.panel.failure(active);
     }
     fn allocate_execution_id(tab: &mut Tab) -> ExecutionId {
@@ -1431,7 +1487,8 @@ impl Qrow {
     fn clear_output(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
         tab.output.clear();
-        tab.output_scroll.set_offset(point(px(0.), px(0.)));
+        tab.output_list.reset(0);
+        tab.expanded_output.clear();
         cx.notify();
     }
     fn copy_output(&self, cx: &mut App) {
@@ -2090,9 +2147,10 @@ impl Qrow {
             })
     }
     /// A modal owns the window, so tab and profile commands wait for it.
+    /// Whether a dialog of the main window is open. The Settings window is a
+    /// window of its own and leaves the main window usable.
     fn dialog_open(&self) -> bool {
         self.form.is_some()
-            || self.settings_open
             || self.about_open
             || self.tab_form.is_some()
             || self.result_form.is_some()
@@ -2222,7 +2280,7 @@ impl Qrow {
         self.run_selected_query(window, cx);
     }
     fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.form.is_some() || self.settings_open {
+        if self.form.is_some() {
             return false;
         }
         self.run_tab_query(self.active, window, cx)
@@ -2554,7 +2612,7 @@ impl Qrow {
     }
     fn disconnect_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[index];
-        if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
+        if !tab.can_disconnect() || self.form.is_some() {
             return;
         }
         if tab.worker.is_some() {
@@ -2576,13 +2634,27 @@ impl Qrow {
         }
         cx.notify();
     }
-    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.dialog_open() {
-            self.settings_open = true;
-            self.init_settings_form(window, cx);
-            self.open_settings_dialog(window, cx);
-            cx.notify();
+    /// Open the Settings window, or bring the open one to the front.
+    fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.settings_window {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+            self.settings_window = None;
+            self.settings_form = None;
         }
+        // The window creates its form inside Qrow, so it opens after this
+        // update of Qrow ends.
+        let qrow = cx.weak_entity();
+        cx.defer(move |cx| settings_window::open(qrow, cx));
+    }
+
+    /// The Settings window, while it is open.
+    pub fn settings_window(&self) -> Option<AnyWindowHandle> {
+        self.settings_window
     }
     fn open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dialog_open() {
@@ -2716,15 +2788,31 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_context_menu_from(position, None, items, window, cx);
+    }
+
+    /// Open a context menu like [`Self::open_context_menu`]. The menu shows
+    /// the shortcuts that `trigger`, the focus of the clicked view, binds.
+    pub(crate) fn open_context_menu_from(
+        &mut self,
+        position: Point<Pixels>,
+        trigger: Option<FocusHandle>,
+        items: impl FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Ask the window rather than mirroring "a dialog is up" into a flag of
         // our own: a flag only stays true until some close path forgets to
         // clear it, and then no menu ever opens again.
         if self.dialog_open() || window.has_active_dialog(cx) {
             return;
         }
-        // Dismissing the menu returns focus to the SQL editor rather than the
-        // row or tab that was clicked.
-        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
+        // Dismissing the menu returns focus to the view that opened it, like
+        // the schema tree. Other menus return it to the SQL editor rather
+        // than the row or tab that was clicked.
+        let restore = trigger
+            .clone()
+            .unwrap_or_else(|| self.tabs[self.active].input.read(cx).focus_handle(cx));
         let view = PopupMenu::build(window, cx, move |menu, window, cx| {
             items(menu.action_context(restore), window, cx)
         });
@@ -2739,6 +2827,9 @@ impl Qrow {
                 cx.notify();
             }
         });
+        if trigger.is_some() {
+            view.update(cx, |menu, cx| menu.set_trigger_focus(trigger, cx));
+        }
         view.focus_handle(cx).focus(window, cx);
         self.menu = Some(ContextMenu {
             position,
@@ -2928,8 +3019,10 @@ impl Qrow {
                 this.refresh_catalog(id, crate::catalog::Scope::Connection, cx);
             }
         });
-        self.open_context_menu(
+        let tree = self.catalog.state.read(cx).focus_handle(cx);
+        self.open_context_menu_from(
             position,
+            Some(tree),
             move |menu, _, _| {
                 // Labeled sections: what the row is, then what it contains.
                 menu.item(menu_section("Connection"))
@@ -2941,13 +3034,16 @@ impl Qrow {
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(PopupMenuItem::new("Show activity").on_click(show_activity))
+                    // The actions only show the shortcuts: a click runs the handler.
                     .item(
                         PopupMenuItem::new("Move up")
+                            .action(Box::new(MoveConnectionUp))
                             .on_click(move_up)
                             .disabled(first),
                     )
                     .item(
                         PopupMenuItem::new("Move down")
+                            .action(Box::new(MoveConnectionDown))
                             .on_click(move_down)
                             .disabled(last),
                     )
@@ -3201,7 +3297,7 @@ impl Qrow {
                         input.masked(true).placeholder(if is_new {
                             ""
                         } else {
-                            "Leave blank to keep stored password"
+                            "Keep the stored password"
                         })
                     } else {
                         input
@@ -3437,6 +3533,8 @@ impl Qrow {
             fields,
             is_new,
             error: None,
+            field_errors: Vec::new(),
+            focus_field: Default::default(),
             saving: None,
         });
         self.open_profile_dialog(window, cx);
@@ -3560,6 +3658,14 @@ impl Qrow {
         profile.username = values[3].trim().into();
         profile.database = values[5].trim().into();
         profile.trino_schema = values[15].trim().into();
+        // Report every invalid text field at once, and focus the first one.
+        form.field_errors = connection_form::field_errors(&values);
+        if let Some((first, _)) = form.field_errors.first() {
+            form.focus_field.set(Some(*first));
+            form.error = None;
+            cx.notify();
+            return;
+        }
         let parse = (|| -> anyhow::Result<()> {
             profile.transfer = form
                 .transfer
@@ -3699,7 +3805,15 @@ impl Qrow {
             Ok(())
         })();
         if let Err(e) = parse {
-            form.error = Some(e.to_string());
+            let error = e.to_string();
+            match connection_form::field_of_error(&error) {
+                Some(field) => {
+                    form.field_errors = vec![(field, error)];
+                    form.focus_field.set(Some(field));
+                    form.error = None;
+                }
+                None => form.error = Some(error),
+            }
             cx.notify();
             return;
         }
@@ -3716,7 +3830,8 @@ impl Qrow {
             && profile.database_type != crate::model::DatabaseType::Trino
             && !self.demo
         {
-            form.error = Some("Enter the password for this connection.".into());
+            form.field_errors = vec![(4, "Enter the password for this connection.".into())];
+            form.focus_field.set(Some(4));
             cx.notify();
             return;
         }
@@ -3724,6 +3839,7 @@ impl Qrow {
         form.saving = Some(recv);
         let _ = self.wake.try_send(());
         form.error = None;
+        form.field_errors.clear();
         let demo = self.demo;
         let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();
@@ -3917,13 +4033,13 @@ impl Qrow {
                 Some(execution_id),
                 Severity::Info,
                 LogKind::ExecutionCompleted,
-                "Execution completed on the server, result set: true (demo)",
+                "Query finished on the server",
             ),
             LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
                 LogKind::FetchCompleted,
-                "Fetched preview page 1: rows 1–2250, 2250 rows, 2250 retained, more rows: false (demo)",
+                "Fetched rows 1–2,250 (all rows)",
             ),
         ];
         let mut activity = Vec::new();

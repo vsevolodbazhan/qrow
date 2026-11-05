@@ -1,6 +1,5 @@
 use super::setting_row::Rows;
 use super::*;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     alert::Alert,
     form::{field, v_form},
@@ -19,6 +18,8 @@ pub(super) type RenameForm<'a> = (&'a Entity<InputState>, Option<String>);
 pub(super) struct RenameDialog {
     /// Element ID suffix, for example `tab` in `rename-tab`.
     pub key: &'static str,
+    /// The dialog title, which names the object, like `Rename Tab`.
+    pub title: &'static str,
     pub label: &'static str,
     pub tooltip: &'static str,
     /// The name field and the current error, while the dialog is open.
@@ -30,7 +31,8 @@ pub(super) struct RenameDialog {
 
 pub(super) const TAB_RENAME: RenameDialog = RenameDialog {
     key: "tab",
-    label: "Tab Name",
+    title: "Rename Tab",
+    label: "Name",
     tooltip: "Rename tab",
     form: |this| {
         this.tab_form
@@ -59,6 +61,7 @@ impl Qrow {
                 .update(cx, |this, cx| this.rename_footer(spec, cx))
                 .ok();
             dialog
+                .title(spec.title)
                 .w(Rows::dialog_width(window, DIALOG_REMS))
                 .overlay_closable(false)
                 .on_ok(move |_, window, cx| {
@@ -75,6 +78,16 @@ impl Qrow {
                     });
                 })
         });
+        // The current name starts selected, so typing replaces it.
+        if let Some((input, _)) = (spec.form)(self) {
+            let input = input.clone();
+            cx.defer_in(window, move |_, window, cx| {
+                input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                    input.select_all(window, cx);
+                });
+            });
+        }
     }
 
     fn rename_content(&self, spec: RenameDialog, cx: &mut Context<Self>) -> AnyElement {
@@ -93,7 +106,6 @@ impl Qrow {
                 v_form().w_full().child(
                     field().label(spec.label).child(
                         Input::new(input)
-                            .focus_ring(false)
                             .id(SharedString::from(format!("rename-{}-name", spec.key)))
                             .w_full()
                             .aria_label(spec.label),

@@ -6,8 +6,13 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Edges, ElementId, Hsla,
     InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, relative,
+    StatefulInteractiveElement, Styled, Window, div, px, relative, rems,
 };
+
+/// The least width of a tab with a maximum width, in rems: room for a short
+/// label like "Query 12" in the large size, with its padding and a close
+/// button.
+const TAB_MIN_WIDTH_REMS: f32 = 10.5;
 
 /// Tab variants.
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]
@@ -415,6 +420,10 @@ pub struct Tab {
     /// restarts in sync with the indicator slide.
     pub(super) indicator_epoch: u64,
     pub(super) max_width: Option<Pixels>,
+    /// Qrow: the least width of a tab that is not selected when the bar fits
+    /// all tabs, see
+    /// [`super::TabBar::fit_width`].
+    pub(super) fit_width: Option<Pixels>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -468,6 +477,7 @@ impl Default for Tab {
             variant: TabVariant::default(),
             size: Size::default(),
             max_width: None,
+            fit_width: None,
             on_click: None,
         }
     }
@@ -574,6 +584,11 @@ impl Tab {
     /// Set the maximum width of the tab, see [`super::TabBar::max_width`].
     pub(super) fn max_width(mut self, max_width: Option<Pixels>) -> Self {
         self.max_width = max_width;
+        self
+    }
+
+    pub(super) fn fit_width(mut self, fit_width: Option<Pixels>) -> Self {
+        self.fit_width = fit_width;
         self
     }
 }
@@ -797,7 +812,19 @@ impl RenderOnce for Tab {
             })
             .gap_1()
             .items_center()
-            .flex_shrink_0()
+            // A capped tab also gives way when the bar is short of room: its
+            // label shrinks to an ellipsis and its suffix, like a close
+            // button, keeps its size. Below the least width, the bar scrolls.
+            // Qrow: the selected tab keeps its whole label, up to the
+            // maximum width. The others shrink to their least width, or to
+            // the fit width when the bar fits all tabs by shrinking them.
+            .map(|this| match (max_width, self.fit_width) {
+                (Some(_), Some(fit)) if !self.selected => this.flex_shrink_1().min_w(fit),
+                (Some(_), None) if !self.selected => {
+                    this.flex_shrink_1().min_w(rems(TAB_MIN_WIDTH_REMS))
+                }
+                _ => this.flex_shrink_0(),
+            })
             .h(height)
             .overflow_hidden()
             .map(|this| match self.size {

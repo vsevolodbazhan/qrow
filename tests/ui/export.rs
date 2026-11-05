@@ -68,11 +68,14 @@ fn select(app: &TestApp, cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn export_is_disabled_before_a_result_has_columns(cx: &mut TestAppContext) {
+fn export_is_unavailable_before_a_result_has_columns(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, qrow::model::Workspace::default());
-    app.click(cx, "export-results");
+    app.settle(cx);
+    // Without a result set, the Result toolbar and its Export button are
+    // not shown.
     app.update(cx, |window, _| {
-        assert!(window.try_find("export-save").is_none())
+        assert!(window.try_find("export-results").is_none());
+        assert!(window.try_find("export-save").is_none());
     });
 }
 

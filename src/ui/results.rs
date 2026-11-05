@@ -8,16 +8,19 @@ use gpui_kit::base::actions::{
     SelectPrevColumn, SelectUp,
 };
 use gpui_kit::component::{
-    ActiveTheme, Sizable, WindowExt,
+    ActiveTheme, ElementExt as _, Sizable, WindowExt,
     input::{Copy, SelectAll},
     menu::{PopupMenu, PopupMenuItem},
     table::{Column, DataTable, TableDelegate, TableState},
+    tooltip::ManagedTooltipExt as _,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::{
     borrow::Cow,
+    cell::Cell,
     ops::{Range, RangeInclusive},
+    rc::Rc,
     sync::Arc,
     time::Duration,
 };
@@ -28,7 +31,9 @@ actions!(
         ExtendSelectionUp,
         ExtendSelectionDown,
         ExtendSelectionLeft,
-        ExtendSelectionRight
+        ExtendSelectionRight,
+        SelectFirstRow,
+        SelectLastRow
     ]
 );
 
@@ -36,10 +41,16 @@ actions!(
 const CONTEXT: &str = "Results";
 
 /// Key bindings of the results table. The table binds the plain arrow keys;
-/// the results view handles those actions before the table does.
-pub(super) fn bindings() -> [KeyBinding; 6] {
+/// the results view handles those actions before the table does. Like other
+/// macOS grids, ⌘↑ and ⌘Home go to the first row and ⌘↓ and ⌘End to the
+/// last row of the page; Home and End go to the first and last column.
+pub(super) fn bindings() -> [KeyBinding; 10] {
     let context = Some("Results > DataTable");
     [
+        KeyBinding::new("cmd-up", SelectFirstRow, context),
+        KeyBinding::new("cmd-home", SelectFirstRow, context),
+        KeyBinding::new("cmd-down", SelectLastRow, context),
+        KeyBinding::new("cmd-end", SelectLastRow, context),
         KeyBinding::new("shift-up", ExtendSelectionUp, context),
         KeyBinding::new("shift-down", ExtendSelectionDown, context),
         KeyBinding::new("shift-left", ExtendSelectionLeft, context),
@@ -123,6 +134,11 @@ pub struct Results {
     export_profile: Option<(uuid::Uuid, u8)>,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
+    /// The width of each column name in the header font, and whether the
+    /// last frame cut the name to fit its column.
+    names: Vec<(Pixels, Rc<Cell<bool>>)>,
+    /// Whether each column holds numbers, which align on the trailing edge.
+    numeric: Vec<bool>,
     pub selection: Option<Selection>,
     drag: Option<Point<Pixels>>,
     drag_hitbox: Option<HitboxId>,
@@ -140,6 +156,8 @@ impl Default for Results {
             export_profile: None,
             empty_message: None,
             headers: vec![],
+            names: vec![],
+            numeric: vec![],
             selection: None,
             drag: None,
             drag_hitbox: None,
@@ -203,16 +221,20 @@ impl Results {
         ];
         self.headers
             .extend(columns.iter().enumerate().map(|(i, c)| {
-                let width = match c.data_type.as_str() {
-                    "TIMESTAMP" => 190.,
-                    "STRING" => 180.,
-                    _ => 120.,
-                };
                 Column::new(i.to_string(), c.name.clone())
-                    .width(px(scale * width).max(header.width(c)))
+                    .min_width(px(scale * MIN_COLUMN_WIDTH))
+                    .width(px(scale * MIN_COLUMN_WIDTH).max(header.width(c)))
                     .paddings(padding)
                     .movable(false)
             }));
+        self.names = columns
+            .iter()
+            .map(|c| (header.text(&c.name, false), Rc::default()))
+            .collect();
+        self.numeric = columns
+            .iter()
+            .map(|column| is_numeric(&column.data_type))
+            .collect();
         self.columns = columns;
     }
     pub fn clear(&mut self) {
@@ -426,7 +448,7 @@ impl Results {
     fn empty_state(&self, cx: &App) -> Div {
         super::panel_empty_state(
             self.empty_message
-                .unwrap_or("Run a query to preview its results"),
+                .unwrap_or("Press ⌘↩ to run a query and preview its results"),
             cx,
         )
     }
@@ -437,14 +459,21 @@ struct HeaderMeasure {
     // A cache of its own, because the measure runs outside a window.
     text: WindowTextSystem,
     font: Font,
+    /// The font of the column name, which the header shows in medium weight.
+    name_font: Font,
     rem: Pixels,
     scale: f32,
 }
 impl HeaderMeasure {
     fn new(scale: f32, cx: &App) -> Self {
+        let font = font(cx.theme().font_family.clone());
         Self {
             text: WindowTextSystem::new(cx.text_system().clone()),
-            font: font(cx.theme().font_family.clone()),
+            name_font: Font {
+                weight: FontWeight::MEDIUM,
+                ..font.clone()
+            },
+            font,
             rem: px(14. * scale),
             scale,
         }
@@ -454,7 +483,11 @@ impl HeaderMeasure {
         let size = self.rem * if small { 10. / 14. } else { 12. / 14. };
         let run = TextRun {
             len: text.len(),
-            font: self.font.clone(),
+            font: if small {
+                self.font.clone()
+            } else {
+                self.name_font.clone()
+            },
             color: Hsla::default(),
             background_color: None,
             underline: None,
@@ -467,13 +500,70 @@ impl HeaderMeasure {
     fn width(&self, column: &DataColumn) -> Pixels {
         let scale = self.scale;
         let name = self.text(&column.name, false);
-        let data_type = self.text(&column.data_type, true);
+        let data_type = self.text(&display_type(&column.data_type), true);
         // Two `px_1` insets and one `gap_2` are 1 rem, the column paddings
         // are 4px, and the table keeps 6px less the right padding for its
         // sort icon. Two more pixels absorb the cell border and rounding.
         let cell = px(scale * 4.) + (px(6.) - px(scale * 2.)).max(px(0.)) + px(2.);
         name + data_type + self.rem + cell
     }
+}
+
+impl Results {
+    /// Whether the table column `c` holds numbers. The row numbers count.
+    fn is_numeric_column(&self, c: usize) -> bool {
+        c == 0 || self.numeric.get(c - 1).copied().unwrap_or(false)
+    }
+}
+
+/// The least width of a result column, in points of the 100% scale, also
+/// when a drag resizes it: room for an 18-character name and a short type.
+const MIN_COLUMN_WIDTH: f32 = 190.;
+
+/// The share of the selection color in the other cells of a selected row.
+const SELECTED_ROW_TINT: f32 = 0.35;
+
+/// Whether a column of `data_type` holds numbers.
+fn is_numeric(data_type: &str) -> bool {
+    let base = data_type
+        .split(['(', ' '])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "tinyint"
+            | "smallint"
+            | "int"
+            | "integer"
+            | "bigint"
+            | "int2"
+            | "int4"
+            | "int8"
+            | "float"
+            | "float4"
+            | "float8"
+            | "real"
+            | "double"
+            | "decimal"
+            | "numeric"
+            | "number"
+            | "money"
+    )
+}
+
+/// The data type as the catalog tree shows it: drivers report some types in
+/// uppercase.
+fn display_type(data_type: &str) -> String {
+    data_type.to_lowercase()
+}
+
+/// Digits of equal width, so that numbers in a column line up.
+fn tabular_numbers() -> FontFeatures {
+    thread_local! {
+        static FEATURES: FontFeatures = FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)]));
+    }
+    FEATURES.with(Clone::clone)
 }
 
 impl TableDelegate for Results {
@@ -513,6 +603,9 @@ impl TableDelegate for Results {
             .px_1()
             .overflow_hidden()
             .text_size(rems(12. / 14.))
+            .rounded_sm()
+            // A click selects the column, so the header shows that it reacts.
+            .hover(|el| el.bg(cx.theme().table_hover))
             .aria_label(self.headers[c].name.clone())
             .on_click(cx.listener(move |state, event: &ClickEvent, window, cx| {
                 let data = state.delegate_mut();
@@ -524,15 +617,56 @@ impl TableDelegate for Results {
                 window.focus(&state.focus_handle(cx), cx);
                 cx.notify();
             }))
-            .child(self.headers[c].name.clone())
+            // Column names start at the left, also over numbers, which align
+            // on the right in the cells. The row-number header stays over its
+            // numbers.
+            .when(c == 0, |el| el.justify_end())
+            // A column name that its column cuts shows in full in a tooltip.
+            .when_some(self.names.get(c.wrapping_sub(1)), |el, (_, cut)| {
+                let name = self.headers[c].name.clone();
+                let cut = cut.clone();
+                el.managed_tooltip_when(
+                    move || cut.get(),
+                    move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(name.clone()).build(window, cx)
+                    },
+                )
+            })
+            .child(
+                div()
+                    .id(("column-name", c))
+                    .test_support()
+                    .truncate()
+                    .text_color(cx.theme().foreground)
+                    .font_weight(FontWeight::MEDIUM)
+                    .when_some(self.names.get(c.wrapping_sub(1)), |el, (width, cut)| {
+                        let (width, cut) = (*width, cut.clone());
+                        el.on_prepaint(move |bounds, _, _| {
+                            cut.set(bounds.size.width + px(0.5) < width)
+                        })
+                    })
+                    .child(self.headers[c].name.clone()),
+            )
             .when(c > 0, |el| {
                 el.child(
                     div()
+                        .flex_shrink_0()
                         .text_size(rems(10. / 14.))
                         .text_color(cx.theme().muted_foreground)
-                        .child(self.columns[c - 1].data_type.clone()),
+                        .child(display_type(&self.columns[c - 1].data_type)),
                 )
             })
+    }
+    fn cell_background(&self, r: usize, c: usize, cx: &App) -> Option<Hsla> {
+        let r = self.pagination.range(self.rows.len()).start + r;
+        let selection = self.selection.filter(|_| c > 0)?;
+        if selection.contains(r, c - 1) {
+            Some(cx.theme().selection)
+        } else if selection.rows().contains(&r) {
+            Some(cx.theme().selection.opacity(SELECTED_ROW_TINT))
+        } else {
+            None
+        }
     }
     fn render_td(
         &mut self,
@@ -552,8 +686,11 @@ impl TableDelegate for Results {
         let display: String = value.unwrap_or("NULL").chars().take(500).collect();
         let selection = self.selection.filter(|_| c > 0);
         let selected = selection.is_some_and(|s| s.contains(r, c - 1));
-        // In a range, the focus cell also shows a ring.
-        let focus = selection.is_some_and(|s| !s.is_cell() && s.focus == (r, c - 1));
+        // The focus cell shows a ring, also when it is the only selected cell.
+        let focus = selection.is_some_and(|s| s.focus == (r, c - 1));
+        // The other cells of a selected row, and its row number, get a faint
+        // tint, so the row of the selection is easy to follow.
+        let row_selected = !selected && self.selection.is_some_and(|s| s.rows().contains(&r));
         div()
             .id(("cell", c))
             .test_support()
@@ -565,10 +702,15 @@ impl TableDelegate for Results {
             .flex()
             .items_center()
             .text_size(rems(12. / 14.))
+            .font_features(tabular_numbers())
+            .when(self.is_numeric_column(c) && !null, |el| el.justify_end())
             .overflow_hidden()
             .text_color(cx.theme().foreground)
             .when(c == 0 || null, |el| {
                 el.text_color(cx.theme().muted_foreground)
+            })
+            .when(row_selected, |el| {
+                el.bg(cx.theme().selection.opacity(SELECTED_ROW_TINT))
             })
             .when(selected, |el| {
                 el.bg(cx.theme().selection)
@@ -695,7 +837,12 @@ impl TableDelegate for Results {
             menu
         };
         menu.when_some(selection, |menu, copy| {
-            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| copy.run(window, cx)))
+            // The action only shows the shortcut: a click runs the handler.
+            menu.item(
+                PopupMenuItem::new(label)
+                    .action(Box::new(Copy))
+                    .on_click(move |_, window, cx| copy.run(window, cx)),
+            )
         })
         .item(
             PopupMenuItem::new("Copy row").on_click(move |_, window, cx| row_copy.run(window, cx)),
@@ -995,6 +1142,8 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
         .capture_action(step!(SelectNextColumn, 0, 1, false))
         .capture_action(step!(SelectFirst, 0, -far, false))
         .capture_action(step!(SelectLast, 0, far, false))
+        .capture_action(step!(SelectFirstRow, -far, 0, false))
+        .capture_action(step!(SelectLastRow, far, 0, false))
         .capture_action(step!(ExtendSelectionUp, -1, 0, true))
         .capture_action(step!(ExtendSelectionDown, 1, 0, true))
         .capture_action(step!(ExtendSelectionLeft, 0, -1, true))
@@ -1192,13 +1341,16 @@ mod tests {
                     column("id", "INT"),
                     column("paid_bookings", "BIGINT"),
                     column("a_much_longer_column_name", "BIGINT"),
+                    column("booking_reference_", "STRING"),
                 ],
                 cx,
             );
             let widths: Vec<_> = results.headers.iter().map(|c| c.width).collect();
-            assert_eq!(widths[1], px(120.));
-            assert!(widths[2] > px(120.));
+            assert_eq!(widths[1], px(super::MIN_COLUMN_WIDTH));
+            assert_eq!(widths[2], px(super::MIN_COLUMN_WIDTH));
             assert!(widths[3] > widths[2]);
+            // An 18-character name and a short type fit in the least width.
+            assert_eq!(widths[4], px(super::MIN_COLUMN_WIDTH));
 
             let header = super::HeaderMeasure::new(1., cx);
             let text =

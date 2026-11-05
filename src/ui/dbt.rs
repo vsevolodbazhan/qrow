@@ -12,7 +12,6 @@ use crate::{
     },
     model::{DbtProject, DbtRefresh, parse_schema_rules},
 };
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IndexPath, Sizable as _,
     button::Button,
@@ -160,7 +159,10 @@ impl Qrow {
                 } => {
                     for (profile, key) in &self.dbt.keys {
                         if *key == manifest {
-                            activity.push((*profile, ActivityEntry::new(severity, text.clone())));
+                            activity.push((
+                                *profile,
+                                ActivityEntry::new(severity, text.clone()).with_source("dbt"),
+                            ));
                         }
                     }
                 }
@@ -271,6 +273,7 @@ impl Qrow {
                     form.dbt.manifest.update(cx, |input, cx| {
                         input.set_value(path.to_string_lossy().into_owned(), window, cx)
                     });
+                    show_path_end(&form.dbt.manifest, cx);
                 }
                 cx.notify();
             });
@@ -351,7 +354,6 @@ impl Qrow {
                 false,
                 |_, form, _, _| {
                     Select::new(&form.dbt.refresh)
-                        .focus_ring(false)
                         .id("connection-dbt-refresh")
                         .w_full()
                         .disabled(form.saving.is_some())
@@ -380,7 +382,6 @@ impl Qrow {
                                 .w_full()
                                 .child(
                                     Textarea::new(&form.dbt.rules)
-                                        .focus_ring(false)
                                         .w_full()
                                         .disabled(form.saving.is_some())
                                         .font_family("Menlo")
@@ -412,14 +413,27 @@ impl Qrow {
                 h_flex()
                     .w_full()
                     .gap_2()
-                    .child(
-                        Input::new(&form.dbt.manifest)
-                            .focus_ring(false)
-                            .id("connection-dbt-manifest")
+                    .child({
+                        // The field may cut a long path; the tooltip has all of it.
+                        let path = form.dbt.manifest.read(cx).value().to_string();
+                        div()
+                            .id("connection-dbt-manifest-path")
                             .flex_1()
-                            .disabled(saving)
-                            .aria_label("Manifest"),
-                    )
+                            .min_w_0()
+                            .when(!path.is_empty(), |el| {
+                                el.tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(path.clone())
+                                        .build(window, cx)
+                                })
+                            })
+                            .child(
+                                Input::new(&form.dbt.manifest)
+                                    .id("connection-dbt-manifest")
+                                    .w_full()
+                                    .disabled(saving)
+                                    .aria_label("Manifest"),
+                            )
+                    })
                     .child(
                         Button::new("connection-dbt-choose")
                             .label("Choose…")
@@ -440,16 +454,18 @@ impl Qrow {
                         )
                     }),
             )
-            .child(
-                div()
-                    .id("connection-dbt-status")
-                    .test_support()
-                    .role(Role::Status)
-                    .aria_label(view.status.clone())
-                    .text_sm()
-                    .text_color(muted)
-                    .child(view.status.clone()),
-            )
+            .when(!view.status.is_empty(), |el| {
+                el.child(
+                    div()
+                        .id("connection-dbt-status")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(view.status.clone())
+                        .text_sm()
+                        .text_color(muted)
+                        .child(view.status.clone()),
+                )
+            })
             .into_any_element()
     }
 
@@ -809,6 +825,7 @@ impl DbtForm {
                 .placeholder("/path/to/project/target/manifest.json")
                 .default_value(project.map(|p| p.manifest.clone()).unwrap_or_default())
         });
+        show_path_end(&manifest, cx);
         let refresh = project.map_or(DbtRefresh::Automatic, |project| project.refresh);
         let refresh = cx.new(|cx| {
             SelectState::new(
@@ -879,6 +896,15 @@ fn refresh_choice(select: &connection_form::ChoiceSelect, cx: &App) -> DbtRefres
     }
 }
 
+/// Put the cursor of the path field at the end, so that a long path shows
+/// its file name rather than its first folders.
+fn show_path_end(input: &Entity<InputState>, cx: &mut App) {
+    input.update(cx, |input, cx| {
+        let end = input.value().len();
+        input.set_selected_range(end..end, cx);
+    });
+}
+
 /// Replace a leading `~/` with the home folder.
 fn expand_home(path: &str) -> String {
     match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
@@ -889,9 +915,9 @@ fn expand_home(path: &str) -> String {
 
 /// The line below the manifest field.
 fn manifest_status(typed: &str, saved: bool, state: Option<&ManifestState>) -> String {
+    // The help of the field already says what to enter.
     if typed.is_empty() {
-        return "The manifest.json file that dbt writes in the target folder of the project."
-            .into();
+        return String::new();
     }
     if !saved {
         return "Read after you save.".into();
@@ -956,7 +982,7 @@ mod tests {
 
     #[test]
     fn the_status_follows_the_field_and_the_manifest() {
-        assert!(manifest_status("", false, None).starts_with("The manifest.json file"));
+        assert!(manifest_status("", false, None).is_empty());
         assert_eq!(
             manifest_status("/m.json", false, None),
             "Read after you save."

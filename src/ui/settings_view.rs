@@ -7,7 +7,6 @@ use crate::model::{
 };
 use crate::sql::KeywordCase;
 use crate::themes;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     IndexPath, h_flex,
     input::{NumberInputEvent, StepAction},
@@ -741,36 +740,40 @@ impl Qrow {
         cx.notify();
     }
 
-    pub(super) fn open_settings_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let close = weak.clone();
-            let body = weak.clone();
-            let footer = weak.update(cx, |this, cx| this.settings_footer(cx)).ok();
-            let (width, height) = settings_dialog_size(window);
-            let viewport = window.viewport_size();
-            dialog
-                .title("Settings")
-                .w(width)
-                .h(height)
-                .margin_top((viewport.height - height) / 2.)
-                .overlay_closable(false)
-                .on_ok(|_, _, _| false)
-                .content(move |content, window, cx| {
-                    let panel = body
-                        .update(cx, |this, cx| this.settings_content(window, cx))
-                        .ok();
-                    content.children(panel)
-                })
-                .when_some(footer, |dialog, footer| dialog.footer(footer))
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |this, cx| {
-                        this.settings_open = false;
-                        this.settings_form = None;
-                        cx.notify();
-                    });
-                })
-        });
+    /// The content of the Settings window: the sections and pages, then a
+    /// footer with Restore defaults.
+    pub(super) fn settings_window_content(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .size_full()
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.settings_content(window, cx)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_4()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(self.settings_footer(cx)),
+            )
+            .into_any_element()
+    }
+
+    /// The Settings window closed: keep the pending edits and drop the form.
+    pub(super) fn settings_window_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_settings_form(window, cx);
+        self.settings_open = false;
+        self.settings_form = None;
+        self.settings_window = None;
+        cx.notify();
     }
 
     fn settings_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -845,15 +848,9 @@ impl Qrow {
                 state.set_selected_value(&harness.to_owned(), window, cx)
             });
         }
-        // Match the gap the dialog leaves above the footer, which the dialog
-        // adds to the smaller gap below the title.
         div()
             .size_full()
-            .mt_2()
             .overflow_hidden()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
             .child(
                 settings_panel("settings", window, cx)
                     .page(appearance_page(form))
@@ -863,12 +860,20 @@ impl Qrow {
                             .group(SettingGroup::new().title("Copy").item(setting_item(
                                 "Copy Format",
                                 "Default format when copying result cells.",
-                                &["copy", "clipboard", "markdown", "plain", "csv", "tsv", "json"],
+                                &[
+                                    "copy",
+                                    "clipboard",
+                                    "markdown",
+                                    "plain",
+                                    "csv",
+                                    "tsv",
+                                    "json",
+                                ],
                                 select_field(&form.copy_format, "Copy Format"),
                             )))
                             .group(SettingGroup::new().title("Replay").item(setting_item(
                                 "Replay Limit",
-                                "Keep completed downloads up to this size. Zero turns retention off.",
+                                "Size limit for kept downloads. Zero turns it off.",
                                 &["export", "replay", "spool", "disk"],
                                 number_field(form, NumberSetting::ExportReplayLimit),
                             ))),
@@ -883,6 +888,36 @@ impl Qrow {
             .into_any_element()
     }
 
+    /// Keep the edits that apply only when they are complete: numbers that
+    /// are still being typed and the executable paths. Settings has no Save:
+    /// closing its window keeps every change.
+    fn commit_settings_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending: Vec<_> = self
+            .settings_form
+            .iter()
+            .flat_map(|form| form.numbers.iter())
+            .map(|(setting, input, _)| (*setting, input.clone()))
+            .collect();
+        for (setting, input) in pending {
+            self.commit_number_setting(&input, setting, 0., window, cx);
+        }
+        if let Some(form) = &self.settings_form {
+            let read = |input: &Entity<InputState>| {
+                let path = input.read(cx).value().trim().to_owned();
+                (!path.is_empty()).then_some(path)
+            };
+            let codex = read(&form.assistant_executable);
+            let claude = read(&form.claude_executable);
+            if self.settings.assistant.codex_executable != codex
+                || self.settings.assistant.claude_executable != claude
+            {
+                self.settings.assistant.codex_executable = codex;
+                self.settings.assistant.claude_executable = claude;
+                self.changed(cx);
+            }
+        }
+    }
+
     fn settings_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
@@ -891,44 +926,6 @@ impl Qrow {
                 Button::new("reset-settings")
                     .label("Restore defaults")
                     .on_click(cx.listener(|this, _, window, cx| this.reset_settings(window, cx))),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("save-settings")
-                    .primary()
-                    .label("Save")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // Commit pending numeric edits before disposing their subscriptions.
-                        let pending: Vec<_> = this
-                            .settings_form
-                            .iter()
-                            .flat_map(|form| form.numbers.iter())
-                            .map(|(setting, input, _)| (*setting, input.clone()))
-                            .collect();
-                        for (setting, input) in pending {
-                            this.commit_number_setting(&input, setting, 0., window, cx);
-                        }
-                        if let Some(form) = &this.settings_form {
-                            let read = |input: &Entity<InputState>| {
-                                let path = input.read(cx).value().trim().to_owned();
-                                (!path.is_empty()).then_some(path)
-                            };
-                            let codex = read(&form.assistant_executable);
-                            let claude = read(&form.claude_executable);
-                            if this.settings.assistant.codex_executable != codex
-                                || this.settings.assistant.claude_executable != claude
-                            {
-                                this.settings.assistant.codex_executable = codex;
-                                this.settings.assistant.claude_executable = claude;
-                                this.changed(cx);
-                            }
-                        }
-                        // Programmatic close_dialog does not invoke Dialog::on_close.
-                        this.settings_open = false;
-                        this.settings_form = None;
-                        window.close_dialog(cx);
-                        cx.notify();
-                    })),
             )
             .into_any_element()
     }
@@ -965,7 +962,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
         )
         .group(
             SettingGroup::new()
-                .title("Assistant")
+                .title("Conversations")
                 .item(setting_item(
                     "Font Family",
                     "Font of messages in assistant conversations.",
@@ -1014,7 +1011,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 ))
                 .item(setting_item(
                     "SQL Keyword Case",
-                    "Keyword case for formatted and assistant-generated SQL.",
+                    "Applies to formatted and assistant-written SQL.",
                     &[
                         "editor",
                         "sql",
@@ -1083,7 +1080,7 @@ fn assistant_page(
                 ))
                 .item(setting_item(
                     "Harness",
-                    "Runs new conversations. A conversation keeps its harness.",
+                    "Runs new conversations. Old ones keep theirs.",
                     &["assistant", "harness", "codex", "claude", "agent"],
                     select_field(&form.assistant_harness, "Assistant Harness"),
                 ))
@@ -1116,7 +1113,6 @@ fn assistant_page(
             &["assistant", "codex", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&executable)
-                    .focus_ring(false)
                     .id(setting_id("Codex Executable"))
                     .w_full()
                     .aria_label("Codex Executable")
@@ -1124,11 +1120,10 @@ fn assistant_page(
         )))
         .group(SettingGroup::new().title("Claude Code").item(setting_item(
             "Executable",
-            "Empty searches your PATH, Homebrew folders, and ~/.local/bin.",
+            "Empty searches PATH, Homebrew, and ~/.local/bin.",
             &["assistant", "claude", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&claude_executable)
-                    .focus_ring(false)
                     .id(setting_id("Claude Code Executable"))
                     .w_full()
                     .aria_label("Claude Code Executable")
@@ -1193,7 +1188,9 @@ pub(super) fn setting_row<E: IntoElement>(
                     )
                 },
             );
-            let control = div().child(field(window, cx));
+            // The focus ring paints outside the control; the page clips at its
+            // edge, so the control keeps the ring width free beside it.
+            let control = div().px_1().child(field(window, cx));
             if stacked || options.layout() == Axis::Vertical {
                 v_flex()
                     .w_full()
@@ -1201,8 +1198,12 @@ pub(super) fn setting_row<E: IntoElement>(
                     .child(label.w_full())
                     .child(control.w_full())
             } else {
+                // Labels align with the top of their control, so a control
+                // that grows, like a field with an error below it, does not
+                // move its label.
                 h_flex()
                     .w_full()
+                    .items_start()
                     .justify_between()
                     .gap_3()
                     .child(label.flex_1().min_w_0().max_w_3_5())
@@ -1290,7 +1291,6 @@ fn select_field(
     let select = select.clone();
     move |_: &mut Window, _: &mut App| {
         Select::new(&select)
-            .focus_ring(false)
             .id(setting_id(label))
             .w_full()
             .accessibility_label(label)

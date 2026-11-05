@@ -22,16 +22,38 @@ pub(super) fn thread_list_after_selection(override_visibility: Option<bool>) -> 
     }
 }
 
-pub(super) fn assistant_select_width(label: &str) -> f32 {
-    56. + label.chars().count() as f32 * 8.
-}
+/// The width of a selector button that shows only its icon, in points.
+const SELECTOR_ICON_WIDTH: f32 = 24.;
+/// The gap between two selector buttons, in points.
+const SELECTOR_GAP: f32 = 4.;
+/// What a labeled selector adds to its label: the compact side padding, the
+/// icon, the caret, and their gaps, in points. Measured on the rendered
+/// composer, with a few points to spare, so a label that shows always fits.
+const SELECTOR_CHROME: f32 = 30.;
+/// What a labeled button of the composer adds to its label, measured the
+/// same way.
+const COMPOSER_BUTTON_CHROME: f32 = 24.;
 
-pub(super) fn assistant_selector_labels(available: f32, widths: [f32; 3]) -> [bool; 3] {
-    let icons = 36. * 3. + 8.;
-    let model = available >= icons + widths[0] - 36.;
-    let reasoning = model && available >= icons + widths[0] + widths[1] - 72.;
-    let tier = reasoning && available >= widths.iter().sum::<f32>() + 8.;
-    [model, reasoning, tier]
+/// Which selectors show their labels when `available` points hold them:
+/// the model first, then reasoning, then the tier. `labeled` holds the
+/// width of each selector with its label; `None` is a selector that the
+/// composer does not show. A selector without its label shows its icon.
+pub(super) fn assistant_selector_labels(available: f32, labeled: [Option<f32>; 3]) -> [bool; 3] {
+    let shown = labeled.iter().flatten().count() as f32;
+    let mut used = shown * SELECTOR_ICON_WIDTH + (shown - 1.).max(0.) * SELECTOR_GAP;
+    let mut labels = [false; 3];
+    for (index, width) in labeled.iter().enumerate() {
+        let Some(width) = width else {
+            continue;
+        };
+        let with_label = used - SELECTOR_ICON_WIDTH + width;
+        if with_label > available {
+            break;
+        }
+        used = with_label;
+        labels[index] = true;
+    }
+    labels
 }
 
 impl Qrow {
@@ -224,7 +246,7 @@ impl Render for AssistantPane {
         }
         let qrow = qrow.read(cx);
         let width = qrow.assistant_width(window.viewport_size().width);
-        self.panel(qrow, width, cx).into_any_element()
+        self.panel(qrow, width, window, cx).into_any_element()
     }
 }
 
@@ -268,7 +290,49 @@ impl AssistantPane {
 }
 
 impl AssistantPane {
-    fn panel(&self, qrow: &Qrow, width: Pixels, cx: &Context<Self>) -> impl IntoElement {
+    /// The transcript of a conversation without messages: what the
+    /// assistant does.
+    fn empty_transcript(&self, cx: &Context<Self>) -> impl IntoElement {
+        v_flex()
+            .id("assistant-empty")
+            .test_support()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .items_center()
+            .justify_center()
+            .px_6()
+            .py_8()
+            .gap_2()
+            .child(
+                Icon::new(AssetIconName::Bot)
+                    .large()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            // The title and its description read as one group.
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(div().font_weight(FontWeight::BOLD).child("Assistant"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_height(rems(1.25))
+                            .text_center()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("The assistant reads the catalog and writes SQL for this tab."),
+                    ),
+            )
+    }
+
+    fn panel(
+        &self,
+        qrow: &Qrow,
+        width: Pixels,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let narrow = width < qrow.ui_px(600.);
         let show_threads = show_thread_list(narrow, self.thread_list_override);
         let action_size = qrow.ui_px(28.);
@@ -347,9 +411,36 @@ impl AssistantPane {
                 format!("{name}: waiting for {harness_name}")
             }
         };
-        let model_width = assistant_select_width(&model_label);
-        let reasoning_width = assistant_select_width(&reasoning_label);
-        let tier_width = assistant_select_width(&tier_label);
+        // The width of a label at the composer text size, in points of
+        // the 100% scale, like the widths of the pane below.
+        let label_width = |text: &str| {
+            let run = TextRun {
+                len: text.len(),
+                font: font(cx.theme().font_family.clone()),
+                color: cx.theme().foreground,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let width = window
+                .text_system()
+                .shape_line(
+                    SharedString::from(text.to_owned()),
+                    window.rem_size() * 0.875,
+                    &[run],
+                    None,
+                )
+                .width;
+            f32::from(width) / qrow.settings.ui_scale
+        };
+        let model_width = SELECTOR_CHROME + label_width(&model_label);
+        let reasoning_width = SELECTOR_CHROME + label_width(&reasoning_label);
+        let tier_width = SELECTOR_CHROME + label_width(&tier_label);
+        // Ask first and Send keep their labels; the selectors use the rest.
+        let actions_width = 2. * COMPOSER_BUTTON_CHROME
+            + label_width(if mode_is_run { "Auto run" } else { "Ask first" })
+            + label_width("Send")
+            + 8.;
         let model_options = qrow
             .assistant_state
             .snapshot
@@ -399,9 +490,17 @@ impl AssistantPane {
         let assistant_entity = self.qrow.clone();
         let conversation_width = width.as_f32() / qrow.settings.ui_scale
             - if show_threads && !narrow { 230. } else { 0. };
+        // The composer stays one row: selectors whose labels do not fit
+        // beside Send show only their icons, and their tooltips name the value.
+        // The composer has 12 points of padding at each side, and the
+        // selectors and the actions keep a gap between them.
         let [show_model_label, show_reasoning_label, show_tier_label] = assistant_selector_labels(
-            (conversation_width - 228.).max(0.),
-            [model_width, reasoning_width, tier_width],
+            (conversation_width - 24. - actions_width - 12.).max(0.),
+            [
+                Some(model_width),
+                Some(reasoning_width),
+                has_tiers.then_some(tier_width),
+            ],
         );
         let displayed_title = displayed
             .as_deref()
@@ -474,7 +573,7 @@ impl AssistantPane {
                             .h(action_size)
                             .icon(IconName::Ellipsis)
                             .accessibility_label("Conversation Actions")
-                            .tooltip("Conversation Actions")
+                            .tooltip("More")
                             .disabled(displayed.is_none() || busy)
                             .dropdown_menu({
                                 let menu = qrow.conversation_menu(selected, &self.qrow);
@@ -490,7 +589,7 @@ impl AssistantPane {
                             .flex_shrink_0()
                             .icon(IconName::Menu)
                             .accessibility_label("Toggle conversation list")
-                            .tooltip("Toggle conversation list")
+                            .tooltip("Conversations")
                             .on_click(cx.listener(move |pane, _, window, cx| {
                                 pane.thread_list_override = Some(!show_threads);
                                 pane.read_visible_reply(window, cx);
@@ -528,7 +627,12 @@ impl AssistantPane {
                     .min_h_0()
                     .overflow_y_scroll()
                     .child(self.sign_in(qrow, cx))))
-            .when(!signed_out, |panel| panel.child(self.transcript(cx)))
+            .when(!signed_out && self.rows.rows.is_empty() && first_message.is_none(), |panel| {
+                panel.child(self.empty_transcript(cx))
+            })
+            .when(!signed_out && (!self.rows.rows.is_empty() || first_message.is_some()), |panel| {
+                panel.child(self.transcript(cx))
+            })
             .when_some(
                 pending_approval,
                 |panel, pending| {
@@ -661,7 +765,19 @@ impl AssistantPane {
                     )
                     .child(
                         h_flex().min_w_0().gap_1()
-                            .child(
+                            // Until the harness is ready, the selectors have no
+                            // values to offer: a status names the wait.
+                            .when((!controls_ready || model.is_none()) && !disconnected, |row| row.child(
+                                div()
+                                    .id("assistant-controls-waiting")
+                                    .test_support()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("Waiting for {harness_name}…")),
+                            ))
+                            .when(controls_ready && model.is_some(), |row| row.child(
                                 h_flex()
                                     .min_w_0()
                                     .gap_1()
@@ -731,7 +847,7 @@ impl AssistantPane {
                                                     ))
                                                 })
                                             }))),
-                            )
+                            ))
                             .child(div().flex_1())
                             .when_some(disconnected_error, |row, error| row.child(
                                 Button::new("assistant-reconnect")
@@ -822,13 +938,21 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn selector_labels_expand_in_priority_order() {
-        let widths = [148., 100., 68.];
-        assert_eq!(assistant_selector_labels(116., widths), [false; 3]);
+        let widths = [Some(148.), Some(100.), Some(68.)];
+        // Three icons take 3 × 24 + 2 × 4 = 80 points.
+        assert_eq!(assistant_selector_labels(80., widths), [false; 3]);
         assert_eq!(
-            assistant_selector_labels(228., widths),
+            assistant_selector_labels(204., widths),
             [true, false, false]
         );
-        assert_eq!(assistant_selector_labels(292., widths), [true, true, false]);
+        assert_eq!(assistant_selector_labels(280., widths), [true, true, false]);
         assert_eq!(assistant_selector_labels(324., widths), [true; 3]);
+        // A label that does not fit keeps the next ones as icons too.
+        assert_eq!(assistant_selector_labels(203., widths), [false; 3]);
+        // Without a tier selector, two labels need less room.
+        assert_eq!(
+            assistant_selector_labels(256., [Some(148.), Some(100.), None]),
+            [true, true, false]
+        );
     }
 }
