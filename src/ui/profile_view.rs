@@ -193,6 +193,8 @@ impl Qrow {
             );
         // Match the gap the dialog leaves above the footer, as Settings does.
         div()
+            .id("connection-settings-panel")
+            .test_support()
             .key_context("ConnectionSettings")
             .on_action(cx.listener(|this, _: &SaveConnection, _, cx| this.save_profile(cx)))
             .size_full()
@@ -569,10 +571,10 @@ impl Qrow {
             .child(
                 // Delete and Duplicate act on the connection as a list item, so
                 // they live in its context menu rather than in its settings.
-                // The last row's rule already separates the body from the footer.
+                // The panel border separates the body from the footer, and the
+                // dialog gap alone spaces them, like the padding below.
                 h_flex()
                     .gap_2()
-                    .pt_3()
                     .child(div().flex_1())
                     .child(
                         Button::new("cancel-profile")
