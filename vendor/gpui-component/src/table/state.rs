@@ -410,6 +410,25 @@ where
         self.options.size.table_row_height()
     }
 
+    /// Qrow: the room that the rows keep for the scrollbars, beside and
+    /// below their content, from the sizes of the last frame. The vertical
+    /// one is kept only when the rows overflow the body, the bottom one only
+    /// when the columns overflow it and the last row would sit under the
+    /// horizontal scrollbar. Row backgrounds and lines still reach the edges.
+    fn scrollbar_room(&self, cx: &App) -> (bool, Pixels) {
+        let body = self.body_bounds().size;
+        let rows = self.delegate.rows_count(cx) as f32 * self.row_height();
+        let columns: Pixels = self.col_groups.iter().map(|col| col.width).sum();
+        let horizontal = self.options.scrollbar_visible.bottom
+            && columns > body.width + px(0.5)
+            && rows > body.height - SCROLLBAR_GUTTER;
+        let bottom = if horizontal { SCROLLBAR_GUTTER } else { px(0.) };
+        let vertical = self.options.scrollbar_visible.right
+            && body.height > px(0.)
+            && rows + bottom > body.height + px(0.5);
+        (vertical, bottom)
+    }
+
     /// Resolve a pointer to a row and column, clamping outside the viewport.
     /// Uses model indices, including fixed columns, without rendering hidden cells.
     pub fn cell_at_position(&self, position: Point<Pixels>, cx: &App) -> Option<(usize, usize)> {
@@ -1840,15 +1859,13 @@ where
         let style = header.style().clone();
         let layout = self.header_layout.clone();
 
-        // The header keeps the same gutter for the vertical scrollbar as the
-        // body, so their columns stay aligned.
-        let vertical_gutter = self.options.scrollbar_visible.right
-            && self.delegate.rows_count(cx) > 0;
+        // The header keeps the same room for the vertical scrollbar as the
+        // rows, so their columns stay aligned, and its border runs on under it.
+        let (vertical_gutter, _) = self.scrollbar_room(cx);
         header
             .h_flex()
             .w_full()
             .flex_shrink_0()
-            .when(vertical_gutter, |this| this.pr(SCROLLBAR_GUTTER))
             .bg(cx.theme().tokens.table_head)
             .text_color(cx.theme().table_head_foreground)
             .refine_style(&style)
@@ -2025,6 +2042,16 @@ where
                         }),
                     )),
             )
+            .when(vertical_gutter, |this| {
+                this.child(
+                    div()
+                        .w(SCROLLBAR_GUTTER)
+                        .h_full()
+                        .flex_shrink_0()
+                        .border_b_1()
+                        .border_color(cx.theme().border),
+                )
+            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2273,6 +2300,12 @@ where
                         )
                         .child(self.delegate.render_last_empty_col(window, cx)),
                 )
+                // Qrow: room for the vertical scrollbar after the cells, so it
+                // covers no text, while the row background and line reach the
+                // edge.
+                .when(self.scrollbar_room(cx).0, |this| {
+                    this.child(div().w(SCROLLBAR_GUTTER).h_full().flex_shrink_0())
+                })
                 // Row selected style
                 // Note: Don't show row selection if a cell is selected
                 .when(is_selected && self.selection_mode.is_row(), |this| {
@@ -2498,6 +2531,7 @@ where
             None
         };
 
+        let (_, bottom_room) = self.scrollbar_room(cx);
         let inner_table = v_flex()
             .id("table-inner")
             .size_full()
@@ -2525,87 +2559,84 @@ where
                             .flex_grow_1()
                             .size_full()
                             .min_h_0()
-                            // Gutters below and beside the rows keep them clear
-                            // of the scrollbars, which overlay the body.
-                            .when(self.options.scrollbar_visible.bottom, |this| {
-                                this.pb(SCROLLBAR_GUTTER)
-                            })
-                            .when(self.options.scrollbar_visible.right, |this| {
-                                this.pr(SCROLLBAR_GUTTER)
-                            })
                             .child(
-                            uniform_list(
-                                "table-uniform-list",
-                                render_rows_count,
-                                cx.processor(
-                                    move |table, visible_range: Range<usize>, window, cx| {
-                                        // Use `col.width` (always up-to-date) rather than
-                                        // `col.bounds.size.width`, which is only set after
-                                        // prepaint and is therefore zero on the first frame.
-                                        let col_sizes: Rc<Vec<gpui::Size<Pixels>>> = Rc::new(
-                                            table
-                                                .col_groups
-                                                .iter()
-                                                .skip(left_columns_count)
-                                                .map(|col| gpui::Size {
-                                                    width: col.width,
-                                                    height: px(0.),
-                                                })
-                                                .collect(),
-                                        );
-
-                                        table.load_more_if_need(
-                                            rows_count,
-                                            visible_range.end,
-                                            window,
-                                            cx,
-                                        );
-                                        table.update_visible_range_if_need(
-                                            visible_range.clone(),
-                                            Axis::Vertical,
-                                            window,
-                                            cx,
-                                        );
-
-                                        if visible_range.end > rows_count {
-                                            table.scroll_to_row(
-                                                std::cmp::min(
-                                                    visible_range.start,
-                                                    rows_count.saturating_sub(1),
-                                                ),
-                                                cx,
+                                uniform_list(
+                                    "table-uniform-list",
+                                    render_rows_count,
+                                    cx.processor(
+                                        move |table, visible_range: Range<usize>, window, cx| {
+                                            // Use `col.width` (always up-to-date) rather than
+                                            // `col.bounds.size.width`, which is only set after
+                                            // prepaint and is therefore zero on the first frame.
+                                            let col_sizes: Rc<Vec<gpui::Size<Pixels>>> = Rc::new(
+                                                table
+                                                    .col_groups
+                                                    .iter()
+                                                    .skip(left_columns_count)
+                                                    .map(|col| gpui::Size {
+                                                        width: col.width,
+                                                        height: px(0.),
+                                                    })
+                                                    .collect(),
                                             );
-                                        }
 
-                                        let mut items = Vec::with_capacity(
-                                            visible_range.end.saturating_sub(visible_range.start),
-                                        );
-
-                                        // Render fake rows to fill the table
-                                        visible_range.for_each(|row_ix| {
-                                            // Render real rows for available data
-                                            items.push(table.render_table_row(
-                                                row_ix,
+                                            table.load_more_if_need(
                                                 rows_count,
-                                                left_columns_count,
-                                                col_sizes.clone(),
-                                                columns_count,
-                                                is_filled,
+                                                visible_range.end,
                                                 window,
                                                 cx,
-                                            ));
-                                        });
+                                            );
+                                            table.update_visible_range_if_need(
+                                                visible_range.clone(),
+                                                Axis::Vertical,
+                                                window,
+                                                cx,
+                                            );
 
-                                        items
-                                    },
-                                ),
-                            )
-                            .flex_grow_1()
-                            .size_full()
-                            .with_sizing_behavior(ListSizingBehavior::Auto)
-                            .track_scroll(&self.vertical_scroll_handle)
-                            .into_any_element(),
-                        ),
+                                            if visible_range.end > rows_count {
+                                                table.scroll_to_row(
+                                                    std::cmp::min(
+                                                        visible_range.start,
+                                                        rows_count.saturating_sub(1),
+                                                    ),
+                                                    cx,
+                                                );
+                                            }
+
+                                            let mut items = Vec::with_capacity(
+                                                visible_range
+                                                    .end
+                                                    .saturating_sub(visible_range.start),
+                                            );
+
+                                            // Render fake rows to fill the table
+                                            visible_range.for_each(|row_ix| {
+                                                // Render real rows for available data
+                                                items.push(table.render_table_row(
+                                                    row_ix,
+                                                    rows_count,
+                                                    left_columns_count,
+                                                    col_sizes.clone(),
+                                                    columns_count,
+                                                    is_filled,
+                                                    window,
+                                                    cx,
+                                                ));
+                                            });
+
+                                            items
+                                        },
+                                    ),
+                                )
+                                .flex_grow_1()
+                                .size_full()
+                                // Qrow: room after the last row for the horizontal
+                                // scrollbar, so it covers no text at the end.
+                                .pb(bottom_room)
+                                .with_sizing_behavior(ListSizingBehavior::Auto)
+                                .track_scroll(&self.vertical_scroll_handle)
+                                .into_any_element(),
+                            ),
                     )
                 }
             });

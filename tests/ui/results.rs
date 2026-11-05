@@ -973,3 +973,48 @@ fn column_names_start_at_the_left_also_over_numbers(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn rows_reach_the_right_edge_beside_the_scrollbar(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.update(cx, |window, _| {
+        // The demo result overflows, so the rows keep room for the vertical
+        // scrollbar after their cells, but their background and line reach
+        // the edge of the grid, which is the edge of the window here.
+        let row = window.find(("row", 0usize)).bounds();
+        let edge = window.viewport_size().width;
+        assert!(
+            (row.right() - edge).abs() < px(1.),
+            "Row 0 {row:?} must reach the right edge {edge:?}"
+        );
+    });
+    // At the end of the columns, the last cell stops before the scrollbar.
+    let position = app.update(cx, |window, _| {
+        window.find(("row", 2usize)).bounds().center()
+    });
+    for _ in 0..4 {
+        app.update(cx, |window, cx| {
+            window.dispatch_event(
+                ScrollWheelEvent {
+                    position,
+                    delta: ScrollDelta::Pixels(point(px(-100000.), px(0.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        app.settle(cx);
+    }
+    app.update(cx, |window, _| {
+        let edge = window.viewport_size().width;
+        let last = find_in(window, ("row", 0usize), ("cell", 141usize))
+            .expect("the last column after a scroll to the end")
+            .bounds();
+        assert!(
+            last.right() <= edge - px(15.),
+            "The last cell {last:?} must stop before the scrollbar at {edge:?}"
+        );
+    });
+}

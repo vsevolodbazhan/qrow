@@ -69,9 +69,14 @@ Qrow changes these files:
   stopped in the middle of the page.
 - `src/sheet.rs`: `Sheet::margin_bottom` keeps a band at the bottom of the
   window free. The dbt details sheet ends above the status bar.
-- `src/table/state.rs`: the table keeps the scrollbar width free below its
-  rows and beside its header and rows. Before, the scrollbars covered the
-  text of the bottom row and of the rightmost column. A new table size
+- `src/table/state.rs`: when the rows overflow the body, each row and the
+  header end with room for the vertical scrollbar after their cells, so it
+  covers no text, while row backgrounds, stripes, the selection tint, and
+  the row and header lines reach the right edge. When the columns overflow
+  and the last row would sit under the horizontal scrollbar, the rows end
+  with room for it. Before, the scrollbars covered the text of the bottom
+  row and of the rightmost column, and later a padded body left an empty
+  band beside and below the rows. A new table size
   renders the table again: the header picks its visible columns from the
   size of the last frame, so a wider pane left the header cells of the
   revealed columns blank.
