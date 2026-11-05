@@ -407,6 +407,24 @@ fn assert_no_tab_cut_at(window: &gpui_kit::Window, edge: gpui_kit::Pixels, count
     }
 }
 
+/// A query tab that an edge of the strip cuts draws no close button.
+fn assert_cut_tabs_hide_close(window: &gpui_kit::Window, edge: gpui_kit::Pixels, count: usize) {
+    let end = bounds_of(window, "new-tab").left();
+    for number in 1..=count {
+        let title = format!("Query {number}");
+        let Some(tab) = labelled(window, &title) else {
+            continue;
+        };
+        let tab = tab.bounds();
+        if tab.left() < edge - px(0.5) || tab.right() > end + px(0.5) {
+            assert!(
+                labelled(window, &format!("Close {title}")).is_none_or(|close| !close.visible()),
+                "{title} {tab:?} is cut by the strip, so it must not draw its close button"
+            );
+        }
+    }
+}
+
 /// The bounds of the selected query tab and of the strip that shows it,
 /// from the first tab edge after the sidebar to the new-tab button.
 fn selected_tab_in_strip(app: &TestApp, cx: &mut TestAppContext, title: &str) {
@@ -551,6 +569,7 @@ fn the_tab_strip_snaps_to_a_tab_after_a_resize(cx: &mut TestAppContext) {
     app.settle(cx);
     app.settle(cx);
     app.update(cx, |window, _| {
+        assert_cut_tabs_hide_close(window, strip_left, 10);
         let last = bounds_of(window, "Query 10");
         let new_tab = bounds_of(window, "new-tab");
         assert!(
@@ -563,7 +582,10 @@ fn the_tab_strip_snaps_to_a_tab_after_a_resize(cx: &mut TestAppContext) {
         cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(770.)));
         app.settle(cx);
         app.settle(cx);
-        app.update(cx, |window, _| assert_no_tab_cut_at(window, strip_left, 10));
+        app.update(cx, |window, _| {
+            assert_no_tab_cut_at(window, strip_left, 10);
+            assert_cut_tabs_hide_close(window, strip_left, 10);
+        });
         selected_tab_in_strip(&app, cx, "Query 1");
     }
 }

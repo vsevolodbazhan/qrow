@@ -106,10 +106,21 @@ impl Qrow {
             .h(tab_height)
             .min_h(tab_height)
             .max_h(tab_height)
-            .children(visible.iter().map(|index| {
+            .children(visible.iter().enumerate().map(|(position, index)| {
                 let index = *index;
                 let tab = &self.tabs[index];
                 let id = tab.saved.id;
+                // A tab that an edge of the strip cuts hides its dot and close
+                // button, so no lone "×" shows at the edge. A click on it
+                // selects it, which scrolls it into view.
+                let cut = self
+                    .tab_scroll
+                    .bounds_for_item(position)
+                    .is_some_and(|item| {
+                        let (view, offset) = (self.tab_scroll.bounds(), self.tab_scroll.offset().x);
+                        item.left() + offset < view.left() - px(0.5)
+                            || item.right() + offset > view.right() + px(0.5)
+                    });
                 let assistant_busy = self.settings.assistant.enabled && self.assistant_tab_busy(id);
                 let title_generating =
                     self.assistant
@@ -183,6 +194,7 @@ impl Qrow {
                         h_flex()
                             .gap_1()
                             .pr_2()
+                            .when(cut, |el| el.invisible())
                             .when_some(tab.dot_status(), |el, status| {
                                 let label = format!("{}{}", tab.saved.title, tab.status_suffix());
                                 let tooltip = StatusTooltip::live(
