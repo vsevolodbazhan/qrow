@@ -722,6 +722,13 @@ fn the_search_field_has_equal_gaps_above_and_below_at_each_zoom(cx: &mut TestApp
                 (above - below).abs() <= gpui_kit::px(0.5),
                 "The gap above the search ({above:?}) must match the gap below it ({below:?})"
             );
+            // The scope button is under New connection.
+            let add = bounds_of(window, "add-connection");
+            let scope = bounds_of(window, "search-scope");
+            assert!((add.center().x - scope.center().x).abs() <= gpui_kit::px(0.5));
+            assert_eq!(add.size, scope.size);
+            assert!((scope.center().y - search.center().y).abs() <= gpui_kit::px(0.5));
+            assert!(search.right() < scope.left());
         });
     }
 }
@@ -1103,12 +1110,6 @@ fn plain_notices_align_with_the_parent_label_at_each_zoom(cx: &mut TestAppContex
         let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
         expand_connection(&app, cx, &profile);
         wait_shows(&app, cx, "avia");
-        let (connection_left, icon_left) = app.update(cx, |window, _| {
-            (
-                bounds_of(window, &format!("c\u{1f}{}\u{1f}label", profile.id)).left(),
-                bounds_of(window, &format!("c\u{1f}{}\u{1f}icon", profile.id)).left(),
-            )
-        });
         app.click_labelled(cx, "avia");
         wait_shows(&app, cx, "bookings");
         let schema_left = app.update(cx, |window, _| {
@@ -1131,16 +1132,16 @@ fn plain_notices_align_with_the_parent_label_at_each_zoom(cx: &mut TestAppContex
                 "Schema notice is too far right at scale {scale}"
             );
         });
-        assert!(connection_left > icon_left);
-        // A notice without a parent uses the icon lane of the connections.
+        // A notice without a parent starts at the text of the search field:
+        // after the field border and the padding of a medium field.
         app.fill_labelled(cx, SEARCH, "missing.bookings");
         wait_shows(&app, cx, "No matches");
         app.update(cx, |window, _| {
             let notice = bounds_of(window, "search-empty\u{1f}label");
-            assert_eq!(
-                notice.left(),
-                icon_left,
-                "Search notice is not in the icon lane at scale {scale}"
+            let field = bounds_of(window, SEARCH);
+            assert!(
+                (notice.left() - field.left() - gpui_kit::px(11.)).abs() <= gpui_kit::px(0.5),
+                "Search notice {notice:?} must start at the text of {field:?} at scale {scale}"
             );
         });
         assert_eq!(app.credentials.reads(), 0);

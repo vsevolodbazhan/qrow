@@ -1584,9 +1584,11 @@ impl Qrow {
         )
     }
 
-    /// The button at the end of the search field that picks the connections
-    /// to search. It shows as selected when the search skips connections.
+    /// The button after the search field that picks the connections to
+    /// search. It shows as selected when the search skips connections. It
+    /// has the size of New connection and sits in the same lane.
     fn search_scope_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let size = self.ui_px(STATUS_SLOT_WIDTH);
         let scope = self.catalog.scope.clone();
         let profiles: Vec<(Uuid, String)> = self
             .profiles
@@ -1597,7 +1599,10 @@ impl Qrow {
         let label = self.search_scope_label();
         Button::new("search-scope")
             .ghost()
-            .xsmall()
+            .small()
+            .w(size)
+            .h(size)
+            .flex_shrink_0()
             .icon(AssetIconName::ListFilter)
             .selected(!scope.is_all())
             .accessibility_label(label.clone())
@@ -1754,23 +1759,26 @@ impl Qrow {
                 // button share a centerline. The bottom padding stands in for
                 // the toolbar border. The first row adds its own top padding,
                 // so the tree moves up by that padding and the border to make
-                // the gap below the search box match the gap above it.
+                // the gap below the search box match the gap above it. The
+                // scope button uses the padding and the gap of the header, so
+                // it is under New connection.
                 el.child(
                     h_flex()
                         .h_12()
                         .px_2()
+                        .gap_1()
                         .pb_px()
                         .mb(-(px(1.) + window.rem_size() * 0.125))
                         .flex_shrink_0()
                         .child(
                             Input::new(&self.catalog.search)
-                                .small()
-                                .w_full()
+                                .flex_1()
+                                .min_w_0()
                                 .focus_ring(false)
                                 .cleanable(true)
-                                .aria_label("Search connections and relations")
-                                .suffix(self.search_scope_button(cx)),
-                        ),
+                                .aria_label("Search connections and relations"),
+                        )
+                        .child(self.search_scope_button(cx)),
                 )
             })
             .child(
@@ -2200,6 +2208,29 @@ fn render_entry(
         } => {
             if text.is_empty() {
                 return div().h(ui_px(ROW_HEIGHT)).into_any_element();
+            }
+            // A search notice has no parent row. Its text starts where the
+            // text of the search field starts: the search row and the tree
+            // have the same side padding, and the field adds its border and
+            // its padding.
+            if profile.is_nil() {
+                return h_flex()
+                    .id(id.clone())
+                    .w_full()
+                    .h(ui_px(ROW_HEIGHT))
+                    .pl(px(1.) + gpui_kit::component::Size::Medium.input_px())
+                    .pr(ui_px(STATUS_SLOT_WIDTH / 2.))
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        div()
+                            .id(child_id(&id, "label"))
+                            .test_support()
+                            .min_w_0()
+                            .truncate()
+                            .child(text.clone()),
+                    )
+                    .into_any_element();
             }
             return notice_row(&id, *profile, text, *tone, refresh.clone(), weak, scale, cx)
                 .pl(indent)
