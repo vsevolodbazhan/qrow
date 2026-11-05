@@ -1,6 +1,7 @@
 use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::component::tooltip::ManagedTooltipExt as _;
 use gpui_kit::component::{
     Icon, Selectable as _, TitleBar,
     alert::Alert,
@@ -71,15 +72,24 @@ impl Qrow {
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
-        // Tabs keep at least 10.5 rems, so a short title shows whole. When
-        // that overflows the strip but 7 rems would not, all tabs shrink to
-        // fit instead, so a few tabs never scroll. The strip width is from
-        // the last frame; the tab bar draws again when it changes.
+        // Tabs keep at least 10.5 rems, so a short title shows whole, and
+        // the selected tab keeps its whole title. When the other tabs
+        // overflow the strip but 8.5 rems each would not, they shrink to
+        // share the rest of the strip instead, so a few tabs never scroll.
+        // The widths are from the last frame; the tab bar draws again when
+        // they change.
         let rem = cx.theme().font_size;
         let room = self.tab_scroll.bounds().size.width - rem * 0.75;
-        let count = visible.len().max(1) as f32;
-        let fit = (room > px(0.) && rem * 10.5 * count > room && rem * 7. * count <= room)
-            .then(|| room / count);
+        let selected = visible.iter().position(|index| *index == self.active);
+        let selected_width = selected
+            .and_then(|position| self.tab_scroll.bounds_for_item(position))
+            .map_or(px(0.), |item| item.size.width);
+        let others = visible
+            .len()
+            .saturating_sub(usize::from(selected.is_some())) as f32;
+        let fit = (others > 0. && room > px(0.) && rem * 10.5 * others + selected_width > room)
+            .then(|| (room - selected_width) / others)
+            .filter(|&width| width >= rem * 8.5);
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
             .fit_width(fit)
@@ -114,20 +124,19 @@ impl Qrow {
                     .min_h(tab_height)
                     .max_h(tab_height)
                     // A tab without a dot shows its status on the tab itself.
+                    // Tab tooltips use the managed overlay, which hides them
+                    // when the strip scrolls.
                     .when(tab.dot_status().is_none(), |query_tab| {
-                        query_tab.map(|mut query_tab| {
-                            query_tab.interactivity().tooltip(StatusTooltip::live(
-                                cx.entity().downgrade(),
-                                None,
-                                move |qrow, _| {
-                                    qrow.tabs
-                                        .iter()
-                                        .find(|tab| tab.saved.id == id)
-                                        .map(Tab::status_tooltip)
-                                },
-                            ));
-                            query_tab
-                        })
+                        query_tab.managed_tooltip(StatusTooltip::live(
+                            cx.entity().downgrade(),
+                            None,
+                            move |qrow, _| {
+                                qrow.tabs
+                                    .iter()
+                                    .find(|tab| tab.saved.id == id)
+                                    .map(Tab::status_tooltip)
+                            },
+                        ))
                     })
                     // Right click does not activate the tab; the menu names its target.
                     .on_mouse_down(
@@ -192,33 +201,34 @@ impl Qrow {
                                         .test_support()
                                         .role(Role::Status)
                                         .aria_label(label)
-                                        .tooltip(tooltip)
+                                        .managed_tooltip(tooltip)
                                         .child(status.dot(cx)),
                                 )
                             })
                             .child(
-                                Button::new(SharedString::from(format!(
-                                    "close-tab-{}",
-                                    tab.saved.id
-                                )))
-                                .ghost()
-                                .small()
-                                .icon(IconName::Close)
-                                .accessibility_label(format!("Close {}", tab.saved.title))
-                                .map(|mut button| {
-                                    button.interactivity().tooltip(
+                                div()
+                                    .id(SharedString::from(format!("close-tab-tip-{id}")))
+                                    .managed_tooltip(
                                         StatusTooltip::new("Close tab", "")
                                             .for_action(&CloseTab, None),
-                                    );
-                                    button
-                                })
-                                .disabled(tab.busy || assistant_busy)
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.close_tab(index, window, cx);
-                                    },
-                                )),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "close-tab-{}",
+                                            tab.saved.id
+                                        )))
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::Close)
+                                        .accessibility_label(format!("Close {}", tab.saved.title))
+                                        .disabled(tab.busy || assistant_busy)
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                this.close_tab(index, window, cx);
+                                            }),
+                                        ),
+                                    ),
                             ),
                     )
             }))

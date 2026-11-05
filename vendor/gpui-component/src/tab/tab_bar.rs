@@ -1,14 +1,14 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 use gpui::{
-    Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, HitboxBehavior,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels,
-    RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, Window, canvas, div, fill, linear_color_stop, linear_gradient, point,
-    prelude::FluentBuilder as _, px, size,
+    Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, InteractiveElement, IntoElement,
+    ParentElement, Pixels, RenderOnce, ScrollHandle, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, canvas, div, fill,
+    linear_color_stop, linear_gradient, point, prelude::FluentBuilder as _, px, size,
 };
 use gpui_base::spring;
 use rust_i18n::t;
@@ -127,7 +127,7 @@ impl TabBar {
         self
     }
 
-    /// Qrow: when set, each tab with a maximum width, the selected one too,
+    /// Qrow: when set, each tab with a maximum width except the selected one
     /// shrinks down to this width instead of the usual least width. A bar
     /// that would scroll only a little sets it so that all tabs fit.
     pub fn fit_width(mut self, width: Option<Pixels>) -> Self {
@@ -446,12 +446,11 @@ impl RenderOnce for TabBar {
         let indicator_ready = indicator_element.is_some();
 
         let has_suffix_or_menu = self.suffix.is_some() || self.menu;
-        // Qrow: a bar with its own background fades the tabs that its edges
-        // cut, so a scrolled bar shows that it has more tabs.
-        // Qrow: what the selected tab was last revealed for.
-        let reveal: Rc<Cell<Option<Reveal>>> = window
-            .use_keyed_state(format!("{}-reveal", self.id), cx, |_, _| {
-                Rc::<Cell<Option<Reveal>>>::default()
+        // Qrow: a bar with its own background fades an edge with more tabs
+        // past it, and snaps its scroll to the start of a tab.
+        let strip: Rc<Strip> = window
+            .use_keyed_state(format!("{}-strip", self.id), cx, |_, _| {
+                Rc::<Strip>::default()
             })
             .read(cx)
             .clone();
@@ -582,81 +581,79 @@ impl RenderOnce for TabBar {
                                 this.track_scroll(&scroll_handle)
                             })
                             .children(rendered_tabs)
-                            .when(has_suffix_or_menu, |this| this.child(self.last_empty_space)),
+                            .when(has_suffix_or_menu, |this| this.child(self.last_empty_space))
+                            // Qrow: room after the last tab, so that the end
+                            // of the scroll range is the start of a tab.
+                            .when(edge_fade.is_some(), |this| {
+                                this.child(div().flex_shrink_0().w(strip.pad.get()))
+                            }),
                     )
                     .when_some(edge_fade, |this, (handle, color)| {
-                        let select = on_click.clone();
                         // Laid out after the tabs, from the scroll position of
                         // this frame.
                         this.child(
                             canvas(
-                                move |_, window, _| {
-                                    reveal_selected(
-                                        &handle,
-                                        selected_index,
-                                        num_tabs,
-                                        &reveal,
-                                        window,
-                                    );
-                                    edge_covers(&handle, num_tabs, selected_index).map(|cover| {
-                                        cover.map(|(bounds, ix)| {
-                                            let hitbox = ix.map(|ix| {
-                                                let hitbox = window.insert_hitbox(
-                                                    bounds,
-                                                    HitboxBehavior::BlockMouse,
-                                                );
-                                                (ix, hitbox)
-                                            });
-                                            (bounds, hitbox)
-                                        })
-                                    })
+                                {
+                                    let (handle, strip) = (handle.clone(), strip.clone());
+                                    move |_, window, cx| {
+                                        settle(
+                                            &handle,
+                                            selected_index,
+                                            num_tabs,
+                                            &strip,
+                                            window,
+                                            cx,
+                                        )
+                                    }
                                 },
-                                move |_, covers, window, _| {
-                                    let [left, right] = covers;
-                                    let width = px(24.);
+                                move |_, _, window, _| {
+                                    let view = handle.bounds();
+                                    let scrolled = -handle.offset().x;
+                                    let width = px(24.).min(view.size.width / 4.);
+                                    let fade = size(width, view.size.height);
                                     let clear = color.opacity(0.);
-                                    for (cover, start) in [(left, true), (right, false)] {
-                                        let Some((bounds, hitbox)) = cover else {
-                                            continue;
-                                        };
-                                        if hitbox.is_some() {
-                                            window.paint_quad(fill(bounds, color));
-                                        }
-                                        let (origin, from, to) = if start {
-                                            (bounds.top_right(), color, clear)
-                                        } else {
-                                            (
-                                                point(bounds.left() - width, bounds.top()),
-                                                clear,
-                                                color,
-                                            )
-                                        };
+                                    if scrolled > px(0.5) {
                                         window.paint_quad(fill(
-                                            Bounds::new(origin, size(width, bounds.size.height)),
+                                            Bounds::new(view.origin, fade),
                                             linear_gradient(
                                                 90.,
-                                                linear_color_stop(from, 0.),
-                                                linear_color_stop(to, 1.),
+                                                linear_color_stop(color, 0.),
+                                                linear_color_stop(clear, 1.),
                                             ),
                                         ));
-                                        // A press on a covered tab selects it,
-                                        // which shows it.
-                                        if let (Some(select), Some((ix, hitbox))) =
-                                            (select.clone(), hitbox)
-                                        {
-                                            window.on_mouse_event(
-                                                move |event: &MouseDownEvent, phase, window, cx| {
-                                                    if phase.bubble()
-                                                        && event.button == MouseButton::Left
-                                                        && hitbox.is_hovered(window)
-                                                    {
-                                                        select(&ix, window, cx);
-                                                        cx.stop_propagation();
-                                                    }
-                                                },
-                                            );
-                                        }
                                     }
+                                    if handle.max_offset().x - scrolled > px(0.5) {
+                                        window.paint_quad(fill(
+                                            Bounds::new(
+                                                point(view.right() - width, view.top()),
+                                                fade,
+                                            ),
+                                            linear_gradient(
+                                                90.,
+                                                linear_color_stop(clear, 0.),
+                                                linear_color_stop(color, 1.),
+                                            ),
+                                        ));
+                                    }
+                                    // The strip snaps when a wheel or a swipe
+                                    // over it stops.
+                                    let strip = strip.clone();
+                                    window.on_mouse_event(
+                                        move |event: &ScrollWheelEvent, phase, window, cx| {
+                                            if !phase.bubble() || !view.contains(&event.position) {
+                                                return;
+                                            }
+                                            strip.wheel.set(Some(cx.background_executor().now()));
+                                            window
+                                                .spawn(cx, async move |cx| {
+                                                    cx.background_executor()
+                                                        .timer(SNAP_DELAY)
+                                                        .await;
+                                                    let _ = cx.update(|window, _| window.refresh());
+                                                })
+                                                .detach();
+                                        },
+                                    );
                                 },
                             )
                             .absolute()
@@ -700,90 +697,113 @@ impl RenderOnce for TabBar {
     }
 }
 
-/// Qrow: the strip width, the selected tab, the tab count, and the width of
-/// the selected tab that the bar last scrolled the selected tab into view for.
-type Reveal = (Pixels, usize, usize, Pixels);
+/// Qrow: the strip width, the selected tab, the tab count, the width of the
+/// selected tab, and the width of all tabs that the bar last settled for.
+type Reveal = (Pixels, usize, usize, Pixels, Pixels);
 
-/// Qrow: scrolls the selected tab fully into view when the bar width, the
-/// selection, the number of tabs, or the width of the selected tab changed,
-/// for example after a window resize, a new tab, or a rename. A scroll by
-/// the user between those changes stays. A change draws the bar again.
-fn reveal_selected(
-    handle: &ScrollHandle,
-    selected: Option<usize>,
-    num_tabs: usize,
-    reveal: &Cell<Option<Reveal>>,
-    window: &mut Window,
-) {
-    let Some(selected) = selected.filter(|&ix| ix < num_tabs) else {
-        return;
-    };
-    let Some(item) = handle.bounds_for_item(selected) else {
-        return;
-    };
-    let view = handle.bounds();
-    let key = (view.size.width, selected, num_tabs, item.size.width);
-    if reveal.get() == Some(key) || view.size.width <= px(0.) {
-        return;
-    }
-    reveal.set(Some(key));
-    // The owner of the bar may size the tabs from the bar width, so it
-    // renders again after a change.
-    window.request_animation_frame();
-    let offset = handle.offset();
-    let (start, end) = (item.left() - view.left(), item.right() - view.left());
-    let mut x = offset.x;
-    if start + x < px(0.) {
-        x = -start;
-    } else if end + x > view.size.width {
-        x = view.size.width - end;
-    }
-    let x = x.max(-handle.max_offset().x).min(px(0.));
-    if x != offset.x {
-        handle.set_offset(point(x, offset.y));
-    }
+/// Qrow: how long a wheel or a swipe must stop before the strip snaps.
+const SNAP_DELAY: Duration = Duration::from_millis(150);
+
+/// Qrow: the scroll state of a tab bar that tracks its scroll.
+#[derive(Default)]
+struct Strip {
+    reveal: Cell<Option<Reveal>>,
+    /// The last wheel event over the strip, until the strip snaps.
+    wheel: Cell<Option<Instant>>,
+    /// The room after the last tab.
+    pad: Cell<Pixels>,
 }
 
-/// Qrow: the fades at the start and the end of a bar with more tabs past
-/// that edge. A tab that the edge cuts to less than half its width is a
-/// sliver: the fade covers it in the bar color, so no lone close button or
-/// part of a title shows, and the cover has the index of the tab. The fade
-/// never covers the selected tab or a tab that shows half or more. Item
-/// bounds leave out the scroll offset.
-fn edge_covers(
+/// Qrow: snaps the scroll so that a tab starts exactly at the start edge, so
+/// no part of a tab shows there. The strip snaps when a wheel or a swipe over
+/// it stops, and when the bar width, the selection, the number of tabs, or
+/// the width of a tab changes, for example after a resize, a new tab, or a
+/// rename. After such a change, the selected tab also scrolls fully
+/// into view. Room after the last tab makes the end of the scroll range the
+/// start of a tab. Item bounds leave out the scroll offset.
+fn settle(
     handle: &ScrollHandle,
-    num_tabs: usize,
     selected: Option<usize>,
-) -> [Option<(Bounds<Pixels>, Option<usize>)>; 2] {
+    num_tabs: usize,
+    strip: &Strip,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let view = handle.bounds();
-    let offset = handle.offset().x;
-    let (mut left, mut right) = ((view.left(), None), (view.right(), None));
-    for ix in (0..num_tabs).filter(|&ix| Some(ix) != selected) {
-        let Some(item) = handle.bounds_for_item(ix) else {
-            continue;
-        };
-        let (start, end) = (item.left() + offset, item.right() + offset);
-        let sliver = item.size.width / 2.;
-        if start < view.left() - px(0.5) && end > view.left() && end - view.left() < sliver {
-            left = (end, Some(ix));
-        }
-        if end > view.right() + px(0.5) && start < view.right() && view.right() - start < sliver {
-            right = (start, Some(ix));
+    let count = handle.children_count();
+    if view.size.width <= px(0.) || num_tabs == 0 || count == 0 {
+        return;
+    }
+    let Some(spacer) = handle.bounds_for_item(count - 1) else {
+        return;
+    };
+    let starts: Vec<Pixels> = (0..num_tabs)
+        .filter_map(|ix| handle.bounds_for_item(ix))
+        .map(|item| item.left() - view.left())
+        .collect();
+    let overflow = spacer.left() - view.left() - view.size.width;
+    let pad = if overflow > px(0.) {
+        starts
+            .iter()
+            .find(|&&start| start >= overflow - px(0.5))
+            .map_or(px(0.), |&start| (start - overflow).max(px(0.)))
+    } else {
+        px(0.)
+    };
+    let padded = (pad - strip.pad.get()).abs() > px(0.5);
+    if padded {
+        strip.pad.set(pad);
+        window.request_animation_frame();
+    }
+    let max = (overflow + pad).max(px(0.));
+
+    let now = cx.background_executor().now();
+    let stopped = strip
+        .wheel
+        .get()
+        .is_some_and(|wheel| now.duration_since(wheel) >= SNAP_DELAY);
+    if stopped {
+        strip.wheel.set(None);
+    }
+    let selected = selected
+        .filter(|&ix| ix < num_tabs)
+        .and_then(|ix| Some((ix, handle.bounds_for_item(ix)?)));
+    let content = spacer.left() - view.left();
+    let key = selected.map(|(ix, item)| (view.size.width, ix, num_tabs, item.size.width, content));
+    let changed = key.is_some() && strip.reveal.get() != key;
+    if changed {
+        strip.reveal.set(key);
+        // The owner of the bar may size the tabs from the bar width, so it
+        // renders again after a change.
+        window.request_animation_frame();
+    }
+    if !(stopped || changed || padded) {
+        return;
+    }
+    let current = -handle.offset().x;
+    let boundaries = || {
+        std::iter::once(px(0.))
+            .chain(starts.iter().copied())
+            .filter(move |&start| start <= max + px(0.5))
+    };
+    let mut target = boundaries()
+        .min_by(|a, b| f32::from((*a - current).abs()).total_cmp(&f32::from((*b - current).abs())))
+        .unwrap_or(px(0.));
+    if changed && let Some((_, item)) = selected {
+        let (start, end) = (item.left() - view.left(), item.right() - view.left());
+        if start < target {
+            target = start;
+        } else if end > target + view.size.width {
+            target = boundaries()
+                .find(|&boundary| boundary >= end - view.size.width - px(0.5))
+                .unwrap_or(max);
         }
     }
-    let start = (-offset > px(0.5)).then(|| {
-        (
-            Bounds::from_corners(view.origin, point(left.0, view.bottom())),
-            left.1,
-        )
-    });
-    let end = (handle.max_offset().x + offset > px(0.5)).then(|| {
-        (
-            Bounds::from_corners(point(right.0, view.top()), view.bottom_right()),
-            right.1,
-        )
-    });
-    [start, end]
+    let target = target.min(max).max(px(0.));
+    if (target - current).abs() > px(0.5) {
+        handle.set_offset(point(-target, handle.offset().y));
+        window.request_animation_frame();
+    }
 }
 
 #[cfg(test)]

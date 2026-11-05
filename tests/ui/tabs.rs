@@ -370,55 +370,15 @@ fn a_full_tab_strip_scrolls_with_the_wheel(cx: &mut TestAppContext) {
             "The wheel {delta:?} must scroll the tab strip"
         );
     }
-    // The edge covers the tab that it cuts. A press on the cover selects
-    // that tab, not its hidden close button, and the tab scrolls into view.
-    // A new tab scrolls into view too.
-    let (strip_left, cut) = app.update(cx, |window, _| {
-        let strip_left = bounds_of(window, "Query 1").left() + px(240.);
-        let cut = (1..=10)
-            .map(|number| format!("Query {number}"))
-            .find(|title| {
-                // A tab outside the strip is not drawn.
-                labelled(window, title).is_some_and(|tab| {
-                    let tab = tab.bounds();
-                    tab.left() < strip_left && tab.right() > strip_left + px(8.)
-                })
-            })
-            .expect("a tab under the left edge");
-        (strip_left, cut)
+    // When the wheel stops, the strip snaps so that a tab starts exactly at
+    // its start edge.
+    let strip_left = app.update(cx, |window, _| {
+        bounds_of(window, "Query 1").left() + px(240.)
     });
-    let cut_bounds = app.update(cx, |window, _| bounds_of(window, &cut));
-    let press = gpui_kit::point(strip_left + px(4.), cut_bounds.center().y);
-    app.update(cx, |window, cx| {
-        for event in [
-            gpui_kit::MouseDownEvent {
-                button: gpui_kit::MouseButton::Left,
-                position: press,
-                modifiers: Default::default(),
-                click_count: 1,
-                first_mouse: false,
-            }
-            .to_platform_input(),
-            gpui_kit::MouseUpEvent {
-                button: gpui_kit::MouseButton::Left,
-                position: press,
-                modifiers: Default::default(),
-                click_count: 1,
-            }
-            .to_platform_input(),
-        ] {
-            window.dispatch_event(event, cx);
-        }
-        window.render_frame(cx);
-    });
+    cx.executor().advance_clock(Duration::from_millis(300));
     app.settle(cx);
-    app.update(cx, |window, _| {
-        let tab = bounds_of(window, &cut);
-        assert!(
-            tab.left() >= strip_left,
-            "{cut} {tab:?} must scroll into view"
-        );
-    });
+    app.settle(cx);
+    app.update(cx, |window, _| assert_no_tab_cut_at(window, strip_left, 10));
     app.click(cx, "new-tab");
     app.settle(cx);
     app.update(cx, |window, _| {
@@ -429,6 +389,22 @@ fn a_full_tab_strip_scrolls_with_the_wheel(cx: &mut TestAppContext) {
             "The new tab {tab:?} must scroll into view before {new_tab:?}"
         );
     });
+}
+
+/// No query tab "Query 1" to "Query {count}" starts before `edge` and ends
+/// after it.
+fn assert_no_tab_cut_at(window: &gpui_kit::Window, edge: gpui_kit::Pixels, count: usize) {
+    for number in 1..=count {
+        let title = format!("Query {number}");
+        // A tab outside the strip is not drawn.
+        if let Some(tab) = labelled(window, &title) {
+            let tab = tab.bounds();
+            assert!(
+                !(tab.left() < edge - px(0.5) && tab.right() > edge + px(0.5)),
+                "{title} {tab:?} is cut at the strip edge {edge:?}"
+            );
+        }
+    }
 }
 
 /// The bounds of the selected query tab and of the strip that shows it,
@@ -449,7 +425,7 @@ fn selected_tab_in_strip(app: &TestApp, cx: &mut TestAppContext, title: &str) {
 fn the_selected_tab_stays_in_view_when_the_assistant_opens(cx: &mut TestAppContext) {
     let (directory, codex) = crate::support::assistant::FakeCodex::new();
     let profile = offline_profile("Two tabs");
-    let mut workspace = codex.workspace(Workspace {
+    let workspace = codex.workspace(Workspace {
         tabs: vec![
             SavedTab {
                 title: "Route overview".into(),
@@ -461,7 +437,6 @@ fn the_selected_tab_stays_in_view_when_the_assistant_opens(cx: &mut TestAppConte
         profiles: vec![profile],
         ..Workspace::default()
     });
-    workspace.settings.assistant.panel_width = 536.;
     let app = TestApp::launch_in(
         cx,
         directory,
@@ -513,4 +488,77 @@ fn a_renamed_selected_tab_stays_in_view(cx: &mut TestAppContext) {
     app.settle(cx);
     app.settle(cx);
     selected_tab_in_strip(&app, cx, title);
+}
+
+#[gpui_kit::test]
+fn the_tab_strip_snaps_to_a_tab_after_a_resize(cx: &mut TestAppContext) {
+    let profile = offline_profile("Snap");
+    let tabs: Vec<_> = (1..=10)
+        .map(|number| SavedTab::new(number, Some(profile.id)))
+        .collect();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs,
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    cx.simulate_window_resize(app.window, gpui_kit::size(px(900.), px(770.)));
+    app.settle(cx);
+    let (strip_left, position) = app.update(cx, |window, _| {
+        let first = bounds_of(window, "Query 1");
+        (first.left(), bounds_of(window, "Query 2").center())
+    });
+    // A wheel stops between two tab starts, and the strip snaps.
+    app.update(cx, |window, cx| {
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-200.), px(0.))),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(300));
+    app.settle(cx);
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(
+            bounds_of(window, "Query 1").left() < strip_left,
+            "The strip must stay scrolled"
+        );
+        assert_no_tab_cut_at(window, strip_left, 10);
+    });
+    // A wider window snaps again, and the selected tab stays in view.
+    for width in [1280., 1000., 900.] {
+        cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(770.)));
+        app.settle(cx);
+        app.settle(cx);
+        app.update(cx, |window, _| assert_no_tab_cut_at(window, strip_left, 10));
+        selected_tab_in_strip(&app, cx, "Query 1");
+    }
+}
+
+#[gpui_kit::test]
+fn each_new_tab_shows_in_full(cx: &mut TestAppContext) {
+    let profile = offline_profile("New tabs");
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.settle(cx);
+    for number in 2..=10 {
+        app.dispatch(cx, qrow::ui::NewTab);
+        app.settle(cx);
+        app.settle(cx);
+        selected_tab_in_strip(&app, cx, &format!("Query {number}"));
+    }
 }
