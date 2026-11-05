@@ -11,7 +11,7 @@ use gpui::{
 
 /// The least width of a tab with a maximum width, in rems: room for a few
 /// characters of its label and a close button.
-const TAB_MIN_WIDTH_REMS: f32 = 5.5;
+const TAB_MIN_WIDTH_REMS: f32 = 8.;
 
 /// Tab variants.
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]

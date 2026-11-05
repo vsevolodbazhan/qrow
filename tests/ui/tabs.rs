@@ -2,7 +2,8 @@ use crate::support::{
     TestApp, assert_workspace_divider_alignment, assert_workspace_header_alignment, bounds_of,
     offline_profile, value,
 };
-use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{InputEvent as _, TestAppContext, px};
 use qrow::model::{SavedTab, Workspace};
 use std::time::Duration;
 use uuid::Uuid;
@@ -326,4 +327,78 @@ fn copy_and_move_to_another_connection(cx: &mut TestAppContext) {
     );
     // Moving the last tab leaves the source connection with a new blank tab.
     wait_tabs(&app, cx, a, &[("Query 1", "")]);
+}
+
+#[gpui_kit::test]
+fn a_full_tab_strip_scrolls_with_the_wheel(cx: &mut TestAppContext) {
+    let profile = offline_profile("Many tabs");
+    let tabs: Vec<_> = (1..=10)
+        .map(|number| SavedTab::new(number, Some(profile.id)))
+        .collect();
+    let workspace = Workspace {
+        tabs,
+        profiles: vec![profile],
+        ..Workspace::default()
+    };
+    let app = TestApp::launch(cx, workspace);
+    cx.simulate_window_resize(app.window, gpui_kit::size(px(900.), px(770.)));
+    app.settle(cx);
+    let strip = app.update(cx, |window, _| bounds_of(window, "Query 2").center());
+    // A horizontal swipe and a vertical wheel both scroll the strip.
+    for delta in [
+        gpui_kit::point(px(-120.), px(0.)),
+        gpui_kit::point(px(0.), px(-120.)),
+    ] {
+        let before = app.update(cx, |window, _| bounds_of(window, "Query 1").left());
+        app.update(cx, |window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position: strip,
+                    delta: gpui_kit::ScrollDelta::Pixels(delta),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        app.settle(cx);
+        let after = app.update(cx, |window, _| bounds_of(window, "Query 1").left());
+        assert_eq!(
+            after,
+            before - px(120.),
+            "The wheel {delta:?} must scroll the tab strip"
+        );
+    }
+    // A tab that the edge cuts scrolls into view when it is selected, and a
+    // new tab scrolls into view.
+    let (strip_left, cut) = app.update(cx, |window, _| {
+        (
+            bounds_of(window, "Query 1").left() + px(240.),
+            bounds_of(window, "Query 3"),
+        )
+    });
+    assert!(
+        cut.left() < strip_left,
+        "Query 3 {cut:?} must start under the edge"
+    );
+    app.click_labelled(cx, "Query 3");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        let tab = bounds_of(window, "Query 3");
+        assert!(
+            tab.left() >= strip_left,
+            "Query 3 {tab:?} must scroll into view"
+        );
+    });
+    app.click(cx, "new-tab");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        let tab = bounds_of(window, "Query 11");
+        let new_tab = bounds_of(window, "new-tab");
+        assert!(
+            tab.right() <= new_tab.left(),
+            "The new tab {tab:?} must scroll into view before {new_tab:?}"
+        );
+    });
 }

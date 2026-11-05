@@ -3,7 +3,8 @@ use std::{cell::RefCell, rc::Rc};
 use gpui::{
     Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, InteractiveElement, IntoElement,
     ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
+    StyleRefinement, Styled, Window, canvas, div, fill, linear_color_stop, linear_gradient, point,
+    prelude::FluentBuilder as _, px, size,
 };
 use gpui_base::spring;
 use rust_i18n::t;
@@ -13,8 +14,8 @@ use super::{Tab, TabVariant};
 use crate::button::{Button, ButtonVariants as _};
 use crate::menu::{DropdownMenu as _, PopupMenuItem};
 use crate::{
-    ActiveTheme, ElementExt, Icon, InteractiveElementExt as _, Selectable, Sizable, Size,
-    StyledExt, h_flex, styled::raised_shadow,
+    ActiveTheme, ElementExt, Icon, Selectable, Sizable, Size, StyledExt, h_flex,
+    styled::raised_shadow,
 };
 
 struct TabIndicatorBounds {
@@ -431,6 +432,13 @@ impl RenderOnce for TabBar {
         let indicator_ready = indicator_element.is_some();
 
         let has_suffix_or_menu = self.suffix.is_some() || self.menu;
+        // Qrow: a bar with its own background fades the tabs that its edges
+        // cut, so a scrolled bar shows that it has more tabs.
+        let edge_fade = self
+            .scroll_handle
+            .clone()
+            .filter(|_| self.variant == TabVariant::Tab)
+            .map(|handle| (handle, cx.theme().tokens.tab_bar));
         let mut item_metas: Vec<(Option<SharedString>, Option<Icon>, bool)> = Vec::new();
         let selected_index = self.selected_index;
         let on_click = self.on_click.clone();
@@ -545,14 +553,56 @@ impl RenderOnce for TabBar {
                             // explicit reveals leave space at both ends of the bar.
                             .relative()
                             .gap(gap)
+                            // Qrow: a vertical wheel scrolls the bar too, as
+                            // the bar has nothing to scroll vertically.
                             .overflow_x_scroll()
-                            .lock_scroll_axis()
                             .when_some(self.scroll_handle, |this, scroll_handle| {
                                 this.track_scroll(&scroll_handle)
                             })
                             .children(rendered_tabs)
                             .when(has_suffix_or_menu, |this| this.child(self.last_empty_space)),
-                    ),
+                    )
+                    .when_some(edge_fade, |this, (handle, color)| {
+                        // Painted after the tabs, from the scroll position of
+                        // this frame.
+                        this.child(
+                            canvas(
+                                |_, _, _| (),
+                                move |_, _, window, _| {
+                                    let bounds = handle.bounds();
+                                    let scrolled = -handle.offset().x;
+                                    let width = px(24.).min(bounds.size.width / 4.);
+                                    let fade = size(width, bounds.size.height);
+                                    let clear = color.opacity(0.);
+                                    if scrolled > px(0.5) {
+                                        window.paint_quad(fill(
+                                            Bounds::new(bounds.origin, fade),
+                                            linear_gradient(
+                                                90.,
+                                                linear_color_stop(color, 0.),
+                                                linear_color_stop(clear, 1.),
+                                            ),
+                                        ));
+                                    }
+                                    if handle.max_offset().x - scrolled > px(0.5) {
+                                        window.paint_quad(fill(
+                                            Bounds::new(
+                                                point(bounds.right() - width, bounds.top()),
+                                                fade,
+                                            ),
+                                            linear_gradient(
+                                                90.,
+                                                linear_color_stop(clear, 0.),
+                                                linear_color_stop(color, 1.),
+                                            ),
+                                        ));
+                                    }
+                                },
+                            )
+                            .absolute()
+                            .size_full(),
+                        )
+                    }),
             )
             .when(self.menu, |this| {
                 this.child(

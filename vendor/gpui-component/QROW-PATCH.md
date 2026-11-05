@@ -76,9 +76,15 @@ Qrow changes these files:
   size of the last frame, so a wider pane left the header cells of the
   revealed columns blank.
 - `src/tab/tab.rs`: a tab with a maximum width also shrinks when its bar is
-  short of room, down to a least width. Its label ends in an ellipsis and its
-  suffix, like a close button, keeps its size. Before, the bar scrolled and
-  clipped the close button of the last tab under the bar suffix.
+  short of room, down to a least width of 8 rems, which keeps a few
+  characters of the label. Its label ends in an ellipsis and its suffix, like
+  a close button, keeps its size. Before, the bar scrolled and clipped the
+  close button of the last tab under the bar suffix.
+- `src/tab/tab_bar.rs`: a vertical wheel also scrolls a tab bar, which has
+  nothing to scroll vertically. Before, only a horizontal swipe scrolled it.
+  A bar of the `Tab` variant that tracks its scroll fades the tabs that its
+  edges cut, so it shows that it has more tabs. The Qrow UI test
+  `tabs::a_full_tab_strip_scrolls_with_the_wheel` checks the wheel.
 - `src/tooltip.rs`: `ManagedTooltipExt` is public, and `managed_tooltip_when`
   shows its tooltip only while a condition holds when the pointer enters.
   A result column header shows its full name only when its column cuts it.
