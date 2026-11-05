@@ -1014,3 +1014,65 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
         );
     });
 }
+
+#[gpui_kit::test]
+fn activity_shows_a_cut_tab_name_in_full_on_hover(cx: &mut TestAppContext) {
+    use gpui_kit::{InputEvent as _, MouseMoveEvent};
+
+    const LONG: &str = "Модели Ривенделла по стоимости";
+    // The demo runs the query of "Route overview" at launch. A rename and
+    // another run add entries under the long name.
+    let app = TestApp::launch_demo(cx);
+    app.wait_for(cx, "toggle-activity");
+    app.context_menu_labelled(cx, "Route overview");
+    app.choose(cx, "popup-menu", "Rename…");
+    app.fill(cx, "rename-tab-name", LONG);
+    app.click(cx, "rename-tab");
+    app.wait_gone(cx, "rename-tab-name");
+    app.click(cx, "sql-editor");
+    app.dispatch(cx, qrow::ui::RunQuery);
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    let source = |window: &gpui_kit::Window, name: &str| {
+        crate::support::elements(window)
+            .into_iter()
+            .filter(|element| {
+                element.path().last() == Some(&"source".into()) && element.label() == Some(name)
+            })
+            .find(|element| element.visible())
+            .map(|element| element.bounds())
+    };
+    app.wait_until(
+        cx,
+        "an entry of the long name",
+        Duration::from_secs(20),
+        |window, _| source(window, LONG).is_some(),
+    );
+    let hover = |app: &TestApp, cx: &mut TestAppContext, name: &str| {
+        app.update(cx, |window, cx| {
+            let bounds = source(window, name).expect(name);
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position: bounds.center(),
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, _| window.try_find("tooltip").is_some())
+    };
+    assert!(
+        hover(&app, cx, LONG),
+        "A cut tab name must show its tooltip"
+    );
+    // Leaving the name hides the tooltip; a name that fits shows none.
+    assert!(
+        !hover(&app, cx, "Route overview"),
+        "A name that fits must not show a tooltip"
+    );
+}

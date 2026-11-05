@@ -3,10 +3,13 @@
 //! the Logs font; the message and the source use the interface font.
 
 use gpui_kit::base::{SelectableText, TextSelectionEvent, TextSelectionHandle};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::tooltip::{ManagedTooltipExt as _, Tooltip};
+use gpui_kit::component::{
+    ActiveTheme, ElementExt as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::time::SystemTime;
+use std::{cell::Cell, rc::Rc, time::SystemTime};
 
 use crate::logs::timestamp_label;
 
@@ -180,13 +183,42 @@ impl RenderOnce for LogRow {
                 )
             }))
             .when_some(self.source, |el, source| {
+                // A name that its lane cuts shows in full in a tooltip.
+                let cut = Rc::new(Cell::new(false));
+                let name = source.clone();
                 el.child(
                     lane()
+                        .id("source")
+                        .test_support()
+                        .aria_label(source.clone())
                         .w_32()
                         .min_w_0()
                         .overflow_hidden()
                         .text_color(muted)
-                        .child(div().truncate().child(source)),
+                        .managed_tooltip_when(
+                            {
+                                let cut = cut.clone();
+                                move || cut.get()
+                            },
+                            move |window, cx| Tooltip::new(name.clone()).build(window, cx),
+                        )
+                        .child(div().truncate().child(source.clone()).on_prepaint(
+                            move |bounds, window, _| {
+                                // Measured in the style the name is drawn in.
+                                let style = window.text_style();
+                                let size = style.font_size.to_pixels(window.rem_size());
+                                let width = window
+                                    .text_system()
+                                    .shape_line(
+                                        source.clone(),
+                                        size,
+                                        &[style.to_run(source.len())],
+                                        None,
+                                    )
+                                    .width;
+                                cut.set(bounds.size.width + px(0.5) < width);
+                            },
+                        )),
                 )
             })
             .child(
