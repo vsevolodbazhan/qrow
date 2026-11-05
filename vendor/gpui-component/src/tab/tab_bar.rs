@@ -472,6 +472,14 @@ impl RenderOnce for TabBar {
         let mut rendered_tabs = Vec::with_capacity(self.children.len());
         let max_width = self.max_width;
 
+        // Qrow: the label size and padding of a tab, for the title that the
+        // start edge pins.
+        let (label_rems, label_padding) = match self.size {
+            Size::XSmall => (0.75, px(8.)),
+            Size::Small => (0.875, px(10.)),
+            Size::Large => (1., px(16.)),
+            _ => (0.875, px(12.)),
+        };
         // Qrow: without a prefix, the first tab starts at the edge of the bar
         // and drops its left border, like a tab bar that says so explicitly.
         let has_prefix = self.prefix.is_some();
@@ -530,6 +538,10 @@ impl RenderOnce for TabBar {
             });
         }
 
+        let labels: Vec<Option<SharedString>> = item_metas
+            .iter()
+            .map(|(label, _, _)| label.clone())
+            .collect();
         tabs.group("tab-bar")
             .relative()
             .flex()
@@ -607,7 +619,9 @@ impl RenderOnce for TabBar {
                                         )
                                     }
                                 },
-                                move |_, _, window, _| {
+                                move |_, _, window, cx| {
+                                    #[cfg(feature = "test-support")]
+                                    PINNED_TITLES.with(|titles| titles.borrow_mut().clear());
                                     let view = handle.bounds();
                                     let scrolled = -handle.offset().x;
                                     let clear = color.opacity(0.);
@@ -623,16 +637,42 @@ impl RenderOnce for TabBar {
                                         // the bar, so no part of it reads as a
                                         // tab of its own.
                                         let cut = (0..num_tabs)
-                                            .filter_map(|ix| handle.bounds_for_item(ix))
-                                            .map(|item| {
-                                                (item.left() - scrolled, item.right() - scrolled)
+                                            .filter_map(|ix| {
+                                                let item = handle.bounds_for_item(ix)?;
+                                                Some((
+                                                    ix,
+                                                    item.left() - scrolled,
+                                                    item.right() - scrolled,
+                                                ))
                                             })
-                                            .find(|&(left, right)| {
+                                            .find(|&(_, left, right)| {
                                                 let edge =
                                                     if start { view.left() } else { view.right() };
                                                 left < edge - px(0.5) && right > edge + px(0.5)
                                             });
-                                        if let Some((left, right)) = cut {
+                                        // The start edge pins the title of the
+                                        // tab it cuts, as its title is past the
+                                        // edge.
+                                        let pinned = start
+                                            && cut.is_some_and(|(ix, _, right)| {
+                                                labels.get(ix).cloned().flatten().is_some_and(
+                                                    |label| {
+                                                        pin_label(
+                                                            &label,
+                                                            Bounds::from_corners(
+                                                                view.origin,
+                                                                point(right, view.bottom()),
+                                                            ),
+                                                            label_padding,
+                                                            window.rem_size() * label_rems,
+                                                            color,
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    },
+                                                )
+                                            });
+                                        if let Some((_, left, right)) = cut.filter(|_| !pinned) {
                                             let (from, to, stops) = if start {
                                                 (view.left(), right, (color, clear))
                                             } else {
@@ -736,6 +776,79 @@ impl RenderOnce for TabBar {
             })
             .when_some(self.suffix, |this, suffix| this.child(suffix))
     }
+}
+
+/// Qrow: paints `label` over `visible`, the part of a tab past the start
+/// edge, from the edge on and cut with an ellipsis to fit. Returns false and
+/// paints nothing when not even two characters fit.
+#[allow(clippy::too_many_arguments)]
+fn pin_label(
+    label: &SharedString,
+    visible: Bounds<Pixels>,
+    padding: Pixels,
+    font_size: Pixels,
+    bar: gpui::Hsla,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let room = visible.size.width - padding * 2.;
+    let style = window.text_style();
+    let shape = |text: SharedString, window: &mut Window| {
+        let run = style.to_run(text.len());
+        window
+            .text_system()
+            .shape_line(text, font_size, &[run], None)
+    };
+    let mut line = shape(label.clone(), window);
+    if line.width > room {
+        let ends: Vec<usize> = label.char_indices().map(|(ix, _)| ix).skip(2).collect();
+        let fits = ends.into_iter().rev().find_map(|end| {
+            let text: SharedString = format!("{}…", label[..end].trim_end()).into();
+            let line = shape(text, window);
+            (line.width <= room).then_some(line)
+        });
+        let Some(fits) = fits else {
+            return false;
+        };
+        line = fits;
+    }
+    // The bar color hides what shows of the tab, then the title starts at
+    // the edge.
+    // It stops short of the tab border and the bottom border of the bar.
+    window.paint_quad(fill(
+        Bounds::from_corners(
+            visible.origin,
+            point(visible.right() - px(1.), visible.bottom() - px(1.)),
+        ),
+        bar,
+    ));
+    let line_height = font_size * 1.25;
+    let origin = point(
+        visible.left() + padding,
+        visible.top() + (visible.size.height - line_height) / 2.,
+    );
+    let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
+    #[cfg(feature = "test-support")]
+    PINNED_TITLES.with(|titles| {
+        titles.borrow_mut().push((
+            line.text.clone(),
+            Bounds::new(origin, gpui::size(line.width, line_height)),
+        ))
+    });
+    true
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static PINNED_TITLES: RefCell<Vec<(SharedString, Bounds<Pixels>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Qrow, for tests: the titles that tab bars pinned to their start edge in
+/// the last frame, with their painted bounds.
+#[cfg(feature = "test-support")]
+pub fn pinned_tab_titles() -> Vec<(SharedString, Bounds<Pixels>)> {
+    PINNED_TITLES.with(|titles| titles.borrow().clone())
 }
 
 /// Qrow: the strip width, the selected tab, the tab count, the width of the

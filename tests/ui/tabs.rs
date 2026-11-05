@@ -577,6 +577,50 @@ fn the_tab_strip_snaps_to_a_tab_after_a_resize(cx: &mut TestAppContext) {
             "The last tab {last:?} must end at the strip end, before {new_tab:?}"
         );
     });
+    // A tab that the left edge cuts at the end of the range has its title
+    // past the edge, so the strip pins the title to the edge when enough of
+    // the tab shows. Some widths cut a wide part.
+    let mut pinned = 0;
+    for width in [900., 930., 960., 990., 1020., 1050.] {
+        cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(770.)));
+        app.settle(cx);
+        app.update(cx, |window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position,
+                    delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-5000.), px(0.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        cx.executor().advance_clock(Duration::from_millis(300));
+        app.settle(cx);
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            let cut = (1..=10)
+                .filter_map(|number| labelled(window, &format!("Query {number}")))
+                .map(|tab| tab.bounds())
+                .find(|tab| tab.left() < strip_left - px(0.5) && tab.right() > strip_left + px(0.5));
+            let Some(cut) = cut.filter(|cut| cut.right() - strip_left >= px(60.)) else {
+                return;
+            };
+            let titles = gpui_kit::component::tab::pinned_tab_titles();
+            assert!(
+                titles.iter().any(|(text, bounds)| {
+                    text.starts_with('Q') && bounds.left() >= strip_left && bounds.right() <= cut.right()
+                }),
+                "At {width} pt, the cut tab {cut:?} must show its title inside the strip: {titles:?}"
+            );
+            pinned += 1;
+        });
+    }
+    assert!(
+        pinned > 0,
+        "No width cut a wide part of a tab at the end of the range"
+    );
     // A wider window snaps again, and the selected tab stays in view.
     for width in [1280., 1000., 900.] {
         cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(770.)));

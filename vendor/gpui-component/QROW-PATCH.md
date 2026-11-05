@@ -92,7 +92,11 @@ Qrow changes these files:
   swipe over it stops, and when the bar width, the selection, the tab count,
   or a tab width changes. After such a change, the selected tab also scrolls
   fully into view. At the end of the scroll range, the last tab aligns to
-  the end edge instead, and a tab that an edge cuts fades into the bar. The
+  the end edge instead. A tab that the end edge cuts fades into the bar. A
+  tab that the start edge cuts has its title past the edge, so the bar
+  paints the title from the edge on, cut with an ellipsis, or nothing when
+  not even two characters fit. With `test-support`, `pinned_tab_titles`
+  gives the titles that the last frame pinned. The
   Qrow UI tests in `tabs` check the wheel, the snap, the end of the range, a
   resize, an Assistant toggle, a rename, and new tabs.
 - `src/tooltip.rs`: `ManagedTooltipExt` is public, and `managed_tooltip_when`
