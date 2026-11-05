@@ -617,7 +617,10 @@ impl TableDelegate for Results {
                 window.focus(&state.focus_handle(cx), cx);
                 cx.notify();
             }))
-            .when(self.is_numeric_column(c), |el| el.justify_end())
+            // Column names start at the left, also over numbers, which align
+            // on the right in the cells. The row-number header stays over its
+            // numbers.
+            .when(c == 0, |el| el.justify_end())
             // A column name that its column cuts shows in full in a tooltip.
             .when_some(self.names.get(c.wrapping_sub(1)), |el, (_, cut)| {
                 let name = self.headers[c].name.clone();
@@ -631,6 +634,8 @@ impl TableDelegate for Results {
             })
             .child(
                 div()
+                    .id(("column-name", c))
+                    .test_support()
                     .truncate()
                     .text_color(cx.theme().foreground)
                     .font_weight(FontWeight::MEDIUM)

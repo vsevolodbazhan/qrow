@@ -946,3 +946,30 @@ fn a_column_name_that_fits_has_no_tooltip(cx: &mut TestAppContext) {
         )
     });
 }
+
+#[gpui_kit::test]
+fn column_names_start_at_the_left_also_over_numbers(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.update(cx, |window, _| {
+        // Column 3 of the demo is `departures`, a bigint column whose values
+        // align on the right.
+        for column in [1usize, 3] {
+            let header = window.find(("column-header", column)).bounds();
+            let name = window.find(("column-name", column)).bounds();
+            assert!(
+                name.left() - header.left() < px(8.),
+                "The name of column {column} {name:?} must start at the left of {header:?}"
+            );
+        }
+        let value = find_in(window, ("row", 0usize), ("cell", 3usize))
+            .unwrap()
+            .bounds();
+        let header = window.find(("column-header", 3usize)).bounds();
+        // The header content sits inside the cell paddings of the header.
+        assert!(
+            (value.left() - header.left()).abs() < px(1.)
+                && (value.right() - header.right()).abs() <= px(6.),
+            "The header {header:?} and the cells {value:?} of a column must line up"
+        );
+    });
+}
