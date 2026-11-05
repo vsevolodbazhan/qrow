@@ -1018,3 +1018,59 @@ fn rows_reach_the_right_edge_beside_the_scrollbar(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn cut_columns_fade_only_where_more_columns_are_hidden(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    let fades = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| {
+            let count = |side: &'static str| {
+                crate::support::elements(window)
+                    .into_iter()
+                    .filter(|element| {
+                        element.visible() && element.path().last() == Some(&ElementId::from(side))
+                    })
+                    .count()
+            };
+            (count("fade-left"), count("fade-right"))
+        })
+    };
+    let position = app.update(cx, |window, _| {
+        window.find(("row", 2usize)).bounds().center()
+    });
+    let scroll = |app: &TestApp, cx: &mut TestAppContext, dx: f32| {
+        app.update(cx, |window, cx| {
+            window.dispatch_event(
+                ScrollWheelEvent {
+                    position,
+                    delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        app.settle(cx);
+    };
+    // At the start, only the end has hidden columns, in the header and the rows.
+    let (left, right) = fades(&app, cx);
+    assert!(
+        left == 0 && right > 1,
+        "start: {left} start fades, {right} end fades"
+    );
+    scroll(&app, cx, -600.);
+    let (left, right) = fades(&app, cx);
+    assert!(
+        left > 1 && right > 1,
+        "middle: {left} start fades, {right} end fades"
+    );
+    for _ in 0..4 {
+        scroll(&app, cx, -100000.);
+    }
+    let (left, right) = fades(&app, cx);
+    assert!(
+        left > 1 && right == 0,
+        "end: {left} start fades, {right} end fades"
+    );
+}

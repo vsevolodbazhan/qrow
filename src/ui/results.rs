@@ -657,6 +657,17 @@ impl TableDelegate for Results {
                 )
             })
     }
+    fn cell_background(&self, r: usize, c: usize, cx: &App) -> Option<Hsla> {
+        let r = self.pagination.range(self.rows.len()).start + r;
+        let selection = self.selection.filter(|_| c > 0)?;
+        if selection.contains(r, c - 1) {
+            Some(cx.theme().selection)
+        } else if selection.rows().contains(&r) {
+            Some(cx.theme().selection.opacity(SELECTED_ROW_TINT))
+        } else {
+            None
+        }
+    }
     fn render_td(
         &mut self,
         r: usize,

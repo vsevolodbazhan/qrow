@@ -26,6 +26,9 @@ use super::*;
 /// width in `gpui-base`.
 const SCROLLBAR_GUTTER: Pixels = px(16.);
 
+/// Qrow: the hover group of a table row, for the fades of its cut columns.
+const TABLE_ROW_GROUP: &str = "qrow-table-row";
+
 /// How far behind the pointer a resize drag trails the column edge.
 const HANDLE_SIZE: Pixels = px(2.);
 
@@ -408,6 +411,104 @@ where
     /// The height shared by all virtualized rows.
     pub fn row_height(&self) -> Pixels {
         self.options.size.table_row_height()
+    }
+
+    /// Qrow: the fades over the start and the end of the scrolled columns of
+    /// a row, or of the header for `None`, in the background that the row
+    /// shows there: the table, a stripe, a hover, a selected row, or the tint
+    /// of the cut cell. They stop above the row border.
+    fn edge_fades(
+        &self,
+        row_ix: Option<usize>,
+        stripe: bool,
+        selected: bool,
+        insets: (Pixels, Pixels),
+        cx: &App,
+    ) -> Vec<gpui::AnyElement> {
+        let (left, right) = self.hidden_edges();
+        let theme = cx.theme();
+        let base = gpui::Hsla::from(theme.tokens.table);
+        let row = match row_ix {
+            None => base.blend(gpui::Hsla::from(theme.tokens.table_head)),
+            Some(_) if selected => base.blend(if theme.list.active_highlight {
+                gpui::Hsla::from(theme.tokens.table_active)
+            } else {
+                gpui::Hsla::from(theme.tokens.accent)
+            }),
+            Some(_) if stripe => base.blend(gpui::Hsla::from(theme.tokens.table_even)),
+            Some(_) => base,
+        };
+        let hover = (row_ix.is_some() && !selected)
+            .then(|| base.blend(gpui::Hsla::from(theme.tokens.table_hover)));
+        let width = px(28.);
+        [(left, true), (right, false)]
+            .into_iter()
+            .filter_map(|(col, start)| {
+                let col = col?;
+                let cell = row_ix.and_then(|row| self.delegate.cell_background(row, col, cx));
+                let color = |under: gpui::Hsla| cell.map_or(under, |cell| under.blend(cell));
+                let gradient = move |color: gpui::Hsla| {
+                    let (from, to) = if start {
+                        (color, color.opacity(0.))
+                    } else {
+                        (color.opacity(0.), color)
+                    };
+                    gpui::linear_gradient(
+                        90.,
+                        gpui::linear_color_stop(from, 0.),
+                        gpui::linear_color_stop(to, 1.),
+                    )
+                };
+                let (normal, hovered) = (color(row), hover.map(color));
+                Some(
+                    div()
+                        .id(if start { "fade-left" } else { "fade-right" })
+                        .test_support()
+                        .absolute()
+                        .top_0()
+                        .bottom(if row_ix.is_none() { px(1.) } else { px(0.) })
+                        .w(width)
+                        .map(|this| {
+                            if start {
+                                this.left(insets.0)
+                            } else {
+                                this.right(insets.1)
+                            }
+                        })
+                        .bg(gradient(normal))
+                        .when_some(hovered, |this, hovered| {
+                            this.group_hover(TABLE_ROW_GROUP, move |style| {
+                                style.bg(gradient(hovered))
+                            })
+                        })
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+
+    /// Qrow: the column at each edge of the scrolled columns, when more
+    /// columns are hidden past that edge, so the cut content fades there.
+    fn hidden_edges(&self) -> (Option<usize>, Option<usize>) {
+        let fixed = self.fixed_left_cols_count();
+        let Some(cols) = self.col_groups.get(fixed..) else {
+            return (None, None);
+        };
+        let scrolled = -self.horizontal_scroll_handle.offset().x;
+        let view = self.horizontal_scroll_handle.bounds().size.width;
+        let total: Pixels = cols.iter().map(|col| col.width).sum();
+        let column_at = |x: Pixels| {
+            let mut end = px(0.);
+            cols.iter().position(|col| {
+                end += col.width;
+                end > x
+            })
+        };
+        let left = (scrolled > px(0.5)).then(|| column_at(scrolled)).flatten();
+        let right = (view > px(0.) && total - view - scrolled > px(0.5))
+            .then(|| column_at(scrolled + view - px(0.5)))
+            .flatten();
+        (left.map(|ix| ix + fixed), right.map(|ix| ix + fixed))
     }
 
     /// Qrow: the room that the rows keep for the scrollbars, beside and
@@ -1862,8 +1963,33 @@ where
         // The header keeps the same room for the vertical scrollbar as the
         // rows, so their columns stay aligned, and its border runs on under it.
         let (vertical_gutter, _) = self.scrollbar_room(cx);
+        // The header fades sit over its scrolled columns: after the fixed
+        // columns and before the room for the scrollbar.
+        let fixed_width = if self.cell_selectable && self.row_header {
+            px(40.)
+        } else {
+            px(0.)
+        } + self.col_groups[..left_columns_count.min(self.col_groups.len())]
+            .iter()
+            .map(|col| col.width)
+            .sum::<Pixels>();
+        let fades = self.edge_fades(
+            None,
+            false,
+            false,
+            (
+                fixed_width,
+                if vertical_gutter {
+                    SCROLLBAR_GUTTER
+                } else {
+                    px(0.)
+                },
+            ),
+            cx,
+        );
         header
             .h_flex()
+            .relative()
             .w_full()
             .flex_shrink_0()
             .bg(cx.theme().tokens.table_head)
@@ -2052,6 +2178,7 @@ where
                         .border_color(cx.theme().border),
                 )
             })
+            .children(fades)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2082,6 +2209,7 @@ where
             tr.test_support()
                 .role(gpui::Role::Row)
                 .aria_selected(is_selected)
+                .group(TABLE_ROW_GROUP)
                 .h_flex()
                 .w_full()
                 .h(row_height)
@@ -2298,7 +2426,16 @@ where
                             )
                             .with_scroll_handle(&self.horizontal_scroll_handle),
                         )
-                        .child(self.delegate.render_last_empty_col(window, cx)),
+                        .child(self.delegate.render_last_empty_col(window, cx))
+                        // Qrow: a column cut by an edge with more columns past
+                        // it fades into the row, in the row's own color.
+                        .children(self.edge_fades(
+                            Some(row_ix),
+                            is_stripe_row,
+                            is_selected,
+                            (px(0.), px(0.)),
+                            cx,
+                        )),
                 )
                 // Qrow: room for the vertical scrollbar after the cells, so it
                 // covers no text, while the row background and line reach the

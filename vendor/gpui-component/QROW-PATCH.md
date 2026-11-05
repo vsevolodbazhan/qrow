@@ -76,7 +76,16 @@ Qrow changes these files:
   and the last row would sit under the horizontal scrollbar, the rows end
   with room for it. Before, the scrollbars covered the text of the bottom
   row and of the rightmost column, and later a padded body left an empty
-  band beside and below the rows. A new table size
+  band beside and below the rows.
+  When columns are hidden past an edge of the scrolled columns, the cut
+  column fades into that edge, in the header and in each row, with a 28 px
+  gradient in the color that the row shows there: the table, a stripe, a
+  hover, the selected row, or the background of the cut cell from
+  `TableDelegate::cell_background` (new, `None` by default). The fades stop
+  above the header border, sit inside the scrollbar room, and do not take
+  pointer input. The Qrow UI test
+  `results::cut_columns_fade_only_where_more_columns_are_hidden` checks
+  which sides fade. A new table size
   renders the table again: the header picks its visible columns from the
   size of the last frame, so a wider pane left the header cells of the
   revealed columns blank.
