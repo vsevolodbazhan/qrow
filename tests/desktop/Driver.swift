@@ -1089,7 +1089,9 @@ final class Driver {
             try fill(label, value)
         }
         try press("Save")
-        _ = try wait("Qrow E2E")
+        // The form's Name input already contains this text. Wait for the
+        // sidebar button, which appears after the asynchronous Keychain save.
+        _ = try waitExact("Qrow E2E", role: kAXButtonRole)
         try waitGone("Cancel")
         // The worker reads the password from Keychain for the session.
         try press("Qrow E2E")

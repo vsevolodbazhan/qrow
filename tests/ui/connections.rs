@@ -42,6 +42,28 @@ fn saved_names(app: &TestApp) -> Vec<String> {
 }
 
 #[gpui_kit::test]
+fn connection_save_completes_after_the_settings_window_closes(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, qrow::ui::OpenSettings);
+    app.wait_for(cx, "reset-settings");
+    // Close without the helper's next main-window frame. Let the poll task
+    // run while Settings is still the entity's last rendered window.
+    app.update(cx, |window, cx| window.press("cmd-w", cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    app.wait_gone(cx, "reset-settings");
+
+    open_new_connection(&app, cx);
+    fill_connection(&app, cx, "After Settings");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "saved connection", Duration::from_secs(10), |_, _| {
+        saved_names(&app) == ["After Settings"]
+    });
+}
+
+#[gpui_kit::test]
 fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
     cx: &mut TestAppContext,
 ) {
