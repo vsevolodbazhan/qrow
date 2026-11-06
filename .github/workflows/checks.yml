@@ -105,6 +105,8 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
+      - name: Install isolated secret service
+        run: sudo apt-get update && sudo apt-get install --yes dbus-daemon gnome-keyring
       - run: ./qtest ci core --install
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: success()

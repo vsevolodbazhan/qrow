@@ -54,7 +54,7 @@ def _tool_version(tool):
 def check_requirement(name, options):
     """Return None when the requirement holds, else a fix for the user."""
     fixes = catalog.REQUIREMENTS
-    if name in ("cargo", "uv", "shellcheck", "actionlint"):
+    if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "gnome-keyring-daemon"):
         return None if shutil.which(name) else fixes[name]
     if name == "macos":
         return None if catalog.MACOS else fixes[name]

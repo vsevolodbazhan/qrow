@@ -15,12 +15,12 @@ fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppCon
     let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     for _ in 0..3 {
         app.press(cx, "down");
     }
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "middle😀;");
     assert_eq!(app.saved().tabs[0].sql, sql);
@@ -34,12 +34,12 @@ fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppCon
     let submissions = app.logs(cx).matches("Submitted query:").count();
     for line in [4, 5, 7] {
         app.click(cx, "sql-editor");
-        app.press(cx, "cmd-a");
+        app.press(cx, "secondary-a");
         app.press(cx, "left");
         for _ in 0..line {
             app.press(cx, "down");
         }
-        app.press(cx, "cmd-enter");
+        app.press(cx, "secondary-enter");
         app.wait_status(cx, "Rejected");
         let logs = app.logs(cx);
         assert!(logs.contains("Move the cursor into a SQL statement or select SQL to run."));
@@ -48,10 +48,10 @@ fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppCon
 
     // Select the first line through the editor, including Unicode text.
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
-    app.press(cx, "cmd-shift-right");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "shift-end");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "最初😀;");
     assert_eq!(app.saved().tabs[0].sql, sql);
@@ -59,7 +59,7 @@ fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppCon
     // An unterminated statement still runs when the cursor is inside it.
     let sql = "invalid earlier SQL;\nSELECT 3 AS value\n-- trailing ;\n";
     app.type_sql(cx, sql);
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.press(cx, "down");
     app.press(cx, "right");
@@ -453,16 +453,16 @@ fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
     let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(cx, "formatted query", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == "SELECT '日本語😀;' AS value"
     });
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "日本語😀;");
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(cx, "original SQL", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == sql
     });
@@ -487,8 +487,8 @@ fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
         assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
         assert_eq!(window.find("sql-editor").bounds().size.height, height);
     });
-    app.press(cx, "cmd-j");
-    app.press(cx, "cmd-j");
+    app.press(cx, "secondary-j");
+    app.press(cx, "secondary-j");
     app.wait_cell(cx, 0, 1, "233");
     app.wait_until(
         cx,
@@ -496,4 +496,23 @@ fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
         Duration::from_secs(10),
         |_, _| !app.saved().settings.results_minimized,
     );
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn linux_application_menu_opens_settings_after_a_query(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().workspace("SELECT 1 AS value", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "1");
+    app.click(cx, "application-menu");
+    app.wait_label(cx, "Settings…");
+    app.click_labelled(cx, "Settings…");
+    cx.run_until_parked();
+    assert!(app.settings_window(cx).is_some());
+    app.press(cx, "secondary-w");
+    cx.run_until_parked();
+    assert!(app.settings_window(cx).is_none());
 }

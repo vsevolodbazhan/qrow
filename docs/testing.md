@@ -36,8 +36,8 @@ accept a test filter.
 | `clippy-app` | Clippy for the application with all features. | macOS |
 | `rustdoc` | Rust API documentation without warnings. | Rust |
 | `unit` * | Rust unit and integration tests that need no UI and no servers. | Rust, cargo-nextest |
-| `ui` * | Headless tests of the real Qrow window, without servers. | macOS, cargo-nextest |
-| `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
+| `ui` * | Headless tests of the real Qrow window, without servers. | cargo-nextest, Linux or macOS |
+| `coverage` | Core line coverage with an 80% floor. On Linux, also checks the secret store. | cargo-llvm-cov; on Linux, cargo-nextest, D-Bus, GNOME Keyring |
 | `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
 | `perf-e2e` * | Window query latency against the real servers. | macOS, Docker or Java 17 |
@@ -52,12 +52,12 @@ accept a test filter.
 | `postgres` | Postgres connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
 | `trino` | Trino connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
-| `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
+| `e2e` * | The real Qrow window, headless, against the real servers. | Docker; on macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
 On Linux, `unit` and `clippy` use only the core library. These suites need
-macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
+macOS and are not available on Linux: `clippy-app`, `perf-ui`,
 `perf-e2e`, `perf-app`, `perf-package`, `package`, and `desktop`. `clippy-app` is the second
 pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
@@ -73,12 +73,12 @@ core library are modules of one test binary,
 links one binary. The `backend` suite runs the `backend::` module of this
 binary.
 
-The full `ui` suite also checks tooltip alignment with the native macOS font
+On macOS, the full `ui` suite also checks tooltip alignment with the native font
 backend at 1× and 2× display scales. Titles, statuses, and shortcuts share
 the vertical center of the first line. Checks cover system and Menlo fonts
 at 75%, 100%, 110%, 125%, and 150% UI scale. It runs this check on the process main
 thread because AppKit requires that thread. The other headless UI tests
-use GPUI's test text backend. Run `./qtest run ui` to include the native
+use GPUI's test text backend. Run `./qtest run ui` on macOS to include the native
 check. A test filter runs only the matching GPUI tests.
 
 UI tests also compare the Connections and Sign-Ins headers with query tabs.
@@ -151,6 +151,11 @@ They check token removal when another executable created the item. They do not
 change the default keychain or its search list. A separate password test uses
 the real macOS Keychain, so no suite runs it. Run that test with
 `cargo test --test integration keychain:: -- --ignored`.
+
+On Linux, the `coverage` suite also starts a private D-Bus session and a
+temporary GNOME Keyring. It checks password and token storage with synthetic
+values. It needs `dbus-run-session` and `gnome-keyring-daemon`. The test does
+not use the desktop secret store.
 
 Kyuubi transfer tests check adaptive request counts and normal preview
 limits on the wire. Worker tests check session reuse after a preset change,

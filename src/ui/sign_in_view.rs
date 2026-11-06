@@ -1293,7 +1293,7 @@ impl Qrow {
         let description = if sign_in.provider == SignInProvider::TrinoExternal {
             "This signs out, deletes the sign-in, and clears its tokens from memory. This cannot be undone."
         } else {
-            "This signs out, deletes the sign-in, and removes its tokens from Keychain. This cannot be undone."
+            "This signs out, deletes the sign-in, and removes its stored tokens. This cannot be undone."
         };
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
@@ -1839,7 +1839,11 @@ impl Qrow {
                         Button::new("save-sign-in-editor")
                             .primary()
                             .label("Save")
-                            .tooltip("Save sign-in · ⌘Enter")
+                            .tooltip(if cfg!(target_os = "macos") {
+                                "Save sign-in · ⌘Enter"
+                            } else {
+                                "Save sign-in · Ctrl+Enter"
+                            })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.save_sign_in_editor(window, cx)
                             })),

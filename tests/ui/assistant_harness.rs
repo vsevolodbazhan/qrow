@@ -44,7 +44,7 @@ impl TestApp {
     /// Sends `message` with ⌘↩ while a turn runs and Send is hidden.
     fn send_during_turn(&self, cx: &mut TestAppContext, message: &str) {
         self.type_message(cx, message);
-        self.press(cx, "cmd-enter");
+        self.press(cx, "secondary-enter");
         self.wait_until(cx, "the sent message", REPLY_TIMEOUT, |window, _| {
             composer_text(window).as_deref() == Some("")
         });
@@ -216,7 +216,7 @@ fn a_conversation_of_the_other_harness_shows_its_saved_copy(cx: &mut TestAppCont
     app.fill_labelled(cx, "Search...", "harness");
     app.select(cx, "setting-assistant-harness", "Claude Code");
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
     app.wait_claude(cx);
 
@@ -280,7 +280,7 @@ fn a_claude_code_conversation_stays_read_only_while_claude_code_is_signed_out(
     app.fill_labelled(cx, "Search...", "harness");
     app.select(cx, "setting-assistant-harness", "Codex");
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
     app.open_assistant(cx);
     app.wait_label(cx, "This conversation uses Claude Code.");
@@ -381,7 +381,7 @@ fn web_search_asks_first_and_restarts_claude_code_with_it(cx: &mut TestAppContex
         saved.settings.assistant.web_search
     });
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
 
     // The next message starts Claude Code again with its search tool.
@@ -426,7 +426,7 @@ fn turning_off_web_search_during_a_search_asks_and_cancels_its_card(cx: &mut Tes
         !saved.settings.assistant.web_search
     });
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
     let cancelled = "Tool Call: Search the web: Cancelled";
     app.wait_until(cx, cancelled, REPLY_TIMEOUT, |window, _| {

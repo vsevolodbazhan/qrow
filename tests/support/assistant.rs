@@ -275,7 +275,7 @@ impl TestApp {
     pub fn type_message(&self, cx: &mut TestAppContext, message: &str) {
         self.show_conversation(cx);
         self.click(cx, "assistant-composer");
-        self.press(cx, "cmd-a");
+        self.press(cx, "secondary-a");
         self.update(cx, |window, cx| {
             gpui_kit::test::TestWindowExt::input(window, message, cx)
         });

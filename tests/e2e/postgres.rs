@@ -66,7 +66,7 @@ fn command_c_copies_postgres_selection_as_pretty_markdown(cx: &mut TestAppContex
     app.press(cx, "shift-right");
     app.press(cx, "shift-down");
     cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.wait_until(
         cx,
         "Markdown selection",
@@ -565,19 +565,19 @@ fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
     let (workspace, credentials) = workspace(sql);
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "formatted SQL",
         std::time::Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql.starts_with("SELECT"),
     );
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "日本語😀; select");
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(
         cx,
         "format undo",

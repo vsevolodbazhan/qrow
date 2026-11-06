@@ -33,6 +33,77 @@ fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static s
 }
 
 impl Qrow {
+    #[cfg(target_os = "linux")]
+    fn open_application_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let assistant_enabled = self.settings.assistant.enabled;
+        let catalog_focused = self.catalog_has_focus(window, cx);
+        let focus = window
+            .focused(cx)
+            .unwrap_or_else(|| self.tabs[self.active].input.read(cx).focus_handle(cx));
+        let file_focus = focus.clone();
+        let edit_focus = focus.clone();
+        let view_focus = focus.clone();
+        self.open_context_menu_from(
+            point(px(12.), px(34.)),
+            Some(focus),
+            move |menu, window, cx| {
+                menu.item(PopupMenuItem::new("About Qrow").action(Box::new(OpenAbout)))
+                    .item(PopupMenuItem::new("Settings…").action(Box::new(OpenSettings)))
+                    .separator()
+                    .submenu("File", window, cx, move |menu, _, _| {
+                        menu.action_context(file_focus.clone())
+                            .item(PopupMenuItem::new("New query tab").action(Box::new(NewTab)))
+                            .item(PopupMenuItem::new("Close tab").action(Box::new(CloseTab)))
+                    })
+                    .submenu("Edit", window, cx, move |menu, _, _| {
+                        use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+                        let copy: Box<dyn Action> = if catalog_focused {
+                            Box::new(CopyCatalogName)
+                        } else {
+                            Box::new(Copy)
+                        };
+                        menu.action_context(edit_focus.clone())
+                            .item(PopupMenuItem::new("Undo").action(Box::new(Undo)))
+                            .item(PopupMenuItem::new("Redo").action(Box::new(Redo)))
+                            .separator()
+                            .item(PopupMenuItem::new("Cut").action(Box::new(Cut)))
+                            .item(PopupMenuItem::new("Copy").action(copy))
+                            .item(PopupMenuItem::new("Paste").action(Box::new(Paste)))
+                            .item(PopupMenuItem::new("Select all").action(Box::new(SelectAll)))
+                    })
+                    .submenu("View", window, cx, move |menu, _, _| {
+                        let menu = menu
+                            .action_context(view_focus.clone())
+                            .item(
+                                PopupMenuItem::new("Connections").action(Box::new(ShowConnections)),
+                            )
+                            .item(PopupMenuItem::new("Sign-Ins").action(Box::new(ShowSignIns)))
+                            .item(
+                                PopupMenuItem::new("Toggle sidebar")
+                                    .action(Box::new(ToggleSidebar)),
+                            )
+                            .item(
+                                PopupMenuItem::new("Toggle results")
+                                    .action(Box::new(ToggleResults)),
+                            );
+                        let menu = if assistant_enabled {
+                            menu.item(
+                                PopupMenuItem::new("Toggle assistant")
+                                    .action(Box::new(ToggleAssistant)),
+                            )
+                        } else {
+                            menu
+                        };
+                        menu.item(PopupMenuItem::new("Activity").action(Box::new(ToggleActivity)))
+                    })
+                    .separator()
+                    .item(PopupMenuItem::new("Quit Qrow").action(Box::new(Quit)))
+            },
+            window,
+            cx,
+        );
+    }
+
     pub(super) fn sidebar_header(
         &self,
         title: &'static str,
@@ -981,16 +1052,35 @@ impl Qrow {
                 }),
             )
             .child(
-                TitleBar::new().bg(cx.theme().title_bar).child(
-                    // Balance TitleBar's fixed 80 px traffic-light inset. It
-                    // does not follow the UI scale, so this padding must not.
-                    div()
-                        .flex_1()
-                        .pr(px(80.))
-                        .text_center()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
-                ),
+                TitleBar::new()
+                    .bg(cx.theme().title_bar)
+                    .on_close_window(
+                        cx.listener(|this, _, window, cx| this.request_quit(window, cx)),
+                    )
+                    .when(cfg!(target_os = "linux"), |bar| {
+                        #[cfg(target_os = "linux")]
+                        let bar = bar.child(
+                            Button::new("application-menu")
+                                .ghost()
+                                .small()
+                                .icon(Icon::new(AssetIconName::Menu).small())
+                                .accessibility_label("Application menu")
+                                .tooltip("Application menu")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_application_menu(window, cx)
+                                })),
+                        );
+                        bar
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            // Balance the fixed macOS traffic-light inset.
+                            .when(cfg!(target_os = "macos"), |el| el.pr(px(80.)))
+                            .text_center()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
+                    ),
             )
             // Activity covers the workspace and the assistant pane while it
             // is open.
@@ -1170,7 +1260,12 @@ impl Render for WindowView {
             // Capture above editor and dialog focus scopes, before text input consumes keys.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = &event.keystroke;
-                if !key.modifiers.platform || key.modifiers.control || key.modifiers.alt {
+                let primary = if cfg!(target_os = "macos") {
+                    key.modifiers.platform && !key.modifiers.control
+                } else {
+                    key.modifiers.control && !key.modifiers.platform
+                };
+                if !primary || key.modifiers.alt {
                     return;
                 }
                 let change = match key.key.as_str() {

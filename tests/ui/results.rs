@@ -68,7 +68,7 @@ fn click_header(app: &TestApp, cx: &mut TestAppContext, column: usize, modifiers
 /// Press ⌘C and wait for the Markdown copy, confirming large copies.
 fn copy_markdown(app: &TestApp, cx: &mut TestAppContext) -> String {
     cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     wait_clipboard(app, cx)
 }
 
@@ -138,7 +138,7 @@ fn cells(markdown: &str) -> String {
 
 fn copy_empty(app: &TestApp, cx: &mut TestAppContext) -> String {
     cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.settle(cx);
     cx.read_from_clipboard()
         .and_then(|item| item.text())
@@ -177,9 +177,9 @@ fn command_c_copies_pretty_markdown_for_the_selected_cells(cx: &mut TestAppConte
 fn command_c_large_markdown_respects_cancel_and_clipboard_changes(cx: &mut TestAppContext) {
     let app = demo(cx);
     click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.wait_for(cx, "markdown-copy-anyway");
     app.click(cx, "markdown-copy-cancel");
     app.wait_gone(cx, "markdown-copy-anyway");
@@ -187,7 +187,7 @@ fn command_c_large_markdown_respects_cancel_and_clipboard_changes(cx: &mut TestA
         cx.read_from_clipboard().unwrap().text().as_deref(),
         Some("preserved")
     );
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.wait_for(cx, "markdown-copy-anyway");
     cx.write_to_clipboard(ClipboardItem::new_string("changed".into()));
     app.click(cx, "markdown-copy-anyway");
@@ -263,7 +263,7 @@ fn headers_row_numbers_and_select_all_select_whole_lines(cx: &mut TestAppContext
     assert!(text.starts_with(&first_columns(2)));
 
     // ⌘A selects the current page.
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     let text = copy(&app, cx);
     assert_eq!(text.lines().count(), 1000);
     assert_eq!(text.lines().next().unwrap().split('\t').count(), 141);
@@ -375,10 +375,10 @@ fn the_copy_format_setting_applies_to_command_c_and_the_menu_but_not_copy_as(
     });
     app.select(cx, "setting-copy-format", "Plain text");
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
     // A new result keeps the format.
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_until(
         cx,
         "the new demo result",
@@ -711,7 +711,7 @@ fn a_held_drag_scrolls_both_axes_and_escape_releases_it(cx: &mut TestAppContext)
         "horizontal scrolling extends past the original viewport"
     );
     // Escape must release capture without letting an active timer select again.
-    app.press(cx, "cmd-home");
+    app.press(cx, "secondary-home");
     app.press(cx, "home");
     app.settle(cx);
     let row = app.update(cx, |window, _| {
@@ -739,7 +739,7 @@ fn changing_tabs_during_a_drag_releases_capture_and_stops_the_old_table(cx: &mut
             .center()
     });
     move_drag(&app, cx, target);
-    app.press(cx, "cmd-t");
+    app.press(cx, "secondary-t");
     for _ in 0..5 {
         app.settle(cx);
     }
@@ -758,7 +758,7 @@ fn changing_tabs_during_a_drag_releases_capture_and_stops_the_old_table(cx: &mut
 fn a_new_query_during_a_drag_releases_capture(cx: &mut TestAppContext) {
     let app = demo(cx);
     begin_drag(&app, cx, 1, 1);
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     for _ in 0..5 {
         app.settle(cx);
     }
@@ -864,12 +864,12 @@ fn results_minimize_restores_height_and_applies_to_all_tabs(cx: &mut TestAppCont
         assert!(window.try_find("editor-splitter").is_none());
         assert!(window.find("results-panel-tab").visible());
     });
-    app.press(cx, "cmd-t");
+    app.press(cx, "secondary-t");
     app.update(cx, |window, _| {
         assert_eq!(window.find("toggle-results").label(), Some("Expand"));
     });
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-j");
+    app.press(cx, "secondary-j");
     app.update(cx, |window, _| {
         assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
         assert_eq!(window.find("sql-editor").bounds().size.height, height);
@@ -887,7 +887,7 @@ fn results_minimize_restores_height_and_applies_to_all_tabs(cx: &mut TestAppCont
 #[gpui_kit::test]
 fn results_minimized_state_survives_restart(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, qrow::model::Workspace::default());
-    app.press(cx, "cmd-j");
+    app.press(cx, "secondary-j");
     app.wait_until(
         cx,
         "saved minimized state",
@@ -914,7 +914,7 @@ fn results_minimized_state_survives_restart(cx: &mut TestAppContext) {
 fn results_toggle_does_not_change_layout_behind_settings(cx: &mut TestAppContext) {
     let app = TestApp::launch_demo(cx);
     app.dispatch(cx, OpenSettings);
-    app.press(cx, "cmd-j");
+    app.press(cx, "secondary-j");
     app.press(cx, "escape");
     app.update(cx, |window, _| {
         assert_eq!(window.find("toggle-results").label(), Some("Collapse"));

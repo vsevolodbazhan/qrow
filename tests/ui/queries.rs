@@ -20,9 +20,9 @@ use std::{
 fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.type_sql(cx, "SELECT '日本語😀;';\nSELECT 2;\n-- trailing ;\n");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     assert!(
         app.logs(cx)
             .contains("Choose a connection before running SQL.")
@@ -30,8 +30,8 @@ fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestApp
     assert_eq!(app.credentials.reads(), 0);
 
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
     assert!(app.logs(cx).contains("Run one statement at a time."));
     assert_eq!(app.credentials.reads(), 0);
 
@@ -41,7 +41,7 @@ fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestApp
     {
         if text.is_empty() {
             app.click(cx, "sql-editor");
-            app.press(cx, "cmd-a");
+            app.press(cx, "secondary-a");
             app.press(cx, "backspace");
             app.wait_until(
                 cx,
@@ -52,7 +52,7 @@ fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestApp
         } else {
             app.type_sql(cx, text);
         }
-        app.press(cx, "cmd-enter");
+        app.press(cx, "secondary-enter");
         assert_eq!(
             app.logs(cx)
                 .matches("Write or select a SQL statement first.")
@@ -79,12 +79,12 @@ fn run_uses_a_multiline_cursor_statement_and_rejects_gaps(cx: &mut TestAppContex
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     for _ in 0..3 {
         app.press(cx, "down");
     }
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Error");
     assert!(app.logs(cx).contains("SELECT\n  'middle😀;' AS value;"));
     assert!(!app.logs(cx).contains("SELECT 3;"));
@@ -93,7 +93,7 @@ fn run_uses_a_multiline_cursor_statement_and_rejects_gaps(cx: &mut TestAppContex
     // The blank line and standalone comment do not submit another query.
     for line in [4, 5, 7] {
         app.click(cx, "sql-editor");
-        app.press(cx, "cmd-a");
+        app.press(cx, "secondary-a");
         app.press(cx, "left");
         for _ in 0..line {
             app.press(cx, "down");
@@ -123,7 +123,7 @@ fn the_editor_tints_the_statement_that_run_uses(cx: &mut TestAppContext) {
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
 
     // Statements that share a line tint only their own text.
@@ -158,7 +158,7 @@ fn the_editor_tints_the_statement_that_run_uses(cx: &mut TestAppContext) {
         app.press(cx, "down");
     }
     assert_eq!(run_tint(&app, cx), vec![]);
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.press(cx, "down");
     assert_eq!(run_tint(&app, cx), vec![]);
@@ -409,7 +409,11 @@ fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppConte
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
-            Some("⇧⌘U")
+            Some(if cfg!(target_os = "macos") {
+                "⇧⌘U"
+            } else {
+                "Ctrl+Shift+U"
+            })
         );
         let title = bounds_of(window, "status-tooltip-title");
         let shortcut = bounds_of(window, "status-tooltip-shortcut");
@@ -442,7 +446,11 @@ fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppConte
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
-            Some("⇧⌘U")
+            Some(if cfg!(target_os = "macos") {
+                "⇧⌘U"
+            } else {
+                "Ctrl+Shift+U"
+            })
         );
     });
     app.click(cx, "toggle-activity");
@@ -641,7 +649,7 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     });
 
     // A closed tab keeps its entries without a link.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
@@ -668,7 +676,7 @@ fn activity_does_not_read_a_hidden_tabs_local_error(cx: &mut TestAppContext) {
     let idle_button = app.update(cx, |window, _| bounds_of(window, "toggle-activity"));
     assert_eq!(idle_button.size.width, idle_button.size.height);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.click(cx, "toggle-activity");
     app.wait_for(cx, "activity");
     app.dispatch(cx, qrow::ui::RunQuery);
@@ -725,8 +733,8 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     let sql = "select '日本語😀;' as value from t;\n\n-- between;\nselect 2 from t;";
     app.type_sql(cx, sql);
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     let formatted = "SELECT '日本語😀;' AS value\nFROM t;\n\n-- between;\nSELECT 2\nFROM t;";
     app.wait_until(
         cx,
@@ -734,12 +742,12 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
         Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql == formatted,
     );
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(cx, "format undo", Duration::from_secs(10), |_, _| {
         app.saved().tabs[0].sql == sql
     });
     app.press(cx, "left");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "alt-secondary-l");
     let first_only = "SELECT '日本語😀;' AS value\nFROM t;\n\n-- between;\nselect 2 from t;";
     app.wait_until(
         cx,
@@ -750,8 +758,8 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
     assert_eq!(app.credentials.reads(), 0);
 
     app.type_sql(cx, "SET x=1");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_label(
         cx,
         "Some SQL statements are not supported by the formatter.",
@@ -764,8 +772,8 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
         );
     });
     app.type_sql(cx, "select ${hivevar:dt}");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_label(cx, "Some SQL could not be formatted safely.");
     assert_eq!(app.saved().tabs[0].sql, "select ${hivevar:dt}");
 }
@@ -779,7 +787,7 @@ fn format_sql_keeps_selections_inside_quoted_tokens(cx: &mut TestAppContext) {
         "SELECT 1 /*select 1*/",
     ] {
         app.type_sql(cx, sql);
-        app.press(cx, "cmd-a");
+        app.press(cx, "secondary-a");
         app.press(cx, "left");
         for _ in 0..sql.find("select 1").unwrap() {
             app.press(cx, "right");
@@ -787,7 +795,7 @@ fn format_sql_keeps_selections_inside_quoted_tokens(cx: &mut TestAppContext) {
         for _ in 0..8 {
             app.press(cx, "shift-right");
         }
-        app.press(cx, "alt-cmd-l");
+        app.press(cx, "alt-secondary-l");
         app.wait_label(cx, "Some SQL could not be formatted safely.");
         assert_eq!(app.saved().tabs[0].sql, sql);
     }
@@ -800,8 +808,8 @@ fn format_sql_uses_editor_style(cx: &mut TestAppContext) {
     workspace.settings.editor_tab_size = 4;
     let app = TestApp::launch(cx, workspace);
     app.type_sql(cx, "SELECT a FROM t WHERE x=1 AND y=2");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "editor format style",
@@ -812,10 +820,10 @@ fn format_sql_uses_editor_style(cx: &mut TestAppContext) {
         },
     );
     app.type_sql(cx, "select 1;\n\nselect 2;");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.press(cx, "down");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "alt-secondary-l");
     app.wait_label(
         cx,
         "Move the cursor into a SQL statement or select SQL to format.",
@@ -841,8 +849,8 @@ fn format_real_trino_queries_and_undo(cx: &mut TestAppContext) {
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "formatted Trino cost queries",
@@ -856,7 +864,7 @@ fn format_real_trino_queries_and_undo(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert!(window.try_find("format-sql-notice").is_none())
     });
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(
         cx,
         "undo Trino cost formatting",
@@ -902,24 +910,24 @@ fn format_sql_uses_each_connections_quoting_rules(cx: &mut TestAppContext) {
             },
         );
         app.click(cx, "sql-editor");
-        app.press(cx, "cmd-a");
+        app.press(cx, "secondary-a");
         app.press(cx, "left");
-        app.press(cx, "alt-cmd-l");
+        app.press(cx, "alt-secondary-l");
         app.wait_until(
             cx,
             "dialect cursor formatting",
             Duration::from_secs(10),
             |_, _| app.saved().tabs[0].sql == format!("{expected}\n\nselect 2;"),
         );
-        app.press(cx, "cmd-z");
+        app.press(cx, "secondary-z");
         app.wait_until(
             cx,
             "dialect format undo",
             Duration::from_secs(10),
             |_, _| app.saved().tabs[0].sql == original,
         );
-        app.press(cx, "cmd-a");
-        app.press(cx, "alt-cmd-l");
+        app.press(cx, "secondary-a");
+        app.press(cx, "alt-secondary-l");
         app.wait_until(
             cx,
             "dialect selection formatting",

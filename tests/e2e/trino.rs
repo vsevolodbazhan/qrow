@@ -605,8 +605,8 @@ fn format_real_cost_queries_and_execute(cx: &mut TestAppContext) {
         .join("\n\n");
     let app = launch(cx, &sql);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "formatted cost queries",
@@ -614,7 +614,7 @@ fn format_real_cost_queries_and_execute(cx: &mut TestAppContext) {
         |_, _| app.saved().tabs[0].sql.matches("SELECT").count() == 3,
     );
     let formatted = app.saved().tabs[0].sql.clone();
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(
         cx,
         "format undo",
@@ -640,19 +640,19 @@ fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
     let sql = r#"select '日本語😀; path\' as "Mixed Case""#;
     let app = launch(cx, sql);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "formatted SQL",
         std::time::Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql.starts_with("SELECT"),
     );
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, r"日本語😀; path\");
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(
         cx,
         "format undo",

@@ -189,6 +189,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("scripts/package/macos.sh", read(RELEASE))
         self.assertIn("- dmg", job("publish", RELEASE))
 
+    def test_linux_release_runs_ui_and_e2e_before_publishing(self):
+        linux = job("linux", RELEASE)
+        self.assertIn("./qtest run ui", linux)
+        self.assertIn("./qtest run e2e --runtime docker", linux)
+        self.assertIn("scripts/package/linux.sh", linux)
+        publish = job("publish", RELEASE)
+        self.assertIn("- linux", publish)
+        self.assertIn('"dist/Qrow-${RELEASE_VERSION}-linux-x86_64.tar.gz"', publish)
+
     def test_intel_package_is_tested_and_both_architectures_are_released(self):
         self.assertEqual(needs(job("e2e-intel")), ["plan", "package-intel"])
         for name in ("package-intel", "e2e-intel"):

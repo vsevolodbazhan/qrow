@@ -945,13 +945,17 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 .title("Interface")
                 .item(setting_item(
                     "Theme",
-                    "Colors of the interface. System follows macOS.",
+                    "Colors of the interface. System follows your system settings.",
                     &["appearance", "colors", "dark", "light"],
                     theme_field(form),
                 ))
                 .item(setting_item(
                     "Scale",
-                    "Size of all text and controls. Also ⌘+ and ⌘−.",
+                    if cfg!(target_os = "macos") {
+                        "Size of all text and controls. Also ⌘+ and ⌘−."
+                    } else {
+                        "Size of all text and controls. Also Ctrl+ and Ctrl−."
+                    },
                     &["zoom", "interface", "ui"],
                     number_field(form, NumberSetting::Scale),
                 ))
@@ -1066,7 +1070,11 @@ fn assistant_page(
                 .title("General")
                 .item(setting_item(
                     "Enabled",
-                    "Shows the assistant button and turns on ⌘R.",
+                    if cfg!(target_os = "macos") {
+                        "Shows the assistant button and turns on ⌘R."
+                    } else {
+                        "Shows the assistant button and turns on Ctrl+R."
+                    },
                     &["assistant", "enable", "codex", "claude", "ai"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();

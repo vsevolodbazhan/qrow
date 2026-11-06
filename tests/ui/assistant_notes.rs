@@ -39,7 +39,7 @@ fn edit_notes(app: &TestApp, cx: &mut TestAppContext, profile: Uuid, notes: &str
                 .any(|text| text == "Assistant Notes")
         );
         window.click("connection-assistant-notes", cx);
-        window.press("cmd-a", cx);
+        window.press("secondary-a", cx);
         if notes.is_empty() {
             window.press("backspace", cx);
         } else {
@@ -192,9 +192,9 @@ fn the_notes_field_rejects_notes_above_the_limit(cx: &mut TestAppContext) {
     app.scroll_to(cx, "connection-assistant-notes");
     app.update(cx, |window, cx| {
         window.click("connection-assistant-notes", cx);
-        window.press("cmd-end", cx);
+        window.press("secondary-end", cx);
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(full.clone()));
-        window.press("cmd-v", cx);
+        window.press("secondary-v", cx);
         window.input("y", cx);
     });
     app.click(cx, "save-profile");

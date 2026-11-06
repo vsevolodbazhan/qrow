@@ -170,7 +170,7 @@ fn run_export_captures_the_cursor_statement_and_cancelled_save_submits_nothing(
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.run_export(cx);
     app.wait_for(cx, "export-save");
@@ -209,7 +209,7 @@ fn trino_run_export_captures_unicode_sql_and_cancelled_save_reads_no_credentials
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.run_export(cx);
     app.wait_for(cx, "export-save");
@@ -259,7 +259,7 @@ fn postgres_run_export_captures_a_dollar_quoted_statement_without_credentials(
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.run_export(cx);
     app.wait_for(cx, "export-save");
@@ -289,7 +289,7 @@ fn run_export_rejects_multiple_selected_statements_without_starting_work(cx: &mu
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.run_export(cx);
     app.update(cx, |window, _| {
         assert!(window.try_find("export-save").is_none())
@@ -456,7 +456,7 @@ fn cancelled_save_prompt_keeps_options_and_escape_restores_table_focus(cx: &mut 
         |window, _| window.try_find("export-save").is_none(),
     );
     // Copy after dismissal still acts on the selected cells.
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.wait_until(
         cx,
         "copied Markdown selection",
@@ -809,7 +809,7 @@ fn context_large_markdown_confirms_with_enter_and_cancel_preserves_clipboard(
         let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();
         pointer_click_with(window, &cell, MouseButton::Left, Modifiers::default(), cx);
     });
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     for confirm in [false, true] {
         app.update(cx, |window, cx| {
             let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();

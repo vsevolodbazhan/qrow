@@ -22,7 +22,7 @@ pub struct Environment {
 }
 
 impl Environment {
-    /// The user's workspace, the macOS Keychain, and the system trust store.
+    /// The user's workspace, system secret store, and system trust store.
     pub fn user() -> Self {
         Self {
             workspace: Some(storage::workspace_path()),

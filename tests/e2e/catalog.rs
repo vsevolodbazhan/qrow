@@ -522,9 +522,9 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
         });
     }
     app.click_labelled(cx, "id bigint");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_gone(cx, "add-connection");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_for(cx, "add-connection");
     app.click(cx, "connections-list");
     app.settle(cx);

@@ -47,16 +47,16 @@ const CONTEXT: &str = "Results";
 pub(super) fn bindings() -> [KeyBinding; 10] {
     let context = Some("Results > DataTable");
     [
-        KeyBinding::new("cmd-up", SelectFirstRow, context),
-        KeyBinding::new("cmd-home", SelectFirstRow, context),
-        KeyBinding::new("cmd-down", SelectLastRow, context),
-        KeyBinding::new("cmd-end", SelectLastRow, context),
+        KeyBinding::new("secondary-up", SelectFirstRow, context),
+        KeyBinding::new("secondary-home", SelectFirstRow, context),
+        KeyBinding::new("secondary-down", SelectLastRow, context),
+        KeyBinding::new("secondary-end", SelectLastRow, context),
         KeyBinding::new("shift-up", ExtendSelectionUp, context),
         KeyBinding::new("shift-down", ExtendSelectionDown, context),
         KeyBinding::new("shift-left", ExtendSelectionLeft, context),
         KeyBinding::new("shift-right", ExtendSelectionRight, context),
-        KeyBinding::new("cmd-c", Copy, context),
-        KeyBinding::new("cmd-a", SelectAll, context),
+        KeyBinding::new("secondary-c", Copy, context),
+        KeyBinding::new("secondary-a", SelectAll, context),
     ]
 }
 
@@ -447,8 +447,11 @@ impl Results {
 
     fn empty_state(&self, cx: &App) -> Div {
         super::panel_empty_state(
-            self.empty_message
-                .unwrap_or("Press ⌘↩ to run a query and preview its results"),
+            self.empty_message.unwrap_or(if cfg!(target_os = "macos") {
+                "Press ⌘↩ to run a query and preview its results"
+            } else {
+                "Press Ctrl+Enter to run a query and preview its results"
+            }),
             cx,
         )
     }

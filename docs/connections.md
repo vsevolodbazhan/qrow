@@ -157,7 +157,7 @@ Enter session settings as a JSON object with string values. For example:
 ```
 
 Postgres checks each setting when the session opens. If a setting is invalid,
-the connection fails and names the setting. Passwords use macOS Keychain.
+the connection fails and names the setting. Passwords use the system secret store.
 Postgres connections do not use OpenID Connect sign-ins.
 
 Select a **TLS Mode**:
@@ -237,7 +237,7 @@ the catalog, schema, and table, with double quotes.
 
 For **Password** authentication, enter the username. Leave the password blank
 if the server accepts a username without a password. Turn on **TLS** when you
-enter a password. Passwords use macOS Keychain.
+enter a password. Passwords use the system secret store.
 
 For **External** authentication, enter the Trino username and turn on **TLS**.
 The connection's host is the coordinator. You do not need a saved sign-in or
@@ -526,11 +526,12 @@ the issuer, client ID, scopes, or resource. Sign out first.
 
 ### Tokens and sessions
 
-Qrow keeps the access token and the refresh token in macOS Keychain. Tokens
+Qrow keeps the access token and the refresh token in macOS Keychain or the
+Linux desktop secret store. Tokens
 are not in the workspace file, Logs, error messages, or assistant context.
 Before Qrow opens a transport, it gets an access token that stays valid for
 at least 60 seconds. If necessary, it uses the refresh token. When the provider
-replaces the refresh token, Qrow saves the new token in Keychain before it uses
+replaces the refresh token, Qrow saves the new token in the secret store before it uses
 the new access token. All tabs of a Qrow process share one refresh. If the
 provider gives no refresh token, a new browser sign-in is necessary when the
 access token expires.
@@ -543,7 +544,7 @@ session, so it does not wait for a token refresh. If that token has expired
 and cancellation fails, the worker interrupts the transport and discards
 the session. The server can continue work that it did not cancel.
 
-**Sign out** deletes the tokens from Keychain. It does not end the session at
+**Sign out** deletes the tokens from the secret store. It does not end the session at
 the provider, and it does not revoke the tokens. Sign out is disabled while a
 query that uses the sign-in runs. Sign out releases the idle sessions of the
 sign-in. Their SQL and downloaded results remain available. A sign-in as
@@ -764,8 +765,8 @@ available. The next Run opens a session with the updated connection settings.
 Editing and deletion are disabled while a session using the profile is busy.
 Deletion requires confirmation. Qrow closes sessions that use the deleted
 profile, even when another profile is selected. Qrow removes the profile and requests deletion
-of its stored password. Keychain deletion failures are not reported in the UI,
-so a failed deletion can leave the password in Keychain.
+of its stored password. Secret store deletion failures are not reported in the UI,
+so a failed deletion can leave the password in the secret store.
 
 ## Browse schemas
 
@@ -1204,11 +1205,13 @@ PLAIN password is an LDAP password or the access token of a
 [sign-in](#sign-in-with-openid-connect). SASL PLAIN does not encrypt the
 transport. Turn on **TLS** to encrypt it, or use a trusted network or VPN.
 Qrow verifies the server
-certificate and the host name against the macOS trust store. To trust a
-company certificate authority, add it to Keychain and trust it. Kerberos, HTTP
+certificate and the host name against the system trust store. On macOS, add a
+company certificate authority to Keychain and trust it. On Linux, add it to
+the system certificate store. Kerberos, HTTP
 transport, and SSH tunneling are not implemented.
 
-Passwords are stored in macOS Keychain. They are not part of the
+Passwords are stored in macOS Keychain, or in the desktop secret store on
+Linux. Linux needs an available Secret Service. Passwords are not part of the
 [workspace file](workspace.md#saved-state). If Qrow cannot read a password,
 edit the connection to save a password again.
 
@@ -1268,7 +1271,7 @@ the worker watches the folder of the manifest with FSEvents, because dbt can
 replace the file, and it does not poll. See the
 [parser](../src/dbt/manifest.rs) and the [saved form](../src/dbt/saved.rs).
 
-[Credential storage](../src/storage.rs) uses Keychain service
+[Credential storage](../src/storage.rs) uses the service identifier
 `io.qrow.connection`, keyed by profile UUID. Keeping that identifier stable
 preserves access to existing passwords. Direct OpenID Connect tokens use the separate
 service `io.qrow.sign-in`, keyed by sign-in UUID. Each record holds the

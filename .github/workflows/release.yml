@@ -188,11 +188,48 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  linux:
+    name: linux-x86_64
+    needs:
+      - resolve-target
+      - checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libxkbcommon-dev libwayland-dev libfontconfig1-dev libx11-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev
+      - run: rustup show
+      - run: ./qtest install cargo-nextest
+      - run: ./qtest run ui
+      - run: ./qtest run e2e --runtime docker
+      - name: Build archive
+        env:
+          QROW_RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+        run: sh scripts/package/linux.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-linux-x86_64
+          path: target/package/*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
   publish:
     name: publish
     needs:
       - resolve-target
       - dmg
+      - linux
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -209,6 +246,11 @@ jobs:
         with:
           pattern: release-dmg-*
           merge-multiple: true
+          path: dist
+      - name: download-linux
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-linux-x86_64
           path: dist
       - name: resolve-previous-release
         id: previous
@@ -323,6 +365,7 @@ jobs:
             "dist/Qrow-${RELEASE_VERSION}.dmg"
             "dist/Qrow-${RELEASE_VERSION}-arm64.dmg"
             "dist/Qrow-${RELEASE_VERSION}-x86_64.dmg"
+            "dist/Qrow-${RELEASE_VERSION}-linux-x86_64.tar.gz"
             --repo "$GITHUB_REPOSITORY"
             --target "$TARGET_SHA"
             --title "$RELEASE_TITLE"
