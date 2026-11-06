@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/core"))
 sys.path.insert(0, str(ROOT / "scripts/e2e"))
 import environment  # noqa: E402
+import opengl  # noqa: E402
 from environment import target_dir  # noqa: E402
 import fixture  # noqa: E402
 
@@ -276,6 +277,11 @@ def junit_failures(path):
 def precheck(item, options):
     """A skipped or missing result, or None when the suite can run."""
     suite = item.suite
+    # Only command_ci supplies this result. Explicit local hardware suites
+    # stay strict; all non-hardware suites retain their prerequisites.
+    capability = options.get("ci_opengl_capability")
+    if capability is not None and capability["available"] is False and suite.name in opengl.HARDWARE_SUITES:
+        return SuiteResult(suite.name, "skipped", reason="Hardware OpenGL unavailable: " + capability["reason"])
     if suite.macos_only and not catalog.MACOS and not item.explicit:
         return SuiteResult(suite.name, "skipped", reason="Requires macOS.")
     missing = []
@@ -303,7 +309,8 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if item.test_filter and step in suite.steps and step.nextest_filter is None:
             continue
         command = render_command(step, options, item.test_filter, extra)
-        step_env = {key: value.replace("{target}", str(target_dir())) for key, value in step.env}
+        step_env = {key: value.replace("{target}", str(target_dir())).replace("{artifacts}", str(run_dir))
+                    for key, value in step.env}
         if step.nextest_filter is not None:
             # A step that fails before nextest writes a report must not report old failures.
             junit_report().unlink(missing_ok=True)
@@ -431,15 +438,23 @@ def new_run_dir():
     return path
 
 
-def run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False):
+def run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False, run_dir=None):
     """Run the selected suites. A failure of a `report_only` suite does not fail the run.
 
     With `require_all`, a missing prerequisite of a suite that is not
     report-only stops the run before any suite, build, or server starts.
     """
-    run_dir = new_run_dir()
+    run_dir = run_dir or new_run_dir()
+    if "ci_opengl_capability" in options:
+        (run_dir / "opengl-capability.json").write_text(json.dumps(options["ci_opengl_capability"], indent=2) + "\n")
     results = [None] * len(selected)
-    blocked = [precheck(item, options) for item in selected]
+    capability = options.get("ci_opengl_capability", {})
+    probe_error = capability.get("error")
+    if probe_error:
+        blocked = [SuiteResult(item.suite.name, "skipped", reason="The OpenGL capability probe failed.")
+                   for item in selected]
+    else:
+        blocked = [precheck(item, options) for item in selected]
     if require_all and any(result and result.status == "missing" and result.name not in report_only
                            for result in blocked):
         blocked = [result or SuiteResult(item.suite.name, "skipped", reason="A prerequisite of the run is missing.")
@@ -490,6 +505,9 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
     finally:
         if session:
             session.release()
+    if probe_error:
+        results.insert(0, SuiteResult("opengl-capability", "failed", log=capability.get("log"),
+                                      reason=probe_error))
     statuses = {result.status for result in results if result.name not in report_only}
     if "failed" in statuses:
         status, code = "failed", EXIT_FAILED

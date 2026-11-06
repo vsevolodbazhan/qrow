@@ -3128,7 +3128,8 @@ fn update_window_scale_factor(window_state: &Arc<Mutex<MacWindowState>>) {
     let scale_factor = lock.scale_factor();
     let size = lock.content_size();
     let drawable_size = size.to_device_pixels(scale_factor);
-    if let Some(layer) = lock.renderer.layer() {
+    let layer = lock.renderer.layer_ptr() as id;
+    if !layer.is_null() {
         unsafe {
             let _: () = msg_send![
                 layer,

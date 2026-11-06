@@ -16,13 +16,15 @@ mod system_notifications;
 #[cfg(feature = "screen-capture")]
 mod screen_capture;
 
-use gpui_apple::metal_renderer as renderer;
+mod renderer;
+mod software_renderer;
+mod opengl_renderer;
 
 pub mod metal_renderer {
     pub use gpui_apple::metal_renderer::{PathRasterizationVertex, PathSprite, SurfaceBounds};
 
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
-    pub use gpui_apple::metal_renderer::MetalHeadlessRenderer;
+    pub use crate::renderer::HeadlessRenderer as MetalHeadlessRenderer;
 }
 
 #[cfg(feature = "font-kit")]

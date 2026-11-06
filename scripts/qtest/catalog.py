@@ -167,7 +167,9 @@ SUITES = {
         Suite("ui", "Headless tests of the real Qrow window, without servers.",
               ("cargo", "cargo-nextest", "macos"),
               (nextest("binary(ui)"),
-               Step(("cargo", "run", "--locked", "--example", "tooltip-layout"))), macos_only=True),
+               Step(("cargo", "run", "--locked", "--example", "tooltip-layout")),
+               Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos", "--lib",
+                     "--features", "gpui-kit/test-support", "software_renderer::tests"))), macos_only=True),
         Suite("coverage", "Core line coverage with an 80% floor.", ("cargo", "cargo-llvm-cov"),
               (Step(("mkdir", "-p", "{target}/coverage")),
                Step(("cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
@@ -254,6 +256,51 @@ SUITES = {
               # The driver removes its synthetic Keychain items on exit. This
               # step also removes them when a time limit stopped the driver.
               cleanup=(Step((PYTHON, "scripts/e2e/keychain.py")),)),
+        Suite("software-ui", "CPU rendering of the real editor and results on the desktop, with synthetic demo data.",
+              ("uv", "cargo", "macos", "xcode", "desktop"),
+              (Step(("sh", "scripts/package/macos.sh"),
+                    env=(("QROW_DIST_DIR", "{artifacts}/software-ui/package"), ("QROW_BUILD_PROFILE", "release"),
+                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
+               Step(("sh", "scripts/e2e/software.sh"),
+                    env=(("QROW_E2E_ARTIFACTS", "{artifacts}/software-ui"),)),),
+              macos_only=True, explicit_only=True),
+        Suite("opengl-unit", "OpenGL scene/atlas/limit and shared renderer startup-policy tests without a GPU.",
+              ("cargo", "macos"),
+              (Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos",
+                     "--features", "gpui-kit/test-support", "--lib", "opengl_renderer::", "--", "--skip", "opengl_renderer::tests::",
+                     "--skip", "hardware_capability_probe")),
+               Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos",
+                     "--features", "gpui-kit/test-support", "--lib", "renderer::tests::", "--",
+                     "--skip", "opengl_renderer::", "--skip", "software_renderer::"))),
+              macos_only=True, explicit_only=True),
+        Suite("opengl-renderer", "Hardware OpenGL shader, atlas, and pixel regression tests.",
+              ("cargo", "macos"),
+              (Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos", "--lib",
+                     "--features", "gpui-kit/test-support", "opengl_renderer::")),
+               Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos", "--lib",
+                     "--features", "gpui-kit/test-support", "renderer_preference_is_validated"))),
+              macos_only=True, explicit_only=True),
+        Suite("opengl-ui", "Hardware OpenGL rendering and native input in a separate demo package.",
+              ("uv", "cargo", "macos", "xcode", "desktop"),
+              (Step(("sh", "scripts/package/macos.sh"),
+                    env=(("QROW_DIST_DIR", "{artifacts}/opengl-ui/package"), ("QROW_BUILD_PROFILE", "release"),
+                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
+               Step((PYTHON, "scripts/core/size.py"),
+                    env=(("QROW_DIST_DIR", "{artifacts}/opengl-ui/package"),)),
+               Step(("sh", "scripts/e2e/software.sh"),
+                    env=(("QROW_E2E_ARTIFACTS", "{artifacts}/opengl-ui/core"), ("QROW_E2E_RENDERER", "opengl"),
+                         ("QROW_E2E_BUNDLE", "{artifacts}/opengl-ui/package/Qrow.app")))),
+              macos_only=True, explicit_only=True),
+        Suite("perf-renderers", "Compare native release CPU and hardware OpenGL composition and scrolling.",
+              ("uv", "cargo", "macos", "xcode", "desktop"),
+              (Step(("sh", "scripts/package/macos.sh"),
+                    env=(("QROW_DIST_DIR", "{artifacts}/perf-renderers/package"), ("QROW_BUILD_PROFILE", "release"),
+                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
+               Step((PYTHON, "scripts/core/size.py"),
+                    env=(("QROW_DIST_DIR", "{artifacts}/perf-renderers/package"),)),
+               Step((PYTHON, "scripts/perf/renderers.py"),
+                    env=(("QROW_E2E_ARTIFACTS", "{artifacts}/perf-renderers"),), timeout=15 * 60)),
+              macos_only=True, explicit_only=True),
     ]
 }
 
@@ -336,6 +383,8 @@ class CiJob:
     runtime: str = "auto"
     # Environment variables of the job, like CARGO_BUILD_TARGET for a cross build.
     env: tuple[tuple[str, str], ...] = ()
+    # Only a known missing CGL hardware pixel format permits a CI GPU-suite skip.
+    probe_opengl: bool = False
 
 
 LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
@@ -354,12 +403,13 @@ CI_JOBS = {
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
         CiJob("backend", LINUX, ("backend", "postgres", "trino"), budget=8, paths=rf"{RUST_PATHS}|{E2E_PATHS}",
               runtime="docker"),
-        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), budget=8, report_only=("perf-e2e",),
+        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), budget=8, report_only=("perf-e2e",),
               paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/|^scripts/package/", runtime="native",
-              env=DEBUG_APP),
+              env=DEBUG_APP, probe_opengl=True),
         # The benchmarks need no Mac, and Linux runners are not limited to a few at a time.
         CiJob("perf", LINUX, ("perf",), budget=5, paths=RUST_PATHS),
-        CiJob("perf-ui", MACOS_RUNNER, (), budget=8, report_only=("perf-ui",), scope="push"),
+        CiJob("perf-ui", MACOS_RUNNER, (), budget=8, report_only=("perf-ui", "perf-renderers"), scope="push",
+              probe_opengl=True),
         CiJob("perf-backend", LINUX, (), budget=14, report_only=("perf-postgres", "perf-trino", "perf-kyuubi"),
               scope="push", runtime="docker"),
         CiJob("desktop-package", MACOS_RUNNER, ("desktop",), budget=5, needs=("package",), scope="manual",
@@ -370,8 +420,8 @@ CI_JOBS = {
         # An ARM64 runner builds the Intel package in about half the time.
         CiJob("package-intel", MACOS_RUNNER, ("package",), budget=10, scope="manual",
               env=(("CARGO_BUILD_TARGET", "x86_64-apple-darwin"),)),
-        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop"), budget=15, report_only=("perf-e2e", "perf-package"),
-              needs=("package-intel",), runtime="native", scope="manual"),
+        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), budget=15, report_only=("perf-e2e", "perf-package"),
+              needs=("package-intel",), runtime="native", scope="manual", probe_opengl=True),
     ]
 }
 # A change to these paths can change any job, so it runs all of them.
