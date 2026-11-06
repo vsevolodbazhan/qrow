@@ -1827,7 +1827,6 @@ impl Qrow {
             .child(
                 h_flex()
                     .gap_2()
-                    .pt_3()
                     .child(div().flex_1())
                     .child(
                         Button::new("cancel-sign-in-editor")

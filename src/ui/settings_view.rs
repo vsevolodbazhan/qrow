@@ -741,7 +741,8 @@ impl Qrow {
     }
 
     /// The content of the Settings window: the sections and pages, then a
-    /// footer with Restore defaults.
+    /// footer with Restore defaults at the right, like the actions of the
+    /// settings dialogs.
     pub(super) fn settings_window_content(
         &self,
         window: &mut Window,
@@ -922,6 +923,7 @@ impl Qrow {
         h_flex()
             .w_full()
             .gap_2()
+            .justify_end()
             .child(
                 Button::new("reset-settings")
                     .label("Restore defaults")

@@ -103,6 +103,21 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn settings_restore_defaults_sits_at_the_right_like_the_dialog_actions(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "reset-settings");
+    app.update(cx, |window, _| {
+        let button = bounds_of(window, "reset-settings");
+        let width = window.viewport_size().width;
+        assert!(
+            width - button.right() < button.left(),
+            "Restore defaults must sit at the right: {button:?} in {width:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn copy_format_is_saved(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, OpenSettings);

@@ -1,9 +1,9 @@
 use crate::support::{
-    MemoryCredentials, TestApp, assert_tooltip_header_center, connection_row, label, menu_item,
-    offline_profile,
+    MemoryCredentials, TestApp, assert_tooltip_header_center, bounds_of, connection_row, label,
+    menu_item, offline_profile,
 };
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{InputEvent as _, MouseMoveEvent, TestAppContext};
+use gpui_kit::{InputEvent as _, MouseMoveEvent, TestAppContext, px};
 use qrow::{
     model::{SavedTab, Workspace},
     storage::Credentials,
@@ -817,6 +817,23 @@ fn the_response_timeout_is_validated_and_saved(cx: &mut TestAppContext) {
             .profiles
             .iter()
             .any(|profile| profile.lifecycle.response_timeout_seconds == 600)
+    });
+}
+
+#[gpui_kit::test]
+fn connection_settings_actions_sit_close_below_the_panel(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.update(cx, |window, _| {
+        let panel = bounds_of(window, "connection-settings-panel");
+        let save = bounds_of(window, "save-profile");
+        let gap = save.top() - panel.bottom();
+        // The dialog gap alone spaces the actions. An extra padding row
+        // doubled it.
+        assert!(
+            gap > px(0.) && gap < window.rem_size() * 1.5,
+            "The actions must sit close below the panel: gap {gap:?}"
+        );
     });
 }
 
