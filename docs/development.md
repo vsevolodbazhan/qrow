@@ -202,9 +202,10 @@ not show. The script ejects the image before it creates the compressed DMG.
 If macOS reports that the image is busy, the script makes at most 10 eject
 attempts. After three attempts, it uses forced ejection. A persistent error
 fails packaging. The `linux` job runs the Linux UI and Docker end-to-end
-tests, then builds an x86-64 archive on Ubuntu 24.04.
+tests, then builds an archive on Ubuntu 24.04. It runs once for x86-64 and
+once for ARM64.
 The publish job creates the release
-tag, and then the GitHub Release with both DMGs and the Linux archive as its assets. It also
+tag, and then the GitHub Release with both DMGs and both Linux archives as its assets. It also
 keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
 workflow uses the latest non-draft release on the selected channel as the
 changelog start tag. If the channel has no previous release, it writes the

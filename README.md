@@ -150,12 +150,13 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 
 ### Linux
 
-Download `Qrow-VERSION-linux-x86_64.tar.gz` from the releases page. Extract
-it into `~/.local` and make sure `~/.local/bin` is in your `PATH`:
+Download the archive for your architecture from the releases page:
+`Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz`.
+Extract it into `~/.local` and make sure `~/.local/bin` is in your `PATH`:
 
 ```sh
 mkdir -p ~/.local
-tar -xzf Qrow-VERSION-linux-x86_64.tar.gz -C ~/.local
+tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local
 ```
 
 Linux archives are added by the next release. Until then, build from source.
@@ -163,7 +164,6 @@ Linux archives are added by the next release. Until then, build from source.
 The archive includes a desktop launcher. Qrow needs a Vulkan driver and a
 desktop Secret Service, such as GNOME Keyring, for saved credentials. The
 archive uses system libraries and needs a compatible Linux distribution.
-You can also build an ARM64 executable from source.
 Use the application menu at the top left for Settings and other commands.
 The window controls are on the right when the desktop allows Qrow to draw them.
 

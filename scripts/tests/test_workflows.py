@@ -196,7 +196,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("scripts/package/linux.sh", linux)
         publish = job("publish", RELEASE)
         self.assertIn("- linux", publish)
-        self.assertIn('"dist/Qrow-${RELEASE_VERSION}-linux-x86_64.tar.gz"', publish)
+        for arch, runner in [("x86_64", "ubuntu-24.04"), ("aarch64", "ubuntu-24.04-arm")]:
+            self.assertIn(f"- arch: {arch}\n            runner: {runner}\n", linux)
+            self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-linux-{arch}.tar.gz"', publish)
+        self.assertIn("pattern: release-linux-*", publish)
 
     def test_intel_package_is_tested_and_both_architectures_are_released(self):
         self.assertEqual(needs(job("e2e-intel")), ["plan", "package-intel"])
