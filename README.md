@@ -206,7 +206,7 @@ with Apple Developer ID. To bypass the Gatekeeper:
 - Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the pinned toolchain.
 - On macOS, Xcode command-line tools. Install them with `xcode-select --install` if needed.
 - On Linux, a C and C++ toolchain, pkg-config, CMake, and the Wayland, X11,
-  xkbcommon, fontconfig, FreeType, and Vulkan development libraries.
+  xkbcommon, xkbcommon-x11, fontconfig, FreeType, and Vulkan development libraries.
 - [uv](https://docs.astral.sh/uv/), which provisions the pinned Python 3.11+
   toolchain used by `./qtest` and by the packaging, dependency-license, and
   code-generation scripts. A separately installed Python is not required.
