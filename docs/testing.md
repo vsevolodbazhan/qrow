@@ -49,8 +49,8 @@ accept a test filter.
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
-| `postgres` | Postgres connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
-| `trino` | Trino connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
+| `postgres` | Postgres connector and real-window tests with a disposable server. | Docker, cargo-nextest; on Linux, the desktop libraries |
+| `trino` | Trino connector and real-window tests with a disposable server. | Docker, cargo-nextest; on Linux, the desktop libraries |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
 | `e2e` * | The real Qrow window, headless, against the real servers. | Docker and, on Linux, the desktop libraries; on macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
@@ -192,8 +192,8 @@ stops. A stalled HEAD request can stop without closing the primary socket.
 Wide-row tests check the fetch byte limit and the order of a pending row.
 SQL error tests check transaction-header updates before the next statement.
 
-Run `./qtest run trino --runtime docker` to test the connector and, on macOS,
-the real window against a disposable Trino 483 coordinator. The suite uses
+Run `./qtest run trino --runtime docker` to test the connector and the real
+window against a disposable Trino 483 coordinator. The suite uses
 synthetic credentials, a temporary certificate authority, and a loopback HTTPS
 port. A pinned Adobe S3Mock 5.2.3 container supplies HTTPS storage. It shares
 a network namespace with Trino, so presigned loopback URLs work from both
@@ -231,8 +231,8 @@ The fixture provider uses only synthetic accounts and an HTTPS callback at
 Trino. The storage namespace stays alive during the OAuth2 restart.
 
 The suite needs Docker and OpenSSL. It builds the tests before the server
-starts. The Linux backend CI job runs its connector tests. The real-window
-Trino tests run locally on macOS with Docker. The Kyuubi `e2e` suite excludes
+starts. The Linux `backend` CI job runs its connector and real-window tests.
+The Kyuubi `e2e` suite excludes
 Postgres and Trino tests because each connector has its own fixture.
 
 ## Groups
@@ -450,8 +450,8 @@ Run `./qtest run postgres`. This suite starts a separate disposable Postgres 17
 container with a synthetic password and a temporary TLS certificate. It tests
 connector results, SQL errors, cancellation, session settings, schema metadata,
 TLS encryption without a trusted certificate, and certificate verification.
-On macOS, it also tests encrypted queries, result pages, and cancellation
-through the real Qrow window. The unit suite includes a protocol test that
+It also tests encrypted queries, result pages, and cancellation through the
+real Qrow window. The unit suite includes a protocol test that
 checks that required TLS cannot fall back to plaintext.
 
 Cancellation tests check the result of a new query after each cancelled query.
@@ -904,6 +904,7 @@ suites of a job on your computer, run the same command, for example
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
 | `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
 | `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, and `perf-e2e` (report only), with local Java servers | all runs |
+| `e2e-linux` | Linux | `e2e`, with Docker | all runs |
 | `perf` | Linux | `perf` | all runs |
 | `perf-ui` | macOS ARM64 | `perf-ui` (report only) | pushes, manual runs, releases |
 | `perf-backend` | Linux | `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | pushes, manual runs, releases |
@@ -945,9 +946,10 @@ package on an Intel runner, and `perf-package` measures its launch there.
 
 For a pull request, the plan always selects `static`. Changes to Rust
 sources or `.cargo/config.toml` select all pull request jobs. Changes to the
-server fixture or the E2E scripts select `backend` and `e2e`. Changes under
+server fixture or the E2E scripts select `backend`, `e2e`, and `e2e-linux`. Changes under
 `tests/desktop/` select `e2e`. Changes to
-`scripts/ci/linux-build-deps.sh` select `ui-linux`. Changes to the packaging or probe scripts,
+`scripts/ci/linux-build-deps.sh` select the Linux jobs that build the
+application: `ui-linux`, `backend`, and `e2e-linux`. Changes to the packaging or probe scripts,
 `assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the packaging
 scripts also select `e2e`, because it packages its debug app. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
@@ -957,7 +959,7 @@ changes, run `./qtest ci plan`.
 
 In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
-accessibility APIs. The ARM64 jobs and `package-intel` use `macos-15`. The
+accessibility APIs. The macOS ARM64 jobs and `package-intel` use `macos-15`. The
 other Intel jobs use `macos-15-intel`.
 Each E2E job shares one set of servers between its suites. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Each Rust build

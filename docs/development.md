@@ -163,6 +163,7 @@ checks / ui-linux
 checks / package
 checks / backend
 checks / e2e
+checks / e2e-linux
 checks / perf
 ```
 
