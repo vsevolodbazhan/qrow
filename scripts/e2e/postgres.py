@@ -12,6 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 IMAGE = "postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24"
 
 
+# The real-window tests run on macOS and Linux. On Linux, GPUI's test support
+# is behind the ui-test feature.
+UI_TEST_FEATURE = ("--features", "ui-test") if platform.system() == "Linux" else ()
+
+
 def command(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
@@ -26,8 +31,8 @@ def main():
     # Compile before starting the server, so builds do not consume its resources.
     build = ("--profile", "perf") if options.perf else ()
     command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
-    if not options.perf and platform.system() == "Darwin":
-        command("cargo", "test", "--locked", "--test", "e2e", "--no-run")
+    if not options.perf:
+        command("cargo", "test", "--locked", *UI_TEST_FEATURE, "--test", "e2e", "--no-run")
     target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     fixture_root = target / "qtest" / "postgres"
     fixture_root.mkdir(parents=True, exist_ok=True)
@@ -82,9 +87,8 @@ def main():
                 return
             command("cargo", "nextest", "run", "--locked", "--profile", profile, "--no-default-features", "--test", "integration",
                     "--run-ignored", "ignored-only", "-E", "test(/^postgres::/)", env=env)
-            if platform.system() == "Darwin":
-                command("cargo", "nextest", "run", "--locked", "--profile", profile, "--test", "e2e", "--run-ignored", "ignored-only",
-                        "-E", "test(/^postgres::/)", env=env)
+            command("cargo", "nextest", "run", "--locked", "--profile", profile, *UI_TEST_FEATURE, "--test", "e2e", "--run-ignored", "ignored-only",
+                    "-E", "test(/^postgres::/)", env=env)
         finally:
             subprocess.run(["docker", "logs", name], check=False)
             if started:
