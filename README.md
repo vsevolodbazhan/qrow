@@ -150,7 +150,15 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 
 ### Linux
 
-Download the archive for your architecture from the releases page:
+On Arch Linux, install the AUR package. Use `qrow-desktop-nightly-bin` for the
+latest nightly build:
+
+```sh
+yay -S qrow-desktop-bin
+```
+
+On other distributions, download the archive for your architecture from the
+releases page:
 `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz`.
 Extract it into `~/.local` and make sure `~/.local/bin` is in your `PATH`:
 
@@ -159,7 +167,8 @@ mkdir -p ~/.local
 tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local
 ```
 
-Linux archives are added by the next release. Until then, build from source.
+Linux archives and the AUR packages are added by the next release. Until
+then, build from source.
 
 The archive includes a desktop launcher. Qrow needs a Vulkan driver and a
 desktop Secret Service, such as GNOME Keyring, for saved credentials. The

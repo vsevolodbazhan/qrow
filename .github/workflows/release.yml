@@ -390,3 +390,70 @@ jobs:
             release_args+=(--latest)
           fi
           gh "${release_args[@]}"
+
+  aur:
+    name: aur
+    needs:
+      - resolve-target
+      - publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Only this job can read the AUR key. Limit the environment to main in the settings.
+    environment: aur
+    steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
+      - name: setup-uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: download-linux
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: release-linux-*
+          merge-multiple: true
+          path: dist
+      - name: write-package
+        id: package
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+        run: |
+          directory=$(uv run --locked python scripts/package/aur.py \
+            --channel "$CHANNEL" --version "$RELEASE_VERSION" --dist dist --output aur)
+          echo "directory=$directory" >> "$GITHUB_OUTPUT"
+      - name: push-aur
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          DIRECTORY: ${{ steps.package.outputs.directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "::notice::The aur environment has no AUR_SSH_PRIVATE_KEY. Skipping the AUR push."
+            exit 0
+          fi
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          # The ED25519 host key published on https://aur.archlinux.org/.
+          echo 'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          package=$(basename "$DIRECTORY")
+          work=$(mktemp -d)
+          git clone --quiet "ssh://aur@aur.archlinux.org/${package}.git" "$work"
+          cp "$DIRECTORY/PKGBUILD" "$DIRECTORY/.SRCINFO" "$work/"
+          if [ -z "$(git -C "$work" status --porcelain)" ]; then
+            echo "$package is already current on the AUR."
+            exit 0
+          fi
+          version=$(sed -n 's/^\tpkgver = //p' "$work/.SRCINFO")
+          git -C "$work" config user.name "github-actions[bot]"
+          git -C "$work" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$work" add PKGBUILD .SRCINFO
+          git -C "$work" commit --quiet -m "Update to $version-1"
+          git -C "$work" push --quiet origin HEAD:master
+          echo "Pushed $package $version-1 to the AUR."
