@@ -935,8 +935,8 @@ slow, and GitHub runs only a small number of macOS jobs at the same time for
 the account. Manual runs and releases run all jobs, so a release finds Intel
 failures. To run the Intel jobs before a merge or a release, start the test
 workflow manually on the branch. `ui-linux` builds and tests the application
-on x86-64 Linux in each pull request. The release builds it again on x86-64
-and ARM64 Linux. `package-intel` builds the Intel package on
+on x86-64 Linux in pull requests that change Rust code. The release builds it
+again on x86-64 and ARM64 Linux. `package-intel` builds the Intel package on
 an ARM64 runner with `CARGO_BUILD_TARGET=x86_64-apple-darwin`. This takes
 about half the time of a build on an Intel runner. `e2e-intel` tests the
 package on an Intel runner, and `perf-package` measures its launch there.
