@@ -77,7 +77,7 @@ class CatalogJobTests(unittest.TestCase):
 
 class PlanTests(unittest.TestCase):
     def test_paths_select_jobs_and_what_they_wait_for(self):
-        everything = ["static", "core", "ui", "ui-linux", "package", "backend", "e2e", "e2e-linux", "perf"]
+        everything = ["static", "core", "ui", "ui-linux", "package", "package-linux", "backend", "e2e", "e2e-linux", "perf"]
         cases = {
             "docs/queries.md": ["static"],
             "scripts/tests/test_hooks.py": ["static"],
@@ -88,9 +88,9 @@ class PlanTests(unittest.TestCase):
             "tests/desktop/fake-codex.py": everything,
             "tests/fixture/server/Blocking.java": ["static", "backend", "e2e", "e2e-linux"],
             # The e2e job packages its debug app with the package scripts.
-            "scripts/package/macos.sh": ["static", "package", "e2e"],
-            "scripts/package/dmg.py": ["static", "package", "e2e"],
-            "scripts/ci/linux-build-deps.sh": ["static", "ui-linux", "backend", "e2e-linux"],
+            "scripts/package/macos.sh": ["static", "package", "package-linux", "e2e"],
+            "scripts/package/dmg.py": ["static", "package", "package-linux", "e2e"],
+            "scripts/ci/linux-build-deps.sh": ["static", "ui-linux", "package-linux", "backend", "e2e-linux"],
             ".github/workflows/checks.yml": everything,
             "scripts/qtest/catalog.py": everything,
         }
@@ -99,9 +99,9 @@ class PlanTests(unittest.TestCase):
                 self.assertEqual(catalog.ci_jobs_for_changes([path]), expected)
 
     def test_each_event_runs_its_scope_and_the_scopes_before_it(self):
-        pull_requests = ["static", "core", "ui", "ui-linux", "package", "backend", "e2e", "e2e-linux", "perf"]
+        pull_requests = ["static", "core", "ui", "ui-linux", "package", "package-linux", "backend", "e2e", "e2e-linux", "perf"]
         self.assertEqual(catalog.ci_jobs_for_event("pull_request"), pull_requests)
-        self.assertEqual(catalog.ci_jobs_for_event("push"), [*pull_requests, "perf-ui", "perf-backend"])
+        self.assertEqual(catalog.ci_jobs_for_event("push"), [*pull_requests, "perf-ui", "perf-backend", "ui-linux-arm", "e2e-linux-arm", "package-linux-arm"])
         self.assertEqual(catalog.ci_jobs_for_event("manual"), list(catalog.CI_JOBS))
         manual = [name for name, ci_job in catalog.CI_JOBS.items() if ci_job.scope == "manual"]
         self.assertEqual(manual, ["desktop-package", "ui-intel", "package-intel", "e2e-intel"])
@@ -168,7 +168,7 @@ class WorkflowTests(unittest.TestCase):
         for name in catalog.CI_JOBS:
             with self.subTest(job=name):
                 forks_skip = "head.repo.full_name == github.repository" in job(name)
-                self.assertEqual(forks_skip, name in ("backend", "e2e", "e2e-linux", "e2e-intel"))
+                self.assertEqual(forks_skip, name in ("backend", "e2e", "e2e-linux", "e2e-linux-arm", "e2e-intel"))
 
     def test_the_tested_package_is_the_released_package(self):
         package = job("package")
@@ -190,17 +190,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("scripts/package/macos.sh", read(RELEASE))
         self.assertIn("- dmg", job("publish", RELEASE))
 
-    def test_linux_release_runs_ui_and_e2e_before_publishing(self):
+    def test_linux_release_downloads_checked_archives(self):
         linux = job("linux", RELEASE)
-        self.assertIn("./qtest run ui", linux)
-        self.assertIn("./qtest run e2e --runtime docker", linux)
-        self.assertIn("scripts/package/linux.sh", linux)
+        self.assertEqual(needs(linux), ["resolve-target", "checks"])
+        self.assertNotIn("./qtest", linux)
+        self.assertNotIn("scripts/package/linux.sh", linux)
+        self.assertIn("pattern: linux-package-*", linux)
         publish = job("publish", RELEASE)
         self.assertIn("- linux", publish)
-        for arch, runner in [("x86_64", "ubuntu-24.04"), ("aarch64", "ubuntu-24.04-arm")]:
-            self.assertIn(f"- arch: {arch}\n            runner: {runner}\n", linux)
+        self.assertIn("name: release-linux", publish)
+        for arch in ("x86_64", "aarch64"):
+            self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-linux-{arch}.tar.gz"', linux)
             self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-linux-{arch}.tar.gz"', publish)
-        self.assertIn("pattern: release-linux-*", publish)
 
     def test_each_platform_tests_the_real_window_against_the_servers(self):
         # Before, the Postgres and Trino window tests ran only on macOS, and CI
@@ -301,9 +302,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(ui_linux.suites, catalog.CI_JOBS["ui"].suites)
         # One script installs the libraries, so the check and the release cannot drift.
         install = "run: sh scripts/ci/linux-build-deps.sh\n"
-        for name in ("ui-linux", "backend", "e2e-linux"):
+        for name in ("ui-linux", "backend", "e2e-linux", "package-linux", "ui-linux-arm", "e2e-linux-arm", "package-linux-arm"):
             self.assertIn(install, job(name))
-        self.assertIn(install, job("linux", RELEASE))
         self.assertNotIn("apt-get install", job("linux", RELEASE))
 
     def test_artifacts_expire_and_main_keeps_performance_history(self):
