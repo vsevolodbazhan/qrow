@@ -13,9 +13,9 @@ case "$qrow_version" in *[!a-zA-Z0-9.+-]*|'') echo 'Invalid release version' >&2
 cargo build --locked --release --bin qrow
 qrow_package=$(mktemp -d)
 trap 'rm -rf "$qrow_package"' EXIT HUP INT TERM
-mkdir -p "$qrow_package/bin" "$qrow_package/share/applications" "$qrow_package/share/icons/hicolor/1024x1024/apps" "$qrow_package/share/licenses/qrow"
+mkdir -p "$qrow_package/bin" "$qrow_package/share/applications" "$qrow_package/share/icons/hicolor/256x256/apps" "$qrow_package/share/licenses/qrow"
 cp "${CARGO_TARGET_DIR:-target}/release/qrow" "$qrow_package/bin/qrow"
-cp assets/app-icons/macos/qrow.png "$qrow_package/share/icons/hicolor/1024x1024/apps/qrow.png"
+cp assets/app-icons/qrow-256.png "$qrow_package/share/icons/hicolor/256x256/apps/qrow.png"
 cp LICENSE NOTICE "$qrow_package/share/licenses/qrow/"
 uv run --locked python scripts/package/notices.py "$qrow_package/share/licenses/qrow/THIRD_PARTY_NOTICES.txt"
 cat > "$qrow_package/share/applications/qrow.desktop" <<'DESKTOP'

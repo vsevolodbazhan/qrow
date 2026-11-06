@@ -306,7 +306,7 @@ update the version and the license text in NOTICE.
 ## Generated icon asset
 
 The executable embeds [the small application icon](../assets/app-icons/qrow-256.png)
-for the About dialog. After a change of the
+for the About dialog. The Linux archive installs it as the launcher icon. After a change of the
 [source icon](../assets/app-icons/macos/qrow.png), make the asset again:
 
 ```sh

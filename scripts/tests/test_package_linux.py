@@ -14,10 +14,10 @@ class LinuxPackageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "scripts/package").mkdir(parents=True)
-            (root / "assets/app-icons/macos").mkdir(parents=True)
+            (root / "assets/app-icons").mkdir(parents=True)
             (root / "tools").mkdir()
             (root / "scripts/package/linux.sh").write_bytes((ROOT / "scripts/package/linux.sh").read_bytes())
-            (root / "assets/app-icons/macos/qrow.png").write_bytes(b"synthetic icon")
+            (root / "assets/app-icons/qrow-256.png").write_bytes(b"synthetic icon")
             for name in ("LICENSE", "NOTICE"):
                 (root / name).write_text("synthetic notice")
             commands = {
@@ -36,7 +36,7 @@ class LinuxPackageTest(unittest.TestCase):
             archive = root / "target/package/Qrow-1.2.3-linux-aarch64.tar.gz"
             with tarfile.open(archive) as bundle:
                 files = {member.name.removeprefix("./") for member in bundle.getmembers()}
-                self.assertTrue({"bin/qrow", "share/applications/qrow.desktop", "share/icons/hicolor/1024x1024/apps/qrow.png", "share/licenses/qrow/THIRD_PARTY_NOTICES.txt"} <= files)
+                self.assertTrue({"bin/qrow", "share/applications/qrow.desktop", "share/icons/hicolor/256x256/apps/qrow.png", "share/licenses/qrow/THIRD_PARTY_NOTICES.txt"} <= files)
                 self.assertEqual(bundle.extractfile("./bin/qrow").read(), b"synthetic-binary")
             env["QROW_RELEASE_VERSION"] = "../bad"
             result = subprocess.run(["sh", "scripts/package/linux.sh"], cwd=root, env=env, capture_output=True)
