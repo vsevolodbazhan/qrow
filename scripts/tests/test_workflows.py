@@ -201,6 +201,17 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-linux-{arch}.tar.gz"', publish)
         self.assertIn("pattern: release-linux-*", publish)
 
+    def test_the_aur_gets_the_released_linux_archives_after_publishing(self):
+        aur = job("aur", RELEASE)
+        self.assertIn("      - publish\n", aur)
+        self.assertIn("pattern: release-linux-*", aur)
+        self.assertIn("scripts/package/aur.py", aur)
+        # Only this job reads the key, and it trusts only the published AUR host key.
+        self.assertIn("    environment: aur\n", aur)
+        self.assertEqual(read(RELEASE).count("secrets.AUR_SSH_PRIVATE_KEY"), 1)
+        self.assertIn("StrictHostKeyChecking=yes", aur)
+        self.assertIn("aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN", aur)
+
     def test_intel_package_is_tested_and_both_architectures_are_released(self):
         self.assertEqual(needs(job("e2e-intel")), ["plan", "package-intel"])
         for name in ("package-intel", "e2e-intel"):

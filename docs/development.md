@@ -239,6 +239,16 @@ The current release package uses ad hoc code signing. Homebrew can install the
 custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
 with Apple Developer ID.
 
+The `aur` job runs after the publish job. It writes the PKGBUILD and .SRCINFO
+of `qrow-desktop-bin` for a stable release, or `qrow-desktop-nightly-bin` for a
+nightly release, with [the AUR script](../scripts/package/aur.py). The checksums
+come from the Linux archives of the release. Then the job pushes the package to
+the AUR. It reads the `AUR_SSH_PRIVATE_KEY` secret of the `aur` environment,
+the private key of an SSH key registered to the AUR account. Without the secret,
+the job skips the push. If the push fails, the release stays published: run the
+failed job again. Both packages install `/usr/bin/qrow`, so they conflict with
+each other and with the unrelated `qrow` and `qrow-bin` AUR packages.
+
 Local checks cannot verify GitHub event filters, run cancellation, artifact
 transfer, or ruleset settings.
 
