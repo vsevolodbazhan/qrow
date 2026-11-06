@@ -851,7 +851,7 @@ impl TestApp {
             |window, _| {
                 window
                     .try_find(id.clone())
-                    .is_some_and(|element| element.visible() && element.disabled() == Some(false))
+                    .is_some_and(|element| element.visible() && element.is_clickable())
             },
         );
         self.click(cx, id);

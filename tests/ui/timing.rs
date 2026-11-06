@@ -50,3 +50,34 @@ fn application_timers_progress_while_waiting_for_real_threads(cx: &mut TestAppCo
     );
     thread.join().unwrap();
 }
+
+#[gpui_kit::test]
+fn readiness_uses_the_native_click_action_for_enabled_and_disabled_buttons(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::test::TestWindowExt;
+    use qrow::model::SavedTab;
+    let disabled = TestApp::launch(cx, Workspace::default());
+    disabled.update(cx, |window, _| {
+        assert!(!window.find("run").is_clickable());
+    });
+    let profile = crate::support::offline_profile("Synthetic readiness");
+    let tab = SavedTab::new(1, Some(profile.id));
+    let enabled = TestApp::launch(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    enabled.update(cx, |window, _| {
+        assert!(window.find("run").is_clickable());
+    });
+    enabled.click_ready(cx, "run");
+    assert!(
+        enabled
+            .logs(cx)
+            .contains("Write or select a SQL statement first.")
+    );
+}
