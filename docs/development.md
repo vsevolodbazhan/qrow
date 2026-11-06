@@ -152,6 +152,24 @@ runs, like the runs on `main` and manual runs, do not stop: a newer run of the
 same branch waits, and it replaces an older run that also waits. A run that
 stops before its end saves no build caches.
 
+The [platform workflow](../.github/workflows/platforms.yml) also validates all
+four supported native targets on each ready pull request. It runs application
+lint, unit tests, headless UI tests, packaging, and an extracted-package smoke
+check. On main, scheduled runs, manual runs, and release candidates, it also
+runs real-server E2E on all targets. Linux runs Postgres and Trino window tests
+with Docker. macOS uses the native Kyuubi fixture and runs desktop tests on the
+candidate package. The existing checks remain active during migration.
+Full runs repeat the UI timing regressions 100 times. The Sunday run and release
+candidates do not restore Rust build caches. A manual test run can select
+`cold-cache` for the same check. Candidate receipts record the host and runner
+image version. A failure on the first attempt still fails the run.
+
+`ci-required` fails unless both workflow groups pass. The platform gate also
+requires one valid report and package receipt for every supported target. It
+rejects empty tests, duplicate results, missing results, and a different source
+commit. Windows remains a planned target. Linux package smoke uses X11 with
+Xvfb and software Vulkan; Wayland and hardware GPU qualification remain gaps.
+
 Configure these individual checks as required checks of the `main` ruleset:
 
 ```text
@@ -171,28 +189,29 @@ Do not require the other checks. Pull requests skip them. A push reports
 the failures of the measurement jobs, and a release or a manual run of the
 test workflow reports the failures of the Intel jobs and `desktop-package`.
 
-There is no aggregate CI gate. A skipped job counts as passed: a job that the
-plan does not select, and a server job of a fork pull request. The `plan`
-check must be required, because the other jobs skip when it fails. Do not
-require the `checks` check. Only a skipped draft run reports it.
+Add `ci-required` to the ruleset after its four-target workflow passes in
+GitHub. Keep the individual checks during this migration. The legacy `plan`
+check remains required. Do not require the reusable `checks` context.
+Fork pull requests use disposable runners and synthetic credentials for the
+server jobs. They do not get secrets.
 
 The [release workflow](../.github/workflows/release.yml) is manual. Use it to
-publish a nightly or stable release. It accepts an optional commit SHA or ref.
-Leave the field blank to use the latest commit on the branch selected for the
-workflow run. It reads the application version from `Cargo.toml`. The stable
+publish a nightly or stable release. It accepts an optional commit SHA or ref. The resolved commit must match the
+workflow run commit. Select the candidate branch before starting the workflow.
+Leave the field blank to use that commit. It reads the application version from `Cargo.toml`. The stable
 tag is `v<version>`. The nightly tag is
 `v<version>-nightly.<UTC date>.<workflow run number>`.
 
 The jobs run in this order:
 
 ```text
-resolve-target -> checks -> dmg and linux -> publish
+resolve-target -> checks and platforms -> dmg and linux -> publish
 ```
 
 `resolve-target` finds the commit and the release version. `checks` is the
-checks workflow with all jobs. Its `package` job builds the package with the
-release version, and its `desktop-package` job tests that package.
-`package-intel` and `e2e-intel` do the same for Intel. `dmg` puts each tested package in a DMG
+checks workflow with all jobs. The platform workflow builds each native package and tests the extracted
+application. The macOS desktop suite uses that candidate archive. The
+legacy package and desktop jobs remain as migration checks. `dmg` puts each tested package in a DMG
 with `arm64` or `x86_64` in its name. It runs
 [`scripts/package/dmg.py`](../scripts/package/dmg.py). When the DMG mounts,
 Finder shows the app icon, an Applications shortcut, and an arrow between
@@ -203,11 +222,15 @@ During packaging, the writable image uses a temporary mount that Finder does
 not show. The script ejects the image before it creates the compressed DMG.
 If macOS reports that the image is busy, the script makes at most 10 eject
 attempts. After three attempts, it uses forced ejection. A persistent error
-fails packaging. The `linux` job runs the Linux UI and Docker end-to-end
-tests, then builds an archive on Ubuntu 24.04. It runs once for x86-64 and
-once for ARM64.
-The publish job creates the release
-tag, and then the GitHub Release with both DMGs and both Linux archives as its assets. It also
+fails packaging. The `linux` jobs download the qualified Ubuntu 24.04 archives for x86-64 and
+ARM64 and check their recorded SHA-256 digests. They do not rebuild the app.
+The DMG jobs check the archive digest, wrap the qualified app, mount the final
+image, compare its app files, and launch the mounted app.
+The publish job creates the release tag and an unpublished release with both
+DMGs and both Linux archives. It downloads the assets and checks SHA256SUMS
+before publishing. A failed upload or digest check leaves an unpublished
+release. A rerun with an existing release stops; inspect that release before
+retrying. It also
 keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
 workflow uses the latest non-draft release on the selected channel as the
 changelog start tag. If the channel has no previous release, it writes the

@@ -435,7 +435,9 @@ def command_fixture(args):
     argv = [args.action]
     if args.action == "up":
         argv += ["--runtime", args.runtime]
-    return fixture.main(argv)
+    from process import lease
+    with lease([f"fixture:{fixture.state_path().resolve()}"]):
+        return fixture.main(argv)
 
 
 def command_artifacts(args):

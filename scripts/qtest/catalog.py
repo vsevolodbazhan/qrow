@@ -259,6 +259,14 @@ def suites_for_platform(system):
                   (Step(("sh", "scripts/package/macos.sh"), env=(("QROW_DIST_DIR", "{target}/package"),), timeout=40 * 60),
                    Step((PYTHON, "scripts/core/size.py"), env=(("QROW_DIST_DIR", "{target}/package"),))),
                   platforms=MACOS_ONLY, explicit_only=True),
+            Suite("linux-package", "Build the native Linux archive in target/package.",
+                  (*APP, "uv"),
+                  (Step(("sh", "scripts/package/linux.sh"), env=(("QROW_DIST_DIR", "{target}/package"),), timeout=60 * 60),),
+                  platforms=("linux",), explicit_only=True),
+            Suite("package-smoke", "Inspect and launch the extracted native package.",
+                  ("uv", *(("xvfb-run", "xdotool") if linux else ())),
+                  (Step((PYTHON, "scripts/package/qualify.py", "{target}/package", "--receipt", "{target}/platform/receipt.json")),),
+                  explicit_only=True),
             Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
                   ("uv", "cargo", "xcode", "desktop", "fixture-runtime"),
                   (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
@@ -295,7 +303,7 @@ CHANGE_RULES = (
      ("policy",)),
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml)", ("deps",)),
     # The scripts suite also lints the Python and shell helpers of the desktop driver.
-    (r"^(\.githooks/|\.github/workflows/|pyproject\.toml$|uv\.lock$|scripts/|qtest$|docs/testing\.md$"
+    (r"^(\.githooks/|\.github/workflows/|pyproject\.toml$|uv\.lock$|scripts/|qtest(?:\.cmd)?$|docs/testing\.md$"
      r"|tests/desktop/[^/]+\.(py|sh)$)",
      ("scripts",)),
     (r"^scripts/core/preflight\.sh$", (*RUST_SUITES, "policy")),
@@ -397,7 +405,7 @@ CI_JOBS = {
     ]
 }
 # A change to these paths can change any job, so it runs all of them.
-CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest$|scripts/core/|pyproject\.toml$|uv\.lock$)"
+CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest(?:\.cmd)?$|scripts/core/|pyproject\.toml$|uv\.lock$)"
 
 
 def ci_jobs_for_event(event):
@@ -426,6 +434,8 @@ def ci_jobs_for_changes(paths):
 REQUIREMENTS = {
     "dbus-run-session": "Install D-Bus to run the isolated secret-store test.",
     "gnome-keyring-daemon": "Install GNOME Keyring to run the isolated secret-store test.",
+    "xvfb-run": "Install Xvfb for isolated Linux package smoke checks.",
+    "xdotool": "Install xdotool to observe the packaged Linux window.",
     "cargo": "Install Rust with rustup. rust-toolchain.toml selects the toolchain.",
     "uv": "Install uv: https://docs.astral.sh/uv/getting-started/installation/",
     "shellcheck": "Install ShellCheck, for example `brew install shellcheck`.",

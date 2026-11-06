@@ -15,14 +15,30 @@ import targets
 SCHEMA = 1
 BUILD_ENV = ("RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_BUILD_TARGET", "MACOSX_DEPLOYMENT_TARGET",
              "QROW_RELEASE_VERSION", "QROW_COMMIT", "CARGO_ENCODED_RUSTFLAGS", "RUSTUP_TOOLCHAIN",
-             "CC", "CXX", "CFLAGS", "CXXFLAGS", "SDKROOT", "CARGO_HOME")
+             "CC", "CXX", "CFLAGS", "CXXFLAGS", "SDKROOT", "CARGO_HOME", "QROW_E2E_REUSE_MACOS_PACKAGE", "QROW_MACOS_PACKAGE")
+
+
+def cargo_config_paths(root):
+    root = Path(root).resolve()
+    paths = {}
+    for depth, directory in enumerate((root, *root.parents)):
+        label = "workspace" if depth == 0 else f"ancestor-{depth}"
+        for name in ("config", "config.toml"):
+            path = directory / ".cargo" / name
+            if path.is_file():
+                paths[f"{label}/.cargo/{name}"] = path
+    home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")).resolve()
+    for name in ("config", "config.toml"):
+        path = home / name
+        if path.is_file():
+            paths = {label: item for label, item in paths.items() if item != path}
+            paths[f"cargo-home/{name}"] = path
+    return paths
 
 
 def cargo_configuration(root):
-    paths = {directory / ".cargo" / name for directory in (Path(root).resolve(), *Path(root).resolve().parents)
-             for name in ("config", "config.toml")}
-    paths.update(Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / name for name in ("config", "config.toml"))
-    return {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(paths) if path.is_file()}
+    # Logical locations let an unchanged plan move between checkout paths.
+    return {label: hashlib.sha256(path.read_bytes()).hexdigest() for label, path in cargo_config_paths(root).items()}
 
 
 def digest(value):
@@ -99,9 +115,12 @@ def plan(root, target_name, selectors, runtime="auto", repeat=1):
         raise ValueError(f"{target.name} is planned, not supported")
     if runtime not in ("auto", "native", "docker") or type(repeat) is not int or repeat < 1:
         raise ValueError("Invalid runtime or repeat count")
+    build_names = set(BUILD_ENV) | {name for name in os.environ
+                                  if name.startswith(("CARGO_PROFILE_", "CARGO_TARGET_", "CC_", "CXX_"))
+                                  and name != "CARGO_TARGET_DIR"}
     value = {"schema": SCHEMA, "target": target.name, "source_sha": source_sha(root),
              "snapshot": snapshot(root), "selectors": selectors, "runtime": runtime, "repeat": repeat,
-             "environment": {name: os.environ.get(name) for name in BUILD_ENV},
+             "environment": {name: os.environ.get(name) for name in sorted(build_names)},
              "cargo_configuration": cargo_configuration(root),
              "suites": definitions(target, selectors)}
     value = json.loads(json.dumps(value))
@@ -126,7 +145,7 @@ def validate_plan(value, root):
     if configured and configured != target.triple:
         raise ValueError("CARGO_BUILD_TARGET conflicts with the native plan target")
     if not configured:
-        for path in cargo_configuration(root):
+        for path in cargo_config_paths(root).values():
             configured = tomllib.loads(Path(path).read_text()).get("build", {}).get("target")
             if configured and configured != target.triple:
                 raise ValueError(f"Cargo build.target conflicts with the native plan target: {path}")
@@ -171,7 +190,7 @@ def execute(value, root, output):
                                    "isolated_reports": True}, [], output, require_all=True)
     result.update(schema=SCHEMA, plan_id=value["id"], target=target.name, snapshot=value["snapshot"],
                   source_sha=value["source_sha"])
-    if snapshot(root) != value["snapshot"]:
+    if snapshot(root) != value["snapshot"] or source_sha(root) != value["source_sha"]:
         result.update(status="failed", exit_code=1, reason="Source changed during execution")
     if result["exit_code"] == 0:
         try:

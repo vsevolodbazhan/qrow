@@ -141,7 +141,7 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 - **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
   The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
 - **Linux.** Qrow needs a Wayland or X11 desktop, Vulkan, and a Secret Service provider.
-  The release archive targets x86-64 Linux and is built on Ubuntu 24.04.
+  Release archives target x86-64 and ARM64 Linux and are built on Ubuntu 24.04.
 - **Bring your own assistant.** The assistant needs a separately installed Codex
   or Claude Code executable and your own subscription or API key.
 - **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap and GitHub releases, and macOS may show a Gatekeeper warning on first launch.

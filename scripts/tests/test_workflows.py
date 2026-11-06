@@ -7,6 +7,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/qtest"))
 import catalog  # noqa: E402
+sys.path.insert(0, str(ROOT / "scripts/ci"))
+import platforms  # noqa: E402
 
 CHECKS = ".github/workflows/checks.yml"
 TEST = ".github/workflows/test.yml"
@@ -72,6 +74,7 @@ class CatalogJobTests(unittest.TestCase):
 
     def test_ci_runs_every_suite(self):
         covered = {name for ci_job in catalog.CI_JOBS.values() for name in [*ci_job.suites, *ci_job.report_only]}
+        covered.update(name for target in platforms.TARGETS.values() if target.supported for name in platforms.suites(target, True))
         self.assertEqual(covered, set(catalog.SUITES))
 
 
@@ -164,11 +167,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("converted_to_draft", on)
         self.assertIn("!github.event.pull_request.draft", job("checks", TEST))
 
-    def test_e2e_jobs_skip_forks(self):
+    def test_disposable_e2e_jobs_do_not_skip_forks(self):
         for name in catalog.CI_JOBS:
             with self.subTest(job=name):
                 forks_skip = "head.repo.full_name == github.repository" in job(name)
-                self.assertEqual(forks_skip, name in ("backend", "e2e", "e2e-linux", "e2e-intel"))
+                self.assertFalse(forks_skip)
 
     def test_the_tested_package_is_the_released_package(self):
         package = job("package")
@@ -185,20 +188,23 @@ class WorkflowTests(unittest.TestCase):
                          {"QROW_BUILD_PROFILE": "debug", "QROW_PACKAGE_PREBUILT": "true"})
         dmg = job("dmg", RELEASE)
         self.assertEqual(needs(dmg) or re.findall(r"^      - (\S+)$", dmg.split("strategy:")[0], re.MULTILINE),
-                         ["resolve-target", "checks"])
+                         ["resolve-target", "checks", "platforms"])
         self.assertIn("name: ${{ matrix.package }}\n", dmg)
         self.assertNotIn("scripts/package/macos.sh", read(RELEASE))
         self.assertIn("- dmg", job("publish", RELEASE))
 
-    def test_linux_release_runs_ui_and_e2e_before_publishing(self):
+    def test_linux_release_promotes_qualified_native_archives(self):
         linux = job("linux", RELEASE)
-        self.assertIn("./qtest run ui", linux)
-        self.assertIn("./qtest run e2e --runtime docker", linux)
-        self.assertIn("scripts/package/linux.sh", linux)
+        self.assertEqual(needs(linux), ["resolve-target", "checks", "platforms"])
+        self.assertNotIn("cargo build", linux)
+        self.assertNotIn("scripts/package/linux.sh", linux)
+        self.assertIn("name: candidate-${{ matrix.target }}", linux)
+        self.assertIn("receipt[\"sha256\"]", linux)
         publish = job("publish", RELEASE)
         self.assertIn("- linux", publish)
-        for arch, runner in [("x86_64", "ubuntu-24.04"), ("aarch64", "ubuntu-24.04-arm")]:
-            self.assertIn(f"- arch: {arch}\n            runner: {runner}\n", linux)
+        self.assertIn("full: true", job("platforms", RELEASE))
+        for arch, target in [("x86_64", "linux-x86_64"), ("aarch64", "linux-arm64")]:
+            self.assertIn(f"- arch: {arch}\n            target: {target}\n", linux)
             self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-linux-{arch}.tar.gz"', publish)
         self.assertIn("pattern: release-linux-*", publish)
 
@@ -226,8 +232,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(catalog.CI_JOBS["e2e-intel"].runner, "macos-15-intel")
         self.assertIn("perf-package", catalog.CI_JOBS["e2e-intel"].report_only)
         dmg = job("dmg", RELEASE)
-        for arch, runner, artifact in (("arm64", "macos-15", "macos-package"),
-                                       ("x86_64", "macos-15-intel", "macos-package-x86_64")):
+        for arch, runner, artifact in (("arm64", "macos-15", "candidate-macos-arm64"),
+                                       ("x86_64", "macos-15-intel", "candidate-macos-x86_64")):
             self.assertIn(f"- arch: {arch}\n            runner: {runner}\n            package: {artifact}\n", dmg)
             self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-{arch}.dmg"', job("publish", RELEASE))
         self.assertIn('lipo -archs dist/Qrow.app/Contents/MacOS/qrow', dmg)
@@ -303,7 +309,7 @@ class WorkflowTests(unittest.TestCase):
         install = "run: sh scripts/ci/linux-build-deps.sh\n"
         for name in ("ui-linux", "backend", "e2e-linux"):
             self.assertIn(install, job(name))
-        self.assertIn(install, job("linux", RELEASE))
+        self.assertIn("sh scripts/ci/linux-build-deps.sh", job("native", ".github/workflows/platforms.yml"))
         self.assertNotIn("apt-get install", job("linux", RELEASE))
 
     def test_artifacts_expire_and_main_keeps_performance_history(self):

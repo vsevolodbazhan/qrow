@@ -55,6 +55,18 @@ class ContractTests(unittest.TestCase):
         (export / 'input').write_text('after')
         self.assertNotEqual(before, contract.snapshot(export))
 
+    def test_unchanged_plan_moves_between_checkout_paths(self):
+        (self.root / '.cargo').mkdir()
+        (self.root / '.cargo/config.toml').write_text('[build]\njobs = 2\n')
+        value = self.plan()
+        with tempfile.TemporaryDirectory() as directory:
+            other = Path(directory)
+            (other / 'source.txt').write_text('synthetic')
+            (other / '.cargo').mkdir()
+            (other / '.cargo/config.toml').write_text('[build]\njobs = 2\n')
+            with patch.object(targets, 'host_target', return_value=targets.TARGETS['linux-x86_64']):
+                contract.validate_plan(value, other)
+
     def test_wrong_host_and_configuration_fail(self):
         value = self.plan()
         with patch.object(targets, 'host_target', return_value=targets.TARGETS['macos-arm64']):
@@ -155,3 +167,17 @@ class FinalizerTests(unittest.TestCase):
                 result = runner.run([runner.Selected(suite)], {}, [], runner.Output(True), require_all=True)
             self.assertEqual(result['status'], 'missing')
             self.assertFalse(marker.exists())
+
+
+class BuildIdentityTests(unittest.TestCase):
+    def test_child_builds_receive_one_commit_without_mutating_parent_environment(self):
+        import runner
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, CARGO_TARGET_DIR=directory):
+            os.environ.pop('QROW_COMMIT', None)
+            suite = catalog.Suite('identity', 'Synthetic build identity.', (),
+                                  (catalog.Step((sys.executable, '-c', 'import os; print(os.environ["QROW_COMMIT"])')),))
+            with patch.object(contract, 'source_sha', return_value='a' * 40):
+                result = runner.run([runner.Selected(suite)], {}, [], runner.Output(True))
+            self.assertEqual(result['exit_code'], 0)
+            self.assertIn('a' * 12, Path(result['suites'][0]['log']).read_text())
+            self.assertNotIn('QROW_COMMIT', os.environ)

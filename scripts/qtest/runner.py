@@ -58,7 +58,7 @@ LINUX_APP_LIBS = ("xcb", "fontconfig", "freetype2", "xkbcommon", "xkbcommon-x11"
 def check_requirement(name, options):
     """Return None when the requirement holds, else a fix for the user."""
     fixes = catalog.REQUIREMENTS
-    if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "gnome-keyring-daemon"):
+    if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "gnome-keyring-daemon", "xvfb-run", "xdotool"):
         return None if shutil.which(name) else fixes[name]
     if name == "linux-app-libs":
         # The pkg-config names of the libraries that the application links.
@@ -468,9 +468,18 @@ def new_run_dir():
 
 
 def run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False):
-    resources = [f"cargo:{target_dir().resolve()}"]
+    from contract import source_sha
+    options = dict(options, env=dict(options.get("env", {})))
+    # Give each run an immutable build identity. build.rs otherwise watches all
+    # Git refs, which background fetches in another worktree can change.
+    if not options["env"].get("QROW_COMMIT") and not os.environ.get("QROW_COMMIT"):
+        sha = source_sha(ROOT)
+        if sha:
+            options["env"]["QROW_COMMIT"] = sha[:12]
+    resources = ([f"cargo:{target_dir().resolve()}"]
+                 if any("cargo" in item.suite.requires or item.suite.name == "package-smoke" for item in selected) else [])
     if any(item.suite.fixture for item in selected):
-        resources.append(f"fixture:{target_dir().resolve()}")
+        resources.append(f"fixture:{fixture.state_path().resolve()}")
     if any(item.suite.name in ("desktop", "perf-app", "perf-package") for item in selected):
         resources.append("desktop")
     with lease(resources):
