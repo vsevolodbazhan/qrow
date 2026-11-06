@@ -58,7 +58,10 @@ class CatalogTests(unittest.TestCase):
     def test_clippy_app_is_the_application_pass_of_clippy(self):
         clippy, app = catalog.SUITES["clippy"], catalog.SUITES["clippy-app"]
         self.assertEqual(app.steps, (catalog.CLIPPY_APP,))
-        self.assertTrue(app.macos_only)
+        self.assertFalse(app.macos_only)
+        self.assertNotIn("macos", app.requires)
+        # Without ui-test, the UI test targets do not build on Linux.
+        self.assertEqual("ui-test" in catalog.CLIPPY_APP.command, catalog.LINUX_HOST)
         self.assertEqual(clippy.steps, (catalog.CLIPPY_CORE, catalog.CLIPPY_APP) if catalog.MACOS
                          else (catalog.CLIPPY_CORE,))
         self.assertIn("--no-default-features", catalog.CLIPPY_CORE.command)
