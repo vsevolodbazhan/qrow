@@ -738,11 +738,12 @@ fn kyuubi_run_export_explicit_rerun_refreshes_preview_and_retry_survives_tab_clo
     cx.simulate_new_path_selection(|_| Some(blocked.clone()));
     app.wait_gone(cx, "export-save");
     app.wait_label(cx, "Retry…");
-    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
     app.wait_until(cx, "the rerun preview", QUERY_TIMEOUT, |window, _| {
         find_in(window, ("row", 0usize), ("cell", 1usize))
             .is_some_and(|cell| cell.label().is_some())
     });
+    // A result selects the Results panel, so read Logs after the preview.
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
     let fresh = app.update(cx, |window, _| {
         find_in(window, ("row", 0usize), ("cell", 1usize))
             .unwrap()
