@@ -21,6 +21,11 @@ IMAGE = "trinodb/trino:483@sha256:db58cc93e593a2706553745f276bb119c9810e69918be5
 STORAGE_IMAGE = "adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92"
 
 
+# The real-window tests run on macOS and Linux. On Linux, GPUI's test support
+# is behind the ui-test feature.
+UI_TEST_FEATURE = ("--features", "ui-test") if platform.system() == "Linux" else ()
+
+
 def command(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
@@ -35,8 +40,8 @@ def main():
     profile = "ci" if env.get("CI") else "default"
     build = ("--profile", "perf") if options.perf else ()
     command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
-    if not options.perf and platform.system() == "Darwin":
-        command("cargo", "test", "--locked", "--test", "e2e", "--no-run")
+    if not options.perf:
+        command("cargo", "test", "--locked", *UI_TEST_FEATURE, "--test", "e2e", "--no-run")
     target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     fixture_root = target / "qtest" / "trino"
     fixture_root.mkdir(parents=True, exist_ok=True)
@@ -156,9 +161,8 @@ def main():
                 return
             command("cargo", "nextest", "run", "--locked", "--profile", profile, "--no-default-features", "--test", "integration",
                     "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & not test(/external_browser/)", env=env)
-            if platform.system() == "Darwin":
-                command("cargo", "nextest", "run", "--locked", "--profile", profile, "--test", "e2e",
-                        "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & not test(/external_browser/)", env=env)
+            command("cargo", "nextest", "run", "--locked", "--profile", profile, *UI_TEST_FEATURE, "--test", "e2e",
+                    "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & not test(/external_browser/)", env=env)
             # The same disposable coordinator now delegates login to its
             # synthetic confidential OIDC client. Only this fixture changes.
             oidc_port = command("docker", "port", storage_name, "9443/tcp", capture_output=True).stdout.strip().rsplit(":", 1)[1]
@@ -200,9 +204,8 @@ def main():
                 time.sleep(0.2)
             command("cargo", "nextest", "run", "--locked", "--profile", profile, "--no-default-features", "--test", "integration",
                     "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & test(/external_browser/)", env=env)
-            if platform.system() == "Darwin":
-                command("cargo", "nextest", "run", "--locked", "--profile", profile, "--test", "e2e",
-                        "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & test(/external_browser/)", env=env)
+            command("cargo", "nextest", "run", "--locked", "--profile", profile, *UI_TEST_FEATURE, "--test", "e2e",
+                    "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & test(/external_browser/)", env=env)
         finally:
             if started:
                 subprocess.run(["docker", "exec", name, "/bin/sh", "-c", "test ! -f /tmp/trino-oidc.log || cat /tmp/trino-oidc.log"], check=False)
