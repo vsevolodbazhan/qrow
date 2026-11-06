@@ -207,6 +207,7 @@ with Apple Developer ID. To bypass the Gatekeeper:
 - On macOS, Xcode command-line tools. Install them with `xcode-select --install` if needed.
 - On Linux, a C and C++ toolchain, pkg-config, CMake, and the Wayland, X11,
   xkbcommon, xkbcommon-x11, fontconfig, FreeType, and Vulkan development libraries.
+  On Ubuntu, `sh scripts/ci/linux-build-deps.sh` installs the libraries.
 - [uv](https://docs.astral.sh/uv/), which provisions the pinned Python 3.11+
   toolchain used by `./qtest` and by the packaging, dependency-license, and
   code-generation scripts. A separately installed Python is not required.

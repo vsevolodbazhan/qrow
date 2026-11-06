@@ -144,6 +144,36 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  ui-linux:
+    name: ui-linux
+    needs: plan
+    if: fromJSON(needs.plan.outputs.jobs)['ui-linux']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Install Linux build dependencies
+        run: sh scripts/ci/linux-build-deps.sh
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native-linux
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci ui-linux --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: ui-linux-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
   package:
     name: package
     needs: plan

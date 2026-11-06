@@ -33,7 +33,7 @@ accept a test filter.
 | --- | --- | --- |
 | `fmt` | Rust formatting. | Rust |
 | `clippy` | Clippy for the core library and, on macOS, the application. | Rust |
-| `clippy-app` | Clippy for the application with all features. | macOS |
+| `clippy-app` | Clippy for the application with all features. | Rust; on Linux, the build libraries |
 | `rustdoc` | Rust API documentation without warnings. | Rust |
 | `unit` * | Rust unit and integration tests that need no UI and no servers. | Rust, cargo-nextest |
 | `ui` * | Headless tests of the real Qrow window, without servers. | cargo-nextest, Linux or macOS |
@@ -56,10 +56,11 @@ accept a test filter.
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
-On Linux, `unit` and `clippy` use only the core library. These suites need
-macOS and are not available on Linux: `clippy-app`, `perf-ui`,
-`perf-e2e`, `perf-app`, `perf-package`, `package`, and `desktop`. `clippy-app` is the second
-pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
+On Linux, `unit` and `clippy` use only the core library. To lint the
+application on Linux, run `clippy-app`. These suites need macOS and are not
+available on Linux: `perf-ui`, `perf-e2e`, `perf-app`, `perf-package`,
+`package`, and `desktop`. `clippy-app` is the second pass of `clippy` on
+macOS. It is not in a group, because `clippy` includes it on macOS.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
 Spark, and OpenID Connect servers. `desktop` also takes over the desktop. These suites, the
@@ -898,6 +899,7 @@ suites of a job on your computer, run the same command, for example
 | `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | all runs |
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | all runs |
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | all runs |
+| `ui-linux` | Linux | `clippy-app`, `ui`, with the build libraries of the Linux release | all runs |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
 | `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
 | `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, and `perf-e2e` (report only), with local Java servers | all runs |
@@ -932,7 +934,9 @@ Pull requests and pushes do not run the Intel jobs. The Intel runners are
 slow, and GitHub runs only a small number of macOS jobs at the same time for
 the account. Manual runs and releases run all jobs, so a release finds Intel
 failures. To run the Intel jobs before a merge or a release, start the test
-workflow manually on the branch. `package-intel` builds the Intel package on
+workflow manually on the branch. `ui-linux` builds and tests the application
+on x86-64 Linux in pull requests that change Rust code. The release builds it
+again on x86-64 and ARM64 Linux. `package-intel` builds the Intel package on
 an ARM64 runner with `CARGO_BUILD_TARGET=x86_64-apple-darwin`. This takes
 about half the time of a build on an Intel runner. `e2e-intel` tests the
 package on an Intel runner, and `perf-package` measures its launch there.
@@ -940,7 +944,8 @@ package on an Intel runner, and `perf-package` measures its launch there.
 For a pull request, the plan always selects `static`. Changes to Rust
 sources or `.cargo/config.toml` select all pull request jobs. Changes to the
 server fixture or the E2E scripts select `backend` and `e2e`. Changes under
-`tests/desktop/` select `e2e`. Changes to the packaging or probe scripts,
+`tests/desktop/` select `e2e`. Changes to
+`scripts/ci/linux-build-deps.sh` select `ui-linux`. Changes to the packaging or probe scripts,
 `assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the packaging
 scripts also select `e2e`, because it packages its debug app. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all

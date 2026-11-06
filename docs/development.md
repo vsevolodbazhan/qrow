@@ -159,6 +159,7 @@ checks / plan
 checks / static
 checks / core
 checks / ui
+checks / ui-linux
 checks / package
 checks / backend
 checks / e2e
