@@ -9,6 +9,9 @@ import re
 
 MACOS = platform.system() == "Darwin"
 LINUX_HOST = platform.system() == "Linux"
+# The operating system of this computer, as the `platforms` of a suite name it.
+HOST = "macos" if MACOS else "linux" if LINUX_HOST else None
+PLATFORM_NAMES = {"macos": "macOS", "linux": "Linux"}
 
 
 def host_platform():
@@ -114,7 +117,9 @@ class Suite:
     summary: str
     requires: tuple[str, ...]
     steps: tuple[Step, ...]
-    macos_only: bool = False
+    # The operating systems that the suite runs on. A group skips the suite
+    # on other systems. Selected by name, it reports a missing prerequisite.
+    platforms: tuple[str, ...] = ("macos", "linux")
     # Suites that start disposable servers or take over the desktop run only
     # when you select them by name.
     explicit_only: bool = False
@@ -145,30 +150,28 @@ CLIPPY_APP = Step(("cargo", "clippy", "--locked", *UI_TEST_FEATURE, "--all-targe
 E2E_BUILD = Step(("cargo", "test", "--locked", *UI_TEST_FEATURE, "--no-run", "--test", "e2e"))
 TRANSFER_PERF_BUILD = Step(("cargo", "test", "--locked", "--profile", "perf", "--no-default-features", "--test", "integration", "--no-run"))
 
-_UNIT = (
-    (nextest("not binary(ui)"), Step(("cargo", "test", "--locked", "--doc")))
-    if MACOS else
-    (nextest("all()", "--no-default-features"),
-     Step(("cargo", "test", "--locked", "--no-default-features", "--doc")))
-)
+MACOS_ONLY = ("macos",)
+# The application build needs the Linux desktop libraries. On macOS, this
+# requirement always holds.
+APP = ("cargo", "linux-app-libs")
 
 SUITES = {
     suite.name: suite
     for suite in [
         Suite("fmt", "Rust formatting.", ("cargo",),
               (Step(("cargo", "fmt", "--all", "--", "--check")),)),
-        Suite("clippy", "Clippy for the core library and, on macOS, the application.", ("cargo",),
-              (CLIPPY_CORE, *((CLIPPY_APP,) if MACOS else ()))),
-        # The ui CI jobs lint the application. The static job lints the core library.
-        Suite("clippy-app", "Clippy for the application with all features.", ("cargo",),
-              (CLIPPY_APP,)),
+        # The static job lints the core library. The ui CI jobs lint the
+        # application on each platform.
+        Suite("clippy", "Clippy for the core library.", ("cargo",), (CLIPPY_CORE,)),
+        Suite("clippy-app", "Clippy for the application with all features.", APP, (CLIPPY_APP,)),
         Suite("rustdoc", "Rust API documentation without warnings.", ("cargo",),
               (Step(("cargo", "doc", "--locked", "--no-default-features", "--no-deps"),
                     env=(("RUSTDOCFLAGS", "-D warnings"),)),)),
         Suite("unit", "Rust unit and integration tests that need no UI and no servers.",
-              ("cargo", "cargo-nextest"), _UNIT),
+              (*APP, "cargo-nextest"),
+              (nextest("not binary(ui)", *UI_TEST_FEATURE), Step(("cargo", "test", "--locked", *UI_TEST_FEATURE, "--doc")))),
         Suite("ui", "Headless tests of the real Qrow window, without servers.",
-              ("cargo", "cargo-nextest"),
+              (*APP, "cargo-nextest"),
               (nextest("binary(ui)", *UI_TEST_FEATURE),
                *((Step(("cargo", "run", "--locked", "--example", "tooltip-layout")),) if MACOS else ()))),
         Suite("coverage", "Core line coverage with an 80% floor.", ("cargo", "cargo-llvm-cov", *(("cargo-nextest", "dbus-run-session", "gnome-keyring-daemon") if LINUX_HOST else ())),
@@ -209,20 +212,20 @@ SUITES = {
               explicit_only=True, fixture="docker",
               prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "integration")),)),
         Suite("e2e", "The real Qrow window, headless, against the real servers.",
-              ("cargo", "cargo-nextest", "fixture-runtime"),
+              (*APP, "cargo-nextest", "fixture-runtime"),
               # `--test e2e` builds only the binary of the prepare step.
               (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/) & not test(/^trino::/)",
                        *UI_TEST_FEATURE, "--test", "e2e", "--run-ignored", "only"),),
               explicit_only=True, fixture="docker" if LINUX_HOST else "any",
               prepare=(E2E_BUILD,)),
         Suite("perf-ui", "Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build.",
-              ("cargo", "cargo-nextest", "macos"),
+              ("cargo", "cargo-nextest"),
               (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
-              macos_only=True, explicit_only=True),
+              platforms=MACOS_ONLY, explicit_only=True),
         Suite("perf-e2e", "Window query latency against the real servers.",
-              ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
+              ("cargo", "cargo-nextest", "fixture-runtime"),
               (nextest("binary(e2e) & test(/^perf::/)", "--test", "e2e", "--run-ignored", "only", "--no-capture"),),
-              macos_only=True, explicit_only=True, fixture="any",
+              platforms=MACOS_ONLY, explicit_only=True, fixture="any",
               prepare=(E2E_BUILD,)),
         Suite("perf-kyuubi", "Kyuubi export transfer measurements against the real servers.",
               ("cargo", "cargo-nextest", "fixture-runtime"),
@@ -236,24 +239,24 @@ SUITES = {
               ("cargo", "cargo-nextest", "docker"),
               (Step((PYTHON, "scripts/e2e/trino.py", "--perf")),), explicit_only=True),
         Suite("perf-app", "Launch time, idle memory, and idle CPU of the release app on the desktop.",
-              ("cargo", "uv", "macos"),
+              ("cargo", "uv"),
               (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
                Step((PYTHON, "scripts/perf/app.py"))),
-              macos_only=True, explicit_only=True),
+              platforms=MACOS_ONLY, explicit_only=True),
         # perf-app on a package from another job, without a release build.
         Suite("perf-package", "Launch time, idle memory, and idle CPU of the packaged app on the desktop.",
-              ("macos",),
+              (),
               (Step((PYTHON, "scripts/perf/app.py", "--package")),),
-              macos_only=True, explicit_only=True),
+              platforms=MACOS_ONLY, explicit_only=True),
         Suite("package", "The release app package, built in the target directory, and its size budget.",
-              ("cargo", "uv", "macos", "xcode"),
+              ("cargo", "uv", "xcode"),
               (Step(("sh", "scripts/package/macos.sh"), env=(("QROW_DIST_DIR", "{target}/package"),), timeout=40 * 60),
                Step((PYTHON, "scripts/core/size.py"), env=(("QROW_DIST_DIR", "{target}/package"),))),
-              macos_only=True, explicit_only=True),
+              platforms=MACOS_ONLY, explicit_only=True),
         Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
-              ("uv", "cargo", "macos", "xcode", "desktop", "fixture-runtime"),
+              ("uv", "cargo", "xcode", "desktop", "fixture-runtime"),
               (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
-              macos_only=True, explicit_only=True, fixture="any",
+              platforms=MACOS_ONLY, explicit_only=True, fixture="any",
               prepare=(Step(("sh", "scripts/e2e/driver.sh", "--prepare"), timeout=30 * 60),),
               # The driver removes its synthetic Keychain items on exit. This
               # step also removes them when a time limit stopped the driver.
@@ -266,15 +269,15 @@ COMPARE_SUITES = ("perf", "perf-ui", "perf-app")
 
 GROUPS = {
     "default": ("Fast local checks. Runs when you give no selector.",
-                ("fmt", "clippy", "unit", "ui")),
+                ("fmt", "clippy", "clippy-app", "unit", "ui")),
     "all": ("Every local suite without servers. CI runs these suites and the suites with servers.",
-            ("scripts", "deps", "fmt", "clippy", "rustdoc", "unit", "ui", "perf", "coverage")),
+            ("scripts", "deps", "fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui", "perf", "coverage")),
 }
 
 # Changed paths select suites for `qtest run --changed` and the hooks.
 RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|tests/(?!fixture/)|benches/|vendor/"
               r"|\.cargo/config\.toml$|themes/|assets/(app-icons|connection-type-icons)/|\.config/nextest\.toml$)")
-RUST_SUITES = ("fmt", "clippy", "rustdoc", "unit", "ui")
+RUST_SUITES = ("fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui")
 CHANGE_RULES = (
     (RUST_PATHS, RUST_SUITES),
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/policy\.py|\.github/workflows/)",
@@ -291,9 +294,9 @@ CHANGE_RULES = (
 # those of the hook. A commit gets the checks that take seconds. A push also
 # gets the tests. CI runs everything, including `perf` and `coverage`.
 HOOKS = {
-    "pre-commit": ("Static checks of the staged files.", ("scripts", "policy", "fmt", "clippy")),
+    "pre-commit": ("Static checks of the staged files.", ("scripts", "policy", "fmt", "clippy", "clippy-app")),
     "pre-push": ("Static checks and tests of the pushed changes.",
-                 ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc", "unit", "ui")),
+                 ("scripts", "policy", "deps", "fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui")),
 }
 
 
@@ -354,8 +357,7 @@ CI_JOBS = {
         CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc"), budget=3),
         CiJob("core", LINUX, ("coverage",), budget=5, paths=RUST_PATHS),
         CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), budget=7, paths=RUST_PATHS),
-        # The Linux application build. The core job runs the unit tests on Linux.
-        CiJob("ui-linux", LINUX, ("clippy-app", "ui"), budget=8, paths=rf"{RUST_PATHS}|^scripts/ci/linux-build-deps\.sh$"),
+        CiJob("ui-linux", LINUX, ("clippy-app", "unit", "ui"), budget=8, paths=rf"{RUST_PATHS}|^scripts/ci/linux-build-deps\.sh$"),
         CiJob("package", MACOS_RUNNER, ("package",), budget=8, report_only=("perf-app",),
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
         CiJob("backend", LINUX, ("backend", "postgres", "trino"), budget=8, paths=rf"{RUST_PATHS}|{E2E_PATHS}",
@@ -414,7 +416,8 @@ REQUIREMENTS = {
     "uv": "Install uv: https://docs.astral.sh/uv/getting-started/installation/",
     "shellcheck": "Install ShellCheck, for example `brew install shellcheck`.",
     "actionlint": "Install actionlint, for example `brew install actionlint`.",
-    "macos": "Run this suite on macOS.",
+    "linux-app-libs": "Install the Linux desktop libraries of the application build. "
+                      "On Ubuntu, run `sh scripts/ci/linux-build-deps.sh`.",
     "xcode": "Install the Xcode command-line tools with `xcode-select --install`.",
     "docker": "Install Docker with Compose v2.",
     "docker-running": "Docker is installed but not running. Start Docker Desktop, then run again.",

@@ -51,13 +51,19 @@ def _tool_version(tool):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+LINUX_APP_LIBS = ("xcb", "fontconfig", "freetype2", "xkbcommon", "xkbcommon-x11")
+
+
 def check_requirement(name, options):
     """Return None when the requirement holds, else a fix for the user."""
     fixes = catalog.REQUIREMENTS
     if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "gnome-keyring-daemon"):
         return None if shutil.which(name) else fixes[name]
-    if name == "macos":
-        return None if catalog.MACOS else fixes[name]
+    if name == "linux-app-libs":
+        # The pkg-config names of the libraries that the application links.
+        if not catalog.LINUX_HOST:
+            return None
+        return None if _succeeds(["pkg-config", "--exists", *LINUX_APP_LIBS]) else fixes[name]
     if name == "xcode":
         return None if shutil.which("xcode-select") and _succeeds(["xcode-select", "-p"]) else fixes[name]
     if name == "docker":
@@ -276,8 +282,12 @@ def junit_failures(path):
 def precheck(item, options):
     """A skipped or missing result, or None when the suite can run."""
     suite = item.suite
-    if suite.macos_only and not catalog.MACOS and not item.explicit:
-        return SuiteResult(suite.name, "skipped", reason="Requires macOS.")
+    if catalog.HOST not in suite.platforms:
+        systems = " or ".join(catalog.PLATFORM_NAMES[name] for name in suite.platforms)
+        if not item.explicit:
+            return SuiteResult(suite.name, "skipped", reason=f"Requires {systems}.")
+        fix = f"Run this suite on {systems}."
+        return SuiteResult(suite.name, "missing", missing=[{"requirement": "platform", "fix": fix}], reason=fix)
     missing = []
     for requirement in suite.requires:
         fix = check_requirement(requirement, dict(options, fixture=suite.fixture))

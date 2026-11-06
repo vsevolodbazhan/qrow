@@ -32,11 +32,11 @@ accept a test filter.
 | Suite | Checks | Needs |
 | --- | --- | --- |
 | `fmt` | Rust formatting. | Rust |
-| `clippy` | Clippy for the core library and, on macOS, the application. | Rust |
-| `clippy-app` | Clippy for the application with all features. | Rust; on Linux, the build libraries |
+| `clippy` | Clippy for the core library. | Rust |
+| `clippy-app` | Clippy for the application with all features. | Rust; on Linux, the desktop libraries |
 | `rustdoc` | Rust API documentation without warnings. | Rust |
-| `unit` * | Rust unit and integration tests that need no UI and no servers. | Rust, cargo-nextest |
-| `ui` * | Headless tests of the real Qrow window, without servers. | cargo-nextest, Linux or macOS |
+| `unit` * | Rust unit and integration tests that need no UI and no servers. | cargo-nextest; on Linux, the desktop libraries |
+| `ui` * | Headless tests of the real Qrow window, without servers. | cargo-nextest; on Linux, the desktop libraries |
 | `coverage` | Core line coverage with an 80% floor. On Linux, also checks the secret store. | cargo-llvm-cov; on Linux, cargo-nextest, D-Bus, GNOME Keyring |
 | `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
@@ -52,15 +52,16 @@ accept a test filter.
 | `postgres` | Postgres connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
 | `trino` | Trino connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
-| `e2e` * | The real Qrow window, headless, against the real servers. | Docker; on macOS, Docker or Java 17 |
+| `e2e` * | The real Qrow window, headless, against the real servers. | Docker and, on Linux, the desktop libraries; on macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
-On Linux, `unit` and `clippy` use only the core library. To lint the
-application on Linux, run `clippy-app`. These suites need macOS and are not
-available on Linux: `perf-ui`, `perf-e2e`, `perf-app`, `perf-package`,
-`package`, and `desktop`. `clippy-app` is the second pass of `clippy` on
-macOS. It is not in a group, because `clippy` includes it on macOS.
+The suites do the same checks on macOS and Linux. `clippy` lints the core
+library without the application. `clippy-app`, `unit`, and `ui` build the
+application. On Linux, they need the desktop libraries that the README lists.
+On Ubuntu, `sh scripts/ci/linux-build-deps.sh` installs them. These suites
+need macOS and are not available on Linux: `perf-ui`, `perf-e2e`, `perf-app`,
+`perf-package`, `package`, and `desktop`.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
 Spark, and OpenID Connect servers. `desktop` also takes over the desktop. These suites, the
@@ -240,12 +241,12 @@ A group selects several suites.
 
 | Group | Suites | Use |
 | --- | --- | --- |
-| `default` | `fmt`, `clippy`, `unit`, `ui` | Runs when you give no selector. |
-| `all` | `scripts`, `deps`, `fmt`, `clippy`, `rustdoc`, `unit`, `ui`, `perf`, `coverage` | Every local suite without servers. |
+| `default` | `fmt`, `clippy`, `clippy-app`, `unit`, `ui` | Runs when you give no selector. |
+| `all` | `scripts`, `deps`, `fmt`, `clippy`, `clippy-app`, `rustdoc`, `unit`, `ui`, `perf`, `coverage` | Every local suite without servers. |
 
-A group skips a suite that the platform does not support, for example `ui`
-on Linux. A suite that you select by name does not skip. It fails with a
-missing prerequisite.
+A group skips a suite that the platform does not support, for example
+`package` on Linux. A suite that you select by name does not skip. It fails
+with a missing prerequisite.
 
 ## Select tests
 
@@ -867,8 +868,8 @@ suites that the changed files select, as `--changed` does (see
 
 | Hook | Changed files | Suites |
 | --- | --- | --- |
-| pre-commit | The staged files. | `scripts`, `policy`, `fmt`, `clippy` |
-| pre-push | The changes that the remote does not have. | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc`, `unit`, `ui` |
+| pre-commit | The staged files. | `scripts`, `policy`, `fmt`, `clippy`, `clippy-app` |
+| pre-push | The changes that the remote does not have. | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `clippy-app`, `rustdoc`, `unit`, `ui` |
 
 With a warm build cache and a change to Rust sources, pre-commit takes about
 20 seconds, and pre-push takes about 2 minutes. The pre-push hook checks the
@@ -899,7 +900,7 @@ suites of a job on your computer, run the same command, for example
 | `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | all runs |
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | all runs |
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | all runs |
-| `ui-linux` | Linux | `clippy-app`, `ui`, with the build libraries of the Linux release | all runs |
+| `ui-linux` | Linux | `clippy-app`, `unit`, `ui`, with the desktop libraries of the Linux release | all runs |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
 | `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
 | `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, and `perf-e2e` (report only), with local Java servers | all runs |
@@ -916,8 +917,9 @@ at once and run in parallel. Only `desktop-package` and `e2e-intel` wait,
 for the package that they test. A failed job skips the jobs that wait for
 it. Each job has a time budget for its suites, most of them 8 minutes or
 less. When the suites take longer, the job shows a warning. Find the cause
-before you raise the budget. `static` lints the core library, and the two
-`ui` jobs lint the application on their Mac architecture.
+before you raise the budget. `static` lints the core library. The `ui`,
+`ui-intel`, and `ui-linux` jobs lint and test the application on their
+platform.
 
 A report-only suite runs, and its measurements go into the run summary. Its
 failure does not fail the job. Pull requests do not keep measurements, so

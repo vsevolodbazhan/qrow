@@ -61,7 +61,7 @@ def command_list(args):
         "name": suite.name,
         "summary": suite.summary,
         "requires": list(suite.requires),
-        "macos_only": suite.macos_only,
+        "platforms": list(suite.platforms),
         "explicit_only": suite.explicit_only,
         "servers": suite.fixture is not None,
         "filterable": suite.filterable,
@@ -76,8 +76,8 @@ def command_list(args):
     for suite in suites:
         flags = "*" if suite["filterable"] else " "
         extra = []
-        if suite["macos_only"]:
-            extra.append("macOS")
+        if len(suite["platforms"]) < len(catalog.PLATFORM_NAMES):
+            extra.append(", ".join(catalog.PLATFORM_NAMES[name] for name in suite["platforms"]))
         if suite["servers"]:
             extra.append("servers")
         if suite["explicit_only"]:
@@ -234,7 +234,7 @@ def command_doctor(args):
         selected, _ = runner.resolve(args.selectors)
         suites = [item.suite for item in selected]
     else:
-        suites = [suite for suite in catalog.SUITES.values() if catalog.MACOS or not suite.macos_only]
+        suites = [suite for suite in catalog.SUITES.values() if catalog.HOST in suite.platforms]
     options = {"runtime": args.runtime}
     results = {}
     for suite in suites:
@@ -244,6 +244,12 @@ def command_doctor(args):
     report = [{"requirement": name, "ok": fix is None, "fix": fix,
                "suites": [suite.name for suite in suites if name in suite.requires]}
               for name, fix in results.items()]
+    # A suite of another platform, which only a selector can name.
+    elsewhere = [suite for suite in suites if catalog.HOST not in suite.platforms]
+    for systems in sorted({suite.platforms for suite in elsewhere}):
+        names = " or ".join(catalog.PLATFORM_NAMES[name] for name in systems)
+        report.append({"requirement": "platform", "ok": False, "fix": f"Run this suite on {names}.",
+                       "suites": [suite.name for suite in elsewhere if suite.platforms == systems]})
     if args.json:
         print(json.dumps(report, indent=2))
     else:
