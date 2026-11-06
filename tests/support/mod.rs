@@ -1028,11 +1028,40 @@ impl TestApp {
         self.wait_until(cx, text, Duration::from_secs(10), |window, _| {
             labelled(window, text).is_some()
         });
-        self.update(cx, |window, cx| {
-            let element = labelled(window, text).unwrap();
-            pointer_click(window, &element, MouseButton::Right, cx);
+        self.open_context_menu(cx, text, |window, cx| {
+            if let Some(element) = labelled(window, text) {
+                pointer_click(window, &element, MouseButton::Right, cx);
+            }
         });
-        self.wait_for(cx, "popup-menu");
+    }
+
+    /// Right-clicks with `click` until a context menu opens. A click while a
+    /// dialog closes reaches its fading backdrop and opens nothing, so the
+    /// helper clicks again when no menu opened after about half a second.
+    fn open_context_menu(
+        &self,
+        cx: &mut TestAppContext,
+        what: &str,
+        mut click: impl FnMut(&mut Window, &mut App),
+    ) {
+        self.update(cx, |window, cx| click(window, cx));
+        let menu = ElementId::Name("popup-menu".into());
+        let mut polls = 0;
+        self.wait_until(
+            cx,
+            &format!("the context menu of {what}"),
+            Duration::from_secs(10),
+            |window, cx| {
+                if present(window, &menu) {
+                    return true;
+                }
+                polls += 1;
+                if polls % 10 == 0 {
+                    click(window, cx);
+                }
+                false
+            },
+        );
     }
 
     /// Scrolls the container of `target` with the wheel until `target` is
@@ -1187,11 +1216,11 @@ impl TestApp {
         self.wait_until(cx, prefix, Duration::from_secs(10), |window, _| {
             labelled_starting(window, prefix).len() == 1
         });
-        self.update(cx, |window, cx| {
-            let element = labelled_starting(window, prefix).remove(0);
-            pointer_click(window, &element, MouseButton::Right, cx);
+        self.open_context_menu(cx, prefix, |window, cx| {
+            if let Some(element) = labelled_starting(window, prefix).into_iter().next() {
+                pointer_click(window, &element, MouseButton::Right, cx);
+            }
         });
-        self.wait_for(cx, "popup-menu");
     }
 
     /// Clicks the first element whose label starts with `prefix`.
@@ -1240,8 +1269,8 @@ impl TestApp {
     /// Right-clicks `id` and waits for its context menu.
     pub fn context_menu(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
         let id = id.into();
-        self.update(cx, |window, cx| window.right_click(id, cx));
-        self.wait_for(cx, "popup-menu");
+        let what = format!("{id:?}");
+        self.open_context_menu(cx, &what, |window, cx| window.right_click(id.clone(), cx));
     }
 
     /// Clicks the item labelled `item` in the open menu `scope`.
