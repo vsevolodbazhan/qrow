@@ -24,6 +24,38 @@ The [catalog](../scripts/qtest/catalog.py) defines the suites, groups, pinned
 tools, and change rules. Rust tests run through
 [cargo-nextest](https://nexte.st/) with the [nextest profiles](../.config/nextest.toml).
 
+## Plan and execute checks
+
+Use a saved plan to separate selection from execution:
+
+```sh
+./qtest plan unit ui --target linux-x86_64 --output target/check-plan.json
+./qtest execute target/check-plan.json --install --output target/check-result.json
+./qtest verify target/check-plan.json target/check-result.json
+```
+
+Store plans under `target/`, or outside the source directory. A plan records
+the source files, target, suite definitions, runtime, repeat count, and build
+settings. Execution stops if these inputs change. A plan for another target
+can be made on any host. Execute it on that target's native architecture.
+Windows is a planned target and cannot execute application suites yet.
+
+Use `--runtime docker` for disposable servers. Use `--repeat N` on `plan` to
+repeat suites. Each attempt keeps a separate nextest report. A failed attempt
+fails the run. Verification rejects missing suites, failed suites, and empty
+nextest selections. Checks without test cases, such as formatting, need a
+successful command result.
+
+Execution uses machine-wide locks for a shared Cargo directory, fixture, or
+desktop. A run owns its output directory. It writes progress to `events.jsonl`
+and final results to `summary.json`. Cancellation stops the child process
+group and keeps partial results. Fixture cleanup failures fail the run.
+
+The portable entry point is `uv run --locked python scripts/qtest`. On Windows,
+`qtest.cmd` calls this entry point. Application and native fixture support on
+Windows still require platform adapters. Existing `run`, `ci`, hook, fixture,
+and comparison commands remain available during migration.
+
 ## Suites
 
 A suite is the smallest unit that you can select. Suites marked with `*`

@@ -37,6 +37,7 @@ class KeychainTests(unittest.TestCase):
         target = Path("/repo/target")
         runs = target / "qtest/runs"
         self.assertTrue(keychain.isolated_run(runs / "20260929-030413-94883/desktop", target))
+        self.assertTrue(keychain.isolated_run(runs / "20260929-030413-94883-a1b2c3d4/desktop", target))
         for path in [runs / "20260929-030413-94883", runs / "latest/desktop", runs / "x/desktop",
                      runs / "20260929-030413-94883/e2e", target / "e2e/qrow-e2e-abc", Path("/tmp/desktop")]:
             with self.subTest(path=path):

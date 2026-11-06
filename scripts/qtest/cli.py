@@ -10,6 +10,8 @@ import time
 
 import catalog
 import runner  # Adds scripts/e2e to the import path for fixture.
+import contract
+import targets
 import fixture  # noqa: E402
 from runner import EXIT_FAILED, EXIT_MISSING, EXIT_PASSED, EXIT_USAGE, ROOT
 
@@ -179,7 +181,6 @@ def command_ci(args):
     measure = args.measure or os.environ.get("QROW_CI_MEASURE") == "true"
     report_only = job.report_only if measure else ()
     names = [*job.suites, *report_only]
-    os.environ.update(job.env)
     if args.install:
         tools = [tool for tool in catalog.TOOLS if any(tool in catalog.SUITES[name].requires for name in names)]
         if install_tools(tools):
@@ -196,7 +197,7 @@ def command_ci(args):
     started = time.monotonic()
     # A CI job stops at once when a prerequisite is missing, for example the
     # automation permissions of the desktop suite, so it builds nothing.
-    summary = runner.run(selected, {"runtime": job.runtime, "repeat": 1}, [], output,
+    summary = runner.run(selected, {"runtime": job.runtime, "repeat": 1, "env": dict(job.env)}, [], output,
                          report_only=report_only, require_all=True)
     print_summary(summary)
     report_budget(job, (time.monotonic() - started) / 60)
@@ -438,7 +439,8 @@ def command_fixture(args):
 
 
 def command_artifacts(args):
-    latest = runner.runs_dir() / "latest"
+    pointer = runner.runs_dir() / "latest.json"
+    latest = runner.runs_dir() / (json.loads(pointer.read_text())["run"] if pointer.exists() else "latest")
     summary = latest / "summary.json"
     if not summary.exists():
         print("No qtest run has finished yet.", file=sys.stderr)
@@ -451,7 +453,43 @@ def command_artifacts(args):
     return EXIT_PASSED
 
 
+def command_plan(args):
+    host = targets.host_target()
+    target = args.target or (host.name if host else None)
+    if not target:
+        raise runner.UsageError("Choose a supported --target")
+    value = contract.plan(ROOT, target, args.selectors, args.runtime, args.repeat)
+    if args.output:
+        contract.atomic_json(args.output, value)
+    print(json.dumps(value, indent=2))
+    return EXIT_PASSED
+
+
+def command_execute(args):
+    value = json.loads(args.plan.read_text())
+    if args.install:
+        names = {name for item in value["suites"] for name in item["definition"]["requires"] if name in catalog.TOOLS}
+        # Validate source and commands before installing anything from a plan.
+        contract.validate_plan(value, ROOT)
+        if install_tools(sorted(names)):
+            return EXIT_FAILED
+    result = contract.execute(value, ROOT, runner.Output(quiet=False))
+    if args.output:
+        contract.atomic_json(args.output, result)
+    print_summary(result)
+    return result["exit_code"]
+
+
+def command_verify(args):
+    contract.verify(json.loads(args.plan.read_text()), json.loads(args.result.read_text()))
+    print("Required execution evidence passed.")
+    return EXIT_PASSED
+
+
 COMMANDS = {
+    "plan": command_plan,
+    "execute": command_execute,
+    "verify": command_verify,
     "list": command_list,
     "run": command_run,
     "hook": command_hook,
@@ -470,6 +508,20 @@ def parser():
     root = argparse.ArgumentParser(prog="qtest", description=DESCRIPTION,
                                    formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = root.add_subparsers(dest="command")
+    from pathlib import Path
+    planning = commands.add_parser("plan", help="Write a source-bound plan without running checks.")
+    planning.add_argument("selectors", nargs="*")
+    planning.add_argument("--target", choices=list(targets.TARGETS))
+    planning.add_argument("--runtime", choices=["auto", "docker", "native"], default="auto")
+    planning.add_argument("--repeat", type=int, default=1)
+    planning.add_argument("--output", type=Path)
+    execution = commands.add_parser("execute", help="Execute a plan on its native target.")
+    execution.add_argument("plan", type=Path)
+    execution.add_argument("--output", type=Path)
+    execution.add_argument("--install", action="store_true")
+    verification = commands.add_parser("verify", help="Reject incomplete or failed execution evidence.")
+    verification.add_argument("plan", type=Path)
+    verification.add_argument("result", type=Path)
 
     listing = commands.add_parser("list", help="Show suites and groups, or the tests of suites.")
     listing.add_argument("selectors", nargs="*", help="Suites or groups whose tests to list (with --tests).")
@@ -569,7 +621,7 @@ def main(argv=None):
         return EXIT_USAGE
     try:
         return COMMANDS[arguments.command](arguments)
-    except runner.UsageError as error:
+    except (runner.UsageError, ValueError, OSError) as error:
         print(f"qtest: {error}", file=sys.stderr)
         return EXIT_USAGE
     except KeyboardInterrupt:

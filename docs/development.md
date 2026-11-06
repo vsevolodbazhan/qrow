@@ -254,7 +254,8 @@ intact when fixing a failure. Investigate the cause instead of weakening checks.
 exceptions. [dependency-reviews.toml](../dependency-reviews.toml) records the scoped
 license review. These files are authoritative for exact versions and review dates.
 The [policy checker](../scripts/core/policy.py) rejects expired or mismatched
-exceptions and unpinned GitHub Actions. The dependency audit targets macOS ARM64 and x86_64.
+exceptions and unpinned GitHub Actions. The dependency audit targets macOS and
+Linux, on ARM64 and x86_64.
 
 GPUI brings some incompatible transitive versions. Duplicate versions produce
 warnings. Advisory and license exceptions must remain specific and justified.
