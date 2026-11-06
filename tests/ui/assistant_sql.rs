@@ -45,7 +45,11 @@ fn appended_sql_keeps_earlier_queries_and_titles_the_conversation(cx: &mut TestA
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
-            Some("⌘⏎")
+            Some(if cfg!(target_os = "macos") {
+                "⌘⏎"
+            } else {
+                "Ctrl+Enter"
+            })
         );
         assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
         assert_eq!(
@@ -159,7 +163,7 @@ fn requests_target_one_statement_and_edits_use_the_sql_style(cx: &mut TestAppCon
     app.wait_for(cx, "setting-sql-keyword-case");
     app.select(cx, "setting-sql-keyword-case", "Uppercase");
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
     app.send(cx, "Report the SQL style");
     app.wait_reply(cx, "SQL style: uppercase, 5 spaces");
@@ -217,7 +221,7 @@ fn the_logs_tool_reads_only_the_latest_execution(cx: &mut TestAppContext) {
     let (app, _codex) = launch(cx, "SELECT 1; SELECT 2", |_| {});
     // Rejected SQL makes a Logs group without an execution.
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.click(cx, "run");
     app.type_sql(cx, "SELECT 'logged-query'");
     app.click(cx, "run");

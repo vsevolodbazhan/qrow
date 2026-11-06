@@ -87,7 +87,7 @@ fn rules(app: &TestApp, cx: &mut TestAppContext, text: &str) {
     app.scroll_to(cx, "connection-dbt-rules");
     app.update(cx, |window, cx| {
         window.click("connection-dbt-rules", cx);
-        window.press("cmd-a", cx);
+        window.press("secondary-a", cx);
         if text.is_empty() {
             window.press("backspace", cx);
         } else {

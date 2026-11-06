@@ -84,11 +84,15 @@ identifiers, the harness of each conversation, conversation titles, query
 execution modes, and the query tab of each conversation. The workspace does not contain assistant messages, tool
 arguments, tool results, result rows, Logs history, or harness credentials.
 Assistant messages and tool results are in separate files, described below. Its
-default path is:
+default path on macOS is:
 
 ```text
 ~/Library/Application Support/Qrow/workspace.json
 ```
+
+On Linux, the path is `$XDG_DATA_HOME/qrow/workspace.json`. If
+`XDG_DATA_HOME` is not set to an absolute path, Qrow uses
+`~/.local/share/qrow/workspace.json`.
 
 Qrow keeps the [schema copy](connections.md#browse-schemas) of each connection
 in a separate file, in the `catalog` folder next to the workspace file. The
@@ -116,7 +120,7 @@ the messages, replies, errors, and tool call cards of the conversation,
 including tool arguments and results. Qrow deletes a copy when you delete its
 conversation. If Qrow cannot open the workspace, it does not save copies.
 
-Passwords and sign-in tokens remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
+Passwords and sign-in tokens remain in the [system secret store](connections.md#authentication-and-connection-failures).
 Passwords, tokens, and result sets are not written to the workspace file. The
 workspace keeps each [sign-in](connections.md#sign-in-with-openid-connect)
 configuration and the issuer, subject, name, and email of its account. SQL text is
@@ -199,11 +203,11 @@ save confirmation. A force quit or system crash can lose edits that are not yet
 saved.
 
 For isolated development, see [Development](development.md#check-the-native-ui).
-`QROW_DATA_DIR` changes the workspace directory, but does not isolate Keychain.
+`QROW_DATA_DIR` changes the workspace directory, but does not isolate the secret store.
 Passwords and sign-in tokens are keyed by profile and sign-in identifiers, so
 a copy of a workspace shares them with the original.
 The [demo](../README.md#preview) uses an in-memory workspace and does not access
-databases or Keychain. The demo writes its synthetic dbt manifest to a temporary
+databases or the secret store. The demo writes its synthetic dbt manifest to a temporary
 file. It removes this file when the window closes.
 
 ## Design
@@ -217,7 +221,7 @@ and flushes the parent directory before it confirms success. This avoids a
 partially written workspace after a normal write failure.
 
 The [UI](../src/ui.rs) schedules saves after edits and flushes the latest state
-before confirmed quit. Existing workspace versions, profile UUIDs, and Keychain service
+before confirmed quit. Existing workspace versions, profile UUIDs, and secret-store service
 identifiers must remain compatible.
 
 Native focus, window dragging, double-click behavior, appearance changes, and

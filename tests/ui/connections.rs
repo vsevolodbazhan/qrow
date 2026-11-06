@@ -48,7 +48,7 @@ fn connection_save_completes_after_the_settings_window_closes(cx: &mut TestAppCo
     app.wait_for(cx, "reset-settings");
     // Close without the helper's next main-window frame. Let the poll task
     // run while Settings is still the entity's last rendered window.
-    app.update(cx, |window, cx| window.press("cmd-w", cx));
+    app.update(cx, |window, cx| window.press("secondary-w", cx));
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(50));
     cx.run_until_parked();
@@ -106,7 +106,7 @@ fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
     );
     app.fill(cx, "connection-transfer-speed", "12");
     app.update(cx, |window, cx| {
-        window.press("cmd-a", cx);
+        window.press("secondary-a", cx);
         // Clicking the blank right side of the full input puts the caret at the end.
         window.click("connection-transfer-speed", cx);
         window.input("3", cx);
@@ -219,7 +219,7 @@ fn preset_values_keep_readonly_fields_and_preserve_unsaved_custom_values(cx: &mu
         }
         for (field, value) in expected {
             app.click(cx, field);
-            app.press(cx, "cmd-a");
+            app.press(cx, "secondary-a");
             app.update(cx, |window, cx| window.input("must not change", cx));
             app.update(cx, |window, _| {
                 assert_eq!(window.find(field).value(), Some(value))
@@ -680,7 +680,7 @@ fn a_tooltip_in_the_form_closes_with_the_form(cx: &mut TestAppContext) {
 
     // The shortcut closes the form under the pointer, so the Save button
     // never gets a hover-out. The tooltip closes with the form.
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_gone(cx, "save-profile");
     app.settle(cx);
     app.update(cx, |window, _| {
@@ -1087,7 +1087,7 @@ fn trino_connection_saves_catalog_schema_and_optional_password(cx: &mut TestAppC
     app.fill(cx, "connection-username", "synthetic-user");
     app.scroll_to(cx, "connection-trino-schema");
     app.fill(cx, "connection-trino-schema", "tiny");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_gone(cx, "connection-name");
     app.wait_until(
         cx,

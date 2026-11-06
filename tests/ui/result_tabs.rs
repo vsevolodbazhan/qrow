@@ -31,7 +31,7 @@ fn shown(app: &TestApp, cx: &mut TestAppContext) -> Option<u64> {
 fn write_sql(app: &TestApp, cx: &mut TestAppContext, sql: &str) {
     app.update(cx, |window, cx| {
         window.click("sql-editor", cx);
-        window.press("cmd-a", cx);
+        window.press("secondary-a", cx);
         window.input(sql, cx);
     });
     app.settle(cx);

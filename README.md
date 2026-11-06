@@ -4,7 +4,7 @@
 
 # Qrow
 
-A native (no JVM, no Electron) SQL workbench for macOS. Built with Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
+A native (no JVM, no Electron) SQL workbench for macOS and Linux. Built with Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
 ![Qrow demo with the schema catalog](assets/screenshots/demo.png)
 
@@ -27,6 +27,8 @@ Qrow is heavily inspired by DataGrip and [Zed](https://zed.dev/). It's built usi
 
 ## Features
 
+The shortcuts below use macOS symbols. On Linux, use Ctrl in place of ⌘.
+
 ### Connections
 
 Qrow connects directly to Kyuubi (Spark), Postgres, and Trino. It does not need
@@ -39,7 +41,7 @@ a JVM, an ODBC driver, or a separately installed database driver.
 - **Trino** uses HTTP or HTTPS with a username, a password, or the browser
   sign-in of the coordinator.
 
-Qrow keeps passwords in macOS Keychain. One OpenID Connect sign-in can
+Qrow keeps passwords in macOS Keychain or the Linux desktop secret store. One OpenID Connect sign-in can
 authenticate several connections, and you can copy its settings to share them
 with a colleague. Drag connections to change their order. See
 [connections](docs/connections.md).
@@ -115,7 +117,8 @@ See [assistant](docs/assistant.md) for setup, data sharing, and query safety.
 Qrow saves your connections, tabs, and SQL automatically. Restored tabs do
 not connect until you run SQL. Select the theme, the interface scale, and the
 fonts of the interface, the editor, the Logs, and the assistant in the
-Settings window (**⌘,**). Qrow includes IBM Plex Sans for the interface and
+Settings window (**⌘,** on macOS, **Ctrl+,** or the application menu on Linux).
+Qrow includes IBM Plex Sans for the interface and
 JetBrains Mono for SQL and Logs. See [workspace](docs/workspace.md).
 
 ## Metrics
@@ -137,12 +140,32 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
   connector limits.
 - **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
   The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
-  Other operating systems are not supported.
+- **Linux.** Qrow needs a Wayland or X11 desktop, Vulkan, and a Secret Service provider.
+  The release archive targets x86-64 Linux and is built on Ubuntu 24.04.
 - **Bring your own assistant.** The assistant needs a separately installed Codex
   or Claude Code executable and your own subscription or API key.
 - **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap and GitHub releases, and macOS may show a Gatekeeper warning on first launch.
 
 ## Installation
+
+### Linux
+
+Download the archive for your architecture from the releases page:
+`Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz`.
+Extract it into `~/.local` and make sure `~/.local/bin` is in your `PATH`:
+
+```sh
+mkdir -p ~/.local
+tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local
+```
+
+Linux archives are added by the next release. Until then, build from source.
+
+The archive includes a desktop launcher. Qrow needs a Vulkan driver and a
+desktop Secret Service, such as GNOME Keyring, for saved credentials. The
+archive uses system libraries and needs a compatible Linux distribution.
+Use the application menu at the top left for Settings and other commands.
+The window controls are on the right when the desktop allows Qrow to draw them.
 
 ### Homebrew
 
@@ -181,7 +204,9 @@ with Apple Developer ID. To bypass the Gatekeeper:
 ### Prerequisites
 
 - Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the pinned toolchain.
-- Xcode command-line tools. Install them with `xcode-select --install` if needed.
+- On macOS, Xcode command-line tools. Install them with `xcode-select --install` if needed.
+- On Linux, a C and C++ toolchain, pkg-config, CMake, and the Wayland, X11,
+  xkbcommon, fontconfig, FreeType, and Vulkan development libraries.
 - [uv](https://docs.astral.sh/uv/), which provisions the pinned Python 3.11+
   toolchain used by `./qtest` and by the packaging, dependency-license, and
   code-generation scripts. A separately installed Python is not required.
@@ -191,11 +216,10 @@ Check your tools:
 ```sh
 rustc --version
 cargo --version
-xcode-select -p
 uv --version
 ```
 
-Java, ODBC drivers, and the Thrift compiler are not required to build or run Qrow. GPUI is built with runtime Metal
+Java, ODBC drivers, and the Thrift compiler are not required to build or run Qrow. On macOS, GPUI uses runtime Metal
 shader compilation, so the separate Xcode Metal compiler is not required either.
 
 ### Debug
@@ -218,7 +242,7 @@ the executable from a terminal also shows startup timing and diagnostic output.
 
 ### Release
 
-For normal use, build the optimized application bundle and launch it:
+On macOS, build the optimized application bundle and launch it:
 
 ```sh
 sh scripts/package/macos.sh
@@ -247,6 +271,15 @@ CI tests both builds on macOS 15. It does not test every macOS 12 driver.
 The file without an architecture suffix remains an ARM64 alias for older tap
 updaters. Until the tap update and a new release are published, use a local
 Intel build. Existing Homebrew releases contain only the ARM64 app.
+
+On Linux, build a native archive in `target/package`:
+
+```sh
+sh scripts/package/linux.sh
+```
+
+The archive uses the libraries of the build system. Build it on a system that
+is compatible with the target computers.
 
 ## Preview
 

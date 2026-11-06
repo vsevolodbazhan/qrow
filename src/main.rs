@@ -30,6 +30,12 @@ fn main() {
                         ..TitleBar::title_bar_options()
                     }),
                     window_min_size: Some(size(px(850.), px(560.))),
+                    app_id: cfg!(target_os = "linux").then(|| "qrow".into()),
+                    window_decorations: if cfg!(target_os = "linux") {
+                        Some(WindowDecorations::Client)
+                    } else {
+                        None
+                    },
                     ..TitleBar::window_options()
                 },
                 |window, cx| {

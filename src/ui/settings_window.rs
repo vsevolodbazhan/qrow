@@ -4,7 +4,7 @@
 //! keeps the edits that apply only when complete, like a number being typed.
 
 use super::*;
-use gpui_kit::component::{Root, v_flex};
+use gpui_kit::component::{Root, TitleBar, v_flex};
 
 actions!(qrow_settings, [CloseSettings]);
 
@@ -20,7 +20,7 @@ const MIN_HEIGHT: f32 = 420.;
 
 pub(super) fn bindings() -> [KeyBinding; 2] {
     [
-        KeyBinding::new("cmd-w", CloseSettings, Some(CONTEXT)),
+        KeyBinding::new("secondary-w", CloseSettings, Some(CONTEXT)),
         KeyBinding::new("escape", CloseSettings, Some(CONTEXT)),
     ]
 }
@@ -66,7 +66,20 @@ impl Render for SettingsWindow {
             .text_color(cx.theme().foreground)
             .font_family(cx.theme().font_family.clone())
             .text_sm()
-            .child(content)
+            .when(
+                cfg!(target_os = "linux")
+                    && matches!(window.window_decorations(), Decorations::Client { .. }),
+                |view| {
+                    view.child(
+                        TitleBar::new()
+                            .on_close_window(
+                                cx.listener(|this, _, window, cx| this.close(window, cx)),
+                            )
+                            .child(div().flex_1().text_center().child("Settings")),
+                    )
+                },
+            )
+            .child(div().flex_1().min_h_0().child(content))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }
@@ -88,6 +101,8 @@ pub(super) fn open(qrow: WeakEntity<Qrow>, cx: &mut App) {
             traffic_light_position: None,
         }),
         window_min_size: Some(gpui_kit::size(px(MIN_WIDTH), px(MIN_HEIGHT))),
+        app_id: cfg!(target_os = "linux").then(|| "qrow".into()),
+        window_decorations: cfg!(target_os = "linux").then_some(WindowDecorations::Client),
         // Like other macOS Settings windows: it can be minimized, but it has
         // a fixed size, so the zoom button and full screen are off.
         is_minimizable: true,

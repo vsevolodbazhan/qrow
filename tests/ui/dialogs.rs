@@ -78,7 +78,7 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
     });
     app.fill(cx, field, "0");
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "disabled replay retention", |workspace| {
         workspace.settings.export_replay_limit_mib == 0
@@ -96,7 +96,7 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
         assert_eq!(value(window, field).as_deref(), Some("1048576"));
     });
     app.fill(cx, field, "300");
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     wait_saved(&app, cx, "replay retention", |workspace| {
         workspace.settings.export_replay_limit_mib == 300
     });
@@ -125,7 +125,7 @@ fn copy_format_is_saved(cx: &mut TestAppContext) {
     app.wait_for(cx, "setting-copy-format");
     app.select(cx, "setting-copy-format", "JSON");
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "the copy format", |workspace| {
         workspace.settings.copy_format == CopyFormat::Json
@@ -238,7 +238,7 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
         );
     });
     // Settings apply as they change; ⌘W closes the dialog.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "the restored default fonts", |w| {
         w.settings.editor_font_size == 13.

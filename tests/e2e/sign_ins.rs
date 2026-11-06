@@ -487,7 +487,7 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
     let port = fixture.tls_port.to_string();
     app.update(cx, |window, cx| {
         window.click("connection-port", cx);
-        window.press("cmd-a", cx);
+        window.press("secondary-a", cx);
         window.input(&port, cx);
     });
     app.click(cx, "connection-tls");

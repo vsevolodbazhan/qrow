@@ -919,7 +919,7 @@ impl TestApp {
     pub fn fill_labelled(&self, cx: &mut TestAppContext, text: &str, value: &str) {
         self.click_labelled(cx, text);
         self.update(cx, |window, cx| {
-            window.press("cmd-a", cx);
+            window.press("secondary-a", cx);
             if value.is_empty() {
                 window.press("backspace", cx);
             } else {
@@ -1264,7 +1264,7 @@ impl TestApp {
         self.reveal(cx, &id.into());
         self.update(cx, |window, cx| {
             window.click(id, cx);
-            window.press("cmd-a", cx);
+            window.press("secondary-a", cx);
             if text.is_empty() {
                 window.press("backspace", cx);
             } else {
@@ -1287,7 +1287,7 @@ impl TestApp {
     pub fn type_sql(&self, cx: &mut TestAppContext, sql: &str) {
         self.update(cx, |window, cx| {
             window.click("sql-editor", cx);
-            window.press("cmd-a", cx);
+            window.press("secondary-a", cx);
             window.input(sql, cx);
         });
         self.wait_until(

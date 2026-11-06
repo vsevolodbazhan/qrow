@@ -85,7 +85,11 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
-            Some("⌘R")
+            Some(if cfg!(target_os = "macos") {
+                "⌘R"
+            } else {
+                "Ctrl+R"
+            })
         );
         let title = bounds_of(window, "status-tooltip-title");
         let status = bounds_of(window, "status-tooltip-status");

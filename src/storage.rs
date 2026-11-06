@@ -17,8 +17,37 @@ pub fn workspace_path() -> PathBuf {
     if let Some(path) = std::env::var_os("QROW_DATA_DIR") {
         return PathBuf::from(path).join("workspace.json");
     }
+    #[cfg(target_os = "linux")]
+    {
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+        linux_workspace_path(&home, std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
+    }
+    #[cfg(not(target_os = "linux"))]
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
         .join("Library/Application Support/Qrow/workspace.json")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_workspace_path(home: &Path, data: Option<PathBuf>) -> PathBuf {
+    data.filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".local/share"))
+        .join("qrow/workspace.json")
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn linux_workspace_uses_absolute_xdg_data_home() {
+    let home = Path::new("/home/example");
+    assert_eq!(
+        linux_workspace_path(home, Some(PathBuf::from("/tmp/data"))),
+        PathBuf::from("/tmp/data/qrow/workspace.json")
+    );
+    for data in [None, Some(PathBuf::from("relative")), Some(PathBuf::new())] {
+        assert_eq!(
+            linux_workspace_path(home, data),
+            PathBuf::from("/home/example/.local/share/qrow/workspace.json")
+        );
+    }
 }
 
 /// Read a snapshot without claiming write access, for the read-only probe.
@@ -304,7 +333,7 @@ impl TokenStore for MemoryTokenStore {
     }
 }
 
-/// Connection passwords and sign-in tokens in the macOS Keychain.
+/// Connection passwords and sign-in tokens in the system secret store.
 pub struct Keychain;
 
 /// The Keychain service of connection passwords. Keep it stable: it gives
@@ -389,7 +418,7 @@ fn delete_keychain_tokens(
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl TokenStore for Keychain {
     fn load_tokens(&self, _: Uuid) -> Result<Option<Zeroizing<String>>> {
         anyhow::bail!("Keychain requires macOS")
@@ -425,7 +454,7 @@ impl Credentials for Keychain {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl Credentials for Keychain {
     fn password(&self, _: Uuid) -> Result<Zeroizing<String>> {
         anyhow::bail!("Keychain requires macOS")
@@ -435,6 +464,112 @@ impl Credentials for Keychain {
     }
     fn delete_password(&self, _: Uuid) -> Result<()> {
         anyhow::bail!("Keychain requires macOS")
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux_secrets {
+    use super::*;
+
+    fn attributes(service: &str, id: Uuid) -> [(String, String); 2] {
+        [
+            ("service".into(), service.into()),
+            ("account".into(), id.to_string()),
+        ]
+    }
+
+    fn load(service: &str, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+        futures_lite::future::block_on(async {
+            let keyring = oo7::Keyring::new().await?;
+            keyring.unlock().await?;
+            let items = keyring.search_items(&attributes(service, id)).await?;
+            match items.first() {
+                Some(item) => {
+                    item.unlock().await?;
+                    let secret = item.secret().await?;
+                    Ok::<_, anyhow::Error>(Some(Zeroizing::new(String::from_utf8(
+                        secret.as_bytes().to_vec(),
+                    )?)))
+                }
+                None => Ok(None),
+            }
+        })
+        .context("Could not read from the system secret store")
+    }
+
+    fn save(service: &str, id: Uuid, value: &str) -> Result<()> {
+        futures_lite::future::block_on(async {
+            let keyring = oo7::Keyring::new().await?;
+            keyring.unlock().await?;
+            keyring
+                .create_item("Qrow", &attributes(service, id), value, true)
+                .await
+        })
+        .context("Could not save in the system secret store")
+    }
+
+    fn delete(service: &str, id: Uuid) -> Result<()> {
+        futures_lite::future::block_on(async {
+            let keyring = oo7::Keyring::new().await?;
+            keyring.unlock().await?;
+            keyring.delete(&attributes(service, id)).await
+        })
+        .context("Could not delete from the system secret store")
+    }
+
+    impl Credentials for Keychain {
+        fn password(&self, id: Uuid) -> Result<Zeroizing<String>> {
+            load(PASSWORD_SERVICE, id)?
+                .context("Password not found. Edit the connection to save a password")
+        }
+        fn set_password(&self, id: Uuid, password: &str) -> Result<()> {
+            save(PASSWORD_SERVICE, id, password)
+        }
+        fn delete_password(&self, id: Uuid) -> Result<()> {
+            delete(PASSWORD_SERVICE, id)
+        }
+    }
+
+    impl TokenStore for Keychain {
+        fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+            load(TOKEN_SERVICE, id)
+        }
+        fn save_tokens(&self, id: Uuid, record: &str) -> Result<()> {
+            save(TOKEN_SERVICE, id, record)
+        }
+        fn delete_tokens(&self, id: Uuid) -> Result<()> {
+            delete(TOKEN_SERVICE, id)
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an isolated Secret Service session"]
+    fn isolated_secret_service_round_trip() {
+        assert_eq!(
+            std::env::var("QROW_ISOLATED_SECRET_TEST").as_deref(),
+            Ok("1")
+        );
+        let store = Keychain;
+        let id = Uuid::new_v4();
+        assert!(store.load_tokens(id).unwrap().is_none());
+        store.set_password(id, "synthetic-password").unwrap();
+        store.save_tokens(id, "synthetic-token").unwrap();
+        assert_eq!(&**store.password(id).unwrap(), "synthetic-password");
+        assert_eq!(
+            &**store.load_tokens(id).unwrap().unwrap(),
+            "synthetic-token"
+        );
+        store.save_tokens(id, "replacement-token").unwrap();
+        assert_eq!(
+            &**store.load_tokens(id).unwrap().unwrap(),
+            "replacement-token"
+        );
+        store.delete_tokens(id).unwrap();
+        assert!(store.load_tokens(id).unwrap().is_none());
+        assert_eq!(&**store.password(id).unwrap(), "synthetic-password");
+        store.delete_password(id).unwrap();
+        assert!(store.password(id).is_err());
+        store.delete_tokens(id).unwrap();
     }
 }
 

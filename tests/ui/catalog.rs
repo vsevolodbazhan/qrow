@@ -1372,7 +1372,7 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
     // A click selects the row and focuses the tree. Down moves to the next row.
     app.click_labelled(cx, "booking_id bigint");
     app.press(cx, "down");
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.settle(cx);
     assert_eq!(
         cx.read_from_clipboard()
@@ -1386,6 +1386,33 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
         "the inserted column",
         Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql == "`gate`",
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn application_edit_menu_copies_the_selected_catalog_name(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate string");
+    app.click_labelled(cx, "gate string");
+    app.click(cx, "application-menu");
+    app.choose_in_submenu(cx, "Edit", "Copy");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("gate")
     );
 }
 
@@ -1560,12 +1587,12 @@ fn hiding_or_replacing_connections_clears_the_catalog_selection(cx: &mut TestApp
     app.click_labelled(cx, "bookings");
     wait_shows(&app, cx, "gate string");
 
-    for exit in ["cmd-b", "show-connections", "show-sign-ins"] {
+    for exit in ["secondary-b", "show-connections", "show-sign-ins"] {
         app.click_labelled(cx, "booking_id bigint");
         app.update(cx, |window, _| {
             assert_eq!(selected_tree_rows(window), ["booking_id bigint"]);
         });
-        if exit == "cmd-b" {
+        if exit == "secondary-b" {
             app.press(cx, exit);
         } else {
             // Selection must clear even when focus left the sidebar already.
@@ -1648,11 +1675,11 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
         })
     };
     let before = row_height(&app, cx);
-    app.press(cx, "cmd-=");
+    app.press(cx, "secondary-=");
     app.settle(cx);
     let after = row_height(&app, cx);
     assert!(after > before, "{before} -> {after}");
-    app.press(cx, "cmd--");
+    app.press(cx, "secondary--");
     app.click(cx, "activity-errors");
     let errors = app.copy_activity(cx);
     assert!(!errors.contains("Started a schema refresh"), "{errors}");
@@ -1660,9 +1687,9 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
     // ⇧⌘U opens and closes Activity too.
-    app.press(cx, "cmd-shift-u");
+    app.press(cx, "secondary-shift-u");
     app.wait_for(cx, "activity");
-    app.press(cx, "cmd-shift-u");
+    app.press(cx, "secondary-shift-u");
     app.wait_gone(cx, "activity");
 
     // A refresh error does not mark the connection as having an unread

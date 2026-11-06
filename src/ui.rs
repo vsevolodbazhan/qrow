@@ -125,37 +125,45 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(results::bindings());
     cx.bind_keys(settings_window::bindings());
     cx.bind_keys([
-        KeyBinding::new("cmd-enter", RunQuery, None),
-        KeyBinding::new("alt-cmd-l", FormatSql, None),
+        KeyBinding::new("secondary-enter", RunQuery, None),
+        KeyBinding::new("alt-secondary-l", FormatSql, None),
         KeyBinding::new(
-            "cmd-enter",
+            "secondary-enter",
             SendAssistantMessage,
             Some("AssistantComposer > Input"),
         ),
-        KeyBinding::new("cmd-t", NewTab, None),
-        KeyBinding::new("cmd-w", CloseTab, None),
-        KeyBinding::new("cmd-b", ShowConnections, None),
-        KeyBinding::new("cmd-r", ToggleAssistant, None),
-        KeyBinding::new("cmd-j", ToggleResults, None),
-        KeyBinding::new("cmd-shift-u", ToggleActivity, None),
+        KeyBinding::new("secondary-t", NewTab, None),
+        KeyBinding::new("secondary-w", CloseTab, None),
+        KeyBinding::new("secondary-b", ShowConnections, None),
+        KeyBinding::new("secondary-r", ToggleAssistant, None),
+        KeyBinding::new("secondary-j", ToggleResults, None),
+        KeyBinding::new("secondary-shift-u", ToggleActivity, None),
         KeyBinding::new(
             "escape",
             activity_view::CloseActivity,
             Some(activity_view::CONTEXT),
         ),
-        KeyBinding::new("cmd-=", IncreaseUiScale, None),
-        KeyBinding::new("cmd-+", IncreaseUiScale, None),
-        KeyBinding::new("cmd--", DecreaseUiScale, None),
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("secondary-=", IncreaseUiScale, None),
+        KeyBinding::new("secondary-+", IncreaseUiScale, None),
+        KeyBinding::new("secondary--", DecreaseUiScale, None),
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
         // ⌘W closes the topmost dialog, like a macOS window, before it
         // closes a query tab.
-        KeyBinding::new("cmd-w", gpui_kit::base::actions::Cancel, Some("Dialog")),
-        KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
-        KeyBinding::new("cmd-enter", SaveSignIn, Some("SignInSettings")),
-        KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
         KeyBinding::new(
-            "cmd-c",
+            "secondary-w",
+            gpui_kit::base::actions::Cancel,
+            Some("Dialog"),
+        ),
+        KeyBinding::new(
+            "secondary-enter",
+            SaveConnection,
+            Some("ConnectionSettings"),
+        ),
+        KeyBinding::new("secondary-enter", SaveSignIn, Some("SignInSettings")),
+        KeyBinding::new("secondary-enter", SubmitRename, Some("RenameDialog")),
+        KeyBinding::new(
+            "secondary-c",
             CopyCatalogName,
             Some(gpui_kit::base::tree_key_context()),
         ),
@@ -1120,7 +1128,11 @@ impl Qrow {
                 .language("sql")
                 .soft_wrap(false)
                 .tab_size(editor_tab_size(&self.settings))
-                .placeholder("Write SQL, then press ⌘↩ to run")
+                .placeholder(if cfg!(target_os = "macos") {
+                    "Write SQL, then press ⌘↩ to run"
+                } else {
+                    "Write SQL, then press Ctrl+Enter to run"
+                })
                 .default_value(saved.sql.clone())
         });
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {

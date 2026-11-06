@@ -8,6 +8,7 @@ import platform
 import re
 
 MACOS = platform.system() == "Darwin"
+LINUX_HOST = platform.system() == "Linux"
 
 
 def host_platform():
@@ -139,7 +140,8 @@ PYTHON = "{python}"  # Replaced with the interpreter that runs qtest.
 CLIPPY_CORE = Step(("cargo", "clippy", "--locked", "--no-default-features", "--all-targets", "--", "-D", "warnings"))
 CLIPPY_APP = Step(("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"))
 # The e2e and perf-e2e suites use the same test binary. A run builds it once.
-E2E_BUILD = Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e"))
+UI_TEST_FEATURE = ("--features", "ui-test") if LINUX_HOST else ()
+E2E_BUILD = Step(("cargo", "test", "--locked", *UI_TEST_FEATURE, "--no-run", "--test", "e2e"))
 TRANSFER_PERF_BUILD = Step(("cargo", "test", "--locked", "--profile", "perf", "--no-default-features", "--test", "integration", "--no-run"))
 
 _UNIT = (
@@ -165,15 +167,16 @@ SUITES = {
         Suite("unit", "Rust unit and integration tests that need no UI and no servers.",
               ("cargo", "cargo-nextest"), _UNIT),
         Suite("ui", "Headless tests of the real Qrow window, without servers.",
-              ("cargo", "cargo-nextest", "macos"),
-              (nextest("binary(ui)"),
-               Step(("cargo", "run", "--locked", "--example", "tooltip-layout"))), macos_only=True),
-        Suite("coverage", "Core line coverage with an 80% floor.", ("cargo", "cargo-llvm-cov"),
+              ("cargo", "cargo-nextest"),
+              (nextest("binary(ui)", *UI_TEST_FEATURE),
+               *((Step(("cargo", "run", "--locked", "--example", "tooltip-layout")),) if MACOS else ()))),
+        Suite("coverage", "Core line coverage with an 80% floor.", ("cargo", "cargo-llvm-cov", *(("cargo-nextest", "dbus-run-session", "gnome-keyring-daemon") if LINUX_HOST else ())),
               (Step(("mkdir", "-p", "{target}/coverage")),
                Step(("cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
                      "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
                      "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov"),
-                    env=(("RUST_TEST_THREADS", "1"),)),)),
+                    env=(("RUST_TEST_THREADS", "1"),)),
+               *((Step(("sh", "scripts/testing/linux-secret-service.sh")),) if LINUX_HOST else ()))),
         Suite("perf", "SQL, dbt, and export benchmarks with enforced budgets.", ("cargo",),
               (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql")),
                Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "dbt")),
@@ -205,11 +208,11 @@ SUITES = {
               explicit_only=True, fixture="docker",
               prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "integration")),)),
         Suite("e2e", "The real Qrow window, headless, against the real servers.",
-              ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
+              ("cargo", "cargo-nextest", "fixture-runtime"),
               # `--test e2e` builds only the binary of the prepare step.
               (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/) & not test(/^trino::/)",
-                       "--test", "e2e", "--run-ignored", "only"),),
-              macos_only=True, explicit_only=True, fixture="any",
+                       *UI_TEST_FEATURE, "--test", "e2e", "--run-ignored", "only"),),
+              explicit_only=True, fixture="docker" if LINUX_HOST else "any",
               prepare=(E2E_BUILD,)),
         Suite("perf-ui", "Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build.",
               ("cargo", "cargo-nextest", "macos"),
@@ -402,6 +405,8 @@ def ci_jobs_for_changes(paths):
 
 
 REQUIREMENTS = {
+    "dbus-run-session": "Install D-Bus to run the isolated secret-store test.",
+    "gnome-keyring-daemon": "Install GNOME Keyring to run the isolated secret-store test.",
     "cargo": "Install Rust with rustup. rust-toolchain.toml selects the toolchain.",
     "uv": "Install uv: https://docs.astral.sh/uv/getting-started/installation/",
     "shellcheck": "Install ShellCheck, for example `brew install shellcheck`.",

@@ -25,6 +25,12 @@ The [qtest catalog](../scripts/qtest/catalog.py) pins cargo-nextest, the
 dependency tools, and the coverage tool. Cargo checks use the lockfile. Python
 scripts use `uv`, the repository's pinned environment, and Ruff.
 
+The Linux dependency graph uses three unmaintained D-Bus crates:
+`zbus_names`, `zvariant`, and `zvariant_derive`. GPUI and its Linux
+dependencies still use the older D-Bus stack. The dependency policy has
+dated exceptions for their maintenance advisories. Remove the exceptions
+when that stack moves to zbus 6.
+
 ## Run checks
 
 Run `./qtest` for the fast local checks, and `./qtest run all` for the full
@@ -178,7 +184,7 @@ tag is `v<version>`. The nightly tag is
 The jobs run in this order:
 
 ```text
-resolve-target -> checks -> dmg -> publish
+resolve-target -> checks -> dmg and linux -> publish
 ```
 
 `resolve-target` finds the commit and the release version. `checks` is the
@@ -195,9 +201,11 @@ During packaging, the writable image uses a temporary mount that Finder does
 not show. The script ejects the image before it creates the compressed DMG.
 If macOS reports that the image is busy, the script makes at most 10 eject
 attempts. After three attempts, it uses forced ejection. A persistent error
-fails packaging.
+fails packaging. The `linux` job runs the Linux UI and Docker end-to-end
+tests, then builds an archive on Ubuntu 24.04. It runs once for x86-64 and
+once for ARM64.
 The publish job creates the release
-tag, and then the GitHub Release with both DMGs as its assets. It also
+tag, and then the GitHub Release with both DMGs and both Linux archives as its assets. It also
 keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
 workflow uses the latest non-draft release on the selected channel as the
 changelog start tag. If the channel has no previous release, it writes the
@@ -298,7 +306,7 @@ update the version and the license text in NOTICE.
 ## Generated icon asset
 
 The executable embeds [the small application icon](../assets/app-icons/qrow-256.png)
-for the About dialog. After a change of the
+for the About dialog. The Linux archive installs it as the launcher icon. After a change of the
 [source icon](../assets/app-icons/macos/qrow.png), make the asset again:
 
 ```sh
