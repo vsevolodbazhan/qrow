@@ -331,6 +331,31 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
 
 #[cfg(target_os = "linux")]
 #[gpui_kit::test]
+fn application_menu_icon_lines_up_with_the_sidebar_title(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    for zoom in [false, true] {
+        if zoom {
+            app.press(cx, "secondary-=");
+            app.settle(cx);
+        }
+        app.update(cx, |window, _| {
+            let button = bounds_of(window, "application-menu");
+            let title = bounds_of(window, "sidebar-title");
+            // The small menu icon is 0.875 rem wide, centered in the button,
+            // and its ink starts 3/24 of the icon in.
+            let icon = window.rem_size() * 0.875;
+            let ink = button.left() + (button.size.width - icon) / 2. + icon * (3. / 24.);
+            assert!(
+                (ink - title.left()).abs() < px(0.5),
+                "zoom {zoom}: icon ink at {ink:?}, title at {:?}",
+                title.left()
+            );
+        });
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
 fn application_menu_opens_the_settings_window(cx: &mut TestAppContext) {
     let app = TestApp::launch_demo(cx);
     app.click(cx, "application-menu");

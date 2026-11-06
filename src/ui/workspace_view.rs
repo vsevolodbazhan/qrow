@@ -15,6 +15,13 @@ use gpui_kit::component::{
 
 pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
 
+/// The left padding of the Linux title bar, in rems. It aligns the ink of the
+/// application menu icon with the sidebar title: the 0.75 rem title inset,
+/// less the 0.3125 rem between a small icon button and its 0.875 rem icon,
+/// less the blank 3/24 at the left of the menu icon.
+#[cfg(target_os = "linux")]
+const APPLICATION_MENU_INSET_REMS: f32 = 0.75 - 0.3125 - 0.875 * 3. / 24.;
+
 fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
     id.and_then(|id| profiles.iter().find(|profile| profile.id == id))
         .map_or("No connection", |profile| profile.name.as_str())
@@ -44,7 +51,8 @@ impl Qrow {
         let edit_focus = focus.clone();
         let view_focus = focus.clone();
         self.open_context_menu_from(
-            point(px(12.), px(34.)),
+            // Under the menu button, below the 34 px title bar.
+            point(window.rem_size() * APPLICATION_MENU_INSET_REMS, px(34.)),
             Some(focus),
             move |menu, window, cx| {
                 menu.item(PopupMenuItem::new("About Qrow").action(Box::new(OpenAbout)))
@@ -1059,7 +1067,7 @@ impl Qrow {
                     )
                     .when(cfg!(target_os = "linux"), |bar| {
                         #[cfg(target_os = "linux")]
-                        let bar = bar.child(
+                        let bar = bar.pl(rems(APPLICATION_MENU_INSET_REMS)).child(
                             Button::new("application-menu")
                                 .ghost()
                                 .small()
