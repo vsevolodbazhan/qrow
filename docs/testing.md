@@ -747,6 +747,13 @@ method, and what you did not measure.
 
 ## Write a UI test
 
+Shared waits use a wall-time deadline and advance GPUI polling timers by the
+measured elapsed time. Polling more often does not advance application time
+faster. Use explicit clock advancement only for deterministic timer tests.
+Use `click_ready` for an enabled button reached after asynchronous work. It
+dispatches input once. Use `click` when disabled behavior is the test subject.
+Wait failures include recent actions and the current observed labels.
+
 UI tests open the real Qrow window in a headless GPUI Kit window. They send
 clicks and keys through GPUI and check the visible result and the saved
 workspace. They do not need a server, Keychain, or a desktop session.

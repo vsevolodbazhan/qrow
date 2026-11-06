@@ -121,7 +121,7 @@ impl TestApp {
     /// Replaces the SQL of the active tab and runs it.
     pub fn run_sql(&self, cx: &mut TestAppContext, sql: &str) {
         self.type_sql(cx, sql);
-        self.click(cx, "run");
+        self.click_ready(cx, "run");
     }
 
     /// Waits until the status of the active tab starts with `prefix`, like

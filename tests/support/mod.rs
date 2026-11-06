@@ -691,6 +691,7 @@ pub struct TestApp {
     pub credentials: Arc<MemoryCredentials>,
     pub sign_ins: Option<SignIns>,
     workspace: PathBuf,
+    actions: Mutex<Vec<String>>,
     _directory: TempDir,
 }
 
@@ -796,6 +797,7 @@ impl TestApp {
             credentials,
             sign_ins,
             workspace: path,
+            actions: Mutex::new(Vec::new()),
             _directory: directory,
         };
         app.update(cx, |window, cx| window.render_frame(cx));
@@ -832,8 +834,35 @@ impl TestApp {
 
     pub fn click(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
         let id = id.into();
+        self.record(format!("click {id:?}"));
         self.reveal(cx, &id);
         self.update(cx, |window, cx| window.click(id, cx));
+    }
+
+    /// Waits for an enabled, visible control, then dispatches input once.
+    /// Use `click` directly when testing disabled controls.
+    pub fn click_ready(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.reveal(cx, &id);
+        self.wait_until(
+            cx,
+            &format!("{id:?} to accept input"),
+            Duration::from_secs(10),
+            |window, _| {
+                window
+                    .try_find(id.clone())
+                    .is_some_and(|element| element.visible() && element.disabled() == Some(false))
+            },
+        );
+        self.click(cx, id);
+    }
+
+    fn record(&self, action: String) {
+        let mut actions = self.actions.lock().unwrap();
+        if actions.len() == 100 {
+            actions.remove(0);
+        }
+        actions.push(action);
     }
 
     /// Scrolls the element `id` into view when it is in the window but out of
@@ -874,6 +903,7 @@ impl TestApp {
     }
 
     pub fn press(&self, cx: &mut TestAppContext, key: &str) {
+        self.record(format!("press {key}"));
         self.update(cx, |window, cx| window.press(key, cx));
     }
 
@@ -1392,11 +1422,15 @@ impl TestApp {
         timeout: Duration,
         mut predicate: impl FnMut(&mut Window, &mut App) -> bool,
     ) {
+        self.record(format!("wait for {what} ({timeout:?})"));
         let deadline = Instant::now() + timeout;
+        let mut last_poll = Instant::now();
         loop {
-            // Advance the test clock for Qrow's polling timers, then run the
-            // tasks that real threads woke.
-            cx.executor().advance_clock(Duration::from_millis(50));
+            // Bridge polling timers to elapsed wall time. Poll frequency must
+            // not accelerate application timeouts while real I/O is pending.
+            let now = Instant::now();
+            cx.executor().advance_clock(now.duration_since(last_poll));
+            last_poll = now;
             cx.run_until_parked();
             let ready = self.update(cx, |window, cx| {
                 window.render_frame(cx);
@@ -1413,8 +1447,9 @@ impl TestApp {
                         .collect::<Vec<_>>()
                 });
                 let saved = std::fs::read_to_string(&self.workspace).unwrap_or_default();
+                let actions = self.actions.lock().unwrap();
                 panic!(
-                    "Timed out after {timeout:?} waiting for {what}.\nLabels: {labels:?}\nSaved workspace: {saved}"
+                    "Timed out after {timeout:?} waiting for {what}.\nActions: {actions:?}\nLabels: {labels:?}\nSaved workspace: {saved}"
                 );
             }
             std::thread::sleep(Duration::from_millis(10));
