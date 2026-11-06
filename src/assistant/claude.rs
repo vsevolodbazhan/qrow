@@ -1049,9 +1049,13 @@ impl ClaudeHarness {
             .find(|(_, session)| session.process.source == source)
             .map(|(id, _)| id.clone())?;
         let mut session = self.sessions.remove(&thread)?;
-        let suffix = diagnostic_suffix(&session.process);
         let turn = session.turn.take();
+        // The end of standard output can arrive before the reader of standard
+        // error has the reason. Stopping the process joins that reader, so
+        // read the reason after it.
+        let stderr_tail = Arc::clone(&session.process.stderr_tail);
         self.stop_process(session.process);
+        let suffix = stderr_suffix(&stderr_tail);
         turn.map(|turn| AssistantEvent::TurnCompleted {
             thread_id: thread,
             turn: Turn {
@@ -1440,7 +1444,11 @@ fn text_links(text: &str) -> Vec<super::WebLink> {
 }
 
 fn diagnostic_suffix(process: &Process) -> String {
-    let Ok(tail) = process.stderr_tail.lock() else {
+    stderr_suffix(&process.stderr_tail)
+}
+
+fn stderr_suffix(stderr_tail: &Mutex<VecDeque<u8>>) -> String {
+    let Ok(tail) = stderr_tail.lock() else {
         return String::new();
     };
     let text = String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<_>>())
