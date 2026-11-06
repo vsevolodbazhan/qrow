@@ -201,7 +201,8 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    # Uncached: a debug build for the tests, the e2e fixture images, and a release build.
+    timeout-minutes: 90
     env:
       CARGO_BUILD_JOBS: 2
     steps:
