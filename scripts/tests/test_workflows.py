@@ -77,7 +77,7 @@ class CatalogJobTests(unittest.TestCase):
 
 class PlanTests(unittest.TestCase):
     def test_paths_select_jobs_and_what_they_wait_for(self):
-        everything = ["static", "core", "ui", "package", "backend", "e2e", "perf"]
+        everything = ["static", "core", "ui", "ui-linux", "package", "backend", "e2e", "perf"]
         cases = {
             "docs/queries.md": ["static"],
             "scripts/tests/test_hooks.py": ["static"],
@@ -90,6 +90,7 @@ class PlanTests(unittest.TestCase):
             # The e2e job packages its debug app with the package scripts.
             "scripts/package/macos.sh": ["static", "package", "e2e"],
             "scripts/package/dmg.py": ["static", "package", "e2e"],
+            "scripts/ci/linux-build-deps.sh": ["static", "ui-linux"],
             ".github/workflows/checks.yml": everything,
             "scripts/qtest/catalog.py": everything,
         }
@@ -98,7 +99,7 @@ class PlanTests(unittest.TestCase):
                 self.assertEqual(catalog.ci_jobs_for_changes([path]), expected)
 
     def test_each_event_runs_its_scope_and_the_scopes_before_it(self):
-        pull_requests = ["static", "core", "ui", "package", "backend", "e2e", "perf"]
+        pull_requests = ["static", "core", "ui", "ui-linux", "package", "backend", "e2e", "perf"]
         self.assertEqual(catalog.ci_jobs_for_event("pull_request"), pull_requests)
         self.assertEqual(catalog.ci_jobs_for_event("push"), [*pull_requests, "perf-ui", "perf-backend"])
         self.assertEqual(catalog.ci_jobs_for_event("manual"), list(catalog.CI_JOBS))
@@ -276,6 +277,18 @@ class WorkflowTests(unittest.TestCase):
         linted = [name for name, ci_job in catalog.CI_JOBS.items() if "clippy" in ci_job.suites]
         self.assertEqual(linted, ["static"])
         self.assertIn("clippy-app", catalog.CI_JOBS["ui"].suites)
+        self.assertIn("clippy-app", catalog.CI_JOBS["ui-linux"].suites)
+
+    def test_pull_requests_build_the_linux_application_with_the_release_libraries(self):
+        ui_linux = catalog.CI_JOBS["ui-linux"]
+        self.assertEqual(ui_linux.runner, catalog.LINUX)
+        self.assertEqual(ui_linux.scope, "pull_request")
+        self.assertIn("ui", ui_linux.suites)
+        # One script installs the libraries, so the check and the release cannot drift.
+        install = "run: sh scripts/ci/linux-build-deps.sh\n"
+        self.assertIn(install, job("ui-linux"))
+        self.assertIn(install, job("linux", RELEASE))
+        self.assertNotIn("apt-get install", job("linux", RELEASE))
 
     def test_artifacts_expire_and_main_keeps_performance_history(self):
         checks = read(CHECKS)

@@ -214,9 +214,7 @@ jobs:
         with:
           version: "0.12.10"
       - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig1-dev libx11-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev
+        run: sh scripts/ci/linux-build-deps.sh
       - run: rustup show
       - run: ./qtest install cargo-nextest
       - run: ./qtest run ui

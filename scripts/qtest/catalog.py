@@ -138,9 +138,10 @@ def nextest(expression, *arguments):
 PYTHON = "{python}"  # Replaced with the interpreter that runs qtest.
 
 CLIPPY_CORE = Step(("cargo", "clippy", "--locked", "--no-default-features", "--all-targets", "--", "-D", "warnings"))
-CLIPPY_APP = Step(("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"))
-# The e2e and perf-e2e suites use the same test binary. A run builds it once.
+# On Linux, the GPUI test support of the UI tests is behind the ui-test feature.
 UI_TEST_FEATURE = ("--features", "ui-test") if LINUX_HOST else ()
+CLIPPY_APP = Step(("cargo", "clippy", "--locked", *UI_TEST_FEATURE, "--all-targets", "--", "-D", "warnings"))
+# The e2e and perf-e2e suites use the same test binary. A run builds it once.
 E2E_BUILD = Step(("cargo", "test", "--locked", *UI_TEST_FEATURE, "--no-run", "--test", "e2e"))
 TRANSFER_PERF_BUILD = Step(("cargo", "test", "--locked", "--profile", "perf", "--no-default-features", "--test", "integration", "--no-run"))
 
@@ -158,9 +159,9 @@ SUITES = {
               (Step(("cargo", "fmt", "--all", "--", "--check")),)),
         Suite("clippy", "Clippy for the core library and, on macOS, the application.", ("cargo",),
               (CLIPPY_CORE, *((CLIPPY_APP,) if MACOS else ()))),
-        # The ui CI job lints the application. The static job lints the core library.
-        Suite("clippy-app", "Clippy for the application with all features.", ("cargo", "macos"),
-              (CLIPPY_APP,), macos_only=True),
+        # The ui CI jobs lint the application. The static job lints the core library.
+        Suite("clippy-app", "Clippy for the application with all features.", ("cargo",),
+              (CLIPPY_APP,)),
         Suite("rustdoc", "Rust API documentation without warnings.", ("cargo",),
               (Step(("cargo", "doc", "--locked", "--no-default-features", "--no-deps"),
                     env=(("RUSTDOCFLAGS", "-D warnings"),)),)),
@@ -353,6 +354,8 @@ CI_JOBS = {
         CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc"), budget=3),
         CiJob("core", LINUX, ("coverage",), budget=5, paths=RUST_PATHS),
         CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), budget=7, paths=RUST_PATHS),
+        # The Linux application build. The core job runs the unit tests on Linux.
+        CiJob("ui-linux", LINUX, ("clippy-app", "ui"), budget=8, paths=rf"{RUST_PATHS}|^scripts/ci/linux-build-deps\.sh$"),
         CiJob("package", MACOS_RUNNER, ("package",), budget=8, report_only=("perf-app",),
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
         CiJob("backend", LINUX, ("backend", "postgres", "trino"), budget=8, paths=rf"{RUST_PATHS}|{E2E_PATHS}",
