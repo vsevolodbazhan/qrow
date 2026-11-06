@@ -54,6 +54,7 @@ accept a test filter.
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
 | `e2e` * | The real Qrow window, headless, against the real servers. | Docker and, on Linux, the desktop libraries; on macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
+| `package-linux` | Linux archive build in `target/package/linux/`, required files, shared libraries, and desktop entry. | Linux, Rust, desktop-file-utils |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
 The suites do the same checks on macOS and Linux. `clippy` lints the core
@@ -901,6 +902,7 @@ suites of a job on your computer, run the same command, for example
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | all runs |
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | all runs |
 | `ui-linux` | Linux | `clippy-app`, `unit`, `ui`, with the desktop libraries of the Linux release | all runs |
+| `package-linux` | Linux x86-64 | `package-linux` archive build and smoke checks | all runs |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
 | `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
 | `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, and `perf-e2e` (report only), with local Java servers | all runs |
@@ -908,6 +910,9 @@ suites of a job on your computer, run the same command, for example
 | `perf` | Linux | `perf` | all runs |
 | `perf-ui` | macOS ARM64 | `perf-ui` (report only) | pushes, manual runs, releases |
 | `perf-backend` | Linux | `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | pushes, manual runs, releases |
+| `ui-linux-arm` | Linux ARM64 | `clippy-app`, `unit`, `ui` | pushes, manual runs, releases |
+| `e2e-linux-arm` | Linux ARM64 | `e2e`, with Docker | pushes, manual runs, releases |
+| `package-linux-arm` | Linux ARM64 | `package-linux` archive build and smoke checks | pushes, manual runs, releases |
 | `desktop-package` | macOS ARM64 | `desktop` on the package of `package` | manual runs, releases |
 | `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | manual runs, releases |
 | `package-intel` | macOS ARM64 | `package` for x86_64 | manual runs, releases |
@@ -938,8 +943,13 @@ slow, and GitHub runs only a small number of macOS jobs at the same time for
 the account. Manual runs and releases run all jobs, so a release finds Intel
 failures. To run the Intel jobs before a merge or a release, start the test
 workflow manually on the branch. `ui-linux` builds and tests the application
-on x86-64 Linux in pull requests that change Rust code. The release builds it
-again on x86-64 and ARM64 Linux. `package-intel` builds the Intel package on
+on x86-64 Linux in pull requests that change Rust code. The shared checks
+build and check Linux archives on x86-64.
+Pushes to main, manual runs, and releases also run ARM64 Linux UI, Docker
+end-to-end, and package jobs. The release downloads the checked archives.
+The Linux package check does not launch the packaged application. The UI and
+end-to-end jobs test the application from a test build.
+`package-intel` builds the Intel package on
 an ARM64 runner with `CARGO_BUILD_TARGET=x86_64-apple-darwin`. This takes
 about half the time of a build on an Intel runner. `e2e-intel` tests the
 package on an Intel runner, and `perf-package` measures its launch there.
@@ -949,8 +959,9 @@ sources or `.cargo/config.toml` select all pull request jobs. Changes to the
 server fixture or the E2E scripts select `backend`, `e2e`, and `e2e-linux`. Changes under
 `tests/desktop/` select `e2e`. Changes to
 `scripts/ci/linux-build-deps.sh` select the Linux jobs that build the
-application: `ui-linux`, `backend`, and `e2e-linux`. Changes to the packaging or probe scripts,
-`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the packaging
+application: `ui-linux`, `package-linux`, `backend`, and `e2e-linux`.
+Changes to packaging scripts, `assets/`, `LICENSE`, or `NOTICE` select
+`package` and `package-linux`. Probe scripts select `package`. Changes to the packaging
 scripts also select `e2e`, because it packages its debug app. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
 pull request jobs. A selected job also selects the jobs that it waits for. A

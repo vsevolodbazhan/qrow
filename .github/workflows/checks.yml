@@ -220,6 +220,46 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
+  package-linux:
+    name: package-linux
+    needs: plan
+    if: fromJSON(needs.plan.outputs.jobs)['package-linux']
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      QROW_RELEASE_VERSION: ${{ inputs.release-version }}
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Install Linux build dependencies
+        run: sh scripts/ci/linux-build-deps.sh
+      - run: sudo apt-get install --yes desktop-file-utils
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: package-linux
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci package-linux --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-package-x86_64
+          path: target/package/linux/*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: package-linux-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
   backend:
     name: backend
     needs: plan
@@ -443,6 +483,110 @@ jobs:
           path: target/qtest/runs/latest/perf.json
           retention-days: 90
           if-no-files-found: warn
+
+  # ARM64 Linux runs on main pushes, manual runs, and releases.
+  ui-linux-arm:
+    name: ui-linux-arm
+    needs: plan
+    if: fromJSON(needs.plan.outputs.jobs)['ui-linux-arm']
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Install Linux build dependencies
+        run: sh scripts/ci/linux-build-deps.sh
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native-linux-arm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci ui-linux-arm --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: ui-linux-arm-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e-linux-arm:
+    name: e2e-linux-arm
+    needs: plan
+    if: >
+      fromJSON(needs.plan.outputs.jobs)['e2e-linux-arm'] &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: Install Linux build dependencies
+        run: sh scripts/ci/linux-build-deps.sh
+      # The headless E2E tests compile in this job.
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native-linux-arm
+          save-if: false
+      - run: ./qtest ci e2e-linux-arm --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-linux-arm-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
+  package-linux-arm:
+    name: package-linux-arm
+    needs: plan
+    if: fromJSON(needs.plan.outputs.jobs)['package-linux-arm']
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      QROW_RELEASE_VERSION: ${{ inputs.release-version }}
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - name: Install Linux build dependencies
+        run: sh scripts/ci/linux-build-deps.sh
+      - run: sudo apt-get install --yes desktop-file-utils
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: package-linux-arm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci package-linux-arm --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-package-aarch64
+          path: target/package/linux/*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: package-linux-arm-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
 
   # The desktop suite on the release package, which a release publishes.
   desktop-package:

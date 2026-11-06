@@ -161,6 +161,7 @@ checks / core
 checks / ui
 checks / ui-linux
 checks / package
+checks / package-linux
 checks / backend
 checks / e2e
 checks / e2e-linux
@@ -203,9 +204,11 @@ During packaging, the writable image uses a temporary mount that Finder does
 not show. The script ejects the image before it creates the compressed DMG.
 If macOS reports that the image is busy, the script makes at most 10 eject
 attempts. After three attempts, it uses forced ejection. A persistent error
-fails packaging. The `linux` job runs the Linux UI and Docker end-to-end
-tests, then builds an archive on Ubuntu 24.04. It runs once for x86-64 and
-once for ARM64.
+fails packaging. The shared checks build Linux archives on Ubuntu 24.04
+for x86-64 and ARM64.
+They check the required files, shared libraries, and desktop entry. ARM64
+Linux UI, Docker end-to-end, and package jobs also run on pushes to main.
+The `linux` job downloads the checked archives for publication.
 The publish job creates the release
 tag, and then the GitHub Release with both DMGs and both Linux archives as its assets. It also
 keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The

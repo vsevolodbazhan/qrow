@@ -5,6 +5,11 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "package"))
+import linux_smoke  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -41,6 +46,42 @@ class LinuxPackageTest(unittest.TestCase):
             env["QROW_RELEASE_VERSION"] = "../bad"
             result = subprocess.run(["sh", "scripts/package/linux.sh"], cwd=root, env=env, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
+
+
+class LinuxSmokeTest(unittest.TestCase):
+    def archive(self, root, *, missing=None, executable=True):
+        package = root / "package"
+        for name in linux_smoke.REQUIRED:
+            if name == missing:
+                continue
+            path = package / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"synthetic fixture")
+        if executable:
+            (package / "bin/qrow").chmod(0o755)
+        archive = root / "archive.tar.gz"
+        with tarfile.open(archive, "w:gz") as bundle:
+            bundle.add(package, arcname=".")
+        return archive
+
+    def test_checks_libraries_and_desktop_entry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = self.archive(Path(temporary))
+            with patch.object(linux_smoke.subprocess, "run") as run:
+                run.return_value.stdout = "libc.so.6 => /lib/libc.so.6"
+                linux_smoke.check(archive)
+                self.assertEqual([call.args[0][0] for call in run.call_args_list],
+                                 ["ldd", "desktop-file-validate"])
+                run.return_value.stdout = "libmissing.so => not found"
+                with self.assertRaisesRegex(ValueError, "Unresolved shared library"):
+                    linux_smoke.check(archive)
+
+    def test_rejects_missing_files_and_nonexecutable_binary(self):
+        for options in ({"missing": "share/licenses/qrow/NOTICE"}, {"executable": False}):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary:
+                archive = self.archive(Path(temporary), **options)
+                with self.assertRaises(ValueError):
+                    linux_smoke.check(archive)
 
 
 if __name__ == "__main__":

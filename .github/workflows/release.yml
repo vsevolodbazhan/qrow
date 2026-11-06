@@ -188,48 +188,28 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Checks build and validate both Linux archives. Only transfer them here.
   linux:
-    name: linux-${{ matrix.arch }}
-    needs:
-      - resolve-target
-      - checks
-    strategy:
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    # Uncached: a debug build for the tests, the e2e fixture images, and a release build.
-    timeout-minutes: 90
-    env:
-      CARGO_BUILD_JOBS: 2
+    name: linux
+    needs: [resolve-target, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          persist-credentials: false
-          ref: ${{ needs.resolve-target.outputs.target_sha }}
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          version: "0.12.10"
-      - name: Install Linux build dependencies
-        run: sh scripts/ci/linux-build-deps.sh
-      - run: rustup show
-      - run: ./qtest install cargo-nextest
-      - run: ./qtest run ui
-      - run: ./qtest run e2e --runtime docker
-      - name: Build archive
+          pattern: linux-package-*
+          merge-multiple: true
+          path: dist
+      - name: Check archive names
         env:
-          QROW_RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
-          PACKAGE_ARCH: ${{ matrix.arch }}
+          RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
         run: |
-          sh scripts/package/linux.sh
-          test -f "target/package/Qrow-${QROW_RELEASE_VERSION}-linux-${PACKAGE_ARCH}.tar.gz"
+          test -f "dist/Qrow-${RELEASE_VERSION}-linux-x86_64.tar.gz"
+          test -f "dist/Qrow-${RELEASE_VERSION}-linux-aarch64.tar.gz"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-linux-${{ matrix.arch }}
-          path: target/package/*.tar.gz
+          name: release-linux
+          path: dist/*.tar.gz
           retention-days: 1
           if-no-files-found: error
 
@@ -259,8 +239,7 @@ jobs:
       - name: download-linux
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          pattern: release-linux-*
-          merge-multiple: true
+          name: release-linux
           path: dist
       - name: resolve-previous-release
         id: previous
