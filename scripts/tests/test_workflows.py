@@ -283,7 +283,8 @@ class WorkflowTests(unittest.TestCase):
         ui_linux = catalog.CI_JOBS["ui-linux"]
         self.assertEqual(ui_linux.runner, catalog.LINUX)
         self.assertEqual(ui_linux.scope, "pull_request")
-        self.assertIn("ui", ui_linux.suites)
+        # The same suites as the macOS ui job.
+        self.assertEqual(ui_linux.suites, catalog.CI_JOBS["ui"].suites)
         # One script installs the libraries, so the check and the release cannot drift.
         install = "run: sh scripts/ci/linux-build-deps.sh\n"
         self.assertIn(install, job("ui-linux"))

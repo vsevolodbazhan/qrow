@@ -55,17 +55,37 @@ class CatalogTests(unittest.TestCase):
                 marked = f"| `{suite.name}` * |" in GUIDE
                 self.assertEqual(marked, suite.filterable)
 
-    def test_clippy_app_is_the_application_pass_of_clippy(self):
+    def test_clippy_lints_the_core_and_clippy_app_the_application_on_each_platform(self):
         clippy, app = catalog.SUITES["clippy"], catalog.SUITES["clippy-app"]
+        self.assertEqual(clippy.steps, (catalog.CLIPPY_CORE,))
         self.assertEqual(app.steps, (catalog.CLIPPY_APP,))
-        self.assertFalse(app.macos_only)
-        self.assertNotIn("macos", app.requires)
+        self.assertEqual(app.platforms, ("macos", "linux"))
         # Without ui-test, the UI test targets do not build on Linux.
         self.assertEqual("ui-test" in catalog.CLIPPY_APP.command, catalog.LINUX_HOST)
-        self.assertEqual(clippy.steps, (catalog.CLIPPY_CORE, catalog.CLIPPY_APP) if catalog.MACOS
-                         else (catalog.CLIPPY_CORE,))
         self.assertIn("--no-default-features", catalog.CLIPPY_CORE.command)
         self.assertNotIn("--no-default-features", catalog.CLIPPY_APP.command)
+        for name in ("default", "all"):
+            self.assertIn("clippy-app", catalog.GROUPS[name][1])
+
+    def test_the_application_suites_are_the_same_on_each_platform(self):
+        # unit tests the application too, so Linux runs its unit tests and doctests.
+        unit = catalog.SUITES["unit"]
+        self.assertEqual(unit.steps[0].nextest_filter, "not binary(ui)")
+        for step in unit.steps:
+            self.assertNotIn("--no-default-features", step.command)
+            self.assertEqual("ui-test" in step.command, catalog.LINUX_HOST)
+        for name in ("clippy-app", "unit", "ui", "e2e"):
+            with self.subTest(suite=name):
+                self.assertIn("linux-app-libs", catalog.SUITES[name].requires)
+                self.assertEqual(catalog.SUITES[name].platforms, ("macos", "linux"))
+
+    def test_platforms_replace_a_macos_requirement(self):
+        for suite in catalog.SUITES.values():
+            with self.subTest(suite=suite.name):
+                self.assertNotIn("macos", suite.requires)
+                self.assertTrue(set(suite.platforms) <= set(catalog.PLATFORM_NAMES))
+        macos = [name for name, suite in catalog.SUITES.items() if suite.platforms == ("macos",)]
+        self.assertEqual(macos, ["perf-ui", "perf-e2e", "perf-app", "perf-package", "package", "desktop"])
 
     def test_coverage_serializes_shared_budget_tests_without_changing_selection(self):
         coverage = catalog.SUITES["coverage"]
@@ -99,7 +119,7 @@ class CatalogTests(unittest.TestCase):
         kyuubi = catalog.SUITES["perf-kyuubi"]
         # Either runtime works on a computer. The perf-backend job uses Docker.
         self.assertEqual(kyuubi.fixture, "any")
-        self.assertFalse(kyuubi.macos_only)
+        self.assertEqual(kyuubi.platforms, ("macos", "linux"))
         self.assertNotIn("docker", kyuubi.requires)
         self.assertIn("transfer_perf::kyuubi", kyuubi.steps[0].nextest_filter)
         self.assertEqual(kyuubi.prepare, (catalog.TRANSFER_PERF_BUILD,))
@@ -127,7 +147,7 @@ class CatalogTests(unittest.TestCase):
 
 class ChangeRuleTests(unittest.TestCase):
     def test_paths_select_suites(self):
-        rust = ["fmt", "clippy", "rustdoc", "unit", "ui"]
+        rust = ["fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui"]
         cases = {
             "src/ui.rs": rust,
             "tests/ui/support.rs": rust,
@@ -152,10 +172,10 @@ class ChangeRuleTests(unittest.TestCase):
 
     def test_hooks_run_only_their_suites(self):
         cases = {
-            ("pre-commit", "src/lib.rs"): ["fmt", "clippy"],
-            ("pre-push", "src/lib.rs"): ["fmt", "clippy", "rustdoc", "unit", "ui"],
-            ("pre-commit", "Cargo.lock"): ["fmt", "clippy", "policy"],
-            ("pre-push", "Cargo.lock"): ["fmt", "clippy", "rustdoc", "unit", "ui", "policy", "deps"],
+            ("pre-commit", "src/lib.rs"): ["fmt", "clippy", "clippy-app"],
+            ("pre-push", "src/lib.rs"): ["fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui"],
+            ("pre-commit", "Cargo.lock"): ["fmt", "clippy", "clippy-app", "policy"],
+            ("pre-push", "Cargo.lock"): ["fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui", "policy", "deps"],
             ("pre-push", "scripts/qtest/cli.py"): ["scripts"],
             ("pre-push", "docs/queries.md"): [],
         }
@@ -415,6 +435,26 @@ class RunTests(unittest.TestCase):
         summary = self.run_suites(fake_suite("flaky", script), repeat=5)
         self.assertIn("Iteration 3 of 5", summary["suites"][0]["reason"])
 
+    def test_a_group_skips_a_suite_of_another_platform_and_a_name_reports_it_missing(self):
+        other = "linux" if catalog.HOST == "macos" else "macos"
+        suite = catalog.Suite("elsewhere", "Fake suite.", (), (), platforms=(other,))
+        skipped = runner.precheck(runner.Selected(suite, explicit=False), {})
+        self.assertEqual(skipped.status, "skipped")
+        self.assertEqual(skipped.reason, f"Requires {catalog.PLATFORM_NAMES[other]}.")
+        missing = runner.precheck(runner.Selected(suite, explicit=True), {})
+        self.assertEqual(missing.status, "missing")
+        self.assertEqual(missing.reason, f"Run this suite on {catalog.PLATFORM_NAMES[other]}.")
+
+    def test_the_linux_libraries_are_found_with_pkg_config(self):
+        with patch.object(runner.catalog, "LINUX_HOST", True), \
+                patch.object(runner, "_succeeds", return_value=False) as succeeds:
+            self.assertEqual(runner.check_requirement("linux-app-libs", {}), catalog.REQUIREMENTS["linux-app-libs"])
+        self.assertEqual(succeeds.call_args.args[0][:2], ["pkg-config", "--exists"])
+        self.assertIn("xkbcommon-x11", succeeds.call_args.args[0])
+        self.assertIn("scripts/ci/linux-build-deps.sh", catalog.REQUIREMENTS["linux-app-libs"])
+        with patch.object(runner.catalog, "LINUX_HOST", False):
+            self.assertIsNone(runner.check_requirement("linux-app-libs", {}))
+
     def test_docker_runtime_needs_docker_instead_of_java(self):
         with patch.object(runner.shutil, "which", return_value=None):
             fix = runner.check_requirement("fixture-runtime", {"runtime": "docker"})
@@ -665,6 +705,15 @@ class CommandLineTests(unittest.TestCase):
             except SystemExit as exit:
                 code = exit.code
         return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_doctor_reports_a_suite_of_another_platform(self):
+        other = "linux" if catalog.HOST == "macos" else "macos"
+        suite = catalog.Suite("elsewhere", "Fake suite.", (), (), platforms=(other,))
+        with patch.dict(catalog.SUITES, {"elsewhere": suite}):
+            code, out, _ = self.call("doctor", "--json", "elsewhere")
+        self.assertEqual(code, runner.EXIT_MISSING)
+        self.assertEqual(json.loads(out), [{"requirement": "platform", "ok": False, "suites": ["elsewhere"],
+                                            "fix": f"Run this suite on {catalog.PLATFORM_NAMES[other]}."}])
 
     def test_usage_errors_exit_with_two(self):
         self.assertEqual(self.call("run", "nosuch")[0], runner.EXIT_USAGE)
