@@ -88,6 +88,7 @@ fn working_entry(qrow: &Qrow, cx: &App) -> AnyElement {
 fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
     let mut table_style = StyleRefinement::default();
     table_style.overflow.x = Some(Overflow::Scroll);
+    let entry_id = entry.id;
     let content = TextView::markdown(
         format!("assistant-markdown-{}", entry.id),
         entry.shown_text().clone(),
@@ -99,7 +100,35 @@ fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
     .when(entry.speaker == Speaker::User, |view| {
         view.markdown_line_breaks()
     })
-    .style(TextViewStyle::default().table(table_style))
+    .when(entry.speaker == Speaker::Assistant, |view| {
+        view.code_block_actions(move |block, _, _| {
+            let code = block.code();
+            Button::new(format!(
+                "assistant-copy-code-{entry_id}-{}",
+                block.span.map_or(0, |span| span.start)
+            ))
+            .ghost()
+            .small()
+            .icon(IconName::Copy)
+            .label("Copy code")
+            .tooltip("Copy code")
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
+                window.push_notification("Code copied", cx);
+            })
+        })
+    })
+    .style(
+        TextViewStyle::default()
+            .table(table_style)
+            // Leave a header for the block action so it cannot cover code.
+            .code_block(if entry.speaker == Speaker::Assistant {
+                StyleRefinement::default().pt_10()
+            } else {
+                StyleRefinement::default()
+            }),
+    )
     .font_family(qrow.settings.assistant_font_family.clone())
     .text_size(qrow.ui_px(qrow.settings.assistant_font_size))
     .line_height(relative(qrow.settings.assistant_line_height))

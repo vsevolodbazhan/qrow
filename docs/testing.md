@@ -180,6 +180,11 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   They check fragmented messages, rejection of a large declared message before
   body allocation, cancellation deadlines for both sockets, and the server's
   ReadyForQuery confirmation before session reuse after a SQL error.
+- The Trino cancellation test waits for **SQL accepted by the server** in
+  Logs before it selects **Cancel**. It then checks session reuse. The
+  **Executing** status can show before the server returns a query URL. A
+  cancellation at that time can close the session; see
+  [Trino limits](connections.md#trino-limits).
 - Property tests check SQL validation with arbitrary Unicode and quoting.
   Keep the Proptest regression seeds that a fixed failure adds.
 - Export tests use the `csv` crate to check text syntax. The Kyuubi,

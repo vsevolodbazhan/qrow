@@ -233,12 +233,10 @@ impl Operation {
             .http
             .page(reqwest::Method::GET, next, None, headers)
         {
-            Err(error)
-                if error.is::<crate::export::Cancelled>()
-                    && self.cancel.requested.load(Ordering::SeqCst) =>
-            {
-                Ok(None)
-            }
+            // Closing the socket can report an I/O error before aborting
+            // the request future. Cleanup still has to succeed before the
+            // worker can retain the session.
+            Err(_) if self.cancel.requested.load(Ordering::SeqCst) => Ok(None),
             result => result.map(Some),
         }
     }

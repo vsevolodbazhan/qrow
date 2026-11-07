@@ -246,6 +246,41 @@ fn sealing_between_poll_check_and_get_admission_is_clean_cancellation() -> Resul
 }
 
 #[test]
+fn response_error_after_cancel_request_is_clean_cancellation() -> Result<()> {
+    for cancelled in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let http = Arc::new(Http::new(
+            &profile(listener.local_addr()?, false),
+            Secret::password(""),
+            &Trust::default(),
+        )?);
+        let mut operation = operation(http.clone())?;
+        operation.cancel.next.lock().unwrap().next = Some(http.statement.clone());
+        let requested = operation.cancel.requested.clone();
+        let peer = thread::spawn(move || -> Result<()> {
+            let mut stream = accept(&listener)?;
+            assert!(headers(&mut stream)?.starts_with("GET "));
+            // poll has passed its cancellation check. A socket shutdown can
+            // report an I/O error before the request's abort future wins.
+            requested.store(cancelled, Ordering::SeqCst);
+            stream.write_all(
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 300\r\n\r\n{",
+            )?;
+            Ok(())
+        });
+        let result = operation.poll(&mut super::protocol::SessionHeaders::default());
+        peer.join().unwrap()?;
+        if cancelled {
+            assert_eq!(result?, crate::connector::QueryState::Cancelled);
+        } else {
+            assert!(result.is_err(), "An ordinary truncated response must fail");
+        }
+        assert!(!http.transport.is_closed());
+    }
+    Ok(())
+}
+
+#[test]
 fn terminal_error_and_detached_cancellation_preserve_successor_transport() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let http = Arc::new(Http::new(

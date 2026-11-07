@@ -333,8 +333,10 @@ memory reservation until it stops. Failed cleanup closes the session.
   the established coordinator address and cached credentials. It does not
   refresh tokens or start browser sign-in. Cleanup waits for the current
   response read to stop, even when `DELETE` succeeds. Repeated cancellation
-  uses the same cleanup result and deadline. If cleanup cannot finish within
-  two seconds, Qrow closes the session and the next Run reconnects.
+  uses the same cleanup result and deadline. A response read interrupted by
+  cancellation reports cancellation. Qrow keeps the session only after cleanup
+  succeeds. If cleanup cannot finish within two seconds, Qrow closes the session
+  and the next Run reconnects.
 - Cancellation closes raw sockets during TLS or a stalled response. It cannot
   stop a system DNS lookup that has already started. A late connection is
   rejected before TLS or authentication.
