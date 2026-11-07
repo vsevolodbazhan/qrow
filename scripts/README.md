@@ -14,5 +14,6 @@ maintenance, and binding generation. Build and package commands are in the
 | `package/` | Native archive qualification and macOS packaging: the app bundle, the zip, the installer DMG and its background, the architecture and minimum-version reader, the version reader, icon conversion, and dependency notices. |
 | `perf/` | The launch time, idle memory, and idle CPU probe of the release app (the `perf-app` suite). |
 | `hooks/` | Hook installation and isolated Git snapshot checks. |
+| `local-postgres/` | Start a disposable Postgres server on localhost with synthetic sample data for manual Qrow connection testing. |
 | `generate/` | Reproducible generation of the Thrift bindings and the small application icon. |
 | `tests/` | Automation, fixture, policy, and hook tests. |
