@@ -143,3 +143,7 @@ with the other GPUI crates as one set.
 - `Editor::smooth_caret(bool)` enables a 70 ms caret transition. The default is off. Text input stays immediate.
 
 - `Editor::smooth_scrolling(bool)` opts into short transitions for discrete mouse-wheel steps. Pixel trackpad gestures stay direct. The default is off.
+
+- Capped document tab labels start at the same leading padding in active and
+  inactive states. Extra space from the minimum tab width follows the label.
+  Other tab variants keep their existing alignment.

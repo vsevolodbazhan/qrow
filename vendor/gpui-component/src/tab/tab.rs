@@ -1,3 +1,4 @@
+use gpui_base::TestSupportExt as _;
 use std::{rc::Rc, time::Duration};
 
 use crate::animation::{Lerp, ease_in_out_cubic};
@@ -723,6 +724,12 @@ impl RenderOnce for Tab {
             .whitespace_nowrap()
             .items_center()
             .justify_center()
+            // Capped document tabs can have spare label room at their minimum
+            // width. Keep their titles at the leading padding in both states.
+            .when(
+                max_width.is_some() && self.variant == TabVariant::Tab,
+                |this| this.justify_start(),
+            )
             .overflow_hidden()
             .margins(inner_margins)
             // Normally the label decides the tab width, so it never shrinks. With
@@ -747,6 +754,8 @@ impl RenderOnce for Tab {
                         // that is allowed to shrink to ellipsize inside of.
                         (Some(label), Some(_)) => this.child(
                             div()
+                                .id("tab-label")
+                                .test_support()
                                 .min_w_0()
                                 .whitespace_nowrap()
                                 .text_ellipsis()

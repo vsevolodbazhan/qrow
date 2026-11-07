@@ -826,3 +826,43 @@ fn the_selected_tab_shows_its_whole_title(cx: &mut TestAppContext) {
     app.settle(cx);
     assert_eq!(tab_width(&app, cx), selected);
 }
+
+#[gpui_kit::test]
+fn inactive_query_tabs_keep_the_same_leading_inset_as_active_tabs(cx: &mut TestAppContext) {
+    use crate::support::elements;
+    use gpui_kit::ElementId;
+    for scale in [0.75, 1., 1.5] {
+        let profile = offline_profile("Tab inset");
+        let mut workspace = Workspace {
+            profiles: vec![profile.clone()],
+            tabs: vec![
+                tab(profile.id, "Route overview", "SELECT 1"),
+                tab(profile.id, "Запрос 2", "SELECT 2"),
+            ],
+            active_tab: 0,
+            ..Workspace::default()
+        };
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch(cx, workspace);
+        for width in [900., 1000., 1100., 1280., 1500.] {
+            cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(820.)));
+            app.settle(cx);
+            for selected in ["Route overview", "Запрос 2"] {
+                app.click_labelled(cx, selected);
+                app.settle(cx);
+                app.update(cx, |window, _| {
+                    for title in ["Route overview", "Запрос 2"] {
+                        let tab = bounds_of(window, title);
+                        let label = elements(window).into_iter().find(|element| {
+                            element.path().last() == Some(&ElementId::Name("tab-label".into()))
+                                && tab.contains(&element.bounds().center())
+                        }).expect("the visible tab has a measured label");
+                        let inset = label.bounds().left() - tab.left();
+                        assert!((inset - px(16.)).abs() <= px(1.),
+                            "{title}, selected {selected}, width {width}, scale {scale}: leading inset {inset:?} must stay at the tab padding");
+                    }
+                });
+            }
+        }
+    }
+}
