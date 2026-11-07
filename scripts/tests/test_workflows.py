@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts/ci"))
 import catalog  # noqa: E402
 import platforms  # noqa: E402
 
-VALIDATION = ".github/workflows/platforms.yml"
+VALIDATION = ".github/workflows/test.yml"
 TEST = ".github/workflows/test.yml"
 RELEASE = ".github/workflows/release.yml"
 
@@ -42,27 +42,28 @@ class ValidationGraphTests(unittest.TestCase):
             self.assertEqual(needs(test), ["common-required", "build-" + key])
             for body in (build, test):
                 self.assertIn("runs-on: " + target.runner, body)
-                self.assertIn("ref: ${{ inputs.ref }}", body)
+                self.assertIn("ref: ${{ inputs.ref || github.sha }}", body)
                 self.assertNotIn("if: inputs.full", body)
             self.assertIn("name: prepared-" + target.name, build)
             self.assertIn("name: prepared-" + target.name, test)
             self.assertIn("name: candidate-" + target.name, test)
             self.assertNotIn("rust-cache@", test)
         self.assertEqual(needs(job("common-required")), ["plan", "common"])
-        self.assertEqual(set(needs(job("required"))), {"common-required", *("test-" + t.name.replace("_", "-") for t in targets)})
-        self.assertIn("if: always()", job("common-required"))
-        self.assertIn("if: always()", job("required"))
+        self.assertEqual(set(needs(job("ci-required"))), {"common-required", *("test-" + t.name.replace("_", "-") for t in targets)})
+        self.assertIn("always()", job("common-required"))
+        self.assertIn("always()", job("ci-required"))
         self.assertIn("verify-common evidence", job("common-required"))
-        self.assertIn("platforms.py verify evidence", job("required"))
+        self.assertIn("platforms.py verify evidence", job("ci-required"))
 
     def test_no_legacy_scheduler_or_workflow_remains(self):
         self.assertFalse((ROOT / ".github/workflows/checks.yml").exists())
         self.assertFalse(hasattr(catalog, "CI_JOBS"))
-        for path in (TEST, RELEASE):
-            self.assertNotIn("workflows/checks.yml", read(path))
-            self.assertIn("uses: ./.github/workflows/platforms.yml", job("platforms", path))
-        self.assertEqual(needs(job("ci-required", TEST)), ["platforms"])
-        self.assertIn('test "$PLATFORMS" = success', job("ci-required", TEST))
+        self.assertFalse((ROOT / ".github/workflows/platforms.yml").exists())
+        self.assertIn("workflow_call:", read(TEST))
+        self.assertNotIn("uses: ./.github/workflows/", read(TEST))
+        self.assertIn("uses: ./.github/workflows/test.yml", job("validation", RELEASE))
+        self.assertNotIn("workflows/checks.yml", read(RELEASE))
+        self.assertIn("platforms.py verify evidence", job("ci-required"))
 
     def test_backend_has_no_ui_dependency_or_feature(self):
         self.assertEqual(platforms.COMMON["backend"], ["backend", "postgres-core", "trino-core"])
@@ -129,15 +130,15 @@ class ValidationGraphTests(unittest.TestCase):
     def test_runs_share_source_and_forks_need_no_secrets(self):
         validation = read(VALIDATION)
         self.assertNotIn("secrets.", validation)
-        self.assertNotIn("concurrency:", validation)
+        self.assertIn("${{ github.workflow }}-validation-", validation)
         self.assertNotIn("head.repo.full_name", validation)
         self.assertIn("converted_to_draft", read(TEST))
-        self.assertIn("!github.event.pull_request.draft", job("platforms", TEST))
+        self.assertIn("!github.event.pull_request.draft", job("plan", TEST))
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", read(TEST))
         self.assertIn("--repeat 100", job("common"))
         self.assertIn("--reuse-builds", job("common"))
         self.assertIn("cold-cache", read(TEST))
-        self.assertIn("full: true", job("platforms", RELEASE))
+        self.assertIn("full: true", job("validation", RELEASE))
 
     def test_caches_have_single_saving_owners_and_tests_only_download_artifacts(self):
         validation = read(VALIDATION)
@@ -146,12 +147,19 @@ class ValidationGraphTests(unittest.TestCase):
         for line in validation.splitlines():
             if "save-if:" in line:
                 self.assertIn("github.ref == 'refs/heads/main' && github.event_name == 'push'", line)
-        cleanup = job("cache-cleanup", TEST)
-        self.assertEqual(needs(cleanup), ["platforms"])
-        self.assertIn("actions: write", cleanup)
-        self.assertIn("scripts/ci/rust_caches.py", cleanup)
+        maintenance = read(".github/workflows/cache-cleanup.yml")
+        self.assertIn("workflow_run:", maintenance)
+        self.assertIn("workflows: [test]", maintenance)
+        self.assertIn("branches: [main]", maintenance)
+        self.assertIn("workflow_run.event == 'push'", maintenance)
+        self.assertIn("head_repository.full_name == github.repository", maintenance)
+        self.assertIn("actions: write", maintenance)
+        self.assertIn("scripts/ci/rust_caches.py", maintenance)
+        self.assertNotIn("ref:", job("cache-cleanup", ".github/workflows/cache-cleanup.yml"))
+        self.assertNotIn("cache-cleanup:", validation)
         self.assertNotIn("cache-cleanup:", read(RELEASE))
         self.assertNotIn("actions: write", validation)
+
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -159,7 +167,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         for name in ("dmg", "linux"):
             body = job(name, RELEASE)
             prerequisites = needs(body) or re.findall(r"^      - (\S+)$", body.split("strategy:")[0], re.MULTILINE)
-            self.assertEqual(prerequisites, ["resolve-target", "platforms"])
+            self.assertEqual(prerequisites, ["resolve-target", "validation"])
             self.assertNotIn("cargo build", body)
             self.assertIn("receipt", body)
             self.assertIn("sha256", body)

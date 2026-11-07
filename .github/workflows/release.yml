@@ -104,9 +104,9 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
-  platforms:
+  validation:
     needs: resolve-target
-    uses: ./.github/workflows/platforms.yml
+    uses: ./.github/workflows/test.yml
     with:
       ref: ${{ needs.resolve-target.outputs.target_sha }}
       release-version: ${{ needs.resolve-target.outputs.release_version }}
@@ -117,7 +117,7 @@ jobs:
     name: dmg-${{ matrix.arch }}
     needs:
       - resolve-target
-      - platforms
+      - validation
     strategy:
       matrix:
         include:
@@ -197,7 +197,7 @@ jobs:
 
   linux:
     name: linux-${{ matrix.arch }}
-    needs: [resolve-target, platforms]
+    needs: [resolve-target, validation]
     strategy:
       fail-fast: false
       matrix:

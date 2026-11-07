@@ -22,9 +22,10 @@ changes, currently run the complete graph. There is no path-based exclusion.
 
 ## Job order
 
-The test and release workflows call the same
-[validation workflow](../.github/workflows/platforms.yml). Each job checks out
-one immutable commit. A pull request uses its merge commit.
+The [test workflow](../.github/workflows/test.yml) contains the shared graph.
+It runs directly for pull requests and `main`, so check names have no wrapper
+prefix. The release workflow calls this same graph. Each job checks out one
+immutable commit. A pull request uses its merge commit.
 
 ```mermaid
 flowchart LR
@@ -33,9 +34,8 @@ flowchart LR
     P --> B[build native target]
     B --> T[test same native target]
     G --> T
-    T --> V[validation-required]
-    G --> V
-    V --> R[ci-required]
+    T --> R[ci-required]
+    G --> R
 ```
 
 There is one build/test pair for each supported native target. Native builds
@@ -97,10 +97,9 @@ The few macOS headless assertions remain because they contain OS-dependent
 expectations. They do not repeat the complete portable UI or backend suites.
 The package uses production features. Test support is confined to test builds.
 
-The final `validation-required` job verifies a result and package receipt for
-all four targets. The receipt digest must match the candidate digest in the
-build manifest. The top-level `ci-required` check fails unless the complete
-validation workflow succeeds.
+The final `ci-required` job requires all common and native tests to pass.
+It verifies a result and package receipt for all four targets. The receipt
+digest must match the candidate digest in the build manifest.
 
 ## Prepared builds and results
 
@@ -120,8 +119,11 @@ the manifest digest. Logs and per-attempt reports remain separate.
 Common evidence, native evidence, and candidates remain available for 14 days.
 Prepared transfer artifacts remain for two days. They are artifacts of the
 current workflow run, not caches. Rust caches only speed up compilation.
-Each cache has one saving job. Only pushes to `main` save caches. The test workflow cleanup
-job removes replaced caches after validation, including failed runs.
+Each cache has one saving job. Only pushes to `main` save caches. A separate
+[cache cleanup workflow](../.github/workflows/cache-cleanup.yml) removes
+replaced caches after a `main` push run completes, including failed runs.
+Validation keeps read-only permissions. Cleanup uses trusted default-branch
+code and has permission to delete caches.
 
 ## Full runs and releases
 

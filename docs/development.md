@@ -165,7 +165,7 @@ tag is `v<version>`. The nightly tag is
 The jobs run in this order:
 
 ```text
-resolve-target -> platforms (common and native validation) -> dmg and linux -> publish
+resolve-target -> validation (shared test workflow) -> dmg and linux -> publish
 ```
 
 `resolve-target` finds the commit and release version. The validation
