@@ -10,8 +10,8 @@ CI has three levels:
 | Event | Common jobs | Native targets | Full mode |
 | --- | --- | --- | --- |
 | Ready pull request that changes only static paths | `common-static` | None | No |
-| Other ready pull request | All five | Linux x86-64 | No |
-| Push to `main`, scheduled run, manual run, release candidate | All five | All four | Yes |
+| Other ready pull request | All six | Linux x86-64 | No |
+| Push to `main`, scheduled run, manual run, release candidate | All six | All four | Yes |
 
 Static paths cannot change a Rust build, a test binary, a server fixture, or
 the validation graph. They are the documentation, root Markdown files,
@@ -87,9 +87,14 @@ suite selections.
 | `common-static` | Check Python and shell scripts, workflow syntax, harness tests, action pins, dependency policy and sources, advisories, licenses, unused dependencies, and Rust formatting. |
 | `common-core` | Run core Clippy, API documentation checks, and portable unit and integration tests with line coverage. The 80% floor remains enforced. UI features are off. |
 | `common-backend` | Prepare one core integration executable. Use Docker to test Kyuubi, Postgres, and Trino connectors and workers, including authentication, TLS, cancellation, and transport scenarios. No GPUI build is required. |
-| `common-headless-ui` | Run application Clippy, application unit tests, doctests, portable headless UI tests, and headless UI scenarios with all three server types. Prepare the required UI test binaries together. |
+| `common-headless-ui` | Run application Clippy, application unit tests, doctests, and portable headless UI tests. These need no server. In full mode, repeat the UI timing regressions with the same binaries. |
+| `common-server-ui` | Run the headless UI scenarios with all three server types: the e2e suite against Kyuubi, and the Postgres and Trino window scenarios. |
 | `common-performance` | Build the SQL, dbt, and export benchmarks in one Cargo request and enforce their existing budgets. |
 | `common-required` | Require every common job to succeed. Verify the exact suite set, commit, target, and nonempty nextest reports. Missing, cancelled, duplicate, stale, or failed results stop native tests. |
+
+The two UI jobs run in parallel. They prepare their own test binaries with
+the same compiler variant, so `common-server-ui` restores the Rust cache of
+`common-headless-ui` and does not save one.
 
 Core coverage uses instrumented binaries. Backend tests use normal core
 binaries. UI tests use the explicit UI test feature on Linux. Performance
@@ -199,7 +204,7 @@ merges when its own level passes, so it can merge with a defect that only
 macOS or Linux ARM64 shows. Check the `main` run after each merge. Fix or
 revert a failed native target before the next release.
 
-After a change to this graph, check the first `main` run. It must contain the five common jobs
+After a change to this graph, check the first `main` run. It must contain the six common jobs
 and all four native build/test pairs, including Intel macOS. Check a full run
 for the timing stress evidence. A release still needs a successful manual
 release run before its new publication path has live release evidence.
