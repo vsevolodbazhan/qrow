@@ -1,5 +1,6 @@
 //! The rows of the conversation transcript.
 use super::*;
+use gpui_kit::base::{Easing, text::TextViewMotion};
 
 /// One row of the transcript list. `index` is the place of the row, which
 /// orders the text selection.
@@ -95,10 +96,15 @@ fn message_entry(
     cx: &App,
 ) -> AnyElement {
     let opacity = entry
-        .buffered_reveal_started()
-        .filter(|_| qrow.settings.assistant_buffer_replies && !cx.reduce_motion())
+        .appearance_started()
+        .filter(|_| {
+            !cx.reduce_motion()
+                && (qrow.settings.smooth_transitions
+                    || entry.speaker == Speaker::Assistant
+                        && qrow.settings.assistant_buffer_replies)
+        })
         .map_or(1., |started| {
-            let duration = cx.theme().motion_tokens().duration_normal;
+            let duration = cx.theme().motion_tokens().duration_slow;
             if duration.is_zero() {
                 return 1.;
             }
@@ -114,7 +120,7 @@ fn message_entry(
                     let _ = pane.update(cx, |_, cx| cx.notify());
                 });
             }
-            1. - (1. - progress).powi(3)
+            Easing::EaseInOut.sample(progress)
         });
     let mut table_style = StyleRefinement::default();
     table_style.overflow.x = Some(Overflow::Scroll);
@@ -125,6 +131,13 @@ fn message_entry(
     )
     // Each word that a streamed reply shows fades in.
     .stream_fade(opacity == 1.)
+    .when(qrow.settings.smooth_transitions && opacity == 1., |view| {
+        view.motion(
+            TextViewMotion::default()
+                .with_stream_fade(cx.theme().motion_tokens().duration_slow)
+                .with_stream_fade_easing(Easing::EaseInOut),
+        )
+    })
     // A line break that you type in a message stays a line break. Replies
     // keep the Markdown rule that joins the lines of a paragraph.
     .when(entry.speaker == Speaker::User, |view| {

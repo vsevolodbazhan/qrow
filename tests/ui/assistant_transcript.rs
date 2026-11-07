@@ -336,6 +336,38 @@ fn buffered_replies_wait_for_completion_with_and_without_reduced_motion(cx: &mut
 }
 
 #[gpui_kit::test]
+fn new_message_fades_keep_full_text_and_fixed_bounds(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.smooth_transitions = true;
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let message = "Hold a buffered reply\nAll of this message appears together.\nПример 你好";
+    app.send(cx, message);
+    let expected = format!("You: {message}");
+    let bounds = app.update(cx, |window, _| {
+        crate::support::labelled_starting(window, &expected)[0].bounds()
+    });
+    for _ in 0..8 {
+        cx.executor().advance_clock(Duration::from_millis(40));
+        app.update(cx, |window, cx| {
+            window.simulate_next_frame(cx);
+            draw(window, cx);
+            let entry = &crate::support::labelled_starting(window, &expected)[0];
+            assert_eq!(entry.label(), Some(expected.as_str()));
+            assert_eq!(entry.bounds(), bounds);
+        });
+    }
+    codex.mark("buffered-release");
+    app.wait_reply(cx, crate::support::assistant::BUFFERED_REPLY);
+    codex.mark("buffered-turn-release");
+    app.wait_idle(cx);
+}
+
+#[gpui_kit::test]
 fn buffered_replies_redraw_without_a_full_window_refresh(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
     let mut workspace = codex.workspace(Workspace::default());

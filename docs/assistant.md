@@ -154,6 +154,8 @@ message to finish, then shows it at its full height with a short fade. A long
 reply stays hidden until it is complete. Tool activity still shows as it
 occurs. If you cancel a reply, or the harness fails or disconnects, the text
 received so far shows. Reduced motion removes the fade but keeps the wait.
+**Smooth Transitions** also fades new messages that you send, without moving
+them.
 Turn this option off to return to word-by-word replies, including text that
 is currently waiting.
 

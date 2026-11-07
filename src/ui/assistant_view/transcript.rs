@@ -213,7 +213,7 @@ pub(in crate::ui) struct TranscriptEntry {
     /// by step. See [`Reveal`].
     shown: SharedString,
     reveal: Option<Reveal>,
-    buffered_reveal_started: Option<Instant>,
+    appearance_started: Option<Instant>,
     pub turn_id: Option<String>,
     pub tool: Option<ToolActivity>,
     pub detail: Option<String>,
@@ -231,7 +231,7 @@ impl TranscriptEntry {
             label: SharedString::default(),
             shown: SharedString::default(),
             reveal: None,
-            buffered_reveal_started: None,
+            appearance_started: None,
             turn_id,
             tool: None,
             detail: None,
@@ -345,8 +345,14 @@ impl TranscriptEntry {
         self.reveal.as_ref().is_none_or(Reveal::is_complete)
     }
 
-    pub fn buffered_reveal_started(&self) -> Option<Instant> {
-        self.buffered_reveal_started
+    pub fn appearance_started(&self) -> Option<Instant> {
+        self.appearance_started
+    }
+
+    /// Mark a live message for appearance motion. Restored entries stay still.
+    pub fn appearing(mut self, now: Instant) -> Self {
+        self.appearance_started = Some(now);
+        self
     }
 
     /// Show a completed message without changing its layout during the fade.
@@ -354,7 +360,7 @@ impl TranscriptEntry {
         let first = self.shown.trim().is_empty();
         let changed = self.show_all();
         if changed && first {
-            self.buffered_reveal_started = Some(now);
+            self.appearance_started = Some(now);
         }
         changed
     }

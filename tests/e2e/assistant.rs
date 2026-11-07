@@ -381,6 +381,7 @@ fn buffered_replies_complete_beside_a_connected_query(cx: &mut TestAppContext) {
         Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
     let mut workspace = codex.workspace(workspace);
     workspace.settings.assistant_buffer_replies = true;
+    workspace.settings.smooth_transitions = true;
     let app = TestApp::launch_in(cx, directory, workspace, credentials);
     app.run_complete(cx, "SELECT 1 AS value");
     app.wait_cell(cx, 0, 1, "1");

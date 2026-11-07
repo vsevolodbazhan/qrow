@@ -38,6 +38,8 @@ their contents during the transition. Controls leave the sidebar when it
 starts to close. A second toggle reverses the motion.
 Content changes keep text visible. Editor text stays in position when tabs
 change. Typing stops the editor fade at once.
+Your messages fade in as a whole, without sliding. Each new part of an
+assistant reply fades as it arrives.
 Window and splitter resizing stay immediate. Activity slides in from the right
 and closes toward the right. Its contents keep their full width during motion.
 These options follow the system reduced-motion setting.
