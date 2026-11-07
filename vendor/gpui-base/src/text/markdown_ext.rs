@@ -246,6 +246,7 @@ impl PartialEq for MarkdownNode {
 pub struct MarkdownExtensions {
     enable_mdx: bool,
     enable_frontmatter: bool,
+    keep_line_breaks: bool,
     block_parsers: Vec<Arc<MarkdownBlockParserFn>>,
     block_renderers: HashMap<SharedString, Arc<MarkdownBlockRenderFn>>,
     inline_parsers: Vec<Arc<MarkdownInlineParserFn>>,
@@ -273,6 +274,20 @@ impl MarkdownExtensions {
         self.enable_frontmatter = true;
         self.bump_revision();
         self
+    }
+
+    /// Show each line ending in a paragraph as a line break.
+    ///
+    /// CommonMark joins the lines of a paragraph with spaces. Use this for
+    /// text that a person typed, where a line ending is meant as a break.
+    pub fn line_breaks(mut self) -> Self {
+        self.keep_line_breaks = true;
+        self.bump_revision();
+        self
+    }
+
+    pub(crate) fn keeps_line_breaks(&self) -> bool {
+        self.keep_line_breaks
     }
 
     /// Enable MDX JSX/expression constructs.
@@ -352,6 +367,7 @@ impl MarkdownExtensions {
         self.parser_revision == other.parser_revision
             && self.enable_mdx == other.enable_mdx
             && self.enable_frontmatter == other.enable_frontmatter
+            && self.keep_line_breaks == other.keep_line_breaks
             && self.block_parsers.len() == other.block_parsers.len()
             && self.block_renderers.len() == other.block_renderers.len()
             && self.inline_parsers.len() == other.inline_parsers.len()

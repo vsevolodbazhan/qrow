@@ -134,6 +134,8 @@ Qrow changes these files:
 - `src/menu/popup_menu.rs`: `PopupMenu::set_trigger_focus` is public, so a
   context menu that the application opens shows the shortcuts of the view
   under the pointer.
+- `src/text/compat.rs`: `TextView::markdown_line_breaks` passes the option
+  of the same name to the GPUI Base text view. See the GPUI Base patch.
 
 Remove the patch when a GPUI Kit release includes the fixes. Update the crate
 with the other GPUI crates as one set.

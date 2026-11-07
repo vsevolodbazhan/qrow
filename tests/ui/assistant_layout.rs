@@ -180,3 +180,24 @@ fn the_message_field_grows_with_its_text_up_to_a_limit(cx: &mut TestAppContext) 
         bounds_of(window, "assistant-composer").size.height == empty
     });
 }
+
+#[gpui_kit::test]
+fn a_message_keeps_its_line_breaks(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.send(cx, "select 1");
+    app.wait_reply(cx, "You: select 1");
+    app.wait_idle(cx);
+    app.send(cx, "select *\nfrom bookings\nlimit 10");
+    app.wait_reply(cx, "You: select *");
+    app.wait_idle(cx);
+    let one = entry(&app, cx, "You: select 1").size.height;
+    let three = entry(&app, cx, "You: select *").size.height;
+    // The message has three lines, as typed, and not one line of joined
+    // words.
+    assert!(
+        three >= one * 2.5,
+        "A message of three lines is {three:?} high, one line is {one:?}"
+    );
+}

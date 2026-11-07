@@ -123,7 +123,8 @@ See [Conversation state](#conversation-state) for the status that the thread
 list and the assistant toggle show.
 
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
-can show headings, lists, code, links, and tables.
+can show headings, lists, code, links, and tables. Each line break that you
+type in a message shows as a line break.
 
 The harness sends a reply in parts of different sizes. Qrow shows the reply word by
 word at an even speed, about 0.3 seconds after the text arrives, and each word
