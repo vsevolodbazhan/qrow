@@ -145,6 +145,12 @@ impl TextView {
         self.inner = self.inner.markdown_extensions(value);
         self
     }
+    /// Shows each line ending in a paragraph as a line break.
+    pub fn markdown_line_breaks(mut self) -> Self {
+        self.inner = self.inner.markdown_line_breaks();
+        self
+    }
+
     /// Enables the MDX Markdown extensions.
     pub fn markdown_mdx(mut self) -> Self {
         self.inner = self.inner.markdown_mdx();

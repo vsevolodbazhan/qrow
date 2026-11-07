@@ -75,6 +75,11 @@ fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
     )
     // Each word that a streamed reply shows fades in.
     .stream_fade(true)
+    // A line break that you type in a message stays a line break. Replies
+    // keep the Markdown rule that joins the lines of a paragraph.
+    .when(entry.speaker == Speaker::User, |view| {
+        view.markdown_line_breaks()
+    })
     .style(TextViewStyle::default().table(table_style))
     .font_family(qrow.settings.assistant_font_family.clone())
     .text_size(qrow.ui_px(qrow.settings.assistant_font_size))

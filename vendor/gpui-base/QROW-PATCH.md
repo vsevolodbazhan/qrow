@@ -88,6 +88,18 @@ Qrow changes these files:
   wraps at its spaces to the text width. Before, a narrow SQL editor cut its
   placeholder off at the right edge. GPUI tests do not shape real text, so
   this change has no test.
+- `src/input/base/state.rs`: `set_auto_grow` fits the row count to the
+  current text at once. Before, the new limit set the row count to the
+  minimum until the next edit, so a field that held a long message shrank.
+  Qrow changes the limit of the message field when the window height changes.
+  The Qrow UI test `the_message_field_grows_with_its_text_up_to_a_limit` is
+  the regression test.
+- `src/text/markdown_ext.rs`, `src/text/format/markdown.rs`, and
+  `src/text/text_view.rs`: `MarkdownExtensions::line_breaks` and
+  `TextView::markdown_line_breaks` show each line ending in a paragraph as a
+  line break. CommonMark joins the lines with spaces. Qrow uses the option for
+  the messages that you send, so a message with SQL keeps its lines. The Qrow
+  UI test `a_message_keeps_its_line_breaks` is the regression test.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.

@@ -9,6 +9,14 @@ use super::*;
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 
+/// The most rows of the message field in a window `height` high.
+pub(super) fn composer_max_rows(height: Pixels, line_height: Pixels) -> usize {
+    if line_height <= px(0.) {
+        return COMPOSER_MIN_ROWS;
+    }
+    ((height * COMPOSER_MAX_HEIGHT / line_height).floor() as usize).max(COMPOSER_MIN_ROWS)
+}
+
 pub(super) fn show_thread_list(narrow: bool, override_visibility: Option<bool>) -> bool {
     override_visibility.unwrap_or(!narrow)
 }
@@ -24,6 +32,11 @@ pub(super) fn thread_list_after_selection(override_visibility: Option<bool>) -> 
 
 /// The width of a selector button that shows only its icon, in points.
 const SELECTOR_ICON_WIDTH: f32 = 24.;
+/// The rows the message field shows when it holds a short message.
+const COMPOSER_MIN_ROWS: usize = 3;
+/// The part of the window height that the message field can grow to. A longer
+/// message scrolls inside the field.
+const COMPOSER_MAX_HEIGHT: f32 = 0.4;
 /// The gap between two selector buttons, in points.
 const SELECTOR_GAP: f32 = 4.;
 /// What a labeled selector adds to its label: the compact side padding, the
@@ -125,6 +138,8 @@ pub(in crate::ui) struct AssistantPane {
     rows: TranscriptRows,
     /// The settings that change the height of the rows.
     typography: Option<Typography>,
+    /// The most rows that the message field grows to at this window height.
+    composer_max_rows: usize,
     _subscriptions: [Subscription; 2],
 }
 
@@ -150,6 +165,7 @@ impl AssistantPane {
             TextareaState::new(window, cx)
                 .placeholder("Ask about your data or describe a query…")
                 .submit_on_enter(true)
+                .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MIN_ROWS)
         });
         let thread_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations…"));
@@ -178,6 +194,7 @@ impl AssistantPane {
             transcript,
             rows: TranscriptRows::default(),
             typography: None,
+            composer_max_rows: COMPOSER_MIN_ROWS,
             _subscriptions: subscriptions,
         }
     }
@@ -190,6 +207,22 @@ impl AssistantPane {
     pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
         self.transcript
             .update(cx, |list, cx| list.scroll_to_end(cx));
+    }
+
+    /// Lets the message field grow to a part of the window height.
+    fn sync_composer_rows(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let line_height = self
+            .composer
+            .read(cx)
+            .line_height()
+            .unwrap_or_else(|| window.line_height());
+        let max_rows = composer_max_rows(window.viewport_size().height, line_height);
+        if max_rows != self.composer_max_rows {
+            self.composer_max_rows = max_rows;
+            self.composer.update(cx, |state, cx| {
+                state.set_auto_grow(COMPOSER_MIN_ROWS, max_rows, cx)
+            });
+        }
     }
 
     /// Closes the thread list of a narrow pane after you select a conversation.
@@ -244,6 +277,7 @@ impl Render for AssistantPane {
         if unread_visible {
             self.read_visible_reply(window, cx);
         }
+        self.sync_composer_rows(window, cx);
         let qrow = qrow.read(cx);
         let width = qrow.assistant_width(window.viewport_size().width);
         self.panel(qrow, width, window, cx).into_any_element()
@@ -759,7 +793,6 @@ impl AssistantPane {
                         div().id("assistant-composer").test_support().key_context("AssistantComposer").child(
                             Textarea::new(&self.composer)
                                 .focus_ring(false)
-                                .h_20()
                                 .w_full()
                                 .aria_label("Assistant Message")),
                     )
@@ -934,6 +967,16 @@ mod tests {
             assert_eq!(show_thread_list(narrow, after), !narrow);
         }
         assert_eq!(thread_list_after_selection(None), None);
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_message_field_grows_to_a_part_of_the_window() {
+        // 40% of 800 points is 320 points: 16 rows of 20 points.
+        assert_eq!(composer_max_rows(px(800.), px(20.)), 16);
+        assert_eq!(composer_max_rows(px(810.), px(20.)), 16);
+        // A short window keeps the rows of a short message.
+        assert_eq!(composer_max_rows(px(100.), px(20.)), COMPOSER_MIN_ROWS);
+        assert_eq!(composer_max_rows(px(800.), px(0.)), COMPOSER_MIN_ROWS);
     }
 
     #[::core::prelude::v1::test]

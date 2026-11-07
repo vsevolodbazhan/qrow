@@ -4,7 +4,7 @@
 use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, jump_to_latest};
 use crate::support::{MemoryCredentials, TestApp, bounds_of, labelled_starting};
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{Bounds, Pixels, ScrollDelta, TestAppContext, point, px};
+use gpui_kit::{Bounds, Pixels, ScrollDelta, TestAppContext, point, px, size};
 use qrow::model::Workspace;
 use qrow::ui::ToggleSidebar;
 
@@ -123,4 +123,81 @@ fn status_bar_buttons_at_both_ends_have_the_same_gap(cx: &mut TestAppContext) {
         )
     });
     assert_eq!(left, right, "Left gap {left:?}, right gap {right:?}");
+}
+
+#[gpui_kit::test]
+fn the_message_field_grows_with_its_text_up_to_a_limit(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    let empty = composer(&app, cx).size.height;
+
+    // A message of three lines keeps the height of an empty field.
+    app.type_message(cx, "1\n2\n3");
+    app.settle(cx);
+    assert_eq!(composer(&app, cx).size.height, empty);
+
+    // Each line after the third adds one row.
+    app.type_message(cx, "1\n2\n3\n4\n5\n6");
+    app.settle(cx);
+    let six = composer(&app, cx).size.height;
+    let row = (six - empty) / 3.;
+    assert!(
+        row > px(10.),
+        "Six lines grew the field by only {:?}",
+        six - empty
+    );
+
+    // A long message stops at 40% of the window and scrolls inside the field.
+    let long = (1..=80)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.type_message(cx, &long);
+    app.settle(cx);
+    let viewport = app.update(cx, |window, _| window.viewport_size().height);
+    let tall = composer(&app, cx).size.height;
+    let text = tall - (empty - row * 3.);
+    assert!(
+        text <= viewport * 0.4 && text > viewport * 0.4 - row,
+        "The text area of the field is {text:?} high in a window {viewport:?} high"
+    );
+
+    // A taller window raises the limit at once, without an edit. The
+    // field grows to the new limit and does not shrink to three rows.
+    let window = app.update(cx, |window, _| window.viewport_size());
+    cx.simulate_window_resize(app.window, size(window.width, window.height + row * 10.));
+    app.settle(cx);
+    let taller = composer(&app, cx).size.height;
+    assert!(
+        taller > tall,
+        "The field is {taller:?} high after the window grew, before {tall:?}"
+    );
+
+    // After Send, the field returns to its first height.
+    app.click(cx, "assistant-send");
+    app.wait_until(cx, "the empty field", REPLY_TIMEOUT, |window, _| {
+        bounds_of(window, "assistant-composer").size.height == empty
+    });
+}
+
+#[gpui_kit::test]
+fn a_message_keeps_its_line_breaks(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.send(cx, "select 1");
+    app.wait_reply(cx, "You: select 1");
+    app.wait_idle(cx);
+    app.send(cx, "select *\nfrom bookings\nlimit 10");
+    app.wait_reply(cx, "You: select *");
+    app.wait_idle(cx);
+    let one = entry(&app, cx, "You: select 1").size.height;
+    let three = entry(&app, cx, "You: select *").size.height;
+    // The message has three lines, as typed, and not one line of joined
+    // words.
+    assert!(
+        three >= one * 2.5,
+        "A message of three lines is {three:?} high, one line is {one:?}"
+    );
 }
