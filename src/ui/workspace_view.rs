@@ -1339,8 +1339,6 @@ impl Render for Qrow {
                             .line_height(relative(self.settings.editor_line_height))
                             .child(
                                 div()
-                                    .relative()
-                                    .top(editor_content.offset() * 0.5)
                                     .opacity(editor_content.opacity())
                                     .size_full()
                                     .child(editor),

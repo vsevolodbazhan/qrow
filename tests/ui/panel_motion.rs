@@ -117,8 +117,10 @@ fn editor_motion_keeps_the_new_document_and_typing_immediate(cx: &mut TestAppCon
     workspace.settings.smooth_transitions = true;
     let app = TestApp::launch(cx, workspace);
     cx.update(|cx| cx.set_reduce_motion(false));
+    let editor_bounds = app.update(cx, |window, _| bounds_of(window, "SQL Editor"));
     app.click_labelled(cx, "Query 2");
     app.update(cx, |window, cx| {
+        assert_eq!(bounds_of(window, "SQL Editor"), editor_bounds);
         assert_eq!(
             labelled(window, "SQL Editor")
                 .and_then(|element| element.value().map(str::to_owned))
@@ -134,6 +136,12 @@ fn editor_motion_keeps_the_new_document_and_typing_immediate(cx: &mut TestAppCon
         );
     });
     app.click_labelled(cx, "Query 1");
+    for millis in [0, 40, 60, 100] {
+        advance(&app, cx, millis);
+        app.update(cx, |window, _| {
+            assert_eq!(bounds_of(window, "SQL Editor"), editor_bounds);
+        });
+    }
     app.update(cx, |window, _| {
         assert_eq!(
             labelled(window, "SQL Editor")

@@ -36,7 +36,8 @@ Enable it for short transitions when query tabs, result tabs, and sidebar
 panels change. Sidebars expand and collapse without changing the width of
 their contents during the transition. Controls leave the sidebar when it
 starts to close. A second toggle reverses the motion.
-Content changes keep text visible. Typing stops the editor transition at once.
+Content changes keep text visible. Editor text stays in position when tabs
+change. Typing stops the editor fade at once.
 Window and splitter resizing stay immediate. Activity keeps a short entrance
 fade. These options follow the system reduced-motion setting.
 
