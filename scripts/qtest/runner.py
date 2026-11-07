@@ -6,14 +6,15 @@ import json
 import os
 from pathlib import Path
 import shutil
-import signal
 import subprocess
 import sys
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ElementTree
 
 import catalog
+from process import lease, spawn_options, stop_tree
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/core"))
@@ -57,7 +58,7 @@ LINUX_APP_LIBS = ("xcb", "fontconfig", "freetype2", "xkbcommon", "xkbcommon-x11"
 def check_requirement(name, options):
     """Return None when the requirement holds, else a fix for the user."""
     fixes = catalog.REQUIREMENTS
-    if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "gnome-keyring-daemon"):
+    if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "gnome-keyring-daemon", "xvfb-run", "xdotool"):
         return None if shutil.which(name) else fixes[name]
     if name == "linux-app-libs":
         # The pkg-config names of the libraries that the application links.
@@ -177,6 +178,7 @@ class SuiteResult:
     missing: list = field(default_factory=list)
     failures: list = field(default_factory=list)
     metrics: list = field(default_factory=list)
+    tests: list = field(default_factory=list)
 
 
 class Output:
@@ -230,8 +232,8 @@ def execute(command, env, timeout, log, output):
         sink.write(f"$ {subprocess.list2cmdline(command)}\n")
         sink.flush()
         process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                   start_new_session=True)
+                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                   bufsize=1, **spawn_options())
 
         def forward():
             for line in iter(process.stdout.readline, ""):
@@ -244,13 +246,13 @@ def execute(command, env, timeout, log, output):
         try:
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            stop_tree(process)
             code = None
         except BaseException:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            stop_tree(process)
             raise
+        finally:
+            stop_tree(process)
         reader.join(timeout=5)
         process.stdout.close()
         if code is None:
@@ -314,10 +316,29 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
             continue
         command = render_command(step, options, item.test_filter, extra)
         step_env = {key: value.replace("{target}", str(target_dir())) for key, value in step.env}
-        if step.nextest_filter is not None:
+        if step.nextest_filter is not None and not options.get("isolated_reports"):
             # A step that fails before nextest writes a report must not report old failures.
             junit_report().unlink(missing_ok=True)
-        code = execute(command, dict(os.environ, **env, **step_env), step.timeout, log, output)
+        report = junit_report()
+        if step.nextest_filter is not None and options.get("isolated_reports"):
+            store = run_dir / "nextest" / suite.name / uuid.uuid4().hex
+            store.mkdir(parents=True)
+            config = store / "config.toml"
+            config.write_text('[store]\ndir = ' + json.dumps(str(store)) + '\n' +
+                              (ROOT / ".config/nextest.toml").read_text())
+            command += ["--config-file", str(config)]
+            report = store / nextest_profile() / "junit.xml"
+        code = execute(command, dict(os.environ, **options.get("env", {}), **env, **step_env), step.timeout, log, output)
+        if step.nextest_filter is not None and options.get("isolated_reports") and report.exists():
+            try:
+                cases = list(ElementTree.parse(report).getroot().iter("testcase"))
+                options.setdefault("test_evidence", []).append({
+                    "count": sum(case.find("skipped") is None for case in cases),
+                    "failures": sum(case.find("failure") is not None or case.find("error") is not None for case in cases),
+                    "report": str(report),
+                })
+            except ElementTree.ParseError:
+                code = 1
         if code == 0:
             continue
         result = SuiteResult(suite.name, "failed", time.monotonic() - started, str(log),
@@ -326,7 +347,7 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if iteration:
             result.reason += f" Iteration {iteration[0]} of {iteration[1]}."
         if step.nextest_filter is not None:
-            junit = junit_report()
+            junit = report
             if junit.exists():
                 saved = run_dir / "junit" / f"{suite.name}.xml"
                 saved.parent.mkdir(parents=True, exist_ok=True)
@@ -354,8 +375,10 @@ def metrics_in(log):
 
 
 def run_suite(item, options, extra, run_dir, output, env=None):
+    options = dict(options, test_evidence=[])
     result = run_suite_steps(item, options, extra, run_dir, output, env)
     result.metrics = metrics_in(suite_log(run_dir, item.suite))
+    result.tests = options["test_evidence"]
     return result
 
 
@@ -432,16 +455,38 @@ class FixtureSession:
 
 def new_run_dir():
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = runs_dir() / f"{stamp}-{os.getpid()}"
+    path = runs_dir() / f"{stamp}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     path.mkdir(parents=True)
     latest = runs_dir() / "latest"
-    if latest.is_symlink() or latest.exists():
-        latest.unlink()
-    latest.symlink_to(path.name)
+    from contract import atomic_json
+    atomic_json(runs_dir() / "latest.json", {"run": path.name})
+    if os.name != "nt":
+        temporary = runs_dir() / f".latest-{uuid.uuid4().hex}"
+        temporary.symlink_to(path.name)
+        os.replace(temporary, latest)
     return path
 
 
 def run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False):
+    from contract import source_sha
+    options = dict(options, env=dict(options.get("env", {})))
+    # Give each run an immutable build identity. build.rs otherwise watches all
+    # Git refs, which background fetches in another worktree can change.
+    if not options["env"].get("QROW_COMMIT") and not os.environ.get("QROW_COMMIT"):
+        sha = source_sha(ROOT)
+        if sha:
+            options["env"]["QROW_COMMIT"] = sha[:12]
+    resources = ([f"cargo:{target_dir().resolve()}"]
+                 if any("cargo" in item.suite.requires or item.suite.name == "package-smoke" for item in selected) else [])
+    if any(item.suite.fixture for item in selected):
+        resources.append(f"fixture:{fixture.state_path().resolve()}")
+    if any(item.suite.name in ("desktop", "perf-app", "perf-package") for item in selected):
+        resources.append("desktop")
+    with lease(resources):
+        return _run(selected, options, extra, output, fail_fast, report_only, require_all)
+
+
+def _run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False):
     """Run the selected suites. A failure of a `report_only` suite does not fail the run.
 
     With `require_all`, a missing prerequisite of a suite that is not
@@ -458,6 +503,17 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
     session = FixtureSession(options, run_dir, output,
                              any(selected[index].suite.fixture == "docker" for index in served)) if served else None
     prepared = False
+    prepared_suites = set()
+    finalized = set()
+    interrupted = False
+    cleanup_errors = []
+    events = run_dir / "events.jsonl"
+
+    def event(kind, **data):
+        with events.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"event": kind, "time": time.monotonic(), **data}) + "\n")
+
+    event("started", suites=[item.suite.name for item in selected])
     try:
         for index, item in enumerate(selected):
             name = item.suite.name
@@ -472,6 +528,7 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
                 done = {}
                 for other in served:
                     suite = selected[other].suite
+                    prepared_suites.add(other)
                     failure = None
                     for step in suite.prepare:
                         if step not in done:
@@ -492,16 +549,42 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
             elif item.suite.fixture and session.error:
                 results[index] = SuiteResult(name, "failed", reason=session.error)
             elif item.suite.fixture:
+                finalized.add(index)
                 results[index] = run_suite(item, options, extra, run_dir, output, session.env(item.suite))
             else:
+                finalized.add(index)
                 results[index] = run_suite(item, options, extra, run_dir, output)
             result = results[index]
+            event("suite_finished", name=result.name, status=result.status, reason=result.reason)
             output.note(f"{result.name}: {result.status}" + (f" ({result.reason})" if result.reason else ""))
+    except (Exception, KeyboardInterrupt) as error:
+        interrupted = isinstance(error, KeyboardInterrupt)
+        for index, result in enumerate(results):
+            if result is None:
+                results[index] = SuiteResult(selected[index].suite.name, "failed",
+                                             reason="Cancelled." if interrupted else f"Execution error: {error}")
+        event("interrupted" if interrupted else "execution_error", reason=str(error))
     finally:
+        for index in sorted(prepared_suites - finalized):
+            item = selected[index]
+            try:
+                cleanup = run_steps(item, item.suite.cleanup, options, extra,
+                                    {"QROW_E2E_ARTIFACTS": str(run_dir / item.suite.name)},
+                                    run_dir, output, time.monotonic())
+                if cleanup:
+                    cleanup_errors.append(cleanup.reason)
+            except Exception as error:
+                cleanup_errors.append(str(error))
         if session:
-            session.release()
+            try:
+                session.release()
+            except Exception as error:
+                cleanup_errors.append(str(error))
+                event("cleanup_failed", reason=str(error))
     statuses = {result.status for result in results if result.name not in report_only}
-    if "failed" in statuses:
+    if interrupted:
+        status, code = "cancelled", 130
+    elif "failed" in statuses or cleanup_errors:
         status, code = "failed", EXIT_FAILED
     elif "missing" in statuses:
         status, code = "missing", EXIT_MISSING
@@ -516,7 +599,11 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
                     **({"report_only": True} if result.name in report_only else {})}
                    for result in results],
     }
-    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    if cleanup_errors:
+        summary["cleanup_errors"] = cleanup_errors
+    from contract import atomic_json
+    atomic_json(run_dir / "summary.json", summary)
+    event("finished", status=status, exit_code=code)
     measured = [metric for result in results for metric in result.metrics]
     if measured:
         (run_dir / "perf.json").write_text(json.dumps(measured, indent=2) + "\n")

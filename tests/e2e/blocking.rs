@@ -335,7 +335,7 @@ fn cancel_stops_spark_and_keeps_the_partial_preview(cx: &mut TestAppContext) {
     // query, not only for its first cell.
     app.run_complete(cx, "SELECT 'after-cancel-works' AS result");
     app.wait_cell(cx, 0, 1, "after-cancel-works");
-    app.click(cx, "disconnect");
+    app.click_ready(cx, "disconnect");
     app.run_sql(cx, "SELECT 'reconnect-works' AS result");
     app.wait_cell(cx, 0, 1, "reconnect-works");
 }

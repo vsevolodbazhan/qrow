@@ -5,6 +5,11 @@ has an Apache 2.0 license. See `LICENSE-APACHE`.
 
 Qrow changes these files:
 
+- `src/test_support.rs`: snapshots expose the native click action through
+  `is_clickable`. Enabled buttons do not expose an explicit disabled flag in
+  this GPUI version. The test harness checks the click action before input.
+  `tests/ui/timing.rs` covers enabled and disabled production Run buttons.
+
 - `src/input/base/element.rs`: the active line paint now covers the editor's
   right padding.
 - `src/text/inline_flow.rs`: a Markdown line with inline code keeps one line at

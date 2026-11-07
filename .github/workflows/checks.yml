@@ -223,11 +223,9 @@ jobs:
   backend:
     name: backend
     needs: plan
-    # E2E jobs run repository code in Docker and through macOS accessibility
-    # APIs, so they skip pull requests from forks.
+    # Fixtures use disposable runners and synthetic credentials, including forks.
     if: >
-      fromJSON(needs.plan.outputs.jobs).backend &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      fromJSON(needs.plan.outputs.jobs).backend
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -262,8 +260,7 @@ jobs:
     name: e2e
     needs: plan
     if: >
-      fromJSON(needs.plan.outputs.jobs).e2e &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      fromJSON(needs.plan.outputs.jobs).e2e
     runs-on: macos-15
     timeout-minutes: 150
     steps:
@@ -309,8 +306,7 @@ jobs:
     name: e2e-linux
     needs: plan
     if: >
-      fromJSON(needs.plan.outputs.jobs)['e2e-linux'] &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      fromJSON(needs.plan.outputs.jobs)['e2e-linux']
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -554,8 +550,7 @@ jobs:
     name: e2e-intel
     needs: [plan, package-intel]
     if: >
-      fromJSON(needs.plan.outputs.jobs)['e2e-intel'] &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      fromJSON(needs.plan.outputs.jobs)['e2e-intel']
     runs-on: macos-15-intel
     timeout-minutes: 150
     steps:

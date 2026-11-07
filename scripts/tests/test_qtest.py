@@ -348,7 +348,7 @@ class RunTests(unittest.TestCase):
                 patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
             os.environ.pop("QROW_CI_MEASURE", None) if env is None else None
             cli.main(["ci", *arguments])
-            environment = dict(os.environ)
+            environment = dict(run.call_args.args[1].get("env", {})) if run.called else {}
         return run, environment
 
     def test_report_only_suites_run_only_when_the_run_measures(self):
@@ -382,13 +382,14 @@ class RunTests(unittest.TestCase):
 
     def test_a_ci_job_sets_its_environment_and_installs_its_rust_target(self):
         commands = []
-        with patch.dict(os.environ, {}), patch.object(runner, "run", return_value={"exit_code": 0}), \
+        with patch.dict(os.environ, {}), patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
                 patch.object(cli, "install_tools", return_value=0), patch.object(cli, "print_summary"), \
                 patch.object(cli.subprocess, "run", side_effect=lambda command, **_: commands.append(command)
                              or subprocess.CompletedProcess(command, 0)), \
                 contextlib.redirect_stderr(io.StringIO()):
             cli.main(["ci", "package-intel", "--install"])
-            self.assertEqual(os.environ["CARGO_BUILD_TARGET"], "x86_64-apple-darwin")
+            self.assertEqual(run.call_args.args[1]["env"]["CARGO_BUILD_TARGET"], "x86_64-apple-darwin")
+            self.assertNotEqual(os.environ.get("CARGO_BUILD_TARGET"), "x86_64-apple-darwin")
         self.assertEqual(commands, [("rustup", "target", "add", "x86_64-apple-darwin")])
 
     def test_a_nextest_step_that_writes_no_report_does_not_report_old_failures(self):

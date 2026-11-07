@@ -25,3 +25,4 @@ mod result_tabs;
 mod results;
 mod sign_ins;
 mod tabs;
+mod timing;

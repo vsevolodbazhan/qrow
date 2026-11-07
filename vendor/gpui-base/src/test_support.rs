@@ -28,6 +28,7 @@ pub struct ElementSnapshot {
     focused: Option<bool>,
     focus_action: bool,
     disabled: Option<bool>,
+    click_action: bool,
     label: Option<SharedString>,
 }
 impl fmt::Debug for ElementSnapshot {
@@ -107,6 +108,10 @@ impl ElementSnapshot {
     /// Absence is not evidence that a control accepts input.
     pub fn disabled(&self) -> Option<bool> {
         self.disabled
+    }
+    /// Whether this control advertises a native click action in the completed frame.
+    pub fn is_clickable(&self) -> bool {
+        self.click_action
     }
     /// The accessibility label; it can intentionally differ from visible text.
     pub fn label(&self) -> Option<&str> {
@@ -315,6 +320,7 @@ impl<E: Element<PrepaintState = Option<Hitbox>> + InteractiveElement> Element fo
             focused: None,
             focus_action: node.supports_action(gpui::accesskit::Action::Focus),
             disabled: node.is_disabled().then_some(true),
+            click_action: node.supports_action(gpui::accesskit::Action::Click),
             label: node.label().map(|label| label.to_owned().into()),
         };
         let registration =

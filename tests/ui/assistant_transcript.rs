@@ -348,6 +348,9 @@ fn a_saved_conversation_shows_as_it_did_live_without_codex(cx: &mut TestAppConte
     app.wait_idle(cx);
     app.send(cx, "Show a bold reply");
     app.wait_idle(cx);
+    // Turn completion precedes the last reveal frame. Compare the persisted
+    // transcript only after the complete synthetic reply is on screen.
+    app.wait_reply(cx, "right edge.**");
     let live = app.update(cx, |window, _| rows(window));
     let card = live
         .iter()

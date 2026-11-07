@@ -49,10 +49,15 @@ jobs:
         shell: bash
         env:
           REQUESTED_REF: ${{ inputs.commit || github.sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           if ! target_sha="$(git rev-parse --verify --end-of-options "${REQUESTED_REF}^{commit}")"; then
             echo "Could not resolve commit, branch, or tag: ${REQUESTED_REF}" >&2
+            exit 1
+          fi
+          if [ "$target_sha" != "$WORKFLOW_SHA" ]; then
+            echo "Select the workflow branch at the candidate commit; source and workflow must match." >&2
             exit 1
           fi
           git checkout --detach "$target_sha"
@@ -108,6 +113,15 @@ jobs:
       ref: ${{ needs.resolve-target.outputs.target_sha }}
       release-version: ${{ needs.resolve-target.outputs.release_version }}
 
+  platforms:
+    needs: resolve-target
+    uses: ./.github/workflows/platforms.yml
+    with:
+      ref: ${{ needs.resolve-target.outputs.target_sha }}
+      release-version: ${{ needs.resolve-target.outputs.release_version }}
+      full: true
+      cold-cache: true
+
   # A release from main saves the Rust caches of the Intel jobs. Delete the
   # caches that they replace, as the test workflow does.
   cache-cleanup:
@@ -133,15 +147,18 @@ jobs:
     needs:
       - resolve-target
       - checks
+      - platforms
     strategy:
       matrix:
         include:
           - arch: arm64
             runner: macos-15
-            package: macos-package
+            package: candidate-macos-arm64
+            target: macos-arm64
           - arch: x86_64
             runner: macos-15-intel
-            package: macos-package-x86_64
+            package: candidate-macos-x86_64
+            target: macos-x86_64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
@@ -155,6 +172,25 @@ jobs:
         with:
           name: ${{ matrix.package }}
           path: package
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: platform-evidence-${{ matrix.target }}
+          path: evidence
+      - name: Verify qualified app archive
+        env:
+          TARGET: ${{ matrix.target }}
+          SOURCE_SHA: ${{ needs.resolve-target.outputs.target_sha }}
+        run: |
+          python3 - <<'PYVERIFY'
+          import hashlib, json, os
+          from pathlib import Path
+          receipt = json.loads(Path("evidence/platform/receipt.json").read_text())
+          archive = Path("package/Qrow-macos.zip")
+          assert receipt["target"] == os.environ["TARGET"]
+          assert receipt["source_sha"] == os.environ["SOURCE_SHA"]
+          assert receipt["archive"] == archive.name
+          assert receipt["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+          PYVERIFY
       - name: setup-uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
@@ -176,6 +212,7 @@ jobs:
             --output "$dmg_path" \
             --volume-name "Qrow ${RELEASE_VERSION}"
           hdiutil imageinfo "$dmg_path" >/dev/null
+          uv run --locked python scripts/package/qualify.py dist --dmg "$dmg_path" --receipt dist/dmg-receipt.json
           # Keep the old ARM64 URL valid until the tap updater supports both architectures.
           if [ "$PACKAGE_ARCH" = arm64 ]; then
             cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"
@@ -190,47 +227,48 @@ jobs:
 
   linux:
     name: linux-${{ matrix.arch }}
-    needs:
-      - resolve-target
-      - checks
+    needs: [resolve-target, checks, platforms]
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-24.04
+            target: linux-x86_64
           - arch: aarch64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    # Uncached: a debug build for the tests, the e2e fixture images, and a release build.
-    timeout-minutes: 90
-    env:
-      CARGO_BUILD_JOBS: 2
+            target: linux-arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          persist-credentials: false
-          ref: ${{ needs.resolve-target.outputs.target_sha }}
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+          name: candidate-${{ matrix.target }}
+          path: candidate
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          version: "0.12.10"
-      - name: Install Linux build dependencies
-        run: sh scripts/ci/linux-build-deps.sh
-      - run: rustup show
-      - run: ./qtest install cargo-nextest
-      - run: ./qtest run ui
-      - run: ./qtest run e2e --runtime docker
-      - name: Build archive
+          name: platform-evidence-${{ matrix.target }}
+          path: evidence
+      - name: Verify qualified archive
         env:
-          QROW_RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+          RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
           PACKAGE_ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+          SOURCE_SHA: ${{ needs.resolve-target.outputs.target_sha }}
         run: |
-          sh scripts/package/linux.sh
-          test -f "target/package/Qrow-${QROW_RELEASE_VERSION}-linux-${PACKAGE_ARCH}.tar.gz"
+          python3 - <<'PYVERIFY'
+          import hashlib, json, os
+          from pathlib import Path
+          receipt = json.loads(Path("evidence/platform/receipt.json").read_text())
+          archive = Path("candidate") / f"Qrow-{os.environ['RELEASE_VERSION']}-linux-{os.environ['PACKAGE_ARCH']}.tar.gz"
+          assert receipt["target"] == os.environ["TARGET"]
+          assert receipt["source_sha"] == os.environ["SOURCE_SHA"]
+          assert receipt["archive"] == archive.name
+          assert receipt["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+          PYVERIFY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-${{ matrix.arch }}
-          path: target/package/*.tar.gz
-          retention-days: 1
+          path: candidate/*.tar.gz
+          retention-days: 14
           if-no-files-found: error
 
   publish:
@@ -382,10 +420,24 @@ jobs:
             --title "$RELEASE_TITLE"
             --notes-file release-notes.md
             --verify-tag
+            --draft
+            --latest=false
           )
           if [ "$PRERELEASE" = true ]; then
-            release_args+=(--prerelease --latest=false)
-          else
-            release_args+=(--latest)
+            release_args+=(--prerelease)
           fi
+          (cd dist && sha256sum -- ./*.dmg ./*.tar.gz > SHA256SUMS)
+          release_args+=(dist/SHA256SUMS)
           gh "${release_args[@]}"
+          verification_dir="$(mktemp -d)"
+          trap 'rm -rf "$verification_dir"' EXIT
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$verification_dir"
+          cmp dist/SHA256SUMS "$verification_dir/SHA256SUMS"
+          (cd "$verification_dir" && sha256sum --check SHA256SUMS)
+          publish_args=(release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false)
+          if [ "$PRERELEASE" = true ]; then
+            publish_args+=(--latest=false)
+          else
+            publish_args+=(--latest)
+          fi
+          gh "${publish_args[@]}"

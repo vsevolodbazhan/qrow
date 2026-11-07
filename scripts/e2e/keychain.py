@@ -33,7 +33,7 @@ def isolated_run(artifacts, target):
     """The desktop directory of one qtest run: <target>/qtest/runs/<run>/desktop."""
     run = artifacts.parent
     return (artifacts.name == "desktop" and run.parent == target / "qtest" / "runs"
-            and re.fullmatch(r"\d{8}-\d{6}-\d+", run.name) is not None)
+            and re.fullmatch(r"\d{8}-\d{6}-\d+(?:-[a-f0-9]{8})?", run.name) is not None)
 
 
 def main():

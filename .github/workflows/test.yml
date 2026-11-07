@@ -6,6 +6,14 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_dispatch:
+    inputs:
+      cold-cache:
+        description: Validate native targets without Rust build caches.
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 2 * * 1-6"
+    - cron: "17 2 * * 0"
 
 permissions:
   contents: read
@@ -25,6 +33,25 @@ jobs:
     uses: ./.github/workflows/checks.yml
     with:
       ref: ${{ github.sha }}
+
+  platforms:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    uses: ./.github/workflows/platforms.yml
+    with:
+      ref: ${{ github.sha }}
+      full: ${{ github.event_name != 'pull_request' }}
+      cold-cache: ${{ inputs.cold-cache == true || github.event.schedule == '17 2 * * 0' }}
+
+  ci-required:
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    needs: [checks, platforms]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          CHECKS: ${{ needs.checks.result }}
+          PLATFORMS: ${{ needs.platforms.result }}
+        run: test "$CHECKS" = success && test "$PLATFORMS" = success
 
   # A run on main can save new Rust caches next to the caches that they
   # replace. Delete the replaced caches to stay inside the repository limit,
