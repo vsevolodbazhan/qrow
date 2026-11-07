@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Delete the Rust build caches of `main` that a newer cache replaced.
+"""Delete the Rust build caches of `main` that a newer cache replaced or that no job uses.
 
 Swatinem/rust-cache names a cache `v0-rust-SHARED-OS-ARCH-ENV-LOCK`. The two
 hashes change with the toolchain and with `Cargo.lock`, and each change saves
 a new cache next to the old one. The old caches fill the repository cache
 limit. Of the caches with the same name before the hashes, this script keeps
-the newest and deletes the others.
+the newest and deletes the others. It also deletes the caches of shared keys
+that the workflow no longer uses.
 
 Only pushes to `main` save these caches. Pull requests restore them too,
 so the time of last use does not show which cache `main` uses. Release
@@ -20,7 +21,14 @@ import subprocess
 import sys
 
 REF = "refs/heads/main"
-RUST_KEY = re.compile(r"(?P<group>v0-rust-.+)-[0-9a-f]{8}-[0-9a-f]{8}")
+RUST_KEY = re.compile(r"(?P<group>v0-rust-(?P<shared>.+)-(?:Linux|Darwin|Windows)-[^-]+)-[0-9a-f]{8}-[0-9a-f]{8}")
+# The rust-cache shared keys of the test workflow. A cache of another key
+# belongs to a removed or renamed job, and no job restores it again.
+# scripts/tests/test_workflows.py keeps this list equal to the workflow.
+CURRENT_KEYS = frozenset({
+    "common-core", "common-backend", "common-headless-ui", "common-performance",
+    "native-macos-arm64", "native-macos-x86_64", "native-linux-x86_64", "native-linux-arm64",
+})
 
 
 def time(text):
@@ -41,6 +49,17 @@ def superseded(caches):
     return sorted(stale, key=lambda cache: cache["key"])
 
 
+def retired(caches):
+    """The Rust caches of `main` whose shared key the workflow no longer uses."""
+    return sorted((cache for cache in caches if cache["ref"] == REF and (match := RUST_KEY.fullmatch(cache["key"]))
+                   and match["shared"] not in CURRENT_KEYS), key=lambda cache: cache["key"])
+
+
+def stale(caches):
+    chosen = {cache["id"]: cache for cache in (*superseded(caches), *retired(caches))}
+    return sorted(chosen.values(), key=lambda cache: cache["key"])
+
+
 def gh(*args):
     return subprocess.run(("gh", "api", *args), check=True, capture_output=True, text=True).stdout
 
@@ -59,14 +78,14 @@ def main():
     options = parser.parse_args()
     if not options.repository:
         parser.error("set --repository or GITHUB_REPOSITORY")
-    stale = superseded(list_caches(options.repository))
-    for cache in stale:
+    caches = stale(list_caches(options.repository))
+    for cache in caches:
         print(f"{'Would delete' if options.dry_run else 'Delete'} {cache['key']} "
               f"({cache['size_in_bytes'] / 1e9:.2f} GB, saved {cache['created_at']})")
         if not options.dry_run:
             gh("--method", "DELETE", f"repos/{options.repository}/actions/caches/{cache['id']}")
-    total = sum(cache["size_in_bytes"] for cache in stale) / 1e9
-    print(f"{len(stale)} superseded Rust caches, {total:.2f} GB.")
+    total = sum(cache["size_in_bytes"] for cache in caches) / 1e9
+    print(f"{len(caches)} superseded or retired Rust caches, {total:.2f} GB.")
 
 
 if __name__ == "__main__":
