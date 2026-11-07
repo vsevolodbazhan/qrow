@@ -338,6 +338,21 @@ fn cancel_a_query_and_reuse_its_tab(cx: &mut TestAppContext) {
     let app = launch(cx, "SELECT count(*) FROM tpch.sf1000.lineitem");
     app.click(cx, "run");
     app.wait_status(cx, "Executing");
+    // Executing starts before the POST returns. Session reuse requires the
+    // query cursor; cancellation during submission can close the session.
+    app.click(cx, "output-panel-tab");
+    app.wait_until(
+        cx,
+        "Trino to accept SQL and return its cancellation cursor",
+        crate::support::fixture::QUERY_TIMEOUT,
+        |window, cx| {
+            window.click("output-copy-all", cx);
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text.contains("SQL accepted by the server"))
+        },
+    );
+    app.click(cx, "results-panel-tab");
     app.click(cx, "cancel");
     app.wait_status(cx, "Cancelled");
     app.run_complete(cx, "SELECT 42 AS value");
