@@ -8,7 +8,9 @@ if [ "${1:-}" = --session ]; then
     mkdir -m 700 "$XDG_RUNTIME_DIR"
     export QROW_ISOLATED_SECRET_TEST=1
     printf '%s\n' synthetic-keyring-password | gnome-keyring-daemon --unlock --components=secrets >/dev/null
-    exec "${QROW_PYTHON:-python3}" scripts/qtest/builds.py cargo nextest run --locked --no-default-features --lib --run-ignored only -E 'test(isolated_secret_service_round_trip)'
+    qrow_profile=default
+    if [ -n "${CI:-}" ]; then qrow_profile=ci; fi
+    exec "${QROW_PYTHON:-python3}" scripts/qtest/builds.py cargo nextest run --locked --no-default-features --profile "$qrow_profile" --lib --run-ignored only -E 'test(isolated_secret_service_round_trip)'
 fi
 qrow_secret_dir=$(mktemp -d)
 trap 'rm -rf "$qrow_secret_dir"' EXIT HUP INT TERM

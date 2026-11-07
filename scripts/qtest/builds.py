@@ -182,6 +182,16 @@ def reuse(command, arguments):
     return ["cargo", "nextest", "run", *arguments[key], *runtime]
 
 
+def nextest_profile(command, env):
+    """The nextest profile that writes the JUnit report: --profile, then NEXTEST_PROFILE, then default."""
+    for index, arg in enumerate(command):
+        if arg == "--profile" and index + 1 < len(command):
+            return command[index + 1]
+        if arg.startswith("--profile="):
+            return arg.removeprefix("--profile=")
+    return env.get("NEXTEST_PROFILE") or "default"
+
+
 def run(command, env=None):
     """Fixture adapter entry point. Keep its runtime/filter, use qtest's prepared build."""
     env = dict(os.environ if env is None else env)
@@ -196,7 +206,7 @@ def run(command, env=None):
         root = Path(__file__).resolve().parents[2]
         config.write_text('[store]\ndir = ' + json.dumps(str(store)) + '\n' + (root / ".config/nextest.toml").read_text())
         command = [*command, "--config-file", str(config)]
-        report = store / ("ci" if env.get("CI") else "default") / "junit.xml"
+        report = store / nextest_profile(command, env) / "junit.xml"
     subprocess.run(command, env=env, check=True)
     if report:
         cases = list(ElementTree.parse(report).getroot().iter("testcase"))

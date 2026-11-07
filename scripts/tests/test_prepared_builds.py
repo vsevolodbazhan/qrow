@@ -56,6 +56,17 @@ class VariantTests(unittest.TestCase):
                 with self.subTest(triple=triple), self.assertRaisesRegex(ValueError, message):
                     builds.Prepared(path, value, ROOT, Path(directory) / "extracted", runner.Output(True))
 
+    def test_adapter_evidence_reads_the_profile_that_nextest_uses(self):
+        command = ["cargo", "nextest", "run", "--lib"]
+        self.assertEqual(builds.nextest_profile(command, {"CI": "true"}), "default")
+        self.assertEqual(builds.nextest_profile([*command, "--profile", "ci"], {}), "ci")
+        self.assertEqual(builds.nextest_profile([*command, "--profile=ci"], {}), "ci")
+        self.assertEqual(builds.nextest_profile(command, {"NEXTEST_PROFILE": "ci"}), "ci")
+        # --cargo-profile selects the compiler profile, not the nextest profile.
+        self.assertEqual(builds.nextest_profile([*command, "--cargo-profile", "perf"], {}), "default")
+        script = (ROOT / "scripts/testing/linux-secret-service.sh").read_text()
+        self.assertIn('--profile "$qrow_profile"', script)
+
     def test_no_prepared_match_fails_without_fallback(self):
         with self.assertRaisesRegex(ValueError, "No prepared build"):
             builds.reuse(["cargo", "nextest", "run", "--no-default-features"], {})
