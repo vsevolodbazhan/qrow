@@ -169,6 +169,10 @@ pub struct Settings {
     pub assistant_font_family: String,
     pub assistant_font_size: f32,
     pub assistant_line_height: f32,
+    /// Animate short horizontal caret movements in the assistant composer.
+    pub assistant_smooth_caret: bool,
+    /// Ease content-driven assistant composer height changes.
+    pub assistant_smooth_resize: bool,
     pub assistant: AssistantSettings,
     pub export: crate::export::Settings,
     /// Maximum retained replay spool size. Zero disables replay retention.
@@ -198,6 +202,8 @@ impl Default for Settings {
             assistant_font_family: INTERFACE_FONT_FAMILY.into(),
             assistant_font_size: 14.,
             assistant_line_height: 1.6,
+            assistant_smooth_caret: false,
+            assistant_smooth_resize: false,
             assistant: AssistantSettings::default(),
             export: crate::export::Settings::default(),
             export_replay_limit_mib: 2048,
@@ -2697,6 +2703,8 @@ mod tests {
             assistant_font_family: "   ".into(),
             assistant_font_size: f32::NAN,
             assistant_line_height: f32::NAN,
+            assistant_smooth_caret: false,
+            assistant_smooth_resize: false,
             assistant: AssistantSettings::default(),
             export: crate::export::Settings::default(),
             export_replay_limit_mib: 2048,

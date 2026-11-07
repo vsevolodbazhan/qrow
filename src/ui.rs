@@ -2799,6 +2799,8 @@ impl Qrow {
         self.settings.assistant_font_family = settings.assistant_font_family;
         self.settings.assistant_font_size = settings.assistant_font_size;
         self.settings.assistant_line_height = settings.assistant_line_height;
+        self.settings.assistant_smooth_caret = settings.assistant_smooth_caret;
+        self.settings.assistant_smooth_resize = settings.assistant_smooth_resize;
         self.apply_ui_scale(settings.ui_scale, window, cx);
         themes::apply(&self.settings.theme, Some(window), cx);
         apply_ui_theme(&self.settings, window, cx);

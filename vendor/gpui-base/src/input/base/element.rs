@@ -1867,7 +1867,32 @@ impl<M: InputModeKind> Element for TextElement<M> {
             if state.mode.is_auto_grow() {
                 // Auto grow to let height match to rows, but not exceed max rows.
                 let rows = state.mode.max_rows().min(state.mode.rows());
-                style.min_size.height = (rows * line_height).into();
+                let target = rows * line_height;
+                let duration = state.editor_style.auto_grow_transition;
+                // Direct window/width and typography changes must keep their layout
+                // response. Only content-driven row changes ease between heights.
+                let geometry = (window.viewport_size(), state.input_bounds.size.width, line_height);
+                let previous = window.use_keyed_state(
+                    ElementId::from(("auto-grow-geometry", self.state.entity_id())),
+                    cx,
+                    |_, _| geometry,
+                );
+                let changed = *previous.read(cx) != geometry;
+                if changed {
+                    previous.update(cx, |previous, _| *previous = geometry);
+                }
+                let height = crate::motion::transition(
+                    ElementId::from(("auto-grow-height", self.state.entity_id())),
+                    target,
+                    crate::motion::Transition::new(if changed {
+                        std::time::Duration::ZERO
+                    } else {
+                        duration
+                    }),
+                    window,
+                    cx,
+                );
+                style.min_size.height = height.into();
             } else {
                 style.min_size.height = line_height.into();
             }

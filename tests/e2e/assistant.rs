@@ -271,3 +271,45 @@ fn the_assistant_reads_columns_of_another_connected_connection(cx: &mut TestAppC
     app.select_connection(cx, &beta);
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn smooth_composer_sends_a_multiline_draft_and_runs_sql(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 42 AS value", crate::support::fixture::PASSWORD);
+    let mut workspace = codex.workspace(workspace);
+    workspace.settings.assistant_smooth_caret = true;
+    workspace.settings.assistant_smooth_resize = true;
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    let empty = app.update(cx, |window, _| {
+        bounds_of(window, "assistant-composer").size.height
+    });
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let message = "select 1\nline 2\nline 3\nline 4\nline 5\nline 6";
+    app.type_message(cx, message);
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        assert!(bounds_of(window, "assistant-composer").size.height > empty);
+        assert_eq!(
+            crate::support::assistant::composer_text(window).as_deref(),
+            Some(message)
+        );
+    });
+    app.click(cx, "assistant-send");
+    app.wait_reply(cx, "You: select 1");
+    cx.executor().advance_clock(Duration::from_millis(200));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.wait_until(cx, "the composer to shrink", QUERY_TIMEOUT, |window, _| {
+        bounds_of(window, "assistant-composer").size.height == empty
+    });
+    app.run_complete(cx, "SELECT 42 AS value");
+    app.wait_cell(cx, 0, 1, "42");
+}

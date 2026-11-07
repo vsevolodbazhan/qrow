@@ -792,6 +792,8 @@ impl AssistantPane {
                         // message field through its container.
                         div().id("assistant-composer").test_support().key_context("AssistantComposer").child(
                             Textarea::new(&self.composer)
+                                .smooth_caret(qrow.settings.assistant_smooth_caret)
+                                .smooth_resize(qrow.settings.assistant_smooth_resize && qrow.assistant_state.resizing.is_none())
                                 .focus_ring(false)
                                 .w_full()
                                 .aria_label("Assistant Message")),

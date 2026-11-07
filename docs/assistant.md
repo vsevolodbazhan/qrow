@@ -80,7 +80,11 @@ status bar, select **Toggle assistant** in the **View** menu, or press **⌘R**.
 **⌘Enter** to send it. Press **Shift-Enter** to start a new line. The message
 field shows three lines. It grows with a longer message to 40% of the window
 height, and then scrolls. After you send the message, the field shows three
-lines again. While the assistant works, the Send button becomes
+lines again. To animate these height changes or short caret movements, enable
+**Smooth Composer Resize** or **Smooth Composer Caret** in
+[Appearance → Conversations](workspace.md). Both options are off by default
+and follow reduced motion. Text entry stays immediate.
+While the assistant works, the Send button becomes
 **Cancel**. While the harness starts a new conversation after its first message, you
 cannot send or cancel. Type a follow-up and press **Enter** to steer the current
 turn. With Claude Code, the follow-up starts the next turn. **Cancel**

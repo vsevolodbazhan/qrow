@@ -107,3 +107,9 @@ as one unit.
 - Input paint can interpolate short horizontal caret movements with the existing motion engine. The styled layer supplies the duration. Logical input and popup geometry stay immediate. Mouse placement, selection, IME, scrolling, layout changes, and large jumps disable interpolation. Reduced motion remains immediate.
 
 - Discrete input wheel events can use a caller-supplied transition duration. Targets accumulate and stay within the viewport limits. Pixel gestures, typing, mouse placement, and direct viewport changes cancel pending travel. Frame requests stop when the target is reached.
+
+- `InputEditorStyle::auto_grow_transition` opts into content-driven height
+  transitions for auto-grow inputs. The default is zero. Direct window, width,
+  and line-height changes snap to their new size. Reduced motion and zero
+  duration settle immediately. Keyed transitions reverse from their current
+  height and stop requesting frames when settled.

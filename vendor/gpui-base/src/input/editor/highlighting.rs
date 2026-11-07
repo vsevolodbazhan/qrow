@@ -100,6 +100,8 @@ pub struct InputEditorStyle {
     pub caret_transition: std::time::Duration,
     /// Duration of discrete wheel scrolling. Zero keeps wheel steps immediate.
     pub scroll_transition: std::time::Duration,
+    /// Duration of auto-grow height changes. Zero keeps resizing immediate.
+    pub auto_grow_transition: std::time::Duration,
     pub diagnostics: DiagnosticColors,
     pub highlight_styles: SharedHighlightStyleResolver,
     pub editor_invisible: Option<Hsla>,
@@ -157,6 +159,7 @@ impl Default for InputEditorStyle {
             caret: Hsla::default(),
             caret_transition: std::time::Duration::ZERO,
             scroll_transition: std::time::Duration::ZERO,
+            auto_grow_transition: std::time::Duration::ZERO,
             diagnostics: DiagnosticColors::default(),
             highlight_styles: Arc::new(NoHighlightStyles),
             editor_invisible: None,

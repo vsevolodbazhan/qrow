@@ -346,3 +346,36 @@ fn scrolling_and_panel_motion_are_independent_opt_ins_and_resettable(cx: &mut Te
         !workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
     });
 }
+
+#[gpui_kit::test]
+fn composer_motion_options_are_independent_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.assistant_smooth_caret);
+    assert!(!app.saved().settings.assistant_smooth_resize);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "composer");
+    app.wait_for(cx, "assistant-smooth-caret");
+    app.click(cx, "assistant-smooth-caret");
+    wait_saved(&app, cx, "composer caret enabled", |workspace| {
+        workspace.settings.assistant_smooth_caret && !workspace.settings.assistant_smooth_resize
+    });
+    app.click(cx, "assistant-smooth-resize");
+    wait_saved(&app, cx, "composer resize enabled", |workspace| {
+        workspace.settings.assistant_smooth_caret
+            && workspace.settings.assistant_smooth_resize
+            && !workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "composer");
+    app.wait_for(cx, "assistant-smooth-resize");
+    app.click(cx, "assistant-smooth-caret");
+    wait_saved(&app, cx, "composer caret disabled", |workspace| {
+        !workspace.settings.assistant_smooth_caret && workspace.settings.assistant_smooth_resize
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "composer defaults", |workspace| {
+        !workspace.settings.assistant_smooth_caret && !workspace.settings.assistant_smooth_resize
+    });
+}

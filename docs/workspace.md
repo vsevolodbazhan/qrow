@@ -41,6 +41,12 @@ change. Typing stops the editor fade at once.
 Window and splitter resizing stay immediate. Activity keeps a short entrance
 fade. These options follow the system reduced-motion setting.
 
+**Smooth Composer Caret** and **Smooth Composer Resize** are in the
+Conversations section. Both are off by default. The caret option animates
+short horizontal movements while text appears immediately. The resize option
+animates message-field growth and shrinkage, including after Send. Window and
+splitter resizing stay immediate. Both options follow reduced motion.
+
 Editor settings apply to SQL. Logs settings apply to log entries.
 Conversations settings apply to assistant messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the

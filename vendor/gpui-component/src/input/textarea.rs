@@ -18,6 +18,8 @@ pub struct Textarea {
     appearance: bool,
     bordered: bool,
     focus_ring: bool,
+    smooth_caret: bool,
+    smooth_resize: bool,
     disabled: bool,
     readonly: bool,
     tab_index: isize,
@@ -42,6 +44,8 @@ impl Textarea {
             appearance: true,
             bordered: true,
             focus_ring: true,
+            smooth_caret: false,
+            smooth_resize: false,
             disabled: false,
             readonly: false,
             tab_index: 0,
@@ -55,6 +59,18 @@ impl Textarea {
 
     pub fn h(mut self, height: impl Into<DefiniteLength>) -> Self {
         self.height = Some(height.into());
+        self
+    }
+
+    /// Ease short horizontal caret movements. Text entry stays immediate.
+    pub fn smooth_caret(mut self, enabled: bool) -> Self {
+        self.smooth_caret = enabled;
+        self
+    }
+
+    /// Ease content-driven auto-grow height changes. The default is off.
+    pub fn smooth_resize(mut self, enabled: bool) -> Self {
+        self.smooth_resize = enabled;
         self
     }
 
@@ -157,6 +173,8 @@ impl Textarea {
             .appearance(self.appearance)
             .bordered(self.bordered)
             .focus_ring(self.focus_ring)
+            .smooth_caret(self.smooth_caret)
+            .smooth_resize(self.smooth_resize)
             .disabled(self.disabled)
             .readonly(self.readonly)
             .tab_index(self.tab_index)

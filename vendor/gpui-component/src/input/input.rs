@@ -123,6 +123,7 @@ pub struct Input {
     disabled: bool,
     readonly: bool,
     smooth_caret: bool,
+    smooth_resize: bool,
     smooth_scrolling: bool,
     bordered: bool,
     focus_bordered: bool,
@@ -215,6 +216,7 @@ impl Input {
             disabled: false,
             readonly: false,
             smooth_caret: false,
+            smooth_resize: false,
             smooth_scrolling: false,
             bordered: true,
             focus_bordered: true,
@@ -333,6 +335,11 @@ impl Input {
     /// made by the user.
     pub fn readonly(mut self, readonly: bool) -> Self {
         self.readonly = readonly;
+        self
+    }
+
+    pub(crate) fn smooth_resize(mut self, enabled: bool) -> Self {
+        self.smooth_resize = enabled;
         self
     }
 
@@ -539,6 +546,11 @@ impl RenderOnce for Input {
         editor_style.caret = cx.theme().caret;
         editor_style.caret_transition = if self.smooth_caret {
             std::time::Duration::from_millis(70)
+        } else {
+            std::time::Duration::ZERO
+        };
+        editor_style.auto_grow_transition = if self.smooth_resize {
+            cx.theme().motion_tokens().duration_fast
         } else {
             std::time::Duration::ZERO
         };

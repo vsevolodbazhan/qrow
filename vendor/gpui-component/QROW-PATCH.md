@@ -151,3 +151,8 @@ with the other GPUI crates as one set.
 - Capped document tabs keep the same minimum width when selected. Short tabs
   do not shrink on selection. A selected long title can still grow. The minimum
   of the selected tab does not exceed the available tab width.
+
+- `Textarea::smooth_caret(bool)` uses the same short horizontal caret transition
+  as Editor. `Textarea::smooth_resize(bool)` opts into auto-grow height
+  transitions using the fast motion duration. Both default to off. Text input
+  stays immediate and the system reduced-motion setting disables motion.

@@ -946,6 +946,10 @@ fn appearance_page(
     let smooth_caret = settings.editor_smooth_caret;
     let smooth_scrolling = settings.editor_smooth_scrolling;
     let smooth_transitions = settings.smooth_transitions;
+    let composer_caret = settings.assistant_smooth_caret;
+    let composer_resize = settings.assistant_smooth_resize;
+    let composer_caret_owner = owner.clone();
+    let composer_resize_owner = owner.clone();
     let transitions_owner = owner.clone();
     let scrolling_owner = owner.clone();
     SettingPage::new("Appearance")
@@ -1016,6 +1020,40 @@ fn appearance_page(
                     "Space between message lines, times the font size.",
                     &["assistant", "messages", "spacing"],
                     number_field(form, NumberSetting::AssistantLineHeight),
+                ))
+                .item(setting_item(
+                    "Smooth Composer Caret",
+                    "Animate short caret movements in the message field.",
+                    &["assistant", "typing", "cursor", "motion", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = composer_caret_owner.clone();
+                        Switch::new("assistant-smooth-caret")
+                            .checked(composer_caret)
+                            .accessibility_label("Smooth Composer Caret")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_smooth_caret = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Smooth Composer Resize",
+                    "Ease message-field growth and shrinkage.",
+                    &["assistant", "height", "resize", "motion", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = composer_resize_owner.clone();
+                        Switch::new("assistant-smooth-resize")
+                            .checked(composer_resize)
+                            .accessibility_label("Smooth Composer Resize")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_smooth_resize = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
                 )),
         )
         .group(
