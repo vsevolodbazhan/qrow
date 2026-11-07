@@ -8,21 +8,54 @@ use qrow::{
 };
 use std::time::Duration;
 
-/// A version line reads `0.1.0` or `0.1.0 (dcc75d4fd874)`.
+/// A version line reads `0.1.0`, `0.1.0 (dcc75d4fd874)`, or, for a release
+/// build, `0.1.0-nightly.20260921.7 (dcc75d4fd874)`.
 fn is_version(text: &str) -> bool {
-    let (number, commit) = text.split_once(' ').unwrap_or((text, ""));
+    let (version, commit) = text.split_once(' ').unwrap_or((text, ""));
+    let (number, channel) = version.split_once('-').unwrap_or((version, ""));
     let parts: Vec<_> = number.split('.').collect();
     let numeric = parts.len() == 3
         && parts
             .iter()
             .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    // A SemVer pre-release: dot-separated, nonempty ASCII alphanumeric identifiers.
+    let channel = version == number
+        || channel.split('.').all(|identifier| {
+            !identifier.is_empty()
+                && identifier
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
     let commit = commit.trim_matches(|c| c == '(' || c == ')');
     numeric
+        && channel
         && (commit.is_empty()
             || (commit.len() == 12
                 && commit
                     .chars()
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())))
+}
+
+#[test]
+fn version_lines_include_release_channels() {
+    for line in [
+        "0.4.0",
+        "0.4.0 (6ca918597182)",
+        "0.4.0-nightly.20261107.39 (6ca918597182)",
+        "1.0.0-rc.1",
+    ] {
+        assert!(is_version(line), "{line}");
+    }
+    for line in [
+        "0.4",
+        "0.4.0-",
+        "0.4.0-nightly..39",
+        "0.4.0-night_ly",
+        "0.4.0 (6CA918597182)",
+        "0.4.0 (6ca9185)",
+    ] {
+        assert!(!is_version(line), "{line}");
+    }
 }
 
 #[gpui_kit::test]
@@ -38,6 +71,7 @@ fn about_shows_the_version_and_closes_with_escape(cx: &mut TestAppContext) {
             );
             let version = label(window, "about-version").unwrap_or_default();
             assert!(is_version(&version), "Not a version line: {version}");
+            assert_eq!(version, build_info::version_label());
         });
         app.press(cx, "escape");
         app.wait_gone(cx, "about-copyright");
