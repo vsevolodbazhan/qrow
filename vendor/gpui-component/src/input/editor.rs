@@ -25,6 +25,7 @@ pub struct Editor {
     disabled: bool,
     readonly: bool,
     smooth_caret: bool,
+    smooth_scrolling: bool,
     tab_index: isize,
     role: RoleOverride,
     aria_label: Option<SharedString>,
@@ -50,6 +51,7 @@ impl Editor {
             disabled: false,
             readonly: false,
             smooth_caret: false,
+            smooth_scrolling: false,
             tab_index: 0,
             role: RoleOverride::default(),
             aria_label: None,
@@ -91,6 +93,12 @@ impl Editor {
     /// Animate short horizontal caret movements. Off by default; respects reduced motion.
     pub fn smooth_caret(mut self, enabled: bool) -> Self {
         self.smooth_caret = enabled;
+        self
+    }
+
+    /// Ease discrete mouse-wheel steps. Pixel trackpad gestures stay direct.
+    pub fn smooth_scrolling(mut self, enabled: bool) -> Self {
+        self.smooth_scrolling = enabled;
         self
     }
 
@@ -171,6 +179,7 @@ impl RenderOnce for Editor {
             .disabled(self.disabled)
             .readonly(self.readonly)
             .smooth_caret(self.smooth_caret)
+            .smooth_scrolling(self.smooth_scrolling)
             .tab_index(self.tab_index)
             .role(self.role)
             .when_some(self.height, |this, height| this.h(height))

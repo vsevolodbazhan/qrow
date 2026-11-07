@@ -473,7 +473,7 @@ impl Qrow {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_results(window, cx)))
     }
 
-    fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn query_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.settings.results_minimized {
             return self.result_tabs(cx).into_any_element();
         }
@@ -503,7 +503,29 @@ impl Qrow {
             .min_h_0()
             .overflow_hidden()
             .child(self.result_tabs(cx))
-            .child(div().flex_1().min_h_0().min_w_0().child(content))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .opacity(motion::fade_in(
+                        "query-panel-fade",
+                        format!(
+                            "{}-{:?}-{}",
+                            self.tabs[self.active].saved.id,
+                            self.tabs[self.active].panel.selected,
+                            if self.tabs[self.active].panel.selected == Panel::Results {
+                                self.tabs[self.active].shown_result().id
+                            } else {
+                                0
+                            }
+                        ),
+                        self.settings.smooth_transitions,
+                        window,
+                        cx,
+                    ))
+                    .child(content),
+            )
             .into_any_element()
     }
 
@@ -1097,6 +1119,13 @@ impl Qrow {
                     div()
                         .flex_1()
                         .min_h_0()
+                        .opacity(motion::fade_in(
+                            "activity-fade",
+                            "open".into(),
+                            self.settings.smooth_transitions,
+                            window,
+                            cx,
+                        ))
                         .child(changed_view(self.activity.clone().into(), window)),
                 )
             })
@@ -1117,9 +1146,21 @@ impl Qrow {
                             self.settings.assistant.enabled && self.assistant_state.open,
                             |el| {
                                 el.child(self.assistant_splitter(cx)).child(
-                                    div().w(assistant_width).flex_shrink_0().min_h_0().child(
-                                        changed_view(self.assistant_pane.clone().into(), window),
-                                    ),
+                                    div()
+                                        .w(assistant_width)
+                                        .flex_shrink_0()
+                                        .min_h_0()
+                                        .opacity(motion::fade_in(
+                                            "assistant-fade",
+                                            "open".into(),
+                                            self.settings.smooth_transitions,
+                                            window,
+                                            cx,
+                                        ))
+                                        .child(changed_view(
+                                            self.assistant_pane.clone().into(),
+                                            window,
+                                        )),
                                 )
                             },
                         ),
@@ -1174,6 +1215,13 @@ impl Render for Qrow {
             .when(self.sidebar, |el| {
                 el.child(
                     div()
+                        .opacity(motion::fade_in(
+                            "sidebar-fade",
+                            format!("{:?}", self.sidebar_panel),
+                            self.settings.smooth_transitions,
+                            window,
+                            cx,
+                        ))
                         .track_focus(&self.sidebar_focus)
                         .w(self.shown_sidebar_width(window.viewport_size().width))
                         .flex_shrink_0()
@@ -1201,6 +1249,13 @@ impl Render for Qrow {
                         // editor through its container.
                         div()
                             .id("sql-editor")
+                            .opacity(motion::fade_in(
+                                "editor-fade",
+                                self.tabs[self.active].saved.id.to_string(),
+                                self.settings.smooth_transitions,
+                                window,
+                                cx,
+                            ))
                             .test_support()
                             .when(self.settings.results_minimized, |el| el.flex_1().min_h_0())
                             .when(!self.settings.results_minimized, |el| {
@@ -1211,6 +1266,7 @@ impl Render for Qrow {
                             .child(
                                 Editor::new(&self.tabs[self.active].input)
                                     .smooth_caret(self.settings.editor_smooth_caret)
+                                    .smooth_scrolling(self.settings.editor_smooth_scrolling)
                                     .appearance(false)
                                     .context_menu_with_capabilities(|_, capabilities, _, cx| {
                                         gpui_kit::component::native_menu::NativeMenu::from(
@@ -1239,7 +1295,7 @@ impl Render for Qrow {
                                     .flex_shrink_0()
                             })
                             .when(!self.settings.results_minimized, |el| el.flex_1().min_h_0())
-                            .child(self.query_panel(cx)),
+                            .child(self.query_panel(window, cx)),
                     ),
             )
     }

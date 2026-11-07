@@ -123,6 +123,7 @@ pub struct Input {
     disabled: bool,
     readonly: bool,
     smooth_caret: bool,
+    smooth_scrolling: bool,
     bordered: bool,
     focus_bordered: bool,
     /// Whether the focused input draws a ring outside its border. The
@@ -214,6 +215,7 @@ impl Input {
             disabled: false,
             readonly: false,
             smooth_caret: false,
+            smooth_scrolling: false,
             bordered: true,
             focus_bordered: true,
             focus_ring: true,
@@ -336,6 +338,11 @@ impl Input {
 
     pub(crate) fn smooth_caret(mut self, enabled: bool) -> Self {
         self.smooth_caret = enabled;
+        self
+    }
+
+    pub(crate) fn smooth_scrolling(mut self, enabled: bool) -> Self {
+        self.smooth_scrolling = enabled;
         self
     }
 
@@ -532,6 +539,11 @@ impl RenderOnce for Input {
         editor_style.caret = cx.theme().caret;
         editor_style.caret_transition = if self.smooth_caret {
             std::time::Duration::from_millis(70)
+        } else {
+            std::time::Duration::ZERO
+        };
+        editor_style.scroll_transition = if self.smooth_scrolling {
+            cx.theme().motion_tokens().duration_fast
         } else {
             std::time::Duration::ZERO
         };
