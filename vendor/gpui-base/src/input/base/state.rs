@@ -9185,8 +9185,13 @@ impl InputBaseState<crate::input::TextareaMode> {
         Self::new_in_mode(window, cx)
     }
 
+    /// Grow with the content from `min_rows` through `max_rows`.
+    ///
+    /// The row count fits the current text at once, not only after the next
+    /// edit, so a new limit does not shrink a field that holds text.
     pub fn set_auto_grow(&mut self, min_rows: usize, max_rows: usize, cx: &mut Context<Self>) {
         self.mode = LayoutMode::auto_grow(min_rows, max_rows.max(min_rows));
+        self.mode.update_auto_grow(&self.display_map);
         cx.notify();
     }
 

@@ -88,6 +88,12 @@ Qrow changes these files:
   wraps at its spaces to the text width. Before, a narrow SQL editor cut its
   placeholder off at the right edge. GPUI tests do not shape real text, so
   this change has no test.
+- `src/input/base/state.rs`: `set_auto_grow` fits the row count to the
+  current text at once. Before, the new limit set the row count to the
+  minimum until the next edit, so a field that held a long message shrank.
+  Qrow changes the limit of the message field when the window height changes.
+  The Qrow UI test `the_message_field_grows_with_its_text_up_to_a_limit` is
+  the regression test.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.
