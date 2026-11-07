@@ -153,8 +153,8 @@ current workflow run, not caches. Rust caches only speed up compilation.
 Each cache has one saving job. Only pushes to `main` save caches. Other runs
 restore them. `common-static` compiles nothing
 and has no cache. A separate
-[cache cleanup workflow](../.github/workflows/cache-cleanup.yml) runs after a
-`main` push run completes, including failed runs. It removes replaced caches
+[maintenance workflow](../.github/workflows/maintenance.yml) runs after a
+`main` push run completes, including failed runs. Its `cache-cleanup` job removes replaced caches
 and the caches of shared keys that the workflow no longer uses. The repository
 cache limit is 10 GB. When the caches use more, GitHub removes the least
 recently used caches, and builds compile from the start.

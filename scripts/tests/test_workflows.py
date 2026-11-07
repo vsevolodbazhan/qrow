@@ -215,7 +215,7 @@ class ValidationGraphTests(unittest.TestCase):
         for line in validation.splitlines():
             if "save-if:" in line:
                 self.assertIn("github.ref == 'refs/heads/main' && github.event_name == 'push'", line)
-        maintenance = read(".github/workflows/cache-cleanup.yml")
+        maintenance = read(".github/workflows/maintenance.yml")
         self.assertIn("workflow_run:", maintenance)
         self.assertIn("workflows: [test]", maintenance)
         self.assertIn("branches: [main]", maintenance)
@@ -223,7 +223,7 @@ class ValidationGraphTests(unittest.TestCase):
         self.assertIn("head_repository.full_name == github.repository", maintenance)
         self.assertIn("actions: write", maintenance)
         self.assertIn("scripts/ci/rust_caches.py", maintenance)
-        self.assertNotIn("ref:", job("cache-cleanup", ".github/workflows/cache-cleanup.yml"))
+        self.assertNotIn("ref:", job("cache-cleanup", ".github/workflows/maintenance.yml"))
         self.assertNotIn("cache-cleanup:", validation)
         self.assertNotIn("cache-cleanup:", read(RELEASE))
         self.assertNotIn("actions: write", validation)
