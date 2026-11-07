@@ -2455,6 +2455,7 @@ fn render_entry(
                             ui_px(STATUS_SLOT_WIDTH),
                             label,
                             show_activity(profile, weak),
+                            cx,
                         )
                         .child(DotStatus::Error.dot(cx)),
                     )
@@ -2704,15 +2705,24 @@ fn status_lane(id: SharedString, width: Pixels) -> Stateful<Div> {
 
 /// A button for one status dot at the end of a catalog row. The header and
 /// the list have the same side padding, so a slot as wide as the header's New
-/// Connection button at the row end has the same centerline.
+/// Connection button at the row end has the same centerline. Like the row's
+/// own button, the slot paints no fill: a hover square on the row fill looks
+/// like a second, misaligned highlight.
 fn status_slot(
     id: String,
     width: Pixels,
     label: String,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
 ) -> Button {
     Button::new(SharedString::from(id))
-        .ghost()
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(transparent_black())
+                .hover(transparent_black())
+                .active(transparent_black())
+                .shadow(false),
+        )
         .small()
         .h_full()
         .w(width)
@@ -2914,6 +2924,7 @@ fn connection_row(
                             slot_width,
                             label,
                             show_activity(id, weak),
+                            cx,
                         )
                         .child(status.dot(cx)),
                     )
