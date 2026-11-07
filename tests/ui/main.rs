@@ -20,6 +20,7 @@ mod dialogs;
 mod editor_menu;
 mod export;
 mod metadata;
+mod panel_motion;
 mod queries;
 mod result_tabs;
 mod results;

@@ -964,7 +964,7 @@ fn appearance_page(
                 ))
                 .item(setting_item(
                     "Smooth Transitions",
-                    "Fade content when switching tabs and panels.",
+                    "Animate sidebars and soften tab and panel changes.",
                     &["interface", "ui", "motion", "animation", "smooth"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = transitions_owner.clone();
