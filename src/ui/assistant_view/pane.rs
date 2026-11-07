@@ -545,6 +545,8 @@ impl AssistantPane {
             );
         let title_generating = qrow.assistant_title_generating(selected);
         h_flex()
+            .id("assistant-panel")
+            .test_support()
             .size_full()
             .min_w_0()
             .bg(cx.theme().sidebar)
@@ -613,6 +615,41 @@ impl AssistantPane {
                                 let menu = qrow.conversation_menu(selected, &self.qrow);
                                 move |popup, _, _| menu.build(popup)
                             }),
+                    )
+                    .child(
+                        Button::new("assistant-maximize")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
+                            .icon(if qrow.assistant_state.maximized {
+                                IconName::Minimize
+                            } else {
+                                IconName::Maximize
+                            })
+                            .accessibility_label(if qrow.assistant_state.maximized {
+                                "Restore assistant"
+                            } else {
+                                "Maximize assistant"
+                            })
+                            .tooltip(if qrow.assistant_state.maximized {
+                                "Restore assistant"
+                            } else {
+                                "Maximize assistant"
+                            })
+                            .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
+                                this.assistant_state.maximized = !this.assistant_state.maximized;
+                                this.assistant_state.resizing = None;
+                                if !this.assistant_state.maximized
+                                    && !this.settings.results_minimized
+                                {
+                                    this.tabs[this.active].panel.content_visible();
+                                }
+                                this.assistant_composer(cx)
+                                    .update(cx, |composer, cx| composer.focus(window, cx));
+                                cx.notify();
+                            })),
                     )
                     .child(
                         Button::new("assistant-toggle-threads")

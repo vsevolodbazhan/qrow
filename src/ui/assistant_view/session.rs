@@ -261,6 +261,7 @@ pub(in crate::ui) enum ComposerTarget {
 /// the workspace file use it too. The pane view keeps its own view state.
 pub(in crate::ui) struct AssistantState {
     pub open: bool,
+    pub maximized: bool,
     pub status: Status,
     pub service: Option<Service>,
     /// The harness that `service` runs.
@@ -317,6 +318,7 @@ impl AssistantState {
     pub fn new(cx: &App) -> Self {
         Self {
             open: false,
+            maximized: false,
             status: Status::Idle,
             service: None,
             harness: None,

@@ -439,7 +439,10 @@ impl Qrow {
         }
         self.settings.results_minimized = !self.settings.results_minimized;
         self.resize = None;
-        if !self.settings.results_minimized {
+        if !self.settings.results_minimized
+            && !self.assistant_maximized()
+            && !self.activity.read(cx).is_open()
+        {
             self.tabs[self.active].panel.content_visible();
         }
         self.changed(cx);
@@ -856,6 +859,7 @@ impl Qrow {
     fn assistant_splitter(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("assistant-splitter")
+            .test_support()
             .relative()
             .flex_shrink_0()
             .w(self.ui_px(5.))
@@ -940,8 +944,17 @@ impl Qrow {
             .min((viewport - self.ui_px(SIDEBAR_YIELDS_TO_WIDTH)).max(least))
     }
 
+    pub(super) fn assistant_maximized(&self) -> bool {
+        self.settings.assistant.enabled
+            && self.assistant_state.open
+            && self.assistant_state.maximized
+    }
+
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
+        if self.assistant_maximized() {
+            return viewport;
+        }
         let available = viewport
             - self.ui_px(MIN_WORK_AREA_WIDTH)
             - if self.sidebar {
@@ -1100,7 +1113,15 @@ impl Qrow {
                         .child(changed_view(self.activity.clone().into(), window)),
                 )
             })
-            .when(!activity_open, |el| {
+            .when(!activity_open && self.assistant_maximized(), |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(changed_view(self.assistant_pane.clone().into(), window)),
+                )
+            })
+            .when(!activity_open && !self.assistant_maximized(), |el| {
                 el.child(
                     h_flex()
                         .items_stretch()

@@ -234,6 +234,10 @@ impl Qrow {
             self.assistant_composer(cx)
                 .update(cx, |composer, cx| composer.focus(window, cx));
         } else {
+            self.assistant_state.maximized = false;
+            if !self.settings.results_minimized && !self.activity.read(cx).is_open() {
+                self.tabs[self.active].panel.content_visible();
+            }
             if let Some(focus) = self.assistant_state.previous_focus.take() {
                 focus.focus(window, cx);
             }
