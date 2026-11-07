@@ -122,7 +122,7 @@ pub struct Input {
     mask_toggle: bool,
     disabled: bool,
     readonly: bool,
-    smooth_caret: bool,
+    caret_transition: std::time::Duration,
     smooth_resize: bool,
     smooth_scrolling: bool,
     bordered: bool,
@@ -215,7 +215,7 @@ impl Input {
             mask_toggle: false,
             disabled: false,
             readonly: false,
-            smooth_caret: false,
+            caret_transition: std::time::Duration::ZERO,
             smooth_resize: false,
             smooth_scrolling: false,
             bordered: true,
@@ -343,8 +343,8 @@ impl Input {
         self
     }
 
-    pub(crate) fn smooth_caret(mut self, enabled: bool) -> Self {
-        self.smooth_caret = enabled;
+    pub(crate) fn caret_transition(mut self, duration: std::time::Duration) -> Self {
+        self.caret_transition = duration;
         self
     }
 
@@ -544,11 +544,7 @@ impl RenderOnce for Input {
         editor_style.border = cx.theme().border;
         editor_style.selection = cx.theme().selection;
         editor_style.caret = cx.theme().caret;
-        editor_style.caret_transition = if self.smooth_caret {
-            std::time::Duration::from_millis(70)
-        } else {
-            std::time::Duration::ZERO
-        };
+        editor_style.caret_transition = self.caret_transition;
         editor_style.auto_grow_transition = if self.smooth_resize {
             cx.theme().motion_tokens().duration_fast
         } else {

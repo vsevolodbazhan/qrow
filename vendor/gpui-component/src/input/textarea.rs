@@ -173,7 +173,11 @@ impl Textarea {
             .appearance(self.appearance)
             .bordered(self.bordered)
             .focus_ring(self.focus_ring)
-            .smooth_caret(self.smooth_caret)
+            .caret_transition(if self.smooth_caret {
+                std::time::Duration::from_millis(35)
+            } else {
+                std::time::Duration::ZERO
+            })
             .smooth_resize(self.smooth_resize)
             .disabled(self.disabled)
             .readonly(self.readonly)

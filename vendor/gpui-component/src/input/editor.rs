@@ -178,7 +178,11 @@ impl RenderOnce for Editor {
             .focus_bordered(false)
             .disabled(self.disabled)
             .readonly(self.readonly)
-            .smooth_caret(self.smooth_caret)
+            .caret_transition(if self.smooth_caret {
+                std::time::Duration::from_millis(70)
+            } else {
+                std::time::Duration::ZERO
+            })
             .smooth_scrolling(self.smooth_scrolling)
             .tab_index(self.tab_index)
             .role(self.role)

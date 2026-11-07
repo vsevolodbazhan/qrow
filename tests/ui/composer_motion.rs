@@ -141,12 +141,18 @@ fn composer_caret_eases_without_delaying_text(cx: &mut TestAppContext) {
     cx.update_window(window.into(), |_, window, cx| window.press("right", cx))
         .unwrap();
     assert_eq!(frame(cx), start);
-    cx.executor().advance_clock(Duration::from_millis(35));
+    cx.executor().advance_clock(Duration::from_millis(15));
     let middle = frame(cx);
     assert!(middle.origin.x > start.origin.x);
-    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.executor().advance_clock(Duration::from_millis(20));
     let end = frame(cx);
     assert!(end.origin.x > middle.origin.x);
+    cx.executor().advance_clock(Duration::from_millis(35));
+    assert_eq!(
+        frame(cx),
+        end,
+        "The composer caret must settle within 35 ms"
+    );
     cx.update_window(window.into(), |_, window, cx| {
         window.input("x", cx);
         assert_eq!(input.read(cx).text().to_string(), "mxessage here");
