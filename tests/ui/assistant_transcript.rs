@@ -378,3 +378,73 @@ fn a_saved_conversation_shows_as_it_did_live_without_codex(cx: &mut TestAppConte
             && !present(window, &"assistant-model".into())
     }));
 }
+
+#[gpui_kit::test]
+fn assistant_code_blocks_copy_only_their_own_contents(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        codex.workspace(Workspace::default()),
+        MemoryCredentials::default(),
+    );
+    app.open_assistant(cx);
+    crate::support::assistant::assert_copyable_code_blocks(&app, cx);
+    let app = app.relaunch(cx);
+    app.open_assistant(cx);
+    app.wait_reply(cx, "last line");
+    app.update(cx, |window, cx| {
+        let mut buttons = crate::support::labelled_starting(window, "Copy code");
+        buttons.sort_by(|a, b| a.bounds().top().partial_cmp(&b.bounds().top()).unwrap());
+        crate::support::click_element(window, &buttons[0], cx);
+    });
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("-- Пример\nSELECT '你好',\n    42;")
+    );
+}
+
+#[gpui_kit::test]
+fn assistant_code_block_copy_is_keyboard_accessible(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{InputEvent, KeyDownEvent, KeyUpEvent};
+
+    let (directory, codex) = FakeCodex::new();
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        codex.workspace(Workspace::default()),
+        MemoryCredentials::default(),
+    );
+    app.open_assistant(cx);
+    crate::support::assistant::assert_copyable_code_blocks(&app, cx);
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()));
+    app.update(cx, |window, cx| {
+        for _ in 0..100 {
+            window.focus_next(cx);
+            window.render_frame(cx);
+            if crate::support::labelled_starting(window, "Copy code")
+                .iter()
+                .any(|button| button.focused() == Some(true))
+            {
+                let keystroke = Keystroke::parse("enter").unwrap();
+                window.dispatch_event(
+                    KeyDownEvent {
+                        keystroke: keystroke.clone(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
+                return;
+            }
+        }
+        panic!("The copy buttons are not in the keyboard focus order");
+    });
+    let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+    assert!(
+        copied == "-- Пример\nSELECT '你好',\n    42;" || copied == "  second block\n\nlast line"
+    );
+}
