@@ -101,8 +101,8 @@ Qrow changes these files:
   short of room, down to a least width of 10.5 rems, which fits a short label
   like "Query 12" in the large size. The selected tab does not shrink, so it
   shows its whole label up to the maximum width. `TabBar::fit_width` gives
-  the tabs other than the selected one a smaller least width, so that a bar
-  that would scroll only a little fits all its tabs. `TabBar::grow_selected` lets the
+  capped document tabs a shared smaller least width in both selection states,
+  so that a bar that would scroll only a little fits all its tabs. `TabBar::grow_selected` lets the
   selected tab grow past the maximum width to the visible width of the bar,
   so it shows its whole label. A label that does not fit
   ends in an ellipsis, and the suffix, like a close button, keeps its size.
@@ -147,3 +147,7 @@ with the other GPUI crates as one set.
 - Capped document tab labels start at the same leading padding in active and
   inactive states. Extra space from the minimum tab width follows the label.
   Other tab variants keep their existing alignment.
+
+- Capped document tabs keep the same minimum width when selected. Short tabs
+  do not shrink on selection. A selected long title can still grow. The minimum
+  of the selected tab does not exceed the available tab width.
