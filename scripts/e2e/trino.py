@@ -97,12 +97,18 @@ def main():
         path = Path(temporary)
         (path / "catalog").mkdir()
         quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        # An explicit configuration gives OpenSSL and LibreSSL the same CA. Python
+        # 3.13 verifies X.509 strictly and needs both key identifiers.
+        (path / "ca.cnf").write_text("[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n[dn]\nCN=Qrow Trino test CA\n"
+                                     "[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n"
+                                     "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n")
         command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                "-subj", "/CN=Qrow Trino test CA", "-keyout", str(path / "ca.key"),
-                "-out", str(path / "ca.crt"), "-addext", "keyUsage=critical,keyCertSign,cRLSign", **quiet)
+                "-config", str(path / "ca.cnf"), "-keyout", str(path / "ca.key"),
+                "-out", str(path / "ca.crt"), **quiet)
         command("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
                 "-keyout", str(path / "server.key"), "-out", str(path / "server.csr"), **quiet)
-        (path / "extensions").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n")
+        (path / "extensions").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n"
+                                           "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
         command("openssl", "x509", "-req", "-in", str(path / "server.csr"), "-CA", str(path / "ca.crt"),
                 "-CAkey", str(path / "ca.key"), "-CAcreateserial", "-days", "1", "-extfile", str(path / "extensions"),
                 "-out", str(path / "server.crt"), **quiet)
@@ -119,7 +125,7 @@ def main():
             "http-server.log.immediate-flush=true\n"
             "http-server.log.compression.enabled=false\n")
         (path / "node.properties").write_text("node.environment=test\nnode.id=qrow-test\nnode.data-dir=/tmp/trino-data\n")
-        (path / "jvm.config").write_text("-server\n-Xmx768M\n-XX:+UseG1GC\n-XX:+ExitOnOutOfMemoryError\n-Djdk.attach.allowAttachSelf=true\n-Djavax.net.ssl.trustStore=/etc/trino/fixture-trust.p12\n-Djavax.net.ssl.trustStorePassword=synthetic-fixture-trust\n")
+        (path / "jvm.config").write_text("-server\n-Xmx2G\n-XX:+UseG1GC\n-XX:+ExitOnOutOfMemoryError\n-Djdk.attach.allowAttachSelf=true\n-Djavax.net.ssl.trustStore=/etc/trino/fixture-trust.p12\n-Djavax.net.ssl.trustStorePassword=synthetic-fixture-trust\n")
         (path / "log.properties").write_text("io.trino=INFO\n")
         (path / "password-authenticator.properties").write_text("password-authenticator.name=file\nfile.password-file=/etc/trino/password.db\n")
         (path / "password.db").write_text("qrow:$2y$10$XGTex8TgykMhNp//95n31Okw76IAjMLFdLSLwnxZh4STmyR8RwHpK\n")
@@ -183,7 +189,10 @@ def main():
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Trino storage fixture did not create its bucket in time")
                 time.sleep(0.2)
-            command("docker", "run", "--detach", "--name", name, "--memory", "2g", "--cpus", "2",
+            # Parallel tests hold several large results and spooled segments at
+            # once. A 768 MB heap ran out of memory locally and needed major
+            # collections in CI. The JVM also needs memory outside the heap.
+            command("docker", "run", "--detach", "--name", name, "--memory", "3g", "--cpus", "2",
                     "--network", f"container:{storage_name}", "--mount", f"type=bind,source={path},target=/etc/trino,readonly", IMAGE)
             started = True
             port = str(coordinator_port)
