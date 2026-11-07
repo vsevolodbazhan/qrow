@@ -85,7 +85,7 @@ class ContractTests(unittest.TestCase):
 
     def test_evidence_rejects_missing_duplicate_empty_and_failed_tests(self):
         value = self.plan(['ui'])
-        result = dict(schema=1, plan_id=value['id'], target=value['target'], snapshot=value['snapshot'],
+        result = dict(schema=1, plan_id=value['id'], target=value['target'], snapshot=value['snapshot'], source_sha=value['source_sha'],
                       status='passed', exit_code=0, suites=[dict(name='ui', status='passed', tests=[dict(count=1, failures=0)])])
         contract.verify(value, result)
         altered = copy.deepcopy(value)

@@ -41,6 +41,34 @@ def command(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
+def accepts_queries(origin, context):
+    """True when the coordinator finished startup and a query that reads task results succeeds.
+
+    An accepted statement does not prove readiness. The task result endpoint can
+    still answer 503 while the coordinator initializes."""
+    headers = {"X-Trino-User": "qrow", "Authorization": "Basic cXJvdzpxcm93LXRlc3QtcGFzc3dvcmQ="}
+    try:
+        with urllib.request.urlopen(origin + "/v1/info", context=context, timeout=5) as response:
+            if json.load(response).get("starting", True) is not False:
+                return False
+        request = urllib.request.Request(origin + "/v1/statement", data=b"SELECT count(*) FROM tpch.tiny.region",
+                                         headers=headers)
+        deadline = time.monotonic() + 30
+        while request is not None:
+            with urllib.request.urlopen(request, context=context, timeout=5) as response:
+                body = json.load(response)
+            if body.get("error"):
+                return False
+            if "nextUri" not in body:
+                return body.get("data") == [[5]]
+            if time.monotonic() >= deadline:
+                return False
+            request = urllib.request.Request(body["nextUri"], headers=headers)
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--perf", action="store_true", help="Measure export transfer in an optimized build.")
@@ -159,17 +187,9 @@ def main():
             env.update(QROW_TRINO_FIXTURE=name, QROW_TRINO_PORT=port, QROW_TRINO_CA=str(path / "ca.crt"))
             env.update(QROW_TRINO_STORAGE=storage_name, QROW_TRINO_STORAGE_PORT=str(storage_port))
             deadline = time.monotonic() + 120
-            while True:
-                request = urllib.request.Request(f"https://localhost:{port}/v1/statement", data=b"SELECT 1",
-                                                 headers={"X-Trino-User": "qrow", "Authorization": "Basic cXJvdzpxcm93LXRlc3QtcGFzc3dvcmQ="})
-                try:
-                    with urllib.request.urlopen(request, context=context, timeout=5) as response:
-                        if response.status == 200:
-                            break
-                except (urllib.error.URLError, OSError):
-                    pass
+            while not accepts_queries(f"https://localhost:{port}", context):
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("Trino fixture did not accept SELECT 1 in time")
+                    raise RuntimeError("Trino fixture did not complete a tpch query in time")
                 time.sleep(0.2)
             if options.perf:
                 command("cargo", "nextest", "run", "--locked", "--profile", profile, "--cargo-profile", "perf",
