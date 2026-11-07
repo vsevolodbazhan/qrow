@@ -36,6 +36,67 @@ class NativePipelineTests(unittest.TestCase):
                     copy.assert_not_called()
                     self.assertFalse((root / "target/platform/builds/manifest.json").exists())
 
+    def build_calls(self, host, target_name):
+        """Run a mocked native build. Returns the qtest arguments, adapter commands, and CARGO_BUILD_TARGET values."""
+        calls = {"checked": [], "commands": [], "cargo_target": []}
+
+        def checked(args):
+            calls["checked"].append(args)
+            calls["cargo_target"].append(os.environ.get("CARGO_BUILD_TARGET"))
+
+        def execute(command, *args):
+            calls["commands"].append(command)
+            return 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = root / "target/platform"
+            contract.atomic_json(base / "builds/manifest.json", {})
+            with patch.object(native, "ROOT", root), patch.object(native, "BASE", base), \
+                    patch.object(native, "PREPARED", base / "builds"), \
+                    patch.object(native, "host_target", return_value=TARGETS[host]), \
+                    patch.object(native.contract, "plan", return_value={"source_sha": "a" * 40}), \
+                    patch.object(native.contract, "validate_plan"), \
+                    patch.object(native.builds, "prepare"), patch.object(native.cli, "install_tools", return_value=0), \
+                    patch.object(native, "checked", side_effect=checked), \
+                    patch.object(native.runner, "execute", side_effect=execute), \
+                    patch.object(native.shutil, "copy2") as copy, \
+                    patch.object(native, "asset_paths", return_value=[]), \
+                    patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CARGO_BUILD_TARGET", None)
+                with self.assertRaisesRegex(ValueError, "Missing native candidate"):
+                    native.build(False, target_name)
+                self.assertNotIn("CARGO_BUILD_TARGET", os.environ)
+                calls["copied"] = [call.args[0].relative_to(root) for call in copy.call_args_list]
+        return calls
+
+    def test_intel_macos_builds_on_apple_silicon_without_clippy(self):
+        calls = self.build_calls("macos-arm64", "macos-x86_64")
+        self.assertEqual(calls["checked"], [["run", "package", "--fail-fast"]])
+        self.assertEqual(calls["cargo_target"], ["x86_64-apple-darwin"])
+        cargo, observer, driver = calls["commands"]
+        self.assertEqual(cargo[:5], ["cargo", "build", "--locked", "--target", "x86_64-apple-darwin"])
+        for command in (observer, driver):
+            self.assertEqual(command[1:3], ["-target", "x86_64-apple-macos" + native.macos_minimum()])
+        self.assertEqual(calls["copied"], [Path("target/x86_64-apple-darwin/debug/examples/tooltip-layout")])
+
+    def test_native_builds_lint_one_architecture_per_os(self):
+        for host, linted in (("macos-arm64", True), ("linux-x86_64", True), ("linux-arm64", False)):
+            with self.subTest(host=host):
+                calls = self.build_calls(host, host)
+                self.assertEqual("clippy-native" in calls["checked"][0], linted)
+                self.assertEqual(calls["cargo_target"], [None])
+        calls = self.build_calls("macos-arm64", "macos-arm64")
+        self.assertEqual(calls["commands"][0][:4], ["cargo", "build", "--locked", "--example"])
+        self.assertEqual(calls["copied"], [Path("target/debug/examples/tooltip-layout")])
+        self.assertEqual({target.system for target in TARGETS.values() if target.name in native.platforms.LINT_TARGETS},
+                         {"macos", "linux"})
+
+    def test_cross_builds_stay_within_one_os(self):
+        with patch.object(native, "host_target", return_value=TARGETS["linux-x86_64"]):
+            with self.assertRaisesRegex(ValueError, "Cannot build macos-x86_64 on linux-x86_64"):
+                native.build(False, "macos-x86_64")
+
     def test_changed_candidate_fails_before_test_execution(self):
         target = host_target()
         if target is None or target.system != "linux":

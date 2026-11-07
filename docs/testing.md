@@ -74,7 +74,10 @@ Preparation groups test binaries by features and profile. It builds each group
 once before servers start. Execution verifies the source, target, compiler
 settings, toolchain, and archive digests. It extracts each archive once and
 uses nextest metadata without another Cargo build. Missing or stale builds
-fail; execution does not fall back to compilation. `run --reuse-builds` also
+fail; execution does not fall back to compilation. A plan for another
+architecture of the same OS, like `--target macos-x86_64` on Apple silicon,
+prepares a cross-compiled build. Install the Rust target first with
+`rustup target add`. Execute that build on the plan target. `run --reuse-builds` also
 supports filtered repeats with these binaries. Doctests and non-nextest checks
 remain separate commands.
 

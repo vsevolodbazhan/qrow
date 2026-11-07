@@ -1,23 +1,33 @@
 """Build native candidates, then verify their source-bound artifacts on a test runner."""
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
 import shutil
 import sys
 import tarfile
+import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qtest"))
 import builds  # noqa: E402
 import cli  # noqa: E402
 import contract  # noqa: E402
 import runner  # noqa: E402
-from targets import host_target  # noqa: E402
+from targets import TARGETS, host_target  # noqa: E402
 import platforms  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = ROOT / "target/platform"
 PREPARED = BASE / "builds"
+SWIFT_ARCH = {"aarch64": "arm64", "x86_64": "x86_64"}
+
+
+CARGO_CONFIG = ROOT / ".cargo/config.toml"
+
+
+def macos_minimum():
+    return tomllib.loads(CARGO_CONFIG.read_text())["env"]["MACOSX_DEPLOYMENT_TARGET"]
 
 
 def checked(args):
@@ -33,10 +43,27 @@ def asset_paths(target):
             ROOT / "target/e2e-tools/native-driver"]
 
 
-def build(full):
-    target = host_target()
-    if target is None:
+@contextlib.contextmanager
+def cargo_target(target, cross):
+    """Make Cargo compile for `target` during the block. Plans exclude this variable, so the test host can validate them."""
+    if not cross:
+        yield
+        return
+    os.environ["CARGO_BUILD_TARGET"] = target.triple
+    try:
+        yield
+    finally:
+        os.environ.pop("CARGO_BUILD_TARGET", None)
+
+
+def build(full, target_name=None):
+    host = host_target()
+    target = TARGETS[target_name] if target_name else host
+    if target is None or host is None:
         raise ValueError("Unsupported native target")
+    cross = host != target
+    if cross and host.system != target.system:
+        raise ValueError(f"Cannot build {target.name} on {host.name}")
     runtime = "docker" if target.system == "linux" else "native"
     selectors = platforms.suites(target, full)
     value = contract.plan(ROOT, target.name, selectors, runtime)
@@ -46,29 +73,34 @@ def build(full):
     if cli.install_tools(["cargo-nextest"]):
         raise ValueError("Cannot install nextest")
     builds.prepare(preparation, ROOT, PREPARED, runner.Output(False))
-    checked(["run", "clippy-native", "linux-package" if target.system == "linux" else "package", "--fail-fast"])
+    package = "linux-package" if target.system == "linux" else "package"
+    with cargo_target(target, cross):
+        checked(["run", *(["clippy-native"] if target.name in platforms.LINT_TARGETS else []), package, "--fail-fast"])
     if target.system == "macos":
         tools = ROOT / "target/native-tools"
         tools.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, QROW_COMMIT=value["source_sha"][:12])
+        cross_flags = ["--target", target.triple] if cross else []
+        swift_target = ["-target", f"{SWIFT_ARCH[target.machine]}-apple-macos{macos_minimum()}"]
         # The font probe needs test-support. Reuse native-ui/e2e debug dependencies.
         commands = [
-            ["cargo", "build", "--locked", "--example", "tooltip-layout"],
-            ["swiftc", "tests/desktop/window_ready.swift", "-o", str(tools / "window-ready")],
-            ["swiftc", "-warnings-as-errors", "tests/desktop/Driver.swift", "-o", "target/e2e-tools/native-driver"],
+            ["cargo", "build", "--locked", *cross_flags, "--example", "tooltip-layout"],
+            ["swiftc", *swift_target, "tests/desktop/window_ready.swift", "-o", str(tools / "window-ready")],
+            ["swiftc", *swift_target, "-warnings-as-errors", "tests/desktop/Driver.swift", "-o", "target/e2e-tools/native-driver"],
         ]
         (ROOT / "target/e2e-tools").mkdir(parents=True, exist_ok=True)
         for command in commands:
             if runner.execute(command, env, 40 * 60, BASE / "tools.log", runner.Output(False)) != 0:
                 raise ValueError("Native adapter preparation failed")
-        shutil.copy2(ROOT / "target/debug/examples/tooltip-layout", tools / "tooltip-layout")
+        output = ROOT / "target" / (target.triple if cross else "") / "debug/examples/tooltip-layout"
+        shutil.copy2(output, tools / "tooltip-layout")
     manifest_path = PREPARED / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     assets = asset_paths(target)
     if not assets:
         raise ValueError("Missing native candidate")
     manifest["assets"] = {str(path.relative_to(ROOT)): builds.sha256(path) for path in assets}
-    contract.validate_plan(value, ROOT)
+    contract.validate_plan(value, ROOT, build=True)
     contract.atomic_json(manifest_path, manifest)
     # One tar fixes the transfer layout and preserves executable permissions.
     with tarfile.open(ROOT / "target/native-transfer.tar", "w") as bundle:
@@ -123,8 +155,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("build", "test"))
     parser.add_argument("--full", action="store_true")
+    parser.add_argument("--target", choices=sorted(name for name, item in TARGETS.items() if item.supported),
+                        help="Build for this target. The default is this host.")
     args = parser.parse_args()
     try:
-        (build if args.command == "build" else test)(args.full)
+        if args.command == "build":
+            build(args.full, args.target)
+        else:
+            if args.target and args.target != getattr(host_target(), "name", None):
+                raise ValueError("Native tests run on their own target")
+            test(args.full)
     except (ValueError, OSError) as error:
         sys.exit(str(error))

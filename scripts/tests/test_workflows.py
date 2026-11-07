@@ -40,8 +40,11 @@ class ValidationGraphTests(unittest.TestCase):
             build, test = job("build-" + key), job("test-" + key)
             self.assertEqual(needs(build), ["plan"])
             self.assertEqual(needs(test), ["common-required", "build-" + key])
+            self.assertIn("runs-on: " + target.build_runner, build)
+            self.assertIn("runs-on: " + target.runner, test)
+            self.assertIn(f"native.py build --target {target.name} ", build)
+            self.assertEqual(f"rust-target: {target.triple}" in build, target.build_runner != target.runner)
             for body in (build, test):
-                self.assertIn("runs-on: " + target.runner, body)
                 self.assertIn("ref: ${{ inputs.ref || github.sha }}", body)
                 self.assertNotIn("if: inputs.full", body)
             self.assertIn("name: prepared-" + target.name, build)
@@ -54,6 +57,16 @@ class ValidationGraphTests(unittest.TestCase):
         self.assertIn("always()", job("ci-required"))
         self.assertIn("verify-common evidence", job("common-required"))
         self.assertIn("platforms.py verify evidence", job("ci-required"))
+
+    def test_intel_macos_compiles_on_apple_silicon_and_tests_on_intel(self):
+        intel = platforms.TARGETS["macos-x86_64"]
+        self.assertEqual(intel.build_runner, platforms.TARGETS["macos-arm64"].runner)
+        self.assertEqual(intel.runner, "macos-15-intel")
+        self.assertEqual([t.name for t in platforms.TARGETS.values() if t.supported and t.build_runner != t.runner],
+                         ["macos-x86_64"])
+
+    def test_builds_use_all_runner_cores(self):
+        self.assertNotIn("CARGO_BUILD_JOBS", read(VALIDATION))
 
     def test_no_legacy_scheduler_or_workflow_remains(self):
         self.assertFalse((ROOT / ".github/workflows/checks.yml").exists())

@@ -40,6 +40,22 @@ class VariantTests(unittest.TestCase):
         self.assertEqual(group["targets"], [["--test", "integration"]])
         self.assertFalse(group.get("all"))
 
+    def test_toolchain_identity_ignores_only_the_build_host(self):
+        with patch.object(builds.subprocess, "run") as run:
+            run.return_value.stdout = "rustc 1.97.1\ncommit-hash: abc\nhost: aarch64-apple-darwin\nrelease: 1.97.1\n"
+            self.assertEqual(builds.toolchain(ROOT), "rustc 1.97.1\ncommit-hash: abc\nrelease: 1.97.1\n")
+
+    def test_prepared_binaries_for_another_target_are_rejected(self):
+        value = contract.plan(ROOT, "macos-x86_64", ["native-storage"], "native")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            for triple, message in (("aarch64-apple-darwin", "different target"), (None, "different target")):
+                manifest = {"schema": 1, "identity": builds.identity(value), "toolchain": builds.toolchain(ROOT),
+                            "triple": triple, "variants": {}}
+                contract.atomic_json(path, manifest)
+                with self.subTest(triple=triple), self.assertRaisesRegex(ValueError, message):
+                    builds.Prepared(path, value, ROOT, Path(directory) / "extracted", runner.Output(True))
+
     def test_no_prepared_match_fails_without_fallback(self):
         with self.assertRaisesRegex(ValueError, "No prepared build"):
             builds.reuse(["cargo", "nextest", "run", "--no-default-features"], {})
@@ -62,12 +78,29 @@ class VariantTests(unittest.TestCase):
 
 
 class RealPreparedExecutionTests(unittest.TestCase):
-    def test_archive_runs_on_relocated_runner_with_no_build_and_rejects_corruption(self):
+    def setUp(self):
         if not shutil.which("cargo") or subprocess.run(["cargo", "nextest", "--version"], capture_output=True).returncode:
             self.skipTest("cargo-nextest is not installed")
+
+    def test_archive_runs_on_relocated_runner_with_no_build_and_rejects_corruption(self):
         target = targets.host_target()
         if target is None:
             self.skipTest("No native target")
+        self.check_relocated_archive(target)
+
+    def test_intel_macos_archive_from_apple_silicon_runs_without_a_build(self):
+        # CI compiles the Intel candidate on Apple silicon. Rosetta runs the x86_64 tests here.
+        target = targets.TARGETS["macos-x86_64"]
+        host = targets.host_target()
+        if host is None or host.name != "macos-arm64":
+            self.skipTest("Needs an Apple silicon Mac")
+        installed = subprocess.run(["rustup", "target", "list", "--installed"], capture_output=True, text=True)
+        if target.triple not in installed.stdout.split() or subprocess.run(["arch", "-x86_64", "/usr/bin/true"]).returncode:
+            self.skipTest("Needs the x86_64-apple-darwin target and Rosetta")
+        manifest = self.check_relocated_archive(target)
+        self.assertEqual(manifest["triple"], target.triple)
+
+    def check_relocated_archive(self, target):
         with tempfile.TemporaryDirectory(prefix="qrow-prepared-test-") as directory:
             base = Path(directory)
             source = base / "source"
@@ -81,6 +114,8 @@ class RealPreparedExecutionTests(unittest.TestCase):
 #[test] fn excluded() { panic!("binary and test filters must both apply"); }
 ''')
             (source / ".gitignore").write_text('/target/\n')
+            # Use the pinned toolchain and its installed targets.
+            shutil.copy2(ROOT / "rust-toolchain.toml", source / "rust-toolchain.toml")
             # A hook exports GIT_DIR and GIT_INDEX_FILE. Keep these commands in the synthetic repository.
             git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
             subprocess.run(["git", "init", "-q", source], check=True, env=git_env)
@@ -112,6 +147,9 @@ class RealPreparedExecutionTests(unittest.TestCase):
                 result = subprocess.run(command, cwd=relocated, env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("1 test run", result.stderr)
+                if target != targets.host_target():
+                    binaries = list((relocated / "target/extracted").glob(f"*/target/{target.triple}/debug/deps/integration-*"))
+                    self.assertTrue(binaries, "The cross archive must contain target binaries")
                 manifest = json.loads(path.read_text())
                 archive = path.parent / next(iter(manifest["variants"].values()))["archive"]
                 archive.write_bytes(b"corrupted synthetic archive")
@@ -120,6 +158,7 @@ class RealPreparedExecutionTests(unittest.TestCase):
                 changed = dict(value, snapshot="changed")
                 with self.assertRaisesRegex(ValueError, "differ from source"):
                     builds.Prepared(path, changed, relocated, relocated / "target/changed", runner.Output(True))
+                return manifest
 
 
 if __name__ == "__main__":

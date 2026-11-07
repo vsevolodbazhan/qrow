@@ -16,6 +16,9 @@ COMMON = {
     "performance": ["perf"],
 }
 COMMON_TARGET = "linux-x86_64"
+# Production Clippy runs on one architecture of each OS. Other architectures
+# add little lint coverage and a complete check build.
+LINT_TARGETS = ("macos-arm64", "linux-x86_64")
 
 
 def suites(target, full=False):

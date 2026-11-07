@@ -406,7 +406,7 @@ def command_plan(args):
 def command_prepare(args):
     import builds
     value = json.loads(args.plan.read_text())
-    contract.validate_plan(value, ROOT)
+    contract.validate_plan(value, ROOT, build=True)
     if args.install and install_tools(["cargo-nextest"]):
         return EXIT_FAILED
     builds.prepare(value, ROOT, args.output, runner.Output(quiet=False))

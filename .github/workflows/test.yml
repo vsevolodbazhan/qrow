@@ -40,7 +40,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  CARGO_BUILD_JOBS: 2
   QROW_RELEASE_VERSION: ${{ inputs.release-version }}
 
 jobs:
@@ -187,7 +186,7 @@ jobs:
         run: |
           flags=()
           if [ "$FULL" = true ]; then flags+=(--full); fi
-          uv run --locked python scripts/ci/native.py build "${flags[@]}"
+          uv run --locked python scripts/ci/native.py build --target macos-arm64 "${flags[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: prepared-macos-arm64
@@ -272,7 +271,8 @@ jobs:
   build-macos-x86-64:
     name: build-macos-x86_64
     needs: plan
-    runs-on: macos-15-intel
+    # Apple silicon compiles the Intel candidate several times faster.
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       QROW_E2E_REUSE_MACOS_PACKAGE: "true"
@@ -288,6 +288,7 @@ jobs:
         with:
           app: "true"
           java: "false"
+          rust-target: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: ${{ !(inputs.cold-cache == true || github.event.schedule == '17 2 * * 0') }}
         with:
@@ -298,7 +299,7 @@ jobs:
         run: |
           flags=()
           if [ "$FULL" = true ]; then flags+=(--full); fi
-          uv run --locked python scripts/ci/native.py build "${flags[@]}"
+          uv run --locked python scripts/ci/native.py build --target macos-x86_64 "${flags[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: prepared-macos-x86_64
@@ -401,7 +402,7 @@ jobs:
         run: |
           flags=()
           if [ "$FULL" = true ]; then flags+=(--full); fi
-          uv run --locked python scripts/ci/native.py build "${flags[@]}"
+          uv run --locked python scripts/ci/native.py build --target linux-x86_64 "${flags[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: prepared-linux-x86_64
@@ -503,7 +504,7 @@ jobs:
         run: |
           flags=()
           if [ "$FULL" = true ]; then flags+=(--full); fi
-          uv run --locked python scripts/ci/native.py build "${flags[@]}"
+          uv run --locked python scripts/ci/native.py build --target linux-arm64 "${flags[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: prepared-linux-arm64

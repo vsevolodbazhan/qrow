@@ -76,6 +76,16 @@ class ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'configuration'):
                 contract.validate_plan(value, self.root)
 
+    def test_builds_can_compile_another_architecture_of_the_same_os(self):
+        value = self.plan(target='macos-x86_64')
+        with patch.object(targets, 'host_target', return_value=targets.TARGETS['macos-arm64']):
+            contract.validate_plan(value, self.root, build=True)
+            with self.assertRaisesRegex(ValueError, 'Native execution'):
+                contract.validate_plan(value, self.root)
+        with patch.object(targets, 'host_target', return_value=targets.TARGETS['linux-x86_64']):
+            with self.assertRaisesRegex(ValueError, 'Native execution'):
+                contract.validate_plan(value, self.root, build=True)
+
     def test_conflicting_cargo_target_is_rejected(self):
         with patch.dict(os.environ, CARGO_BUILD_TARGET='aarch64-unknown-linux-gnu'):
             value = self.plan()

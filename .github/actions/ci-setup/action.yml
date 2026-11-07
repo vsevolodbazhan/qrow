@@ -10,6 +10,9 @@ inputs:
   java:
     description: Select Java 17 for native macOS fixtures.
     default: "false"
+  rust-target:
+    description: Install the standard library of another Rust target for a cross build.
+    default: ""
 runs:
   using: composite
   steps:
@@ -18,6 +21,11 @@ runs:
         version: "0.12.10"
     - shell: bash
       run: rustup show
+    - if: inputs.rust-target != ''
+      shell: bash
+      env:
+        RUST_TARGET: ${{ inputs.rust-target }}
+      run: rustup target add "$RUST_TARGET"
     - if: runner.os == 'Linux' && inputs.app == 'true'
       shell: bash
       run: |

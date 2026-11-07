@@ -9,6 +9,7 @@ import uuid
 from xml.etree import ElementTree
 
 import contract
+import targets
 
 # Fail closed on unknown build flags. Runtime flags stay in the nextest command.
 VALUE_FLAGS = {"--features", "--cargo-profile", "--target"}
@@ -104,29 +105,36 @@ def prepare(value, root, directory, output):
 
 def _prepare(value, root, directory, output):
     import runner
-    contract.validate_plan(value, root)
+    contract.validate_plan(value, root, build=True)
+    target = targets.TARGETS[value["target"]]
+    # Another architecture of the same OS compiles for the plan target. The
+    # variant key stays the same, so the test host finds the archive.
+    cross = ["--target", target.triple] if targets.host_target() != target else []
     directory = Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    manifest = {"schema": 1, "identity": identity(value), "toolchain": toolchain(root), "variants": {}}
+    manifest = {"schema": 1, "identity": identity(value), "toolchain": toolchain(root), "triple": target.triple,
+                "variants": {}}
     env = os.environ.copy()
     if value["source_sha"] and not env.get("QROW_COMMIT"):
         env["QROW_COMMIT"] = value["source_sha"][:12]
     for key, group in variants(value).items():
         archive = directory / f"{key}.tar.zst"
         selection = [] if group.get("all") else [arg for pair in group["targets"] for arg in pair]
-        command = ["cargo", "nextest", "archive", "--locked", *group["flags"], *selection,
+        command = ["cargo", "nextest", "archive", "--locked", *cross, *group["flags"], *selection,
                    "--archive-file", str(archive)]
         if runner.execute(command, env, 90 * 60, directory / "build.log", output) != 0:
             raise ValueError("Test preparation failed")
         manifest["variants"][key] = {"flags": group["flags"], "all": group.get("all", False),
                                       "targets": group["targets"], "archive": archive.name, "sha256": sha256(archive)}
-    contract.validate_plan(value, root)
+    contract.validate_plan(value, root, build=True)
     contract.atomic_json(directory / "manifest.json", manifest)
     return manifest
 
 
 def toolchain(root):
-    return subprocess.run(["rustc", "-Vv"], cwd=root, capture_output=True, text=True, check=True).stdout
+    """The Rust release and commit. The build host can differ from the test host; `triple` records the target."""
+    version = subprocess.run(["rustc", "-Vv"], cwd=root, capture_output=True, text=True, check=True).stdout
+    return "".join(line for line in version.splitlines(keepends=True) if not line.startswith("host: "))
 
 
 class Prepared:
@@ -138,6 +146,8 @@ class Prepared:
             raise ValueError("Prepared binaries differ from source, target, or compiler configuration")
         if self.value.get("toolchain") != toolchain(root):
             raise ValueError("Prepared binaries use a different Rust toolchain")
+        if self.value.get("triple") != targets.TARGETS[value["target"]].triple:
+            raise ValueError("Prepared binaries were compiled for a different target")
         self.arguments = {}
         for key, required in variants(value).items():
             group = self.value["variants"].get(key)

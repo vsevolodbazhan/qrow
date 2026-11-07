@@ -8,12 +8,16 @@ Use [Testing](testing.md) to run an individual suite locally.
 Every ready pull request, push to `main`, manual run, and release candidate
 has the same functional tests on these native targets:
 
-| Target | Runner |
-| --- | --- |
-| macOS ARM64 | `macos-15` |
-| macOS Intel | `macos-15-intel` |
-| Linux x86-64 | `ubuntu-24.04` |
-| Linux ARM64 | `ubuntu-24.04-arm` |
+| Target | Build runner | Test runner |
+| --- | --- | --- |
+| macOS ARM64 | `macos-15` | `macos-15` |
+| macOS Intel | `macos-15` | `macos-15-intel` |
+| Linux x86-64 | `ubuntu-24.04` | `ubuntu-24.04` |
+| Linux ARM64 | `ubuntu-24.04-arm` | `ubuntu-24.04-arm` |
+
+Intel runners compile several times slower than Apple silicon runners. Thus
+the macOS ARM64 runner compiles the Intel candidate and test binaries for
+`x86_64-apple-darwin`. The tests and the package checks run on an Intel runner.
 
 A draft pull request starts no validation. Mark it ready to start the checks.
 Fork pull requests use disposable servers and synthetic credentials. They do
@@ -73,12 +77,17 @@ filters stay the same.
 
 ## Native jobs
 
-Each `build-TARGET` job checks production application Clippy, prepares its OS
-test binaries, and builds one production release package. On macOS it also
-prepares the native font probe, window observer, and desktop driver. The font
-probe uses the debug test-support dependencies that the native UI tests use.
-It does not cause a second release build of GPUI. macOS Clippy also checks
-all test targets to retain lint coverage of OS-specific test code.
+Each `build-TARGET` job prepares its OS test binaries and builds one production
+release package. On macOS it also prepares the native font probe, window
+observer, and desktop driver. The font probe uses the debug test-support
+dependencies that the native UI tests use. It does not cause a second release
+build of GPUI.
+
+Production application Clippy runs in `build-macos-arm64` and
+`build-linux-x86_64`, one architecture for each OS. The other architectures
+have the same OS code, so another complete check build adds little lint
+coverage. macOS Clippy also checks all test targets to retain lint coverage of
+OS-specific test code.
 
 Each `test-TARGET` job downloads its prepared binaries and candidate package.
 It verifies the source snapshot, compiler settings, Rust toolchain, native
@@ -112,8 +121,10 @@ ignored-test rules, runtime settings, time limits, and JUnit results still
 apply. Missing or changed builds fail instead of compiling again.
 
 The build identity includes the source commit and file snapshot, native target,
-compiler environment, Cargo configuration, and Rust toolchain. A build
-manifest records archive and native asset digests. Each test result records
+compiler environment, Cargo configuration, and Rust toolchain. The toolchain
+identity is the Rust release and commit, without the build host. The manifest
+records the compiled target triple separately, and execution rejects a
+different triple. A build manifest records archive and native asset digests. Each test result records
 the manifest digest. Logs and per-attempt reports remain separate.
 
 Common evidence, native evidence, and candidates remain available for 14 days.

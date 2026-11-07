@@ -128,7 +128,11 @@ def plan(root, target_name, selectors, runtime="auto", repeat=1):
     return value
 
 
-def validate_plan(value, root):
+def validate_plan(value, root, build=False):
+    """Check that the plan matches this source and configuration.
+
+    Execution needs the plan target as host. A build can also run on another
+    architecture of the same OS: it then compiles for the plan target."""
     if value.get("schema") != SCHEMA:
         raise ValueError("Unsupported plan schema")
     try:
@@ -138,9 +142,9 @@ def validate_plan(value, root):
     if value != expected:
         raise ValueError("Plan differs from the source snapshot, configuration, or suite definitions. Plan again.")
     host = targets.host_target()
-    if host is None or host.name != value["target"]:
-        raise ValueError(f"Native execution requires {value['target']}; this host is {host.name if host else 'unknown'}")
     target = targets.TARGETS[value["target"]]
+    if host is None or (host.name != target.name and not (build and host.system == target.system)):
+        raise ValueError(f"Native execution requires {value['target']}; this host is {host.name if host else 'unknown'}")
     configured = os.environ.get("CARGO_BUILD_TARGET")
     if configured and configured != target.triple:
         raise ValueError("CARGO_BUILD_TARGET conflicts with the native plan target")
