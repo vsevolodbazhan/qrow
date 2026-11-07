@@ -1,4 +1,4 @@
-"""Check that the workflows run the CI jobs of the qtest catalog."""
+"""CI ownership, dependency order, source identity, and release artifact promotion."""
 from pathlib import Path
 import re
 import sys
@@ -6,11 +6,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/qtest"))
-import catalog  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts/ci"))
+import catalog  # noqa: E402
 import platforms  # noqa: E402
 
-CHECKS = ".github/workflows/checks.yml"
+VALIDATION = ".github/workflows/test.yml"
 TEST = ".github/workflows/test.yml"
 RELEASE = ".github/workflows/release.yml"
 
@@ -19,9 +19,8 @@ def read(path):
     return (ROOT / path).read_text()
 
 
-def job(name, path=CHECKS):
-    """The body of one job, up to the next job or the end of the file."""
-    match = re.search(rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^(?:  # .*\n)*  [a-z0-9-]+:\n|\Z)",
+def job(name, path=VALIDATION):
+    match = re.search(rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
                       read(path), re.MULTILINE | re.DOTALL)
     if match is None:
         raise AssertionError(f"{path} has no job {name}")
@@ -30,317 +29,172 @@ def job(name, path=CHECKS):
 
 def needs(body):
     match = re.search(r"^    needs: (?:\[(.*)\]|(\S+))$", body, re.MULTILINE)
-    if not match:
-        return []
-    return [name.strip() for name in (match.group(1) or match.group(2)).split(",")]
+    return [name.strip() for name in (match.group(1) or match.group(2)).split(",")] if match else []
 
 
-class CatalogJobTests(unittest.TestCase):
-    def test_every_catalog_job_is_a_workflow_job(self):
-        workflow_jobs = re.findall(r"^  ([a-z0-9-]+):\n", read(CHECKS), re.MULTILINE)
-        self.assertEqual(workflow_jobs, ["plan", *catalog.CI_JOBS])
+class ValidationGraphTests(unittest.TestCase):
+    def test_common_gate_precedes_each_native_test_but_builds_overlap(self):
+        targets = [target for target in platforms.TARGETS.values() if target.supported]
+        for target in targets:
+            key = target.name.replace("_", "-")
+            build, test = job("build-" + key), job("test-" + key)
+            self.assertEqual(needs(build), ["plan"])
+            self.assertEqual(needs(test), ["common-required", "build-" + key])
+            self.assertIn("runs-on: " + target.build_runner, build)
+            self.assertIn("runs-on: " + target.runner, test)
+            self.assertIn(f"native.py build --target {target.name} ", build)
+            self.assertEqual(f"rust-target: {target.triple}" in build, target.build_runner != target.runner)
+            for body in (build, test):
+                self.assertIn("ref: ${{ inputs.ref || github.sha }}", body)
+                self.assertNotIn("if: inputs.full", body)
+            self.assertIn("name: prepared-" + target.name, build)
+            self.assertIn("name: prepared-" + target.name, test)
+            self.assertIn("name: candidate-" + target.name, test)
+            self.assertNotIn("rust-cache@", test)
+        self.assertEqual(needs(job("common-required")), ["plan", "common"])
+        self.assertEqual(set(needs(job("ci-required"))), {"common-required", *("test-" + t.name.replace("_", "-") for t in targets)})
+        self.assertIn("always()", job("common-required"))
+        self.assertIn("always()", job("ci-required"))
+        self.assertIn("verify-common evidence", job("common-required"))
+        self.assertIn("platforms.py verify evidence", job("ci-required"))
 
-    def test_workflow_jobs_follow_the_catalog(self):
-        for name, ci_job in catalog.CI_JOBS.items():
-            with self.subTest(job=name):
-                body = job(name)
-                self.assertIn(f"runs-on: {ci_job.runner}\n", body)
-                self.assertIn(f"run: ./qtest ci {name} --install\n", body)
-                self.assertEqual(needs(body), ["plan", *ci_job.needs])
-                self.assertIn("ref: ${{ inputs.ref }}", body)
-                if name == "static":
-                    self.assertNotIn("if:", body.split("steps:")[0])
-                else:
-                    self.assertTrue(f"fromJSON(needs.plan.outputs.jobs).{name}" in body or
-                                    f"fromJSON(needs.plan.outputs.jobs)['{name}']" in body)
+    def test_intel_macos_compiles_on_apple_silicon_and_tests_on_intel(self):
+        intel = platforms.TARGETS["macos-x86_64"]
+        self.assertEqual(intel.build_runner, platforms.TARGETS["macos-arm64"].runner)
+        self.assertEqual(intel.runner, "macos-15-intel")
+        self.assertEqual([t.name for t in platforms.TARGETS.values() if t.supported and t.build_runner != t.runner],
+                         ["macos-x86_64"])
 
-    def test_suites_of_jobs_exist(self):
-        for ci_job in catalog.CI_JOBS.values():
-            for name in [*ci_job.suites, *ci_job.report_only]:
-                self.assertIn(name, catalog.SUITES)
-            for need in ci_job.needs:
-                self.assertIn(need, catalog.CI_JOBS)
+    def test_builds_use_all_runner_cores(self):
+        self.assertNotIn("CARGO_BUILD_JOBS", read(VALIDATION))
 
-    def test_guide_lists_every_job_and_the_rules_list_every_required_check(self):
-        guide = read("docs/testing.md")
-        development = read("docs/development.md")
-        for name in ["plan", *catalog.CI_JOBS]:
-            with self.subTest(job=name):
-                if name != "plan":
-                    self.assertIn(f"\n| `{name}` | ", guide)
-                # A pull request runs only pull request jobs, so only they can be required checks.
-                required = name == "plan" or catalog.CI_JOBS[name].scope == "pull_request"
-                self.assertEqual(f"\nchecks / {name}\n" in development, required)
+    def test_no_legacy_scheduler_or_workflow_remains(self):
+        self.assertFalse((ROOT / ".github/workflows/checks.yml").exists())
+        self.assertFalse(hasattr(catalog, "CI_JOBS"))
+        self.assertFalse((ROOT / ".github/workflows/platforms.yml").exists())
+        self.assertIn("workflow_call:", read(TEST))
+        self.assertNotIn("uses: ./.github/workflows/", read(TEST))
+        self.assertIn("uses: ./.github/workflows/test.yml", job("validation", RELEASE))
+        self.assertNotIn("workflows/checks.yml", read(RELEASE))
+        self.assertIn("platforms.py verify evidence", job("ci-required"))
 
-    def test_ci_runs_every_suite(self):
-        covered = {name for ci_job in catalog.CI_JOBS.values() for name in [*ci_job.suites, *ci_job.report_only]}
-        covered.update(name for target in platforms.TARGETS.values() if target.supported for name in platforms.suites(target, True))
-        self.assertEqual(covered, set(catalog.SUITES))
+    def test_backend_has_no_ui_dependency_or_feature(self):
+        self.assertEqual(platforms.COMMON["backend"], ["backend", "postgres-core", "trino-core"])
+        for name in platforms.COMMON["backend"]:
+            suite = catalog.suites_for_platform("linux")[name]
+            self.assertNotIn("linux-app-libs", suite.requires)
+            commands = [*suite.builds, *(s.command for s in suite.steps if s.nextest_filter)]
+            self.assertTrue(commands)
+            self.assertTrue(all("--no-default-features" in command for command in commands))
+            self.assertTrue(all("ui-test" not in command for command in commands))
+
+    def test_portable_scenarios_have_one_owner_and_native_has_only_os_assertions(self):
+        self.assertEqual(set(platforms.COMMON), {"static", "core", "backend", "headless-ui", "performance"})
+        owned = [name for suites in platforms.COMMON.values() for name in suites]
+        self.assertEqual(len(owned), len(set(owned)))
+        self.assertEqual(set(platforms.COMMON["headless-ui"]), {"clippy-app", "app-unit", "ui", "e2e", "postgres-ui", "trino-ui"})
+        for target in platforms.TARGETS.values():
+            if not target.supported:
+                continue
+            suites = platforms.suites(target)
+            self.assertEqual(suites, platforms.suites(target, True))
+            self.assertTrue({"native-storage", "package-smoke"} <= set(suites))
+            self.assertFalse(set(suites) & {"unit", "ui", "backend", "postgres", "trino", "e2e"})
+            if target.system == "macos":
+                self.assertTrue({"desktop", "native-font", "native-ui", "native-assistant"} <= set(suites))
+        self.assertIn("--fail-under-lines", catalog.SUITES["coverage"].steps[1].command)
+        self.assertIn("80", catalog.SUITES["coverage"].steps[1].command)
+        self.assertIn("perf", platforms.COMMON["performance"])
+        self.assertIn("--all-targets", catalog.suites_for_platform("macos")["clippy-native"].steps[0].command)
+
+    def test_all_local_suites_have_ci_coverage_or_explicit_equivalents(self):
+        owned = {name for suites in platforms.COMMON.values() for name in suites}
+        owned.update(name for target in platforms.TARGETS.values() if target.supported for name in platforms.suites(target))
+        # Production lint/package builds run in the build phase. Measurements
+        # run once per baseline host in full mode. Local convenience suites
+        # partition into CI suites instead of running again.
+        owned.update({"clippy-native", "package", "linux-package", "perf-ui", "perf-e2e", "perf-package",
+                      "perf-kyuubi", "perf-postgres", "perf-trino"})
+        equivalents = {"unit": {"coverage", "app-unit"}, "postgres": {"postgres-core", "postgres-ui"},
+                       "trino": {"trino-core", "trino-ui"}, "perf-app": {"perf-package"}}
+        self.assertTrue(all(replacement <= owned for replacement in equivalents.values()))
+        self.assertEqual(owned | equivalents.keys(), set(catalog.SUITES))
+
+    def test_conditional_headless_assertions_keep_their_macos_branch(self):
+        definitions = catalog.suites_for_platform("macos")
+        for relative in ("tests/ui/queries.rs", "tests/ui/metadata.rs", "tests/ui/assistant_sql.rs", "tests/e2e/assistant.rs"):
+            source = read(relative)
+            expression = definitions["native-assistant" if "/e2e/" in relative else "native-ui"].steps[0].nextest_filter
+            for position in re.finditer(r'cfg!\(target_os = "macos"\)', source):
+                function = list(re.finditer(r"^fn (\w+)\(", source[:position.start()], re.MULTILINE))[-1][1]
+                self.assertIn(function, expression)
+
+    def test_evidence_does_not_upload_extracted_test_binaries(self):
+        validation = read(VALIDATION)
+        self.assertEqual(validation.count("            target/qtest/runs/\n"),
+                         validation.count("            !target/qtest/runs/**/prepared/*/target/**\n"))
+        self.assertEqual(validation.count("name: candidate-"), 8)
+        for target in platforms.TARGETS.values():
+            if target.supported:
+                body = job("build-" + target.name.replace("_", "-"))
+                self.assertIn("compression-level: 0", body)
+                self.assertNotIn("path: target/package/\n", body)
+
+    def test_runs_share_source_and_forks_need_no_secrets(self):
+        validation = read(VALIDATION)
+        self.assertNotIn("secrets.", validation)
+        self.assertIn("${{ github.workflow }}-validation-", validation)
+        self.assertNotIn("head.repo.full_name", validation)
+        self.assertIn("converted_to_draft", read(TEST))
+        self.assertIn("!github.event.pull_request.draft", job("plan", TEST))
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", read(TEST))
+        self.assertIn("--repeat 100", job("common"))
+        self.assertIn("--reuse-builds", job("common"))
+        self.assertIn("cold-cache", read(TEST))
+        self.assertIn("full: true", job("validation", RELEASE))
+
+    def test_caches_have_single_saving_owners_and_tests_only_download_artifacts(self):
+        validation = read(VALIDATION)
+        keys = re.findall(r"shared-key: (.+)", validation)
+        self.assertEqual(len(keys), len(set(keys)))
+        for line in validation.splitlines():
+            if "save-if:" in line:
+                self.assertIn("github.ref == 'refs/heads/main' && github.event_name == 'push'", line)
+        maintenance = read(".github/workflows/cache-cleanup.yml")
+        self.assertIn("workflow_run:", maintenance)
+        self.assertIn("workflows: [test]", maintenance)
+        self.assertIn("branches: [main]", maintenance)
+        self.assertIn("workflow_run.event == 'push'", maintenance)
+        self.assertIn("head_repository.full_name == github.repository", maintenance)
+        self.assertIn("actions: write", maintenance)
+        self.assertIn("scripts/ci/rust_caches.py", maintenance)
+        self.assertNotIn("ref:", job("cache-cleanup", ".github/workflows/cache-cleanup.yml"))
+        self.assertNotIn("cache-cleanup:", validation)
+        self.assertNotIn("cache-cleanup:", read(RELEASE))
+        self.assertNotIn("actions: write", validation)
 
 
-class PlanTests(unittest.TestCase):
-    def test_paths_select_jobs_and_what_they_wait_for(self):
-        everything = ["static", "core", "ui", "ui-linux", "package", "backend", "e2e", "e2e-linux", "perf"]
-        cases = {
-            "docs/queries.md": ["static"],
-            "scripts/tests/test_hooks.py": ["static"],
-            "src/ui.rs": everything,
-            ".cargo/config.toml": everything,
-            "scripts/e2e/driver.sh": ["static", "backend", "e2e", "e2e-linux"],
-            # The UI tests embed the synthetic Codex server.
-            "tests/desktop/fake-codex.py": everything,
-            "tests/fixture/server/Blocking.java": ["static", "backend", "e2e", "e2e-linux"],
-            # The e2e job packages its debug app with the package scripts.
-            "scripts/package/macos.sh": ["static", "package", "e2e"],
-            "scripts/package/dmg.py": ["static", "package", "e2e"],
-            "scripts/ci/linux-build-deps.sh": ["static", "ui-linux", "backend", "e2e-linux"],
-            ".github/workflows/checks.yml": everything,
-            "scripts/qtest/catalog.py": everything,
-        }
-        for path, expected in cases.items():
-            with self.subTest(path=path):
-                self.assertEqual(catalog.ci_jobs_for_changes([path]), expected)
 
-    def test_each_event_runs_its_scope_and_the_scopes_before_it(self):
-        pull_requests = ["static", "core", "ui", "ui-linux", "package", "backend", "e2e", "e2e-linux", "perf"]
-        self.assertEqual(catalog.ci_jobs_for_event("pull_request"), pull_requests)
-        self.assertEqual(catalog.ci_jobs_for_event("push"), [*pull_requests, "perf-ui", "perf-backend"])
-        self.assertEqual(catalog.ci_jobs_for_event("manual"), list(catalog.CI_JOBS))
-        manual = [name for name, ci_job in catalog.CI_JOBS.items() if ci_job.scope == "manual"]
-        self.assertEqual(manual, ["desktop-package", "ui-intel", "package-intel", "e2e-intel"])
-        # A job that waited for a job of a later scope would never run.
-        for name, ci_job in catalog.CI_JOBS.items():
-            for need in ci_job.needs:
-                self.assertLessEqual(catalog.SCOPES.index(catalog.CI_JOBS[need].scope),
-                                     catalog.SCOPES.index(ci_job.scope), name)
-
-    def test_jobs_start_at_once_unless_they_use_a_package(self):
-        # Waiting for a job that only predicts a failure, like core, made each
-        # path of a pull request longer.
-        waits = {name: ci_job.needs for name, ci_job in catalog.CI_JOBS.items() if ci_job.needs}
-        self.assertEqual(waits, {"desktop-package": ("package",), "e2e-intel": ("package-intel",)})
-
-    def test_pull_request_jobs_have_budgets_under_ten_minutes(self):
-        for name in catalog.ci_jobs_for_event("pull_request"):
-            with self.subTest(job=name):
-                self.assertLessEqual(catalog.CI_JOBS[name].budget, 8)
-        for ci_job in catalog.CI_JOBS.values():
-            self.assertGreater(ci_job.budget, 0)
-
-    def test_pull_requests_do_not_measure(self):
-        self.assertIn("QROW_CI_MEASURE: ${{ github.event_name != 'pull_request' }}\n", read(CHECKS))
-        # Jobs with only report-only suites check nothing, so pull requests skip them.
-        for name, ci_job in catalog.CI_JOBS.items():
-            if not ci_job.suites:
-                self.assertNotEqual(ci_job.scope, "pull_request", name)
-
-    def test_the_benchmarks_run_on_linux(self):
-        self.assertEqual(catalog.CI_JOBS["perf"].runner, catalog.LINUX)
-        self.assertNotIn("macos", catalog.SUITES["perf"].requires)
-
-    def test_plan_job_selects_the_jobs_of_each_event(self):
-        body = job("plan")
-        self.assertIn("fetch-depth: 2", body)
-        self.assertIn('git diff --name-only HEAD^1 HEAD', body)
-        self.assertIn("push) ./qtest ci plan --push", body)
-        self.assertIn("*) ./qtest ci plan --all", body)
-
-
-class WorkflowTests(unittest.TestCase):
-    def test_callers_share_the_checks_and_own_the_concurrency(self):
-        checks = read(CHECKS)
-        self.assertIn("workflow_call:", checks)
-        # A concurrency group in the called workflow would let a release cancel a test run.
-        self.assertNotIn("concurrency:", checks)
-        self.assertNotIn("statuses:", checks)
-        test = job("checks", TEST)
-        self.assertIn("uses: ./.github/workflows/checks.yml", test)
-        self.assertIn("ref: ${{ github.sha }}", test)
-        release = job("checks", RELEASE)
-        self.assertIn("uses: ./.github/workflows/checks.yml", release)
-        self.assertIn("release-version: ${{ needs.resolve-target.outputs.release_version }}", release)
-
-    def test_pull_requests_into_any_branch_get_checks(self):
-        workflow = read(TEST)
-        on = workflow[workflow.index("on:"):workflow.index("permissions:")]
-        self.assertNotIn("branches: [main]\n    types", on)
-        self.assertIn("converted_to_draft", on)
-        self.assertIn("!github.event.pull_request.draft", job("checks", TEST))
-
-    def test_disposable_e2e_jobs_do_not_skip_forks(self):
-        for name in catalog.CI_JOBS:
-            with self.subTest(job=name):
-                forks_skip = "head.repo.full_name == github.repository" in job(name)
-                self.assertFalse(forks_skip)
-
-    def test_the_tested_package_is_the_released_package(self):
-        package = job("package")
-        self.assertIn("QROW_RELEASE_VERSION: ${{ inputs.release-version }}", package)
-        self.assertIn("name: macos-package\n", package)
-        self.assertIn("path: target/package/Qrow-macos.zip", package)
-        tested = job("desktop-package")
-        self.assertIn("name: macos-package\n", tested)
-        self.assertIn("QROW_E2E_REUSE_MACOS_PACKAGE: true", tested)
-        self.assertEqual(catalog.CI_JOBS["desktop-package"].suites, ("desktop",))
-        # The e2e job tests a debug app from its own test build and does not wait for the package.
-        self.assertNotIn("macos-package", job("e2e"))
-        self.assertEqual(dict(catalog.CI_JOBS["e2e"].env),
-                         {"QROW_BUILD_PROFILE": "debug", "QROW_PACKAGE_PREBUILT": "true"})
+class ReleaseWorkflowTests(unittest.TestCase):
+    def test_release_promotes_qualified_candidates_without_cargo_builds(self):
+        for name in ("dmg", "linux"):
+            body = job(name, RELEASE)
+            prerequisites = needs(body) or re.findall(r"^      - (\S+)$", body.split("strategy:")[0], re.MULTILINE)
+            self.assertEqual(prerequisites, ["resolve-target", "validation"])
+            self.assertNotIn("cargo build", body)
+            self.assertIn("receipt", body)
+            self.assertIn("sha256", body)
+            self.assertIn("platform-evidence-", body)
         dmg = job("dmg", RELEASE)
-        self.assertEqual(needs(dmg) or re.findall(r"^      - (\S+)$", dmg.split("strategy:")[0], re.MULTILINE),
-                         ["resolve-target", "checks", "platforms"])
-        self.assertIn("name: ${{ matrix.package }}\n", dmg)
-        self.assertNotIn("scripts/package/macos.sh", read(RELEASE))
-        self.assertIn("- dmg", job("publish", RELEASE))
-
-    def test_linux_release_promotes_qualified_native_archives(self):
-        linux = job("linux", RELEASE)
-        self.assertEqual(needs(linux), ["resolve-target", "checks", "platforms"])
-        self.assertNotIn("cargo build", linux)
-        self.assertNotIn("scripts/package/linux.sh", linux)
-        self.assertIn("name: candidate-${{ matrix.target }}", linux)
-        self.assertIn("receipt[\"sha256\"]", linux)
-        publish = job("publish", RELEASE)
-        self.assertIn("- linux", publish)
-        self.assertIn("full: true", job("platforms", RELEASE))
-        for arch, target in [("x86_64", "linux-x86_64"), ("aarch64", "linux-arm64")]:
-            self.assertIn(f"- arch: {arch}\n            target: {target}\n", linux)
-            self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-linux-{arch}.tar.gz"', publish)
-        self.assertIn("pattern: release-linux-*", publish)
-
-    def test_each_platform_tests_the_real_window_against_the_servers(self):
-        # Before, the Postgres and Trino window tests ran only on macOS, and CI
-        # runs those suites only on Linux, so no CI job ran them.
-        for script in ("scripts/e2e/postgres.py", "scripts/e2e/trino.py"):
-            with self.subTest(script=script):
-                self.assertNotIn("Darwin", read(script))
-                self.assertIn('*UI_TEST_FEATURE, "--test", "e2e"', read(script))
-        for name in ("postgres", "trino", "e2e"):
-            self.assertIn("linux-app-libs", catalog.SUITES[name].requires)
-        self.assertEqual(catalog.CI_JOBS["e2e-linux"].suites, ("e2e",))
-        self.assertEqual(catalog.CI_JOBS["e2e-linux"].runner, catalog.LINUX)
-        self.assertEqual(catalog.CI_JOBS["e2e-linux"].runtime, "docker")
-        self.assertEqual(catalog.CI_JOBS["e2e-linux"].scope, "pull_request")
-
-    def test_intel_package_is_tested_and_both_architectures_are_released(self):
-        self.assertEqual(needs(job("e2e-intel")), ["plan", "package-intel"])
-        for name in ("package-intel", "e2e-intel"):
-            self.assertIn("name: macos-package-x86_64\n", job(name))
-        # An ARM64 runner builds the Intel package. An Intel runner tests it.
-        self.assertEqual(dict(catalog.CI_JOBS["package-intel"].env), {"CARGO_BUILD_TARGET": "x86_64-apple-darwin"})
-        self.assertEqual(catalog.CI_JOBS["package-intel"].runner, catalog.MACOS_RUNNER)
-        self.assertEqual(catalog.CI_JOBS["e2e-intel"].runner, "macos-15-intel")
-        self.assertIn("perf-package", catalog.CI_JOBS["e2e-intel"].report_only)
-        dmg = job("dmg", RELEASE)
-        for arch, runner, artifact in (("arm64", "macos-15", "candidate-macos-arm64"),
-                                       ("x86_64", "macos-15-intel", "candidate-macos-x86_64")):
-            self.assertIn(f"- arch: {arch}\n            runner: {runner}\n            package: {artifact}\n", dmg)
-            self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-{arch}.dmg"', job("publish", RELEASE))
-        self.assertIn('lipo -archs dist/Qrow.app/Contents/MacOS/qrow', dmg)
-        self.assertIn("name: release-dmg-${{ matrix.arch }}", dmg)
-        self.assertIn("pattern: release-dmg-*", job("publish", RELEASE))
-        self.assertIn("merge-multiple: true", job("publish", RELEASE))
-        self.assertIn('if [ "$PACKAGE_ARCH" = arm64 ]; then', dmg)
-        self.assertIn('cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"', dmg)
-        self.assertIn('"dist/Qrow-${RELEASE_VERSION}.dmg"', job("publish", RELEASE))
-
-    def test_the_release_dmg_comes_from_the_packaging_script(self):
-        # The installer window, the Applications shortcut, and the icon layout
-        # are the job of scripts/package/dmg.py, not of a raw disk image.
-        dmg = job("dmg", RELEASE)
-        self.assertIn("uv run --locked python scripts/package/dmg.py build", dmg)
-        self.assertIn('--volume-name "Qrow ${RELEASE_VERSION}"', dmg)
+        for architecture, runner in (("arm64", "macos-15"), ("x86_64", "macos-15-intel")):
+            self.assertIn(f"arch: {architecture}\n            runner: {runner}", dmg)
+        self.assertIn("scripts/package/dmg.py build", dmg)
         self.assertIn("hdiutil imageinfo", dmg)
-        self.assertNotIn("hdiutil create", dmg)
-        # The packaging script lives in the repository at the released commit.
-        self.assertIn("uses: actions/checkout@", dmg)
-        self.assertIn("ref: ${{ needs.resolve-target.outputs.target_sha }}", dmg)
-        self.assertIn("setup-uv", dmg)
-
-    def test_only_main_saves_rust_caches(self):
-        checks = read(CHECKS)
-        caches = re.findall(r"rust-cache@.*\n(?:\s+.*\n)*?\s+save-if: (.*)\n", checks)
-        self.assertEqual(len(caches), checks.count("rust-cache@"))
-        self.assertTrue(all(value in ("${{ github.ref == 'refs/heads/main' }}", "false") for value in caches))
-
-    def test_runs_that_save_rust_caches_delete_the_replaced_caches(self):
-        for path in (TEST, RELEASE):
-            with self.subTest(workflow=path):
-                cleanup = job("cache-cleanup", path)
-                self.assertEqual(needs(cleanup), ["checks"])
-                # The same condition as save-if, also after a failed or cancelled check.
-                self.assertIn("if: ${{ always() && github.ref == 'refs/heads/main' }}", cleanup)
-                self.assertIn("actions: write", cleanup)
-                self.assertIn("run: python3 scripts/ci/rust_caches.py\n", cleanup)
-        # The checks run code from pull requests, so they must not delete caches.
-        self.assertNotIn("actions: write", read(CHECKS))
-
-    def test_runs_on_main_finish_and_pull_request_runs_cancel(self):
-        # A cancelled run on main saves no build caches.
-        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n", read(TEST))
-
-    def test_each_rust_cache_has_one_job_that_saves_it(self):
-        caches = {}
-        for name in catalog.CI_JOBS:
-            match = re.search(r"shared-key: (\S+)\n\s+save-if: (.*)\n", job(name))
-            if match:
-                caches.setdefault(match.group(1), []).append((name, match.group(2) != "false"))
-        for key, users in caches.items():
-            with self.subTest(key=key):
-                self.assertEqual(sum(saves for _, saves in users), 1, users)
-        # Core builds only under cargo-llvm-cov, so its cache does not have the backend build.
-        self.assertIn("backend", [name for name, _ in caches["backend"]])
-
-    def test_the_no_default_features_lint_runs_in_one_job(self):
-        self.assertIn("clippy", catalog.CI_JOBS["static"].suites)
-        self.assertEqual(catalog.CI_JOBS["static"].runner, catalog.LINUX)
-        linted = [name for name, ci_job in catalog.CI_JOBS.items() if "clippy" in ci_job.suites]
-        self.assertEqual(linted, ["static"])
-        self.assertIn("clippy-app", catalog.CI_JOBS["ui"].suites)
-        self.assertIn("clippy-app", catalog.CI_JOBS["ui-linux"].suites)
-
-    def test_pull_requests_build_the_linux_application_with_the_release_libraries(self):
-        ui_linux = catalog.CI_JOBS["ui-linux"]
-        self.assertEqual(ui_linux.runner, catalog.LINUX)
-        self.assertEqual(ui_linux.scope, "pull_request")
-        # The same suites as the macOS ui job.
-        self.assertEqual(ui_linux.suites, catalog.CI_JOBS["ui"].suites)
-        # One script installs the libraries, so the check and the release cannot drift.
-        install = "run: sh scripts/ci/linux-build-deps.sh\n"
-        for name in ("ui-linux", "backend", "e2e-linux"):
-            self.assertIn(install, job(name))
-        self.assertIn("sh scripts/ci/linux-build-deps.sh", job("native", ".github/workflows/platforms.yml"))
-        self.assertNotIn("apt-get install", job("linux", RELEASE))
-
-    def test_artifacts_expire_and_main_keeps_performance_history(self):
-        checks = read(CHECKS)
-        uploads = re.findall(r"upload-artifact@.*\n((?:\s{8,}.*\n)+)", checks)
-        self.assertEqual(len(uploads), checks.count("upload-artifact@"))
-        for upload in uploads:
-            with self.subTest(upload=upload.split("\n")[1:2]):
-                if "name: performance-" in upload:
-                    self.assertIn("retention-days: 90", upload)
-                    self.assertIn("perf.json", upload)
-                else:
-                    self.assertIn("retention-days: 1\n", upload)
-        artifacts = {"package": "package", "perf-backend": "backend", "e2e": "e2e", "perf": "perf",
-                     "perf-ui": "perf-ui"}
-        for name, artifact in artifacts.items():
-            self.assertIn(f"name: performance-{artifact}\n", job(name))
-            self.assertIn("if: github.ref == 'refs/heads/main'", job(name))
-
-    def test_the_desktop_suite_runs_the_only_permission_preflight(self):
-        # `./qtest ci e2e` checks the permissions before it builds or starts servers.
-        self.assertNotIn("driver.sh", job("e2e"))
-        self.assertIn("desktop", catalog.SUITES["desktop"].requires)
-        self.assertIn("e2e", [name for name, ci_job in catalog.CI_JOBS.items() if "desktop" in ci_job.suites])
-
-    def test_native_e2e_downloads_come_from_the_mirror_without_an_actions_cache(self):
-        # The mirror downloads the archives faster than an Actions cache restores them.
-        body = job("e2e")
-        self.assertIn("timeout-minutes: 150", body)
-        self.assertNotIn("actions/cache", body)
-        self.assertNotIn("e2e-downloads", body)
+        self.assertIn("scripts/package/qualify.py dist --dmg", dmg)
+        self.assertIn("lipo -archs", dmg)
+        self.assertIn('cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"', dmg)
+        self.assertIn("merge-multiple: true", job("publish", RELEASE))
+        self.assertIn("Select the workflow branch at the candidate commit", job("resolve-target", RELEASE))
 
 
 if __name__ == "__main__":

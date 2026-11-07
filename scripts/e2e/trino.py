@@ -14,8 +14,12 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/qtest"))
+import builds  # noqa: E402
+
 IMAGE = "trinodb/trino:483@sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534"
 
 STORAGE_IMAGE = "adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92"
@@ -27,21 +31,65 @@ UI_TEST_FEATURE = ("--features", "ui-test") if platform.system() == "Linux" else
 
 
 def command(*args, **kwargs):
+    if args[:3] == ("cargo", "nextest", "run"):
+        # A layer selects scenarios, not different fixture behavior.
+        layer = os.environ.get("QROW_CONNECTOR_LAYER", "all")
+        core = "--no-default-features" in args
+        if layer != "all" and core != (layer == "core"):
+            return None
+        return builds.run(list(args), kwargs.get("env"))
     return subprocess.run(args, check=True, text=True, **kwargs)
+
+
+def accepts_queries(origin, context):
+    """True when the coordinator finished startup and a query that reads task results succeeds.
+
+    An accepted statement does not prove readiness. The task result endpoint can
+    still answer 503 while the coordinator initializes."""
+    headers = {"X-Trino-User": "qrow", "Authorization": "Basic cXJvdzpxcm93LXRlc3QtcGFzc3dvcmQ="}
+    try:
+        with urllib.request.urlopen(origin + "/v1/info", context=context, timeout=5) as response:
+            if json.load(response).get("starting", True) is not False:
+                return False
+        request = urllib.request.Request(origin + "/v1/statement", data=b"SELECT count(*) FROM tpch.tiny.region",
+                                         headers=headers)
+        deadline = time.monotonic() + 30
+        rows = []
+        while request is not None:
+            with urllib.request.urlopen(request, context=context, timeout=5) as response:
+                body = json.load(response)
+            if body.get("error"):
+                return False
+            # Rows can arrive on any page. The last page often has none.
+            rows.extend(body.get("data", []))
+            if "nextUri" not in body:
+                return rows == [[5]]
+            if time.monotonic() >= deadline:
+                return False
+            request = urllib.request.Request(body["nextUri"], headers=headers)
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return False
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--perf", action="store_true", help="Measure export transfer in an optimized build.")
+    parser.add_argument("--layer", choices=("all", "core", "ui"), default="all")
     options = parser.parse_args()
+    if options.perf and options.layer == "ui":
+        parser.error("--perf requires core tests")
+    os.environ["QROW_CONNECTOR_LAYER"] = options.layer
     name = "qrow-e2e-trino-" + uuid.uuid4().hex[:12]
     storage_name = name + "-storage"
     env = os.environ.copy()
     profile = "ci" if env.get("CI") else "default"
     build = ("--profile", "perf") if options.perf else ()
-    command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
-    if not options.perf:
-        command("cargo", "test", "--locked", *UI_TEST_FEATURE, "--test", "e2e", "--no-run")
+    if not os.environ.get("QROW_NEXTEST_RUNTIME"):
+        if options.layer != "ui":
+            command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
+        if not options.perf and options.layer != "core":
+            command("cargo", "test", "--locked", *UI_TEST_FEATURE, "--test", "e2e", "--no-run")
     target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     fixture_root = target / "qtest" / "trino"
     fixture_root.mkdir(parents=True, exist_ok=True)
@@ -142,17 +190,9 @@ def main():
             env.update(QROW_TRINO_FIXTURE=name, QROW_TRINO_PORT=port, QROW_TRINO_CA=str(path / "ca.crt"))
             env.update(QROW_TRINO_STORAGE=storage_name, QROW_TRINO_STORAGE_PORT=str(storage_port))
             deadline = time.monotonic() + 120
-            while True:
-                request = urllib.request.Request(f"https://localhost:{port}/v1/statement", data=b"SELECT 1",
-                                                 headers={"X-Trino-User": "qrow", "Authorization": "Basic cXJvdzpxcm93LXRlc3QtcGFzc3dvcmQ="})
-                try:
-                    with urllib.request.urlopen(request, context=context, timeout=5) as response:
-                        if response.status == 200:
-                            break
-                except (urllib.error.URLError, OSError):
-                    pass
+            while not accepts_queries(f"https://localhost:{port}", context):
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("Trino fixture did not accept SELECT 1 in time")
+                    raise RuntimeError("Trino fixture did not complete a tpch query in time")
                 time.sleep(0.2)
             if options.perf:
                 command("cargo", "nextest", "run", "--locked", "--profile", profile, "--cargo-profile", "perf",

@@ -7,11 +7,9 @@ a new cache next to the old one. The old caches fill the repository cache
 limit. Of the caches with the same name before the hashes, this script keeps
 the newest and deletes the others.
 
-Only runs on `main` save the caches of `main`. Pull requests restore them too,
-so the time of last use does not show which cache `main` uses. A release of
-an older commit with another `Cargo.lock` saves a newer cache that `main` does
-not use. Then the next run on `main` builds the dependencies again and saves
-its cache again.
+Only pushes to `main` save these caches. Pull requests restore them too,
+so the time of last use does not show which cache `main` uses. Release
+qualification and scheduled cold-cache runs do not save caches.
 """
 import argparse
 import datetime

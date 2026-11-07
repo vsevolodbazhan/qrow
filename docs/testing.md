@@ -57,8 +57,29 @@ identity, if any.
 
 The portable entry point is `uv run --locked python scripts/qtest`. On Windows,
 `qtest.cmd` calls this entry point. Application and native fixture support on
-Windows still require platform adapters. Existing `run`, `ci`, hook, fixture,
-and comparison commands remain available during migration.
+Windows still require platform adapters. Local `run`, hook, fixture, and
+comparison commands remain available. The legacy `ci` scheduler was removed;
+see [Continuous integration](ci.md) for job ownership.
+
+To build once and execute the same binaries, use a prepared build:
+
+```sh
+./qtest plan ui e2e --runtime docker --output target/ui-plan.json
+./qtest prepare target/ui-plan.json --output target/ui-builds --install
+./qtest execute target/ui-plan.json --reuse-builds target/ui-builds/manifest.json --output target/ui-result.json
+./qtest verify target/ui-plan.json target/ui-result.json
+```
+
+Preparation groups test binaries by features and profile. It builds each group
+once before servers start. Execution verifies the source, target, compiler
+settings, toolchain, and archive digests. It extracts each archive once and
+uses nextest metadata without another Cargo build. Missing or stale builds
+fail; execution does not fall back to compilation. A plan for another
+architecture of the same OS, like `--target macos-x86_64` on Apple silicon,
+prepares a cross-compiled build. Install the Rust target first with
+`rustup target add`. Execute that build on the plan target. `run --reuse-builds` also
+supports filtered repeats with these binaries. Doctests and non-nextest checks
+remain separate commands.
 
 ## Suites
 
@@ -67,13 +88,23 @@ accept a test filter.
 
 | Suite | Checks | Needs |
 | --- | --- | --- |
+| `app-unit` * | Application unit tests and doctests, without repeating portable core tests. | Desktop libraries, cargo-nextest |
+| `clippy-native` | Production application Clippy for the current target. | Desktop build libraries |
+| `native-storage` | OS credential tests with synthetic data. | cargo-nextest; on Linux, D-Bus and GNOME Keyring |
+| `native-font` | Native macOS font and tooltip layout on the main thread. | macOS, Rust |
+| `native-ui` * | macOS branches of headless shortcut assertions. | macOS, cargo-nextest |
+| `native-assistant` * | macOS branch of the assistant server interaction. | macOS, cargo-nextest, fixture runtime |
+| `postgres-core` | Postgres connector scenarios without GPUI. | Docker, cargo-nextest |
+| `trino-core` | Trino connector scenarios without GPUI. | Docker, cargo-nextest |
+| `postgres-ui` | Postgres headless window scenarios. | Docker, desktop libraries, cargo-nextest |
+| `trino-ui` | Trino headless window scenarios. | Docker, desktop libraries, cargo-nextest |
 | `fmt` | Rust formatting. | Rust |
 | `clippy` | Clippy for the core library. | Rust |
 | `clippy-app` | Clippy for the application with all features. | Rust; on Linux, the desktop libraries |
 | `rustdoc` | Rust API documentation without warnings. | Rust |
 | `unit` * | Rust unit and integration tests that need no UI and no servers. | cargo-nextest; on Linux, the desktop libraries |
 | `ui` * | Headless tests of the real Qrow window, without servers. | cargo-nextest; on Linux, the desktop libraries |
-| `coverage` | Core line coverage with an 80% floor. On Linux, also checks the secret store. | cargo-llvm-cov; on Linux, cargo-nextest, D-Bus, GNOME Keyring |
+| `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
 | `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
 | `perf-e2e` * | Window query latency against the real servers. | macOS, Docker or Java 17 |
@@ -99,7 +130,8 @@ library without the application. `clippy-app`, `unit`, and `ui` build the
 application. On Linux, they need the desktop libraries that the README lists.
 On Ubuntu, `sh scripts/ci/linux-build-deps.sh` installs them. These suites
 need macOS and are not available on Linux: `perf-ui`, `perf-e2e`, `perf-app`,
-`perf-package`, `package`, and `desktop`.
+`perf-package`, `package`, `desktop`, `native-font`, `native-ui`, and
+`native-assistant`.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
 Spark, and OpenID Connect servers. `desktop` also takes over the desktop. These suites, the
@@ -113,13 +145,13 @@ core library are modules of one test binary,
 links one binary. The `backend` suite runs the `backend::` module of this
 binary.
 
-On macOS, the full `ui` suite also checks tooltip alignment with the native font
+On macOS, `native-font` checks tooltip alignment with the native font
 backend at 1× and 2× display scales. Titles, statuses, and shortcuts share
 the vertical center of the first line. Checks cover system and Menlo fonts
 at 75%, 100%, 110%, 125%, and 150% UI scale. It runs this check on the process main
 thread because AppKit requires that thread. The other headless UI tests
-use GPUI's test text backend. Run `./qtest run ui` on macOS to include the native
-check. A test filter runs only the matching GPUI tests.
+use GPUI's test text backend. Run `./qtest run native-font` on macOS for the
+native check. `ui` and its test filters run only the headless GPUI tests.
 
 UI tests also compare the Connections and Sign-Ins headers with query tabs.
 They check text height, control centers, and separator positions at different
@@ -189,10 +221,10 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
 The macOS unit tests use explicit temporary keychains with synthetic tokens.
 They check token removal when another executable created the item. They do not
 change the default keychain or its search list. A separate password test uses
-the real macOS Keychain, so no suite runs it. Run that test with
-`cargo test --test integration keychain:: -- --ignored`.
+the real macOS Keychain with a randomly named synthetic item. `native-storage`
+runs both checks on disposable macOS runners and removes the synthetic item.
 
-On Linux, the `coverage` suite also starts a private D-Bus session and a
+On Linux, `native-storage` starts a private D-Bus session and a
 temporary GNOME Keyring. It checks password and token storage with synthetic
 values. It needs `dbus-run-session` and `gnome-keyring-daemon`. The test does
 not use the desktop secret store.
@@ -549,9 +581,8 @@ it, needs the Accessibility and Screen Recording permissions. Give them in
 System Settings when preflight reports that they are missing. Preflight
 writes `target/e2e-tools/preflight.log`. It does not change the settings.
 `./qtest run desktop` runs the preflight before it builds the package. The
-driver also checks the permissions each time it starts. `./qtest ci JOB`
-stops before it builds or starts servers when a prerequisite of a suite is
-missing, so the `e2e` job fails at once without the permissions.
+driver also checks the permissions each time it starts. CI stops before it
+starts servers when a required prerequisite is missing.
 
 The suite builds a release package in the run directory. It does not replace
 `dist/Qrow.app`. It uses a temporary workspace and new synthetic Keychain
@@ -615,12 +646,11 @@ CI runs `perf` with its budgets on Linux. It runs the other probes as
 report-only suites, because the hosted runners are slower and less steady
 than a developer computer. Pull requests skip the report-only suites. Runs
 on `main` keep the measurements for 90 days. To get the measurements of a
-run, download its `performance-package`, `performance-backend`,
-`performance-e2e`, `performance-perf`, or `performance-perf-ui` artifact,
-for example:
+run, download its `performance-common-performance`, `performance-common-backend`,
+or `performance-macos-arm64` artifact. For example:
 
 ```sh
-gh run download RUN_ID -n performance-perf
+gh run download RUN_ID -n performance-common-performance
 ```
 
 To find smaller changes, compare the probes with another revision on the
@@ -930,106 +960,15 @@ checkout. All worktrees of the repository use it. To use a different
 directory, set `QROW_HOOK_TARGET_DIR`. You can remove the directory to get
 disk space back. The next hook then builds the dependencies again.
 
-The [checks workflow](../.github/workflows/checks.yml) checks one commit. The
-[test workflow](../.github/workflows/test.yml) and the
-[release workflow](../.github/workflows/release.yml) call it. The qtest
-catalog defines its jobs: the suites of each job, its time budget, the jobs
-that it waits for, the events that start it, and the paths that select it.
-The workflow prepares each runner and runs `./qtest ci JOB`. To run the
-suites of a job on your computer, run the same command, for example
-`./qtest ci ui`. Add `--measure` to also run its report-only suites.
-`./qtest ci` lists the jobs:
+The test and release workflows use one validation graph. Common static,
+core, backend, headless UI, and performance jobs run before native tests.
+Each native test consumes its own build artifact. Portable tests run once;
+OS assertions and package checks run on all applicable native targets.
 
-| Job | Runner | Suites | Runs in |
-| --- | --- | --- | --- |
-| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | all runs |
-| `core` | Linux | `coverage`, which runs the unit tests of the core library | all runs |
-| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | all runs |
-| `ui-linux` | Linux | `clippy-app`, `unit`, `ui`, with the desktop libraries of the Linux release | all runs |
-| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
-| `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
-| `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, and `perf-e2e` (report only), with local Java servers | all runs |
-| `e2e-linux` | Linux | `e2e`, with Docker | all runs |
-| `perf` | Linux | `perf` | all runs |
-| `perf-ui` | macOS ARM64 | `perf-ui` (report only) | pushes, manual runs, releases |
-| `perf-backend` | Linux | `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | pushes, manual runs, releases |
-| `desktop-package` | macOS ARM64 | `desktop` on the package of `package` | manual runs, releases |
-| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | manual runs, releases |
-| `package-intel` | macOS ARM64 | `package` for x86_64 | manual runs, releases |
-| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package of `package-intel`, and `perf-e2e`, `perf-package` (report only), with local Java servers | manual runs, releases |
-
-A pull request run takes about 10 minutes. To keep it there, the jobs start
-at once and run in parallel. Only `desktop-package` and `e2e-intel` wait,
-for the package that they test. A failed job skips the jobs that wait for
-it. Each job has a time budget for its suites, most of them 8 minutes or
-less. When the suites take longer, the job shows a warning. Find the cause
-before you raise the budget. `static` lints the core library. The `ui`,
-`ui-intel`, and `ui-linux` jobs lint and test the application on their
-platform.
-
-A report-only suite runs, and its measurements go into the run summary. Its
-failure does not fail the job. Pull requests do not keep measurements, so
-they skip the report-only suites and the measurement jobs `perf-ui` and
-`perf-backend`. Pushes, manual runs, and releases run them.
-
-The `desktop` suite of the `e2e` job tests a debug app. The app contains
-the executable that the E2E test build makes, so the job does not wait for
-the release package and does not compile again. `desktop-package` tests the
-legacy release package. The platform workflow qualifies the release candidate.
-
-The table above describes the legacy checks workflow. The platform workflow
-also runs on every ready pull request, including documentation-only changes.
-It validates native macOS ARM64, macOS Intel, Linux x86-64, and Linux ARM64.
-Each target runs `clippy-app`, `unit`, `ui`, its packaging suite, and
-`package-smoke`. This conservative selection remains in place during migration.
-
-Pushes to main, scheduled runs, manual runs, and releases use full mode.
-All four targets run real-server E2E. Linux also runs Postgres and Trino suites
-with Docker. macOS runs the desktop suite against its candidate archive with
-the native Kyuubi fixture. The platform gate requires the expected suites and
-a native package receipt for every target. `ci-required` requires this gate
-and the legacy checks. See [Development](development.md#hooks-and-continuous-integration).
-
-Legacy `package-intel` still cross-builds on ARM64. The platform workflow builds
-and executes the Intel candidate on Intel. The legacy jobs remain during
-migration; they do not provide the package that the new release path promotes.
-
-For a pull request, the plan always selects `static`. Changes to Rust
-sources or `.cargo/config.toml` select all pull request jobs. Changes to the
-server fixture or the E2E scripts select `backend`, `e2e`, and `e2e-linux`. Changes under
-`tests/desktop/` select `e2e`. Changes to
-`scripts/ci/linux-build-deps.sh` select the Linux jobs that build the
-application: `ui-linux`, `backend`, and `e2e-linux`. Changes to the packaging or probe scripts,
-`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the packaging
-scripts also select `e2e`, because it packages its debug app. Changes to the
-workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
-pull request jobs. A selected job also selects the jobs that it waits for. A
-job that the plan does not select shows as skipped. To see the plan of your
-changes, run `./qtest ci plan`.
-
-In CI, qtest uses the `ci` nextest profile. Server jobs also run for forks,
-with disposable fixtures and synthetic credentials. They do not get secrets. The macOS ARM64 jobs and `package-intel` use `macos-15`. The
-other Intel jobs use `macos-15-intel`.
-Each E2E job shares one set of servers between its suites. The native archives download from the
-mirror in each run, with a limit of 2 hours for each archive. Each Rust build
-cache belongs to one job, and only that job saves it. Each E2E job also
-restores the cache of its UI job, which builds the same dependencies. Runs on
-`main` save the build caches. Other runs only restore them. A change to
-`Cargo.lock` or to the toolchain gives a cache a new name, and the old cache
-stays. After the checks of a run on `main`, the `cache-cleanup` job of the test
-workflow and of the release workflow deletes the old caches. It also runs
-after failed or cancelled checks. A cancelled job saves no cache, so a newer
-push to `main` does not cancel the run in progress. For each job, it keeps the newest cache. A
-release of an older commit with another `Cargo.lock` saves a newer cache that
-`main` does not use, so the next run on `main` builds the dependencies again.
-To see the caches that it deletes, run
-`python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`.
-Legacy CI keeps its artifacts for one day. The platform workflow keeps evidence
-and candidates for 14 days. Runs on `main` also keep the measurements of the
-package, E2E, `perf`, `perf-ui`, and `perf-backend` jobs for 90 days, in
-the `performance-NAME` artifacts. See [Check performance](#check-performance). See
-[Development](development.md#hooks-and-continuous-integration) for workflow
-events, required checks, and releases.
+[Continuous integration](ci.md) lists each job, its dependencies, prepared
+build variants, evidence, cache policy, full-run measurements, and merge steps.
+The only branch protection context is `ci-required`. The old `checks / ...`
+jobs and the `qtest ci` scheduler have been removed.
 
 ## Limitations
 

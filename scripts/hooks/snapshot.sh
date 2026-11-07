@@ -22,6 +22,10 @@ case "$common" in
     *) checkout="$repository" ;;
 esac
 export CARGO_TARGET_DIR="${QROW_HOOK_TARGET_DIR:-$checkout/target/hook-checks}"
+# The snapshot has no repository. Git exports these variables to hooks. Without
+# this, a test that runs Git in a temporary directory changes the user's repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_NAMESPACE
 cd "$scratch/worktree"
 # The remaining arguments are qtest arguments, for example `hook pre-push`.
 sh ./qtest "$@"

@@ -76,6 +76,16 @@ class ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'configuration'):
                 contract.validate_plan(value, self.root)
 
+    def test_builds_can_compile_another_architecture_of_the_same_os(self):
+        value = self.plan(target='macos-x86_64')
+        with patch.object(targets, 'host_target', return_value=targets.TARGETS['macos-arm64']):
+            contract.validate_plan(value, self.root, build=True)
+            with self.assertRaisesRegex(ValueError, 'Native execution'):
+                contract.validate_plan(value, self.root)
+        with patch.object(targets, 'host_target', return_value=targets.TARGETS['linux-x86_64']):
+            with self.assertRaisesRegex(ValueError, 'Native execution'):
+                contract.validate_plan(value, self.root, build=True)
+
     def test_conflicting_cargo_target_is_rejected(self):
         with patch.dict(os.environ, CARGO_BUILD_TARGET='aarch64-unknown-linux-gnu'):
             value = self.plan()
@@ -85,7 +95,7 @@ class ContractTests(unittest.TestCase):
 
     def test_evidence_rejects_missing_duplicate_empty_and_failed_tests(self):
         value = self.plan(['ui'])
-        result = dict(schema=1, plan_id=value['id'], target=value['target'], snapshot=value['snapshot'],
+        result = dict(schema=1, plan_id=value['id'], target=value['target'], snapshot=value['snapshot'], source_sha=value['source_sha'],
                       status='passed', exit_code=0, suites=[dict(name='ui', status='passed', tests=[dict(count=1, failures=0)])])
         contract.verify(value, result)
         altered = copy.deepcopy(value)

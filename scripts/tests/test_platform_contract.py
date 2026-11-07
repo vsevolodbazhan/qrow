@@ -28,7 +28,7 @@ class MatrixGateTests(unittest.TestCase):
         self.assertEqual({item['target'] for item in matrix},
                          {'linux-x86_64', 'linux-arm64', 'macos-arm64', 'macos-x86_64'})
         self.assertTrue(all(item['runner'] and 'package-smoke' in item['suites'] for item in matrix))
-        self.assertTrue(all('e2e' in item['suites'] for item in platforms.matrix(True)['include']))
+        self.assertEqual(platforms.matrix(), platforms.matrix(True))
 
     def evidence(self, root, full=False):
         sha = 'a' * 40
@@ -45,11 +45,17 @@ class MatrixGateTests(unittest.TestCase):
                           source_sha=sha, status='passed', exit_code=0, suites=[])
             for item in value['suites']:
                 evidence = dict(name=item['name'], status='passed')
-                if any(step['nextest_filter'] is not None for step in item['definition']['steps']):
-                    evidence['tests'] = [dict(count=1, failures=0)]
+                count = sum(step['nextest_filter'] is not None for step in item['definition']['steps']) + item['definition']['test_runs']
+                if count:
+                    evidence['tests'] = [dict(count=1, failures=0)] * count
                 result['suites'].append(evidence)
             receipt = dict(schema=1, target=target.name, source_sha=sha, sha256='b' * 64,
-                           qualification='native-package-smoke')
+                           qualification='native-package-smoke', archive='candidate.tar.gz')
+            import builds
+            manifest = dict(identity=builds.identity(value), assets={'target/package/candidate.tar.gz': 'b' * 64})
+            manifest_path = directory / 'build-manifest.json'
+            contract.atomic_json(manifest_path, manifest)
+            result['build_manifest_sha256'] = builds.sha256(manifest_path)
             for name, data in [('plan', value), ('result', result), ('receipt', receipt)]:
                 (directory / f'{name}.json').write_text(json.dumps(data))
         return sha
@@ -203,3 +209,66 @@ class SmokeReadinessTests(unittest.TestCase):
                     qualify.smoke(Path('/synthetic/qrow'), 'macos', evidence)
                 self.assertEqual(observer.call_count, 2)
                 stop.assert_called_once_with(process)
+
+class CommonGateTests(unittest.TestCase):
+    def evidence(self, root, full=False):
+        import builds
+        source = root / 'source'
+        source.mkdir()
+        sha = 'a' * 40
+        for name, selectors in platforms.COMMON.items():
+            directory = root / name
+            directory.mkdir()
+            value = contract.plan(source, platforms.COMMON_TARGET, selectors, 'docker')
+            value['source_sha'] = sha
+            value['id'] = contract.digest({key: item for key, item in value.items() if key != 'id'})
+            result = dict(schema=1, plan_id=value['id'], target=value['target'], snapshot=value['snapshot'],
+                          source_sha=sha, status='passed', exit_code=0, suites=[])
+            for item in value['suites']:
+                count = sum(step['nextest_filter'] is not None for step in item['definition']['steps']) + item['definition']['test_runs']
+                result['suites'].append(dict(name=item['name'], status='passed', tests=[dict(count=1, failures=0)] * count))
+            if name in ('backend', 'headless-ui'):
+                manifest_path = directory / 'build-manifest.json'
+                contract.atomic_json(manifest_path, dict(identity=builds.identity(value)))
+                result['build_manifest_sha256'] = builds.sha256(manifest_path)
+            contract.atomic_json(directory / 'plan.json', value)
+            contract.atomic_json(directory / 'result.json', result)
+        return sha
+
+    def test_complete_common_graph_passes_and_missing_or_changed_evidence_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha = self.evidence(root)
+            platforms.verify_common(root, sha)
+            with self.assertRaises(FileNotFoundError):
+                platforms.verify_common(root, sha, full=True)
+            path = root / 'backend/build-manifest.json'
+            original = path.read_text()
+            path.write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'build identity'):
+                platforms.verify_common(root, sha)
+            path.write_text(original)
+            (root / 'backend/result.json').unlink()
+            with self.assertRaisesRegex(ValueError, 'Missing common'):
+                platforms.verify_common(root, sha)
+
+    def test_full_common_gate_requires_stress_from_the_same_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha = self.evidence(root)
+            ui = root / 'headless-ui'
+            functional = json.loads((ui / 'result.json').read_text())
+            value = contract.plan(root / 'source', platforms.COMMON_TARGET, ['ui/timing'], 'docker', 100)
+            value['source_sha'] = sha
+            value['id'] = contract.digest({key: item for key, item in value.items() if key != 'id'})
+            result = dict(schema=1, plan_id=value['id'], target=value['target'], snapshot=value['snapshot'],
+                          source_sha=sha, status='passed', exit_code=0,
+                          build_manifest_sha256=functional['build_manifest_sha256'],
+                          suites=[dict(name='ui', status='passed', tests=[dict(count=3, failures=0)] * 100)])
+            contract.atomic_json(ui / 'stress-plan.json', value)
+            contract.atomic_json(ui / 'stress-result.json', result)
+            platforms.verify_common(root, sha, full=True)
+            result['build_manifest_sha256'] = 'changed'
+            contract.atomic_json(ui / 'stress-result.json', result)
+            with self.assertRaisesRegex(ValueError, 'stress contract'):
+                platforms.verify_common(root, sha, full=True)

@@ -315,6 +315,13 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if item.test_filter and step in suite.steps and step.nextest_filter is None:
             continue
         command = render_command(step, options, item.test_filter, extra)
+        prepared = options.get("prepared")
+        if prepared and step.command[:2] == ("cargo", "test") and "--no-run" in step.command:
+            continue
+        if prepared and suite.name == "native-font":
+            command = [str(target_dir() / "native-tools/tooltip-layout")]
+        elif prepared and step.nextest_filter is not None:
+            command = prepared.command(command)
         step_env = {key: value.replace("{target}", str(target_dir())) for key, value in step.env}
         if step.nextest_filter is not None and not options.get("isolated_reports"):
             # A step that fails before nextest writes a report must not report old failures.
@@ -328,7 +335,20 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
                               (ROOT / ".config/nextest.toml").read_text())
             command += ["--config-file", str(config)]
             report = store / nextest_profile() / "junit.xml"
-        code = execute(command, dict(os.environ, **options.get("env", {}), **env, **step_env), step.timeout, log, output)
+        adapter_env = {"QROW_PYTHON": sys.executable}
+        if prepared:
+            adapter_env["QROW_NEXTEST_RUNTIME"] = prepared.runtime
+        evidence = None
+        if suite.test_runs and step in suite.steps and options.get("isolated_reports"):
+            evidence = run_dir / "adapters" / suite.name / uuid.uuid4().hex
+            evidence.mkdir(parents=True)
+            adapter_env["QROW_NEXTEST_EVIDENCE"] = str(evidence)
+        code = execute(command, dict(os.environ, **options.get("env", {}), **env, **step_env, **adapter_env), step.timeout, log, output)
+        if evidence:
+            reports = [json.loads(path.read_text()) for path in sorted(evidence.rglob("evidence.json"))]
+            options.setdefault("test_evidence", []).extend(reports)
+            if len(reports) != suite.test_runs:
+                code = 1
         if step.nextest_filter is not None and options.get("isolated_reports") and report.exists():
             try:
                 cases = list(ElementTree.parse(report).getroot().iter("testcase"))
@@ -444,13 +464,15 @@ class FixtureSession:
                 "QROW_FIXTURE_STATE": str(self.state)}
 
     def release(self):
-        if self.fixture is None:
+        fixture = self.fixture
+        self.fixture = None
+        if fixture is None:
             return
         try:
-            self.fixture.collect(self.run_dir / "fixture")
+            fixture.collect(self.run_dir / "fixture")
         finally:
             if self.owned:
-                self.fixture.stop()
+                fixture.stop()
 
 
 def new_run_dir():
@@ -515,6 +537,12 @@ def _run(selected, options, extra, output, fail_fast=False, report_only=(), requ
 
     event("started", suites=[item.suite.name for item in selected])
     try:
+        if options.get("reuse_builds") and any(result is None for result in blocked):
+            import builds
+            from contract import plan
+            from targets import host_target
+            value = plan(ROOT, host_target().name, list(dict.fromkeys(item.suite.name for item in selected)), options.get("runtime", "auto"))
+            options = dict(options, prepared=builds.Prepared(options["reuse_builds"], value, ROOT, run_dir / "prepared", output))
         for index, item in enumerate(selected):
             name = item.suite.name
             if fail_fast and any(result and result.status in ("failed", "missing")
@@ -554,6 +582,12 @@ def _run(selected, options, extra, output, fail_fast=False, report_only=(), requ
             else:
                 finalized.add(index)
                 results[index] = run_suite(item, options, extra, run_dir, output)
+            if session and index == served[-1]:
+                try:
+                    session.release()
+                except Exception as error:
+                    cleanup_errors.append(str(error))
+                    event("cleanup_failed", reason=str(error))
             result = results[index]
             event("suite_finished", name=result.name, status=result.status, reason=result.reason)
             output.note(f"{result.name}: {result.status}" + (f" ({result.reason})" if result.reason else ""))
@@ -563,6 +597,8 @@ def _run(selected, options, extra, output, fail_fast=False, report_only=(), requ
             if result is None:
                 results[index] = SuiteResult(selected[index].suite.name, "failed",
                                              reason="Cancelled." if interrupted else f"Execution error: {error}")
+        if not interrupted:
+            cleanup_errors.append(str(error))
         event("interrupted" if interrupted else "execution_error", reason=str(error))
     finally:
         for index in sorted(prepared_suites - finalized):
