@@ -1446,10 +1446,13 @@ impl TestApp {
                         .filter_map(|element| element.label().map(str::to_owned))
                         .collect::<Vec<_>>()
                 });
+                // The status bar text is no labelled element. It names the
+                // error that replaced the awaited state.
+                let status = self.update(cx, |_, cx| self.status(cx));
                 let saved = std::fs::read_to_string(&self.workspace).unwrap_or_default();
                 let actions = self.actions.lock().unwrap();
                 panic!(
-                    "Timed out after {timeout:?} waiting for {what}.\nActions: {actions:?}\nLabels: {labels:?}\nSaved workspace: {saved}"
+                    "Timed out after {timeout:?} waiting for {what}.\nStatus: {status}\nActions: {actions:?}\nLabels: {labels:?}\nSaved workspace: {saved}"
                 );
             }
             std::thread::sleep(Duration::from_millis(10));

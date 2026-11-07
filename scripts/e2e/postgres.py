@@ -57,12 +57,18 @@ def main():
         path = Path(temporary)
         # Synthetic certificates identify only this local fixture.
         quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        # An explicit configuration gives OpenSSL and LibreSSL the same CA. Python
+        # 3.13 verifies X.509 strictly and needs both key identifiers.
+        (path / "ca.cnf").write_text("[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n[dn]\nCN=Qrow Postgres test CA\n"
+                                     "[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n"
+                                     "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n")
         command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                "-subj", "/CN=Qrow Postgres test CA", "-keyout", str(path / "ca.key"),
+                "-config", str(path / "ca.cnf"), "-keyout", str(path / "ca.key"),
                 "-out", str(path / "ca.crt"), **quiet)
         command("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
                 "-keyout", str(path / "server.key"), "-out", str(path / "server.csr"), **quiet)
-        (path / "extensions").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n")
+        (path / "extensions").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n"
+                                           "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
         command("openssl", "x509", "-req", "-in", str(path / "server.csr"), "-CA", str(path / "ca.crt"),
                 "-CAkey", str(path / "ca.key"), "-CAcreateserial", "-days", "1", "-extfile", str(path / "extensions"),
                 "-out", str(path / "server.crt"), **quiet)
