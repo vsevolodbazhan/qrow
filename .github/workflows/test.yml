@@ -56,11 +56,14 @@ jobs:
       tier: ${{ steps.plan.outputs.tier }}
       full: ${{ steps.plan.outputs.full }}
       targets: ${{ steps.plan.outputs.targets }}
+      common-jobs: ${{ steps.plan.outputs.common_jobs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
+          # A pull request checks out its merge commit. The first parent is the base.
+          fetch-depth: 2
       - id: plan
         env:
           EVENT: ${{ github.event_name }}
@@ -68,6 +71,7 @@ jobs:
         run: |
           flags=()
           if [ "$FULL" = true ]; then flags+=(--full); fi
+          if [ "$EVENT" = pull_request ]; then flags+=(--changed-since HEAD^1); fi
           python3 scripts/ci/platforms.py outputs --event "$EVENT" "${flags[@]}" | tee -a "$GITHUB_OUTPUT"
 
   common:
@@ -166,10 +170,11 @@ jobs:
       - env:
           SOURCE_SHA: ${{ inputs.ref || github.sha }}
           FULL: ${{ needs.plan.outputs.full }}
+          JOBS: ${{ needs.plan.outputs.common-jobs }}
         run: |
           flags=()
           if [ "$FULL" = true ]; then flags+=(--full); fi
-          python3 scripts/ci/platforms.py verify-common evidence "$SOURCE_SHA" "${flags[@]}"
+          python3 scripts/ci/platforms.py verify-common evidence "$SOURCE_SHA" --jobs "$JOBS" "${flags[@]}"
 
   build-macos-arm64:
     name: build-macos-arm64
@@ -610,8 +615,12 @@ jobs:
       - env:
           RESULTS: ${{ toJSON(needs) }}
           TARGETS: ${{ needs.plan.outputs.targets }}
+          TIER: ${{ needs.plan.outputs.tier }}
+          EVENT: ${{ github.event_name }}
         run: python3 scripts/ci/platforms.py gate
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      # The static level selects no native target and has no native evidence.
+      - if: needs.plan.outputs.targets != '[]'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: platform-evidence-*
           path: evidence

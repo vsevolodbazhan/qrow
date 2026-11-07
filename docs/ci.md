@@ -5,12 +5,21 @@ Use the `ci-required` check to decide if a commit passes CI. Open the
 job name identifies common validation, a native build, or a native test.
 Use [Testing](testing.md) to run an individual suite locally.
 
-CI has two levels. Each level runs all five common jobs:
+CI has three levels:
 
-| Event | Native targets | Full mode |
-| --- | --- | --- |
-| Ready pull request | Linux x86-64 | No |
-| Push to `main`, scheduled run, manual run, release candidate | All four | Yes |
+| Event | Common jobs | Native targets | Full mode |
+| --- | --- | --- | --- |
+| Ready pull request that changes only static paths | `common-static` | None | No |
+| Other ready pull request | All five | Linux x86-64 | No |
+| Push to `main`, scheduled run, manual run, release candidate | All five | All four | Yes |
+
+Static paths cannot change a Rust build, a test binary, a server fixture, or
+the validation graph. They are the documentation, root Markdown files,
+`scripts/README.md`, the automation tests in `scripts/tests/`, agent
+instructions, and the release and maintenance workflows and their scripts.
+The [CI policy](../scripts/ci/platforms.py) lists them. One other changed
+path selects the complete pull request level. Markdown files of vendored
+crates are not static paths, because a crate can embed its README.
 
 A pull request gets fast feedback from the common jobs and one native target.
 It does not wait for macOS builds. After the merge, the `main` run tests all
@@ -39,8 +48,8 @@ the macOS ARM64 runner compiles the Intel candidate and test binaries for
 
 A draft pull request starts no validation. Mark it ready to start the checks.
 Fork pull requests use disposable servers and synthetic credentials. They do
-not receive repository secrets. All source changes, including documentation
-changes, run their level completely. There is no path-based exclusion.
+not receive repository secrets. `main` and release runs never skip a job
+because of the changed paths.
 
 ## Job order
 
@@ -125,7 +134,8 @@ expectations. They do not repeat the complete portable UI or backend suites.
 The package uses production features. Test support is confined to test builds.
 
 The final `ci-required` job requires common validation and the tests of the
-selected targets to pass. The jobs of the other targets must be skipped. It
+selected targets to pass. Only a pull request can select fewer than all
+common jobs and native targets. The jobs of the other targets must be skipped. It
 verifies a result and package receipt for each selected target, and rejects
 evidence from other targets. The receipt
 digest must match the candidate digest in the build manifest.
@@ -153,8 +163,8 @@ current workflow run, not caches. Rust caches only speed up compilation.
 Each cache has one saving job. Only pushes to `main` save caches. Other runs
 restore them. `common-static` compiles nothing
 and has no cache. A separate
-[cache cleanup workflow](../.github/workflows/cache-cleanup.yml) runs after a
-`main` push run completes, including failed runs. It removes replaced caches
+[maintenance workflow](../.github/workflows/maintenance.yml) runs after a
+`main` push run completes, including failed runs. Its `cache-cleanup` job removes replaced caches
 and the caches of shared keys that the workflow no longer uses. The repository
 cache limit is 10 GB. When the caches use more, GitHub removes the least
 recently used caches, and builds compile from the start.
