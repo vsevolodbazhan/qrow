@@ -516,3 +516,32 @@ fn linux_application_menu_opens_settings_after_a_query(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert!(app.settings_window(cx).is_none());
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn numbered_shortcuts_keep_query_results_with_their_tabs(cx: &mut TestAppContext) {
+    let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 111 AS value", PASSWORD);
+    let profile = workspace.tabs[0].profile;
+    workspace.tabs.push(SavedTab {
+        sql: "SELECT 222 AS value".into(),
+        ..SavedTab::new(2, profile)
+    });
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "111");
+    // Switch from the result grid, then run from the newly focused editor.
+    app.update(cx, |window, cx| {
+        window.within(("row", 0_usize)).click(("cell", 1_usize), cx)
+    });
+    app.press(cx, "secondary-2");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "222");
+    app.press(cx, "secondary-1");
+    app.wait_cell(cx, 0, 1, "111");
+    app.press(cx, "secondary-2");
+    app.wait_cell(cx, 0, 1, "222");
+    app.press(cx, "secondary-9");
+    app.wait_cell(cx, 0, 1, "222");
+}

@@ -979,6 +979,7 @@ impl Qrow {
                 cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
             )
             .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::select_tab))
             .on_action(
                 cx.listener(|this, _: &CloseTab, window, cx| {
                     this.close_tab(this.active, window, cx)
