@@ -81,11 +81,13 @@ class RealPreparedExecutionTests(unittest.TestCase):
 #[test] fn excluded() { panic!("binary and test filters must both apply"); }
 ''')
             (source / ".gitignore").write_text('/target/\n')
-            subprocess.run(["git", "init", "-q", source], check=True)
+            # A hook exports GIT_DIR and GIT_INDEX_FILE. Keep these commands in the synthetic repository.
+            git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            subprocess.run(["git", "init", "-q", source], check=True, env=git_env)
             subprocess.run(["cargo", "generate-lockfile"], cwd=source, check=True, capture_output=True)
-            subprocess.run(["git", "add", "."], cwd=source, check=True)
+            subprocess.run(["git", "add", "."], cwd=source, check=True, env=git_env)
             subprocess.run(["git", "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid",
-                            "commit", "-qm", "Synthetic test input"], cwd=source, check=True)
+                            "commit", "-qm", "Synthetic test input"], cwd=source, check=True, env=git_env)
             environment = dict(os.environ, CARGO_TARGET_DIR=str(source / "target"))
             with patch.dict(os.environ, environment), patch.object(runner, "ROOT", source):
                 value = contract.plan(source, target.name, ["backend"], "docker")

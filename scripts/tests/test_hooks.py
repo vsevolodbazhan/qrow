@@ -60,6 +60,15 @@ class HookTests(unittest.TestCase):
         self.assertEqual(self.git("write-tree"), tree)
         self.assertEqual((self.repo / "payload").read_text(), "good")
 
+    def test_snapshot_checks_cannot_reach_the_repository_through_git_variables(self):
+        # Git exports these variables to hooks. Checks run in a snapshot without a repository.
+        (self.repo / "qtest").write_text(f'#!/bin/sh\nenv | grep "^GIT_" > {self.log} || true\n')
+        self.git("add", "qtest")
+        env = dict(self.env, GIT_DIR=str(self.repo / ".git"), GIT_INDEX_FILE=str(self.repo / ".git/index"))
+        result = subprocess.run(["sh", ".githooks/pre-commit"], cwd=self.repo, env=env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text(), "")
+
     def calls(self):
         return self.log.read_text().splitlines() if self.log.exists() else []
 
