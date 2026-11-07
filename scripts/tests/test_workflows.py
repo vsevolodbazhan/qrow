@@ -174,10 +174,23 @@ class ValidationGraphTests(unittest.TestCase):
         rust_caches = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(rust_caches)
         keys = set(re.findall(r"shared-key: (native-[a-z0-9_-]+)", read(VALIDATION)))
-        self.assertIn("shared-key: common-${{ matrix.job }}", job("common"))
+        self.assertIn("shared-key: common-${{ matrix.cache }}", job("common"))
         self.assertIn("matrix.job != 'static'", job("common"))
-        keys |= {"common-" + name for name in platforms.COMMON if name != "static"}
+        caches = {item["cache"] for item in platforms.common_matrix()["include"] if item["job"] != "static"}
+        keys |= {"common-" + name for name in caches}
         self.assertEqual(keys, rust_caches.CURRENT_KEYS)
+
+    def test_server_ui_runs_beside_headless_ui_and_shares_its_cache(self):
+        matrix = {item["job"]: item for item in platforms.common_matrix()["include"]}
+        self.assertEqual(matrix["server-ui"]["cache"], "headless-ui")
+        self.assertTrue(matrix["server-ui"]["prepare"] and matrix["headless-ui"]["prepare"])
+        # Every cache has exactly one saving job: the job that owns its name.
+        owners = [name for name, item in matrix.items() if item["cache"] == name and name != "static"]
+        self.assertEqual(sorted(owners), sorted({item["cache"] for name, item in matrix.items() if name != "static"}))
+        self.assertIn("matrix.cache == matrix.job", job("common"))
+        self.assertIn("matrix.job == 'server-ui'", job("common"))
+        # The UI timing stress stays with the binaries that headless-ui prepares.
+        self.assertIn("matrix.job == 'headless-ui'", job("common"))
 
     def test_intel_macos_compiles_on_apple_silicon_and_tests_on_intel(self):
         intel = platforms.TARGETS["macos-x86_64"]
@@ -210,10 +223,11 @@ class ValidationGraphTests(unittest.TestCase):
             self.assertTrue(all("ui-test" not in command for command in commands))
 
     def test_portable_scenarios_have_one_owner_and_native_has_only_os_assertions(self):
-        self.assertEqual(set(platforms.COMMON), {"static", "core", "backend", "headless-ui", "performance"})
+        self.assertEqual(set(platforms.COMMON), {"static", "core", "backend", "headless-ui", "server-ui", "performance"})
         owned = [name for suites in platforms.COMMON.values() for name in suites]
         self.assertEqual(len(owned), len(set(owned)))
-        self.assertEqual(set(platforms.COMMON["headless-ui"]), {"clippy-app", "app-unit", "ui", "e2e", "postgres-ui", "trino-ui"})
+        self.assertEqual(set(platforms.COMMON["headless-ui"]), {"clippy-app", "app-unit", "ui"})
+        self.assertEqual(set(platforms.COMMON["server-ui"]), {"e2e", "postgres-ui", "trino-ui"})
         for target in platforms.TARGETS.values():
             if not target.supported:
                 continue

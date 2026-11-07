@@ -15,10 +15,17 @@ COMMON = {
     "static": ["scripts", "policy", "deps", "fmt"],
     "core": ["clippy", "rustdoc", "coverage"],
     "backend": ["backend", "postgres-core", "trino-core"],
-    "headless-ui": ["clippy-app", "app-unit", "ui", "e2e", "postgres-ui", "trino-ui"],
+    "headless-ui": ["clippy-app", "app-unit", "ui"],
+    # Server-window scenarios run beside the server-free UI tests.
+    "server-ui": ["e2e", "postgres-ui", "trino-ui"],
     "performance": ["perf"],
 }
 COMMON_TARGET = "linux-x86_64"
+# Jobs that prepare their test binaries once and verify the build identity.
+PREPARED = ("backend", "headless-ui", "server-ui")
+# server-ui compiles the same UI-test dependencies as headless-ui. It restores
+# that cache and does not save one, so each cache keeps a single saving job.
+CACHES = {"server-ui": "headless-ui"}
 # Pull requests qualify one native target for fast feedback. main and release
 # candidates qualify all supported targets. A merge queue would too, but this
 # personal-account repository cannot have one.
@@ -116,7 +123,8 @@ def matrix(full=False):
 
 def common_matrix(selected_tier="full"):
     return {"include": [{"job": name, "suites": " ".join(COMMON[name]),
-                         "prepare": name in ("backend", "headless-ui")} for name in common_jobs(selected_tier)]}
+                         "prepare": name in PREPARED, "cache": CACHES.get(name, name)}
+                        for name in common_jobs(selected_tier)]}
 
 
 def check_plan(value, result, sha, selectors, target, runtime):
@@ -140,7 +148,7 @@ def verify_common(directory, sha, full=False, jobs=None):
         if len(matches) != 1 or matches[0] in seen or matches[0] not in expected:
             raise ValueError("Duplicate or unexpected common result")
         check_plan(value, result, sha, COMMON[matches[0]], COMMON_TARGET, "docker")
-        if matches[0] in ("backend", "headless-ui"):
+        if matches[0] in PREPARED:
             import builds
             manifest_path = path.parent / "build-manifest.json"
             manifest = json.loads(manifest_path.read_text())

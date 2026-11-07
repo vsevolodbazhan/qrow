@@ -89,14 +89,14 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/ci-setup
         with:
-          app: ${{ matrix.job == 'headless-ui' }}
+          app: ${{ matrix.job == 'headless-ui' || matrix.job == 'server-ui' }}
           static: ${{ matrix.job == 'static' }}
       # The static job compiles nothing. Its cache would only use cache storage.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: ${{ matrix.job != 'static' && !(inputs.cold-cache == true || github.event.schedule == '17 2 * * 0') }}
         with:
-          shared-key: common-${{ matrix.job }}
-          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+          shared-key: common-${{ matrix.cache }}
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && matrix.cache == matrix.job }}
       - name: Plan common validation
         env:
           SUITES: ${{ matrix.suites }}

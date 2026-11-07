@@ -244,7 +244,7 @@ class CommonGateTests(unittest.TestCase):
             for item in value['suites']:
                 count = sum(step['nextest_filter'] is not None for step in item['definition']['steps']) + item['definition']['test_runs']
                 result['suites'].append(dict(name=item['name'], status='passed', tests=[dict(count=1, failures=0)] * count))
-            if name in ('backend', 'headless-ui'):
+            if name in platforms.PREPARED:
                 manifest_path = directory / 'build-manifest.json'
                 contract.atomic_json(manifest_path, dict(identity=builds.identity(value)))
                 result['build_manifest_sha256'] = builds.sha256(manifest_path)
