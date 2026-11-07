@@ -950,6 +950,11 @@ for line in sys.stdin:
                 if message.startswith("Report the tab SQL")
                 else "\n\n".join(f"Line {number}: synthetic assistant text" for number in range(1, 41))
                 if message.startswith("Show many lines")
+                else (
+                    "Here are two examples.\n\n```sql\n-- Пример\nSELECT '你好',\n    42;\n```\n\n"
+                    "~~~\n  second block\n\nlast line\n~~~"
+                )
+                if message.startswith("Show copyable code blocks")
                 else wide_table()
                 if message.startswith("Show a wide table")
                 else bold_reply()

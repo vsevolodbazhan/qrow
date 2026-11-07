@@ -420,3 +420,32 @@ impl TestApp {
         });
     }
 }
+
+/// Copies two distinct blocks through the reply's real buttons.
+pub fn assert_copyable_code_blocks(app: &TestApp, cx: &mut TestAppContext) {
+    app.send(
+        cx,
+        "Show copyable code blocks\n\n```sql\nSELECT user_message;\n```",
+    );
+    app.wait_reply(cx, "last line");
+    app.wait_idle(cx);
+    for (index, expected) in [
+        "-- Пример\nSELECT '你好',\n    42;",
+        "  second block\n\nlast line",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()));
+        app.update(cx, |window, cx| {
+            let mut buttons = super::labelled_starting(window, "Copy code");
+            buttons.sort_by(|a, b| a.bounds().top().partial_cmp(&b.bounds().top()).unwrap());
+            assert_eq!(buttons.len(), 2);
+            super::click_element(window, &buttons[index], cx);
+        });
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(expected)
+        );
+    }
+}
