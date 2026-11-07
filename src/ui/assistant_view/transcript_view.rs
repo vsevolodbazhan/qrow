@@ -43,7 +43,13 @@ pub(super) fn transcript_row(
             };
             let thread = shown.thread.as_deref().unwrap_or("");
             match &entry.tool {
-                Some(tool) => tool_entry(qrow, handle, thread, index, entry, tool, cx),
+                Some(tool) => div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .opacity(entry_opacity(qrow, entry, pane, window, cx))
+                    .child(tool_entry(qrow, handle, thread, index, entry, tool, cx))
+                    .into_any_element(),
                 None if entry.speaker == Speaker::Assistant
                     && entry.shown_text().trim().is_empty()
                     && (entry.revealing()
@@ -87,15 +93,14 @@ fn working_entry(qrow: &Qrow, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// A message, a reply, or an error.
-fn message_entry(
+fn entry_opacity(
     qrow: &Qrow,
     entry: &TranscriptEntry,
     pane: &WeakEntity<AssistantPane>,
     window: &mut Window,
     cx: &App,
-) -> AnyElement {
-    let opacity = entry
+) -> f32 {
+    entry
         .appearance_started()
         .filter(|_| {
             !cx.reduce_motion()
@@ -121,7 +126,18 @@ fn message_entry(
                 });
             }
             Easing::EaseInOut.sample(progress)
-        });
+        })
+}
+
+/// A message, a reply, or an error.
+fn message_entry(
+    qrow: &Qrow,
+    entry: &TranscriptEntry,
+    pane: &WeakEntity<AssistantPane>,
+    window: &mut Window,
+    cx: &App,
+) -> AnyElement {
+    let opacity = entry_opacity(qrow, entry, pane, window, cx);
     let mut table_style = StyleRefinement::default();
     table_style.overflow.x = Some(Overflow::Scroll);
     let entry_id = entry.id;

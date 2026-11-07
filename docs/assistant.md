@@ -165,6 +165,8 @@ narrower and their text wraps. If the columns are at their minimum width, you
 can scroll the table horizontally.
 
 Each Qrow tool call shows as a card across the full width of the conversation.
+With **Smooth Transitions**, new cards fade in. Status updates do not start
+the fade again.
 The card is collapsed. It shows the tool icon, the tool name, for example
 **Edit query** or **Run query**, and the state at the right:
 

@@ -367,6 +367,19 @@ mod tests {
             assert_eq!(restored.appearance_started(), None);
             assert_eq!(restored.text(), entry.text());
         }
+        let card = TranscriptEntry::tool(
+            ToolActivity {
+                kind: ToolKind::Workspace,
+                target: None,
+                state: ToolState::Done(None),
+            },
+            "turn-1".into(),
+        )
+        .appearing(now);
+        assert_eq!(
+            TranscriptEntry::from_stored(card.stored()).appearance_started(),
+            None
+        );
     }
 
     #[::core::prelude::v1::test]

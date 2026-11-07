@@ -281,6 +281,7 @@ impl Qrow {
             self.record_assistant_query_cancelled(
                 &pending,
                 "A new instruction replaced this query request.",
+                cx,
             );
             self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
         }

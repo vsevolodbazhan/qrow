@@ -55,7 +55,9 @@ impl Qrow {
                     target: None,
                     state,
                 };
-                let entry = TranscriptEntry::tool(tool, turn_id).with_detail(detail);
+                let entry = TranscriptEntry::tool(tool, turn_id)
+                    .with_detail(detail)
+                    .appearing(cx.background_executor().now());
                 if running {
                     self.thread_run_mut(&thread_id)
                         .web_searches
@@ -479,6 +481,7 @@ impl Qrow {
                     self.record_assistant_query_cancelled(
                         &pending,
                         "The turn ended before the query ran.",
+                        cx,
                     );
                 }
                 self.cancel_web_search_cards(&thread_id, &searches);

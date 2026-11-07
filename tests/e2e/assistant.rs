@@ -375,6 +375,51 @@ fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn tool_call_fades_keep_the_card_stable_through_completion(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (mut workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
+    let gate = crate::support::response_gate::ResponseGate::new(workspace.profiles[0].port);
+    workspace.profiles[0].port = gate.port;
+    let mut workspace = codex.workspace(workspace);
+    workspace.settings.smooth_transitions = true;
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.run_complete(cx, "SELECT 1 AS value");
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.send(cx, "Run selected SQL with approval");
+    app.wait_until(cx, "query approval", QUERY_TIMEOUT, |window, _| {
+        approval(window).is_some()
+    });
+    gate.pause();
+    app.click(cx, "assistant-approve-query");
+    app.wait_until(cx, "the held query", QUERY_TIMEOUT, |_, _| gate.blocked());
+    let card = app.update(cx, |window, _| {
+        crate::support::labelled_starting(window, "Tool Call: Run query")[0].clone()
+    });
+    let id = card.path().last().unwrap().clone();
+    for _ in 0..8 {
+        cx.executor().advance_clock(Duration::from_millis(40));
+        app.update(cx, |window, cx| {
+            window.simulate_next_frame(cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(window.find(id.clone()).bounds(), card.bounds());
+        });
+    }
+    gate.resume();
+    app.wait_reply(cx, "I ran the query.");
+    app.wait_idle(cx);
+    app.update(cx, |window, _| {
+        let completed = window.find(id);
+        assert!(completed.label().unwrap().contains("1 row"));
+        assert_eq!(completed.bounds(), card.bounds());
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn buffered_replies_complete_beside_a_connected_query(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
     let (workspace, credentials) =

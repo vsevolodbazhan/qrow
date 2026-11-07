@@ -401,6 +401,14 @@ impl TranscriptEntry {
         self
     }
 
+    /// Update a card without replacing its identity or appearance clock.
+    pub fn update_tool(&mut self, tool: ToolActivity, detail: String) {
+        let label = tool.label();
+        self.tool = Some(tool);
+        self.detail = Some(detail);
+        self.set_text(label);
+    }
+
     /// Replaces the tool state and keeps the accessible text in step with it.
     pub fn set_tool_state(&mut self, state: ToolState) {
         if let Some(tool) = &mut self.tool {
@@ -519,6 +527,43 @@ pub(in crate::ui) fn row_change(old: &[Row], new: &[Row]) -> RowChange {
 mod tests {
     use super::*;
     use crate::assistant::WORKSPACE_CONTEXT_SEPARATOR;
+
+    #[::core::prelude::v1::test]
+    fn tool_updates_keep_identity_appearance_and_expansion() {
+        let now = Instant::now();
+        let mut entry = TranscriptEntry::tool(
+            ToolActivity {
+                kind: ToolKind::RunQuery,
+                target: None,
+                state: ToolState::Running("Preparing".into()),
+            },
+            "turn-1".into(),
+        )
+        .appearing(now);
+        let id = entry.id;
+        entry.toggle_expanded();
+        let revision = entry.revision();
+        entry.update_tool(
+            ToolActivity {
+                kind: ToolKind::RunQuery,
+                target: Some("Query 1".into()),
+                state: ToolState::QueryResult {
+                    rows: 1,
+                    more: false,
+                    elapsed: Some(Duration::from_millis(50)),
+                },
+            },
+            "The result".into(),
+        );
+        assert_eq!(entry.id, id);
+        assert_eq!(entry.appearance_started(), Some(now));
+        assert!(entry.expanded());
+        assert!(entry.revision() > revision);
+        assert!(entry.label().contains("1 row"));
+        entry.set_tool_state(ToolState::Failed);
+        assert_eq!(entry.appearance_started(), Some(now));
+        assert_eq!(entry.id, id);
+    }
 
     #[::core::prelude::v1::test]
     fn the_icon_of_each_tool_kind_loads() {
