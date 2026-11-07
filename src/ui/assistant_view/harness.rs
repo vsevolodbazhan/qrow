@@ -460,11 +460,12 @@ impl Qrow {
         self.assistant_command(
             AssistantCommand::Interrupt {
                 thread_id: thread_id.clone(),
-                turn_id,
+                turn_id: turn_id.clone(),
             },
             cx,
         );
         self.thread_run_mut(&thread_id).pending_reply = false;
+        self.finish_assistant_replies(Some(&thread_id), Some(&turn_id), cx);
         cx.notify();
     }
 

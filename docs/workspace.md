@@ -48,6 +48,11 @@ short horizontal movements while text appears immediately. The resize option
 animates message-field growth and shrinkage, including after Send. Window and
 splitter resizing stay immediate. Both options follow reduced motion.
 
+**Buffered Replies** is also in Conversations and is off by default. Enable
+it to wait for complete assistant messages and then fade them in at their
+full height. Reduced motion removes this fade. See
+[assistant replies](assistant.md#work-with-sql) for the wait and interruption behavior.
+
 Editor settings apply to SQL. Logs settings apply to log entries.
 Conversations settings apply to assistant messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the

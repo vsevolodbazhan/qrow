@@ -8,6 +8,8 @@ pub(super) fn transcript_row(
     handle: &WeakEntity<Qrow>,
     row: Row,
     index: usize,
+    pane: &WeakEntity<AssistantPane>,
+    window: &mut Window,
     cx: &App,
 ) -> AnyElement {
     let shown = qrow.shown_conversation();
@@ -53,7 +55,7 @@ pub(super) fn transcript_row(
                 {
                     working_entry(qrow, cx)
                 }
-                None => message_entry(qrow, entry, cx),
+                None => message_entry(qrow, entry, pane, window, cx),
             }
         }
     }
@@ -85,7 +87,35 @@ fn working_entry(qrow: &Qrow, cx: &App) -> AnyElement {
 }
 
 /// A message, a reply, or an error.
-fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
+fn message_entry(
+    qrow: &Qrow,
+    entry: &TranscriptEntry,
+    pane: &WeakEntity<AssistantPane>,
+    window: &mut Window,
+    cx: &App,
+) -> AnyElement {
+    let opacity = entry
+        .buffered_reveal_started()
+        .filter(|_| qrow.settings.assistant_buffer_replies && !cx.reduce_motion())
+        .map_or(1., |started| {
+            let duration = cx.theme().motion_tokens().duration_normal;
+            if duration.is_zero() {
+                return 1.;
+            }
+            let elapsed = cx
+                .background_executor()
+                .now()
+                .saturating_duration_since(started);
+            let progress = (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0., 1.);
+            if progress < 1. {
+                // Keep the fade tied to the pane that owns these virtual rows.
+                let pane = pane.clone();
+                window.on_next_frame(move |_, cx| {
+                    let _ = pane.update(cx, |_, cx| cx.notify());
+                });
+            }
+            1. - (1. - progress).powi(3)
+        });
     let mut table_style = StyleRefinement::default();
     table_style.overflow.x = Some(Overflow::Scroll);
     let entry_id = entry.id;
@@ -94,7 +124,7 @@ fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
         entry.shown_text().clone(),
     )
     // Each word that a streamed reply shows fades in.
-    .stream_fade(true)
+    .stream_fade(opacity == 1.)
     // A line break that you type in a message stays a line break. Replies
     // keep the Markdown rule that joins the lines of a paragraph.
     .when(entry.speaker == Speaker::User, |view| {
@@ -155,6 +185,7 @@ fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
     let full_width = entry.speaker != Speaker::User;
     Message::new()
         .flex_shrink_0()
+        .opacity(opacity)
         .alignment(alignment)
         .content(
             MessageContent::new()

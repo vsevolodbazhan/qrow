@@ -379,3 +379,26 @@ fn composer_motion_options_are_independent_saved_and_resettable(cx: &mut TestApp
         !workspace.settings.assistant_smooth_caret && !workspace.settings.assistant_smooth_resize
     });
 }
+
+#[gpui_kit::test]
+fn buffered_replies_are_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.assistant_buffer_replies);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "buffered");
+    app.wait_for(cx, "assistant-buffer-replies");
+    app.click(cx, "assistant-buffer-replies");
+    wait_saved(&app, cx, "buffered replies enabled", |workspace| {
+        workspace.settings.assistant_buffer_replies
+            && !workspace.settings.smooth_transitions
+            && !workspace.settings.assistant_smooth_resize
+    });
+    app.press(cx, "secondary-w");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "buffered");
+    app.wait_for(cx, "assistant-buffer-replies");
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "buffered replies reset", |workspace| {
+        !workspace.settings.assistant_buffer_replies
+    });
+}

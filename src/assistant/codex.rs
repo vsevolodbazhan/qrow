@@ -384,6 +384,13 @@ impl CodexHarness {
                 turn_id: required_string(&params, "turnId")?.to_owned(),
                 text: required_string(&params, "delta")?.to_owned(),
             }),
+            "item/completed" if params["item"]["type"].as_str() == Some("agentMessage") => {
+                Ok(AssistantEvent::MessageCompleted {
+                    thread_id: required_string(&params, "threadId")?.to_owned(),
+                    turn_id: required_string(&params, "turnId")?.to_owned(),
+                    text: required_string(&params["item"], "text")?.to_owned(),
+                })
+            }
             "turn/completed" => {
                 let thread_id = required_string(&params, "threadId")?.to_owned();
                 let turn: CodexTurn = serde_json::from_value(

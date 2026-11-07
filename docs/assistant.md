@@ -148,6 +148,15 @@ word at an even speed, about 0.3 seconds after the text arrives, and each word
 fades in. Qrow does not split bold text, inline code, a link, or a table row.
 If you reduce motion in macOS, each part shows when it arrives.
 
+To show complete replies, enable **Appearance → Conversations → Buffered
+Replies** in Settings. This option is off by default. It waits for each reply
+message to finish, then shows it at its full height with a short fade. A long
+reply stays hidden until it is complete. Tool activity still shows as it
+occurs. If you cancel a reply, or the harness fails or disconnects, the text
+received so far shows. Reduced motion removes the fade but keeps the wait.
+Turn this option off to return to word-by-word replies, including text that
+is currently waiting.
+
 Your messages show at the right. Assistant replies and errors use the full width
 of the conversation. If a table is too wide for a reply, its columns become
 narrower and their text wraps. If the columns are at their minimum width, you

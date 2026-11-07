@@ -375,6 +375,31 @@ fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn buffered_replies_complete_beside_a_connected_query(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
+    let mut workspace = codex.workspace(workspace);
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.run_complete(cx, "SELECT 1 AS value");
+    app.wait_cell(cx, 0, 1, "1");
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    crate::support::assistant::assert_buffered_reply_completion(&app, cx, &codex);
+    app.send(cx, "Run selected SQL with approval");
+    app.wait_until(cx, "live query approval", QUERY_TIMEOUT, |window, _| {
+        approval(window).is_some()
+    });
+    app.click(cx, "assistant-approve-query");
+    app.wait_reply(cx, "I ran the query.");
+    app.wait_idle(cx);
+    app.wait_cell(cx, 0, 1, "1");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn assistant_code_blocks_are_copyable_beside_a_connected_query(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
     let (workspace, credentials) =

@@ -948,8 +948,10 @@ fn appearance_page(
     let smooth_transitions = settings.smooth_transitions;
     let composer_caret = settings.assistant_smooth_caret;
     let composer_resize = settings.assistant_smooth_resize;
+    let buffer_replies = settings.assistant_buffer_replies;
     let composer_caret_owner = owner.clone();
     let composer_resize_owner = owner.clone();
+    let buffer_replies_owner = owner.clone();
     let transitions_owner = owner.clone();
     let scrolling_owner = owner.clone();
     SettingPage::new("Appearance")
@@ -1033,6 +1035,31 @@ fn appearance_page(
                             .on_click(move |next, _, cx| {
                                 let _ = owner.update(cx, |this, cx| {
                                     this.settings.assistant_smooth_caret = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Buffered Replies",
+                    "Wait for each complete reply, then fade it in.",
+                    &[
+                        "assistant",
+                        "messages",
+                        "streaming",
+                        "buffer",
+                        "motion",
+                        "smooth",
+                    ],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = buffer_replies_owner.clone();
+                        Switch::new("assistant-buffer-replies")
+                            .checked(buffer_replies)
+                            .accessibility_label("Buffered Replies")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_buffer_replies = *next;
+                                    this.reveal_assistant_replies(cx);
                                     this.changed(cx);
                                 });
                             })

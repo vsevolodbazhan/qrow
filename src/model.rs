@@ -173,6 +173,8 @@ pub struct Settings {
     pub assistant_smooth_caret: bool,
     /// Ease content-driven assistant composer height changes.
     pub assistant_smooth_resize: bool,
+    /// Hold reply text until its message completes, then fade it in.
+    pub assistant_buffer_replies: bool,
     pub assistant: AssistantSettings,
     pub export: crate::export::Settings,
     /// Maximum retained replay spool size. Zero disables replay retention.
@@ -204,6 +206,7 @@ impl Default for Settings {
             assistant_line_height: 1.6,
             assistant_smooth_caret: false,
             assistant_smooth_resize: false,
+            assistant_buffer_replies: false,
             assistant: AssistantSettings::default(),
             export: crate::export::Settings::default(),
             export_replay_limit_mib: 2048,
@@ -2705,6 +2708,7 @@ mod tests {
             assistant_line_height: f32::NAN,
             assistant_smooth_caret: false,
             assistant_smooth_resize: false,
+            assistant_buffer_replies: false,
             assistant: AssistantSettings::default(),
             export: crate::export::Settings::default(),
             export_replay_limit_mib: 2048,

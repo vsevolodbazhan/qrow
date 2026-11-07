@@ -482,6 +482,7 @@ impl Qrow {
                     );
                 }
                 self.cancel_web_search_cards(&thread_id, &searches);
+                self.finish_assistant_replies(Some(&thread_id), Some(&turn.id), cx);
                 // The final text of a reply can be longer than the streamed text.
                 if self.harness_features().history {
                     self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
@@ -541,9 +542,7 @@ impl Qrow {
                             .get(..start)
                             .map_or_else(|| format!("{}\n\n", entry.text()), str::to_owned);
                         let full = format!("{earlier}{text}");
-                        if *entry.text() != full {
-                            entry.set_text(full);
-                        }
+                        entry.set_text(full);
                         ReplyMessage {
                             entry: entry.id,
                             start: earlier.len(),
@@ -551,8 +550,9 @@ impl Qrow {
                         }
                     }
                     None => {
-                        let entry =
+                        let mut entry =
                             TranscriptEntry::streamed(Speaker::Assistant, &text, Some(turn_id));
+                        entry.finish_reply();
                         let reply = ReplyMessage {
                             entry: entry.id,
                             start: 0,

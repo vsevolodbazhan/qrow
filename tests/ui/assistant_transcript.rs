@@ -321,6 +321,158 @@ fn a_streamed_reply_shows_at_once_with_reduced_motion(cx: &mut TestAppContext) {
     assert!(steps.len() <= 4, "{steps:?}");
 }
 
+#[gpui_kit::test]
+fn buffered_replies_wait_for_completion_with_and_without_reduced_motion(cx: &mut TestAppContext) {
+    for reduced in [false, true] {
+        let (directory, codex) = FakeCodex::new();
+        let mut workspace = codex.workspace(Workspace::default());
+        workspace.settings.assistant_buffer_replies = true;
+        let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+        app.open_assistant(cx);
+        app.show_conversation(cx);
+        cx.update(|cx| cx.set_reduce_motion(reduced));
+        crate::support::assistant::assert_buffered_reply_completion(&app, cx, &codex);
+    }
+}
+
+#[gpui_kit::test]
+fn buffered_replies_redraw_without_a_full_window_refresh(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.send(cx, "Hold a buffered reply");
+    wait_drawn(&app, cx, "the buffered partial", |_| {
+        codex.marked("buffered-partial")
+    });
+    codex.mark("buffered-release");
+    wait_drawn(&app, cx, "the completed buffered reply", |window| {
+        transcript(window)
+            .iter()
+            .any(|text| text.contains(crate::support::assistant::BUFFERED_REPLY))
+    });
+    codex.mark("buffered-turn-release");
+    wait_drawn(&app, cx, "the completed buffered turn", |window| {
+        !present(window, &ElementId::from("assistant-working"))
+    });
+}
+
+#[gpui_kit::test]
+fn buffered_replies_hold_each_message_of_the_same_turn(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.send(cx, "Hold a buffered reply twice");
+    app.wait_for(cx, "assistant-stop");
+    codex.mark("buffered-release");
+    app.wait_reply(cx, crate::support::assistant::BUFFERED_REPLY);
+    codex.mark("buffered-second-start");
+    app.wait_until(cx, "the second partial message", REPLY_TIMEOUT, |_, _| {
+        codex.marked("buffered-second-partial")
+    });
+    cx.executor().advance_clock(Duration::from_millis(500));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        let expected = format!("Assistant: {}", crate::support::assistant::BUFFERED_REPLY);
+        assert_eq!(transcript(window).last(), Some(&expected));
+    });
+    codex.mark("buffered-second-release");
+    app.wait_reply(cx, "Second buffered reply.");
+    app.update(cx, |window, _| {
+        let expected = format!(
+            "Assistant: {}\n\nSecond buffered reply.",
+            crate::support::assistant::BUFFERED_REPLY
+        );
+        assert_eq!(transcript(window).last(), Some(&expected));
+    });
+    codex.mark("buffered-turn-release");
+    app.wait_idle(cx);
+}
+
+#[gpui_kit::test]
+fn buffered_replies_keep_large_markdown_stable_during_the_fade(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    crate::support::assistant::assert_large_buffered_reply_completion(&app, cx, &codex);
+}
+
+#[gpui_kit::test]
+fn buffered_replies_keep_partial_text_on_cancel_failure_and_disconnect(cx: &mut TestAppContext) {
+    for ending in ["cancel", "failure", "disconnect"] {
+        let (directory, codex) = FakeCodex::new();
+        let mut workspace = codex.workspace(Workspace::default());
+        workspace.settings.assistant_buffer_replies = true;
+        let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+        app.open_assistant(cx);
+        app.show_conversation(cx);
+        cx.update(|cx| cx.set_reduce_motion(false));
+        app.send(cx, &format!("Hold a buffered reply {ending}"));
+        app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
+            codex.marked("buffered-partial")
+        });
+        app.wait_for(cx, "assistant-stop");
+        if ending == "cancel" {
+            app.click(cx, "assistant-stop");
+            app.wait_reply(cx, "Assistant: **Buffered reply**");
+            codex.mark("buffered-turn-release");
+        }
+        codex.mark("buffered-release");
+        app.wait_reply(cx, "Assistant: **Buffered reply**");
+        if ending == "failure" {
+            app.wait_reply(cx, "Synthetic buffered failure");
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn buffered_replies_resume_streaming_when_disabled(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.send(cx, "Hold a buffered reply");
+    app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
+        codex.marked("buffered-partial")
+    });
+    app.dispatch(cx, qrow::ui::OpenSettings);
+    app.fill_labelled(cx, "Search...", "buffered");
+    app.click(cx, "assistant-buffer-replies");
+    app.press(cx, "secondary-w");
+    app.wait_reply(cx, "Assistant: **Buffered reply**");
+    codex.mark("buffered-release");
+    codex.mark("buffered-turn-release");
+    app.wait_idle(cx);
+}
+
+#[gpui_kit::test]
+fn buffered_replies_also_release_when_only_the_turn_completes(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.send(cx, "select 1");
+    app.wait_reply(cx, "| Result | 1 |");
+    app.wait_idle(cx);
+}
+
 /// Each step of a streamed reply parses the message again, so the paragraphs
 /// of the new parse replace the paragraphs that the frame before drew. The
 /// shaped text of a replaced paragraph must not stay in memory.

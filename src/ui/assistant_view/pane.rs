@@ -317,7 +317,7 @@ impl AssistantPane {
                 MessageScroller::new(
                     "assistant-messages",
                     self.transcript.clone(),
-                    move |index, _, cx| {
+                    move |index, window, cx| {
                         let (Some(qrow_entity), Some(pane)) = (qrow.upgrade(), pane.upgrade())
                         else {
                             return div().into_any_element();
@@ -325,7 +325,15 @@ impl AssistantPane {
                         let Some(row) = pane.read(cx).rows.rows.get(index).copied() else {
                             return div().into_any_element();
                         };
-                        transcript_row(qrow_entity.read(cx), &qrow, row, index, cx)
+                        transcript_row(
+                            qrow_entity.read(cx),
+                            &qrow,
+                            row,
+                            index,
+                            &pane.downgrade(),
+                            window,
+                            cx,
+                        )
                     },
                 )
                 // Like the transcript before it, the list has no scrollbar.

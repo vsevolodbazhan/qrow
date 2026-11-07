@@ -1,7 +1,7 @@
 //! The messages and tool cards of a conversation.
 use super::*;
 use std::borrow::Cow;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::ui) enum Speaker {
@@ -213,6 +213,7 @@ pub(in crate::ui) struct TranscriptEntry {
     /// by step. See [`Reveal`].
     shown: SharedString,
     reveal: Option<Reveal>,
+    buffered_reveal_started: Option<Instant>,
     pub turn_id: Option<String>,
     pub tool: Option<ToolActivity>,
     pub detail: Option<String>,
@@ -230,6 +231,7 @@ impl TranscriptEntry {
             label: SharedString::default(),
             shown: SharedString::default(),
             reveal: None,
+            buffered_reveal_started: None,
             turn_id,
             tool: None,
             detail: None,
@@ -331,6 +333,30 @@ impl TranscriptEntry {
     /// Whether the entry has streamed text that does not show yet.
     pub fn revealing(&self) -> bool {
         self.reveal.is_some() && self.shown.len() < self.text.len()
+    }
+
+    pub fn finish_reply(&mut self) {
+        if let Some(reveal) = &mut self.reveal {
+            reveal.complete();
+        }
+    }
+
+    pub fn reply_complete(&self) -> bool {
+        self.reveal.as_ref().is_none_or(Reveal::is_complete)
+    }
+
+    pub fn buffered_reveal_started(&self) -> Option<Instant> {
+        self.buffered_reveal_started
+    }
+
+    /// Show a completed message without changing its layout during the fade.
+    pub fn show_buffered(&mut self, now: Instant) -> bool {
+        let first = self.shown.trim().is_empty();
+        let changed = self.show_all();
+        if changed && first {
+            self.buffered_reveal_started = Some(now);
+        }
+        changed
     }
 
     /// Shows more of the streamed text. Returns whether the shown text changed.

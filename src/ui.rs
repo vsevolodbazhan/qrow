@@ -2828,6 +2828,8 @@ impl Qrow {
         self.settings.assistant_line_height = settings.assistant_line_height;
         self.settings.assistant_smooth_caret = settings.assistant_smooth_caret;
         self.settings.assistant_smooth_resize = settings.assistant_smooth_resize;
+        self.settings.assistant_buffer_replies = settings.assistant_buffer_replies;
+        self.reveal_assistant_replies(cx);
         self.apply_ui_scale(settings.ui_scale, window, cx);
         themes::apply(&self.settings.theme, Some(window), cx);
         apply_ui_theme(&self.settings, window, cx);
