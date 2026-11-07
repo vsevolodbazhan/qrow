@@ -160,15 +160,33 @@ impl Qrow {
         let rem = cx.theme().font_size;
         let room = self.tab_scroll.bounds().size.width - rem * 0.75;
         let selected = visible.iter().position(|index| *index == self.active);
-        let selected_width = selected
-            .and_then(|position| self.tab_scroll.bounds_for_item(position))
-            .map_or(px(0.), |item| item.size.width);
+        // Width from the shared minimum is not intrinsic title width. Reserve
+        // extra room only for content that extends beyond the previous minimum.
+        // Otherwise equally short tabs cannot share the available room evenly.
+        let previous_minimum = self.tab_min_width.get().unwrap_or(rem * 10.5);
+        let shared_width = room / visible.len().max(1) as f32;
+        let reserved_width = visible
+            .iter()
+            .enumerate()
+            .filter_map(|(position, index)| {
+                let width = self.tab_scroll.bounds_for_item(position)?.size.width;
+                Some(if *index == self.active {
+                    width
+                } else {
+                    width.min(self.ui_px(MAX_QUERY_TAB_WIDTH))
+                })
+            })
+            .filter(|width| *width > previous_minimum + px(0.5))
+            .max()
+            .unwrap_or(px(0.))
+            .max(shared_width);
         let others = visible
             .len()
             .saturating_sub(usize::from(selected.is_some())) as f32;
-        let fit = (others > 0. && room > px(0.) && rem * 10.5 * others + selected_width > room)
-            .then(|| (room - selected_width) / others)
+        let fit = (others > 0. && room > px(0.) && rem * 10.5 * others + reserved_width > room)
+            .then(|| (room - reserved_width) / others)
             .filter(|&width| width >= rem * 8.5);
+        self.tab_min_width.set(Some(fit.unwrap_or(rem * 10.5)));
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
             // The selected tab shows its whole title, up to the visible strip.
