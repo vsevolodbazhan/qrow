@@ -268,6 +268,8 @@ synthetic credentials, a temporary certificate authority, and a loopback HTTPS
 port. A pinned Adobe S3Mock 5.2.3 container supplies HTTPS storage. It shares
 a network namespace with Trino, so presigned loopback URLs work from both
 the coordinator and client. The fixture removes both containers after the run.
+The coordinator container can use 3 GB of memory and S3Mock 1 GB. Parallel
+tests hold several large results at the same time.
 S3Mock does not check presigned signatures or expiry and does not encrypt stored
 objects. Fake HTTPS peers check expiry and storage encryption headers.
 The suite checks password authentication, certificate checks, types, pagination,
