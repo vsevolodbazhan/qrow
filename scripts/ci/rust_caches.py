@@ -10,7 +10,7 @@ that the workflow no longer uses.
 
 Only pushes to `main` save these caches. Pull requests and release
 qualification restore them too, so the time of last use does not show which
-cache `main` uses. The Sunday cold-cache run restores and saves no cache.
+cache `main` uses. The weekly scheduled run restores and saves no cache.
 """
 import argparse
 import datetime

@@ -133,7 +133,7 @@ Markdown files, for example `QROW-PATCH.md`. Other Markdown changes, except
 `docs/testing.md`, do not trigger hook checks.
 
 The [test workflow](../.github/workflows/test.yml) runs for ready pull requests
-into any branch, pushes to `main`, manual runs, and scheduled runs. Draft pull
+into any branch, pushes to `main`, manual runs, and a weekly scheduled run. Draft pull
 requests start no validation. A newer pull request run cancels an older run.
 Runs on `main` finish so they can save build caches.
 

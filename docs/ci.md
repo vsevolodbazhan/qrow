@@ -11,7 +11,7 @@ CI has three levels:
 | --- | --- | --- | --- |
 | Ready pull request that changes only static paths | `common-static` | None | No |
 | Other ready pull request | All six | Linux x86-64 | No |
-| Push to `main`, scheduled run, manual run, release candidate | All six | All four | Yes |
+| Push to `main`, weekly scheduled run, manual run, release candidate | All six | All four | Yes |
 
 Static paths cannot change a Rust build, a test binary, a server fixture, or
 the validation graph. They are the documentation, root Markdown files,
@@ -178,7 +178,7 @@ code and has permission to delete caches.
 
 ## Full runs and releases
 
-Pushes to `main`, scheduled runs, manual runs, and release candidates use full
+Pushes to `main`, the weekly scheduled run, manual runs, and release candidates use full
 mode. Pull requests run the same functional tests on Linux x86-64, without
 full mode. Full mode also repeats the
 three portable UI timing regressions 100 times with the prepared UI binaries.
@@ -191,8 +191,10 @@ the native functional contract for Intel or Linux. Measurements from `main`
 remain for 90 days in `performance-common-*` and `performance-macos-arm64`.
 
 Release candidates restore the Rust caches of `main`, like other runs, but do
-not save caches. The Sunday run skips cache restoration. This proves weekly
-that a clean checkout builds. A manual test run can select `cold-cache`. The release workflow downloads qualified
+not save caches. The scheduled run starts on Sundays at 02:17 UTC and skips
+cache restoration. It proves weekly that a clean checkout builds, and it
+finds new dependency advisories and changed server images. A push to `main`
+cannot replace it in the queue. A manual test run can select `cold-cache`. The release workflow downloads qualified
 candidates. It wraps the macOS app in a DMG, mounts and launches that app, and
 forwards the Linux archives. It does not compile the application again.
 See [Development](development.md#hooks-and-continuous-integration) for release

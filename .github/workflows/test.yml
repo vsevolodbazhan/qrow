@@ -30,17 +30,19 @@ on:
         description: Validate native targets without Rust build caches.
         type: boolean
         default: false
+  # A weekly cold run proves that a clean checkout builds. Pushes to main
+  # already qualify every merge.
   schedule:
-    - cron: "17 2 * * 1-6"
     - cron: "17 2 * * 0"
 
 permissions:
   contents: read
 
 # Keep PR updates cancellable. Release calls use their caller workflow name,
-# so they do not share the group of a direct test run.
+# so they do not share the group of a direct test run. The weekly run has its
+# own group, so a pending push to main cannot replace it.
 concurrency:
-  group: ${{ github.workflow }}-validation-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-validation-${{ github.event_name == 'schedule' && 'weekly' || github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -93,7 +95,7 @@ jobs:
           static: ${{ matrix.job == 'static' }}
       # The static job compiles nothing. Its cache would only use cache storage.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: ${{ matrix.job != 'static' && !(inputs.cold-cache == true || github.event.schedule == '17 2 * * 0') }}
+        if: ${{ matrix.job != 'static' && !(inputs.cold-cache == true || github.event_name == 'schedule') }}
         with:
           shared-key: common-${{ matrix.cache }}
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && matrix.cache == matrix.job }}
@@ -197,7 +199,7 @@ jobs:
           app: "true"
           java: "false"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: ${{ !(inputs.cold-cache == true || github.event.schedule == '17 2 * * 0') }}
+        if: ${{ !(inputs.cold-cache == true || github.event_name == 'schedule') }}
         with:
           shared-key: native-macos-arm64
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
@@ -311,7 +313,7 @@ jobs:
           java: "false"
           rust-target: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: ${{ !(inputs.cold-cache == true || github.event.schedule == '17 2 * * 0') }}
+        if: ${{ !(inputs.cold-cache == true || github.event_name == 'schedule') }}
         with:
           shared-key: native-macos-x86_64
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
@@ -415,7 +417,7 @@ jobs:
           app: "true"
           java: "false"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: ${{ !(inputs.cold-cache == true || github.event.schedule == '17 2 * * 0') }}
+        if: ${{ !(inputs.cold-cache == true || github.event_name == 'schedule') }}
         with:
           shared-key: native-linux-x86_64
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
@@ -518,7 +520,7 @@ jobs:
           app: "true"
           java: "false"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: ${{ !(inputs.cold-cache == true || github.event.schedule == '17 2 * * 0') }}
+        if: ${{ !(inputs.cold-cache == true || github.event_name == 'schedule') }}
         with:
           shared-key: native-linux-arm64
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
