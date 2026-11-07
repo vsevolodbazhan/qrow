@@ -826,3 +826,95 @@ fn the_selected_tab_shows_its_whole_title(cx: &mut TestAppContext) {
     app.settle(cx);
     assert_eq!(tab_width(&app, cx), selected);
 }
+
+#[gpui_kit::test]
+fn numbered_shortcuts_select_visible_query_tabs(cx: &mut TestAppContext) {
+    let alpha = offline_profile("Alpha");
+    let beta = offline_profile("Beta");
+    // Interleave connections so visible positions differ from saved indexes.
+    let mut tabs = vec![];
+    for number in 1..=10 {
+        tabs.push(tab(beta.id, &format!("Other {number}"), "SELECT 99"));
+        tabs.push(tab(
+            alpha.id,
+            &format!("Запрос {number}"),
+            &format!("SELECT {number}"),
+        ));
+    }
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs,
+            active_tab: 1,
+            profiles: vec![alpha, beta],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    for number in [9, 1, 8, 2, 7, 3, 6, 4, 5] {
+        app.press(cx, &format!("secondary-{number}"));
+        app.settle(cx);
+        // Copy without clicking proves that selection focused the new editor.
+        app.press(cx, "secondary-a");
+        app.press(cx, "secondary-c");
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(format!("SELECT {number}"))
+        );
+        selected_tab_in_strip(&app, cx, &format!("Запрос {number}"));
+    }
+    // The digit is a position, not a query number or the last tab.
+    app.wait_saved(cx, "fifth visible tab", |workspace| {
+        workspace.active_tab == 9
+    });
+    rename(&app, cx, "Запрос 5");
+    app.press(cx, "secondary-1");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "rename-tab-name").as_deref(),
+            Some("Запрос 5")
+        );
+    });
+    app.press(cx, "escape");
+    app.wait_gone(cx, "rename-tab-name");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-c");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("SELECT 5")
+    );
+    app.press(cx, "secondary-1");
+    app.wait_saved(cx, "first visible tab", |workspace| {
+        workspace.active_tab == 1
+    });
+}
+
+#[gpui_kit::test]
+fn numbered_shortcuts_ignore_missing_query_tabs(cx: &mut TestAppContext) {
+    let profile = offline_profile("Two tabs");
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![
+                tab(profile.id, "First", "SELECT 1"),
+                tab(profile.id, "Second", "SELECT 2"),
+            ],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    for key in ["secondary-2", "secondary-3", "secondary-9", "secondary-0"] {
+        app.press(cx, key);
+        app.wait_saved(cx, "second tab stays selected", |workspace| {
+            workspace.active_tab == 1
+        });
+    }
+    app.press(cx, "secondary-w");
+    app.press(cx, "secondary-2");
+    app.wait_saved(cx, "remaining tab", |workspace| {
+        workspace.tabs.len() == 1 && workspace.active_tab == 0
+    });
+}
