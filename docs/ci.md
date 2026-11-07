@@ -47,6 +47,9 @@ the macOS ARM64 runner compiles the Intel candidate and test binaries for
 `x86_64-apple-darwin`. The tests and the package checks run on an Intel runner.
 
 A draft pull request starts no validation. Mark it ready to start the checks.
+A run for a draft skips every job, and GitHub counts its skipped `ci-required`
+check as passed. Thus a draft run uses its own concurrency group: it cannot
+cancel the run that starts when the pull request becomes ready.
 Fork pull requests use disposable servers and synthetic credentials. They do
 not receive repository secrets. `main` and release runs never skip a job
 because of the changed paths.

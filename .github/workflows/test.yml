@@ -40,9 +40,12 @@ permissions:
 
 # Keep PR updates cancellable. Release calls use their caller workflow name,
 # so they do not share the group of a direct test run. The weekly run has its
-# own group, so a pending push to main cannot replace it.
+# own group, so a pending push to main cannot replace it. A run for a draft
+# skips every job and uses its own group too. Otherwise a push just before
+# "Ready for review" can cancel the run of the ready pull request, and the
+# skipped ci-required check counts as passed.
 concurrency:
-  group: ${{ github.workflow }}-validation-${{ github.event_name == 'schedule' && 'weekly' || github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-validation-${{ github.event_name == 'schedule' && 'weekly' || github.event.pull_request.number || github.ref }}${{ github.event.pull_request.draft && '-draft' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
