@@ -36,11 +36,13 @@ def check(today=None):
             expires = datetime.date.min
         if expires < today:
             errors.append(f"Missing or expired license review date: {exception['name']}")
-    for path in (ROOT / ".github/workflows").glob("*.yml"):
+    paths = [*(ROOT / ".github/workflows").glob("*.yml"), *(ROOT / ".github/workflows").glob("*.yaml"),
+             *(ROOT / ".github/actions").rglob("action.yml"), *(ROOT / ".github/actions").rglob("action.yaml")]
+    for path in paths:
         for line in path.read_text().splitlines():
             match = re.search(r"\buses:\s*([^ #]+)", line)
-            # Local reusable workflows run from the caller's commit.
-            if match and re.fullmatch(r"\./\.github/workflows/[\w-]+\.ya?ml", match[1]):
+            # Local workflows and actions run from the caller's source commit.
+            if match and re.fullmatch(r"\./\.github/(workflows/[\w-]+\.ya?ml|actions/[\w-]+)", match[1]):
                 continue
             if match and not re.fullmatch(r"[\w.-]+/[\w./-]+@[a-f0-9]{40}", match[1]):
                 errors.append(f"Pin action to a full commit SHA in {path.name}: {match[1]}")

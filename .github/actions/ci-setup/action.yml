@@ -1,0 +1,38 @@
+name: CI tools and native libraries
+description: Set up the pinned Python environment and required host libraries.
+inputs:
+  app:
+    description: Install application build and runtime libraries on Linux.
+    default: "false"
+  static:
+    description: Install script linters on Linux.
+    default: "false"
+  java:
+    description: Select Java 17 for native macOS fixtures.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      with:
+        version: "0.12.10"
+    - shell: bash
+      run: rustup show
+    - if: runner.os == 'Linux' && inputs.app == 'true'
+      shell: bash
+      run: |
+        sh scripts/ci/linux-build-deps.sh
+        sudo apt-get install --yes xvfb xdotool mesa-vulkan-drivers dbus-daemon gnome-keyring
+    - if: inputs.static == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes shellcheck
+        go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+    - if: runner.os == 'macOS' && inputs.java == 'true'
+      shell: bash
+      run: |
+        qrow_java_home="$(/usr/libexec/java_home -v 17)"
+        echo "JAVA_HOME=$qrow_java_home" >> "$GITHUB_ENV"
+        echo "$qrow_java_home/bin" >> "$GITHUB_PATH"

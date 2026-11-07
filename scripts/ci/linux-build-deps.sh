@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install the Ubuntu libraries that the Qrow application builds and links
-# against. The ui-linux check and the Linux release jobs run this script.
+# against. Native build jobs and the common headless UI job run this script.
 set -eu
 sudo apt-get update
 sudo apt-get install --yes \

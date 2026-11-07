@@ -55,7 +55,7 @@ def github_archives(repository, tag, member, platforms):
 
 
 # The digests are the SHA-256 digests of the release assets, calculated from
-# the downloaded files. CI uses Linux x86_64 and macOS ARM64 and x86_64.
+# the downloaded files. Native validation uses Linux and macOS on both architectures.
 NEXTEST_MACOS = ("cargo-nextest-0.9.146-universal-apple-darwin.tar.gz",
                  "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8")
 LLVM_COV_MACOS = ("cargo-llvm-cov-universal-apple-darwin.tar.gz",
@@ -130,6 +130,9 @@ class Suite:
     prepare: tuple[Step, ...] = ()
     # Steps that run after the suite, also when it failed.
     cleanup: tuple[Step, ...] = ()
+    # Nextest commands used by fixture adapters; prepared together before servers.
+    builds: tuple[tuple[str, ...], ...] = ()
+    test_runs: int = 0
 
     @property
     def filterable(self):
@@ -157,7 +160,7 @@ APP = ("cargo", "linux-app-libs")
 
 def suites_for_platform(system):
     """Resolve suite commands from the requested OS, independently of this host."""
-    linux, macos = system == "linux", system == "macos"
+    linux = system == "linux"
     ui_feature = ("--features", "ui-test") if linux else ()
     clippy_app = Step(("cargo", "clippy", "--locked", *ui_feature, "--all-targets", "--", "-D", "warnings"))
     e2e_build = Step(("cargo", "test", "--locked", *ui_feature, "--no-run", "--test", "e2e"))
@@ -173,24 +176,27 @@ def suites_for_platform(system):
             Suite("rustdoc", "Rust API documentation without warnings.", ("cargo",),
                   (Step(("cargo", "doc", "--locked", "--no-default-features", "--no-deps"),
                         env=(("RUSTDOCFLAGS", "-D warnings"),)),)),
+            Suite("app-unit", "Application unit tests and doctests; portable core tests run in coverage.",
+                  (*APP, "cargo-nextest"),
+                  (nextest("kind(lib) & test(/^(ui|assets|themes)::/)", *ui_feature, "--lib"),
+                   Step(("cargo", "test", "--locked", *ui_feature, "--doc")))),
+            Suite("clippy-native", "Clippy for the production application on this target.", APP,
+                  (Step(("cargo", "clippy", "--locked", *(("--bin", "qrow", "--lib") if linux else ("--all-targets",)), "--", "-D", "warnings")),)),
             Suite("unit", "Rust unit and integration tests that need no UI and no servers.",
                   (*APP, "cargo-nextest"),
                   (nextest("not binary(ui)", *ui_feature), Step(("cargo", "test", "--locked", *ui_feature, "--doc")))),
             Suite("ui", "Headless tests of the real Qrow window, without servers.",
                   (*APP, "cargo-nextest"),
-                  (nextest("binary(ui)", *ui_feature),
-                   *((Step(("cargo", "run", "--locked", "--example", "tooltip-layout")),) if macos else ()))),
-            Suite("coverage", "Core line coverage with an 80% floor.", ("cargo", "cargo-llvm-cov", *(("cargo-nextest", "dbus-run-session", "gnome-keyring-daemon") if linux else ())),
+                  (nextest("binary(ui)", *ui_feature, "--test", "ui"),)),
+            Suite("coverage", "Core line coverage with an 80% floor.", ("cargo", "cargo-llvm-cov"),
                   (Step(("mkdir", "-p", "{target}/coverage")),
                    Step(("cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
                          "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
                          "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov"),
                         env=(("RUST_TEST_THREADS", "1"),)),
-                   *((Step(("sh", "scripts/testing/linux-secret-service.sh")),) if linux else ()))),
+                  )),
             Suite("perf", "SQL, dbt, and export benchmarks with enforced budgets.", ("cargo",),
-                  (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql")),
-                   Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "dbt")),
-                   Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "export")))),
+                  (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql", "--bench", "dbt", "--bench", "export")),)),
             Suite("scripts", "ShellCheck, actionlint, Ruff, and automation unit tests.",
                   ("uv", "shellcheck", "actionlint"),
                   (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + "
@@ -206,15 +212,47 @@ def suites_for_platform(system):
                   (Step((PYTHON, "scripts/core/policy.py")),
                    Step(("cargo", "machete")),
                    Step(("cargo", "deny", "--locked", "check")))),
+            Suite("native-storage", "OS-specific credential tests with synthetic data.",
+                  ("cargo", "cargo-nextest", *(("dbus-run-session", "gnome-keyring-daemon") if linux else ())),
+                  (Step(("sh", "scripts/testing/linux-secret-service.sh")),) if linux else
+                  (Step((PYTHON, "scripts/testing/macos-keychain.py")),),
+                  explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--lib"),) +
+                         ((("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),) if not linux else ()),
+                  test_runs=1 if linux else 2),
+            Suite("native-font", "macOS font and tooltip layout on the native main thread.", APP,
+                  (Step(("cargo", "run", "--locked", "--example", "tooltip-layout")),), platforms=MACOS_ONLY, explicit_only=True),
+            Suite("native-ui", "macOS branches of headless application assertions.", (*APP, "cargo-nextest"),
+                  (nextest("binary(ui) & (test(=metadata::shortcuts_and_connection_fields_use_tooltip_parts) | test(=queries::activity_tooltips_keep_the_shortcut_above_unread_status) | test(=assistant_sql::appended_sql_keeps_earlier_queries_and_titles_the_conversation))", "--test", "ui"),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("native-assistant", "macOS branch of the assistant server interaction.", (*APP, "cargo-nextest", "fixture-runtime"),
+                  (nextest("binary(e2e) & test(=assistant::assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs)", "--test", "e2e", "--run-ignored", "only"),),
+                  platforms=MACOS_ONLY, explicit_only=True, fixture="any"),
+            Suite("postgres-core", "Postgres connector tests without GPUI.", ("cargo", "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/postgres.py", "--layer", "core")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),), test_runs=1),
+            Suite("trino-core", "Trino connector tests without GPUI.", ("cargo", "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/trino.py", "--layer", "core")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),), test_runs=2),
+            Suite("postgres-ui", "Postgres headless window scenarios.", (*APP, "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/postgres.py", "--layer", "ui")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", *ui_feature, "--test", "e2e"),), test_runs=1),
+            Suite("trino-ui", "Trino headless window scenarios.", (*APP, "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/trino.py", "--layer", "ui")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", *ui_feature, "--test", "e2e"),), test_runs=2),
             Suite("postgres", "Postgres connector and real-window tests with a disposable server.",
                   (*APP, "cargo-nextest", "docker"),
-                  (Step((PYTHON, "scripts/e2e/postgres.py")),), explicit_only=True),
+                  (Step((PYTHON, "scripts/e2e/postgres.py")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),
+                          ("cargo", "nextest", "run", *ui_feature, "--test", "e2e")), test_runs=2),
             Suite("trino", "Trino connector and real-window tests with a disposable server.",
                   (*APP, "cargo-nextest", "docker"),
-                  (Step((PYTHON, "scripts/e2e/trino.py")),), explicit_only=True),
+                  (Step((PYTHON, "scripts/e2e/trino.py")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),
+                          ("cargo", "nextest", "run", *ui_feature, "--test", "e2e")), test_runs=4),
             Suite("backend", "Connector and worker against the real servers, without the UI.",
                   ("cargo", "cargo-nextest", "fixture-runtime"),
-                  (nextest("binary(integration) & test(/^backend::/)", "--no-default-features", "--run-ignored", "only"),),
+                  (nextest("binary(integration) & test(/^backend::/)", "--no-default-features", "--test", "integration", "--run-ignored", "only"),),
                   explicit_only=True, fixture="docker",
                   prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "integration")),)),
             Suite("e2e", "The real Qrow window, headless, against the real servers.",
@@ -226,7 +264,7 @@ def suites_for_platform(system):
                   prepare=(e2e_build,)),
             Suite("perf-ui", "Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build.",
                   ("cargo", "cargo-nextest"),
-                  (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
+                  (nextest("binary(perf)", "--cargo-profile", "perf", "--test", "perf", "--run-ignored", "only", "--no-capture"),),
                   platforms=MACOS_ONLY, explicit_only=True),
             Suite("perf-e2e", "Window query latency against the real servers.",
                   ("cargo", "cargo-nextest", "fixture-runtime"),
@@ -240,10 +278,12 @@ def suites_for_platform(system):
                   explicit_only=True, fixture="any", prepare=(TRANSFER_PERF_BUILD,)),
             Suite("perf-postgres", "Postgres export transfer and COPY measurements against a disposable server.",
                   ("cargo", "cargo-nextest", "docker"),
-                  (Step((PYTHON, "scripts/e2e/postgres.py", "--perf")),), explicit_only=True),
+                  (Step((PYTHON, "scripts/e2e/postgres.py", "--perf")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--cargo-profile", "perf", "--test", "integration"),), test_runs=1),
             Suite("perf-trino", "Trino export transfer measurements against a disposable coordinator.",
                   ("cargo", "cargo-nextest", "docker"),
-                  (Step((PYTHON, "scripts/e2e/trino.py", "--perf")),), explicit_only=True),
+                  (Step((PYTHON, "scripts/e2e/trino.py", "--perf")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--cargo-profile", "perf", "--test", "integration"),), test_runs=1),
             Suite("perf-app", "Launch time, idle memory, and idle CPU of the release app on the desktop.",
                   ("cargo", "uv"),
                   (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
@@ -299,11 +339,11 @@ RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|te
 RUST_SUITES = ("fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui")
 CHANGE_RULES = (
     (RUST_PATHS, RUST_SUITES),
-    (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/policy\.py|\.github/workflows/)",
+    (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/policy\.py|\.github/(workflows|actions)/)",
      ("policy",)),
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml)", ("deps",)),
     # The scripts suite also lints the Python and shell helpers of the desktop driver.
-    (r"^(\.githooks/|\.github/workflows/|pyproject\.toml$|uv\.lock$|scripts/|qtest(?:\.cmd)?$|docs/testing\.md$"
+    (r"^(\.githooks/|\.github/(workflows|actions)/|pyproject\.toml$|uv\.lock$|scripts/|qtest(?:\.cmd)?$|docs/testing\.md$"
      r"|tests/desktop/[^/]+\.(py|sh)$)",
      ("scripts",)),
     (r"^scripts/core/preflight\.sh$", (*RUST_SUITES, "policy")),
@@ -332,103 +372,6 @@ def suites_for_changes(paths):
 def suites_for_hook(hook, paths):
     """Return the suites that the changed paths select and that the hook runs."""
     return [name for name in suites_for_changes(paths) if name in HOOKS[hook][1]]
-
-
-# The events that start a CI job. Each scope includes the events of the scopes
-# before it: a push runs the pull request jobs too.
-SCOPES = ("pull_request", "push", "manual")
-
-
-@dataclass(frozen=True)
-class CiJob:
-    """One job of the checks workflow. `./qtest ci NAME` runs its suites."""
-    name: str
-    runner: str
-    suites: tuple[str, ...]
-    # The minutes that the suites of the job may take, without the runner
-    # setup. A slower run shows a warning. Most jobs stay under 10 minutes.
-    budget: int
-    # Suites that measure and do not fail the job. They run only when the run
-    # measures: on pushes, manual runs, and releases. Pull request measurements
-    # are not kept, so pull requests skip them.
-    report_only: tuple[str, ...] = ()
-    # Jobs whose output this job uses. The other jobs start at once.
-    needs: tuple[str, ...] = ()
-    # A pull request runs the job when it changes a path that matches.
-    paths: str = r"^"
-    # "pull_request": every run. "push": pushes, manual runs, and releases.
-    # "manual": manual runs and releases.
-    scope: str = "pull_request"
-    runtime: str = "auto"
-    # Environment variables of the job, like CARGO_BUILD_TARGET for a cross build.
-    env: tuple[tuple[str, str], ...] = ()
-
-
-LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
-E2E_PATHS = r"^(tests/fixture/|scripts/e2e/)"
-# The desktop suite of the e2e job tests a debug app with the executable that
-# the E2E test build makes, so that the job does not wait for the release
-# package. The desktop-package job tests the release package.
-DEBUG_APP = (("QROW_BUILD_PROFILE", "debug"), ("QROW_PACKAGE_PREBUILT", "true"))
-CI_JOBS = {
-    job.name: job
-    for job in [
-        CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc"), budget=3),
-        CiJob("core", LINUX, ("coverage",), budget=5, paths=RUST_PATHS),
-        CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), budget=7, paths=RUST_PATHS),
-        CiJob("ui-linux", LINUX, ("clippy-app", "unit", "ui"), budget=8, paths=rf"{RUST_PATHS}|^scripts/ci/linux-build-deps\.sh$"),
-        CiJob("package", MACOS_RUNNER, ("package",), budget=8, report_only=("perf-app",),
-              paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
-        CiJob("backend", LINUX, ("backend", "postgres", "trino"), budget=8,
-              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^scripts/ci/linux-build-deps\.sh$", runtime="docker"),
-        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), budget=8, report_only=("perf-e2e",),
-              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/|^scripts/package/", runtime="native",
-              env=DEBUG_APP),
-        # The real window against the Kyuubi servers on Linux, in Docker.
-        CiJob("e2e-linux", LINUX, ("e2e",), budget=8, paths=rf"{RUST_PATHS}|{E2E_PATHS}|^scripts/ci/linux-build-deps\.sh$",
-              runtime="docker"),
-        # The benchmarks need no Mac, and Linux runners are not limited to a few at a time.
-        CiJob("perf", LINUX, ("perf",), budget=5, paths=RUST_PATHS),
-        CiJob("perf-ui", MACOS_RUNNER, (), budget=8, report_only=("perf-ui",), scope="push"),
-        CiJob("perf-backend", LINUX, (), budget=14, report_only=("perf-postgres", "perf-trino", "perf-kyuubi"),
-              scope="push", runtime="docker"),
-        CiJob("desktop-package", MACOS_RUNNER, ("desktop",), budget=5, needs=("package",), scope="manual",
-              runtime="native"),
-        # The Intel runners are slow, and the account runs few macOS jobs at a
-        # time, so only releases and manual runs start the Intel jobs.
-        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), budget=15, scope="manual"),
-        # An ARM64 runner builds the Intel package in about half the time.
-        CiJob("package-intel", MACOS_RUNNER, ("package",), budget=10, scope="manual",
-              env=(("CARGO_BUILD_TARGET", "x86_64-apple-darwin"),)),
-        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop"), budget=15, report_only=("perf-e2e", "perf-package"),
-              needs=("package-intel",), runtime="native", scope="manual"),
-    ]
-}
-# A change to these paths can change any job, so it runs all of them.
-CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest(?:\.cmd)?$|scripts/core/|pyproject\.toml$|uv\.lock$)"
-
-
-def ci_jobs_for_event(event):
-    """Return the jobs that an event starts: "pull_request" (all paths), "push", or "manual"."""
-    events = SCOPES[:SCOPES.index(event) + 1]
-    return [name for name, job in CI_JOBS.items() if job.scope in events]
-
-
-def ci_jobs_for_changes(paths):
-    """Return the pull request jobs for the changed paths, with the jobs that they wait for."""
-    jobs = {name: CI_JOBS[name] for name in ci_jobs_for_event("pull_request")}
-    selected = {"static"}
-    for path in paths:
-        if re.search(CI_ALL_PATHS, path):
-            return list(jobs)
-        selected.update(name for name, job in jobs.items() if re.search(job.paths, path))
-    pending = list(selected)
-    while pending:
-        for need in CI_JOBS[pending.pop()].needs:
-            if need not in selected:
-                selected.add(need)
-                pending.append(need)
-    return [name for name in CI_JOBS if name in selected]
 
 
 REQUIREMENTS = {

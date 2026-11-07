@@ -85,7 +85,7 @@ class CatalogTests(unittest.TestCase):
                 self.assertNotIn("macos", suite.requires)
                 self.assertTrue(set(suite.platforms) <= set(catalog.PLATFORM_NAMES))
         macos = [name for name, suite in catalog.SUITES.items() if suite.platforms == ("macos",)]
-        self.assertEqual(macos, ["perf-ui", "perf-e2e", "perf-app", "perf-package", "package", "desktop"])
+        self.assertEqual(macos, ["native-font", "native-ui", "native-assistant", "perf-ui", "perf-e2e", "perf-app", "perf-package", "package", "desktop"])
 
     def test_coverage_serializes_shared_budget_tests_without_changing_selection(self):
         coverage = catalog.SUITES["coverage"]
@@ -106,14 +106,14 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(postgres.explicit_only)
         self.assertIn("docker", postgres.requires)
         self.assertIsNone(postgres.fixture)
-        self.assertIn("postgres", catalog.CI_JOBS["backend"].suites)
+        self.assertIn("--layer", catalog.SUITES["postgres-core"].steps[0].command)
 
     def test_trino_has_its_own_docker_suite_and_backend_ci_job(self):
         trino = catalog.SUITES["trino"]
         self.assertTrue(trino.explicit_only)
         self.assertIn("docker", trino.requires)
         self.assertIsNone(trino.fixture)
-        self.assertIn("trino", catalog.CI_JOBS["backend"].suites)
+        self.assertIn("--layer", catalog.SUITES["trino-core"].steps[0].command)
 
     def test_transfer_probes_run_in_the_perf_backend_job(self):
         kyuubi = catalog.SUITES["perf-kyuubi"]
@@ -123,8 +123,7 @@ class CatalogTests(unittest.TestCase):
         self.assertNotIn("docker", kyuubi.requires)
         self.assertIn("transfer_perf::kyuubi", kyuubi.steps[0].nextest_filter)
         self.assertEqual(kyuubi.prepare, (catalog.TRANSFER_PERF_BUILD,))
-        self.assertIn("perf-kyuubi", catalog.CI_JOBS["perf-backend"].report_only)
-        self.assertEqual(catalog.CI_JOBS["perf-backend"].runtime, "docker")
+        self.assertIn("--no-default-features", kyuubi.steps[0].command)
         # The macOS E2E jobs do not build the integration tests with the perf profile.
         for step in (*catalog.SUITES["perf-e2e"].steps, *catalog.SUITES["perf-e2e"].prepare):
             self.assertNotIn("integration", step.command)
@@ -134,8 +133,8 @@ class CatalogTests(unittest.TestCase):
             self.assertTrue(suite.explicit_only)
             self.assertIn("docker", suite.requires)
             self.assertIn("--perf", suite.steps[0].command)
-            self.assertIn(name, catalog.CI_JOBS["perf-backend"].report_only)
-            self.assertNotIn(name, catalog.CI_JOBS["e2e"].report_only)
+            self.assertEqual(suite.test_runs, 1)
+            self.assertIn("perf", suite.builds[0])
 
     def test_guide_topics_that_the_cli_names_exist(self):
         topics = cli.guide_sections()
@@ -156,6 +155,7 @@ class ChangeRuleTests(unittest.TestCase):
             "deny.toml": ["policy", "deps"],
             "Cargo.lock": [*rust, "policy", "deps"],
             ".github/workflows/test.yml": ["scripts", "policy"],
+            ".github/actions/ci-setup/action.yml": ["scripts", "policy"],
             "scripts/e2e/fixture.py": ["scripts"],
             "qtest": ["scripts"],
             "docs/testing.md": ["scripts"],
@@ -318,79 +318,6 @@ class RunTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         self.assertEqual((summary["status"], summary["exit_code"]), ("missing", runner.EXIT_MISSING))
         self.assertEqual([suite["status"] for suite in summary["suites"]], ["skipped", "missing"])
-
-    def test_ci_jobs_stop_before_they_build_when_a_prerequisite_is_missing(self):
-        with patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
-                patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
-            cli.main(["ci", "e2e"])
-        self.assertTrue(run.call_args.kwargs["require_all"])
-
-    def test_the_job_list_shows_the_scope_of_each_job(self):
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            cli.main(["ci"])
-        lines = {line.split()[0]: line for line in output.getvalue().splitlines()}
-        for name, job in catalog.CI_JOBS.items():
-            with self.subTest(job=name):
-                self.assertTrue(lines[name].endswith(cli.SCOPE_NOTES[job.scope]) if job.scope != "pull_request"
-                                else not lines[name].endswith(("requests", "only")))
-
-    def test_plans_of_pushes_and_manual_runs(self):
-        for flag, expected in (("--push", catalog.ci_jobs_for_event("push")), ("--all", list(catalog.CI_JOBS))):
-            output = io.StringIO()
-            with self.subTest(flag=flag), contextlib.redirect_stdout(output):
-                cli.main(["ci", "plan", flag])
-                plan = json.loads(output.getvalue())
-                self.assertEqual([name for name, selected in plan.items() if selected], expected)
-
-    def run_ci(self, *arguments, env=None):
-        with patch.dict(os.environ, env or {}), patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
-                patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
-            os.environ.pop("QROW_CI_MEASURE", None) if env is None else None
-            cli.main(["ci", *arguments])
-            environment = dict(run.call_args.args[1].get("env", {})) if run.called else {}
-        return run, environment
-
-    def test_report_only_suites_run_only_when_the_run_measures(self):
-        run, _ = self.run_ci("package")
-        self.assertEqual([item.suite.name for item in run.call_args.args[0]], ["package"])
-        self.assertEqual(run.call_args.kwargs["report_only"], ())
-        for arguments, env in ((("package", "--measure"), None), (("package",), {"QROW_CI_MEASURE": "true"})):
-            with self.subTest(arguments=arguments):
-                run, _ = self.run_ci(*arguments, env=env)
-                self.assertEqual([item.suite.name for item in run.call_args.args[0]], ["package", "perf-app"])
-                self.assertEqual(run.call_args.kwargs["report_only"], ("perf-app",))
-
-    def test_a_measurement_job_does_nothing_when_the_run_does_not_measure(self):
-        run, _ = self.run_ci("perf-ui")
-        run.assert_not_called()
-
-    def test_the_e2e_job_packages_the_executable_of_its_test_build(self):
-        _, environment = self.run_ci("e2e")
-        self.assertEqual(environment["QROW_PACKAGE_PREBUILT"], "true")
-        self.assertEqual(environment["QROW_BUILD_PROFILE"], "debug")
-
-    def test_a_slow_ci_job_warns_about_its_budget(self):
-        job = catalog.CI_JOBS["ui"]
-        for actions, expected in (("true", "::warning title=CI budget::"), ("", "[qtest]")):
-            output, errors = io.StringIO(), io.StringIO()
-            with self.subTest(actions=actions), patch.dict(os.environ, {"GITHUB_ACTIONS": actions}), \
-                    contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-                cli.report_budget(job, job.budget + 0.5)
-                cli.report_budget(job, job.budget - 0.5)
-                self.assertEqual((output.getvalue() + errors.getvalue()).count(expected), 1)
-
-    def test_a_ci_job_sets_its_environment_and_installs_its_rust_target(self):
-        commands = []
-        with patch.dict(os.environ, {}), patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
-                patch.object(cli, "install_tools", return_value=0), patch.object(cli, "print_summary"), \
-                patch.object(cli.subprocess, "run", side_effect=lambda command, **_: commands.append(command)
-                             or subprocess.CompletedProcess(command, 0)), \
-                contextlib.redirect_stderr(io.StringIO()):
-            cli.main(["ci", "package-intel", "--install"])
-            self.assertEqual(run.call_args.args[1]["env"]["CARGO_BUILD_TARGET"], "x86_64-apple-darwin")
-            self.assertNotEqual(os.environ.get("CARGO_BUILD_TARGET"), "x86_64-apple-darwin")
-        self.assertEqual(commands, [("rustup", "target", "add", "x86_64-apple-darwin")])
 
     def test_a_nextest_step_that_writes_no_report_does_not_report_old_failures(self):
         report = runner.junit_report()

@@ -7,8 +7,12 @@ import subprocess
 import tempfile
 import time
 import uuid
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/qtest"))
+import builds  # noqa: E402
+
 IMAGE = "postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24"
 
 
@@ -18,21 +22,34 @@ UI_TEST_FEATURE = ("--features", "ui-test") if platform.system() == "Linux" else
 
 
 def command(*args, **kwargs):
+    if args[:3] == ("cargo", "nextest", "run"):
+        # A layer selects scenarios, not different fixture behavior.
+        layer = os.environ.get("QROW_CONNECTOR_LAYER", "all")
+        core = "--no-default-features" in args
+        if layer != "all" and core != (layer == "core"):
+            return None
+        return builds.run(list(args), kwargs.get("env"))
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--perf", action="store_true", help="Measure export transfer in an optimized build.")
+    parser.add_argument("--layer", choices=("all", "core", "ui"), default="all")
     options = parser.parse_args()
+    if options.perf and options.layer == "ui":
+        parser.error("--perf requires core tests")
+    os.environ["QROW_CONNECTOR_LAYER"] = options.layer
     name = "qrow-e2e-postgres-" + uuid.uuid4().hex[:12]
     env = os.environ.copy()
     profile = "ci" if env.get("CI") else "default"
     # Compile before starting the server, so builds do not consume its resources.
     build = ("--profile", "perf") if options.perf else ()
-    command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
-    if not options.perf:
-        command("cargo", "test", "--locked", *UI_TEST_FEATURE, "--test", "e2e", "--no-run")
+    if not os.environ.get("QROW_NEXTEST_RUNTIME"):
+        if options.layer != "ui":
+            command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
+        if not options.perf and options.layer != "core":
+            command("cargo", "test", "--locked", *UI_TEST_FEATURE, "--test", "e2e", "--no-run")
     target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     fixture_root = target / "qtest" / "postgres"
     fixture_root.mkdir(parents=True, exist_ok=True)

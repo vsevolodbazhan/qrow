@@ -48,9 +48,10 @@ def smoke(executable, system, evidence):
         command = [str(executable), "--demo"]
         observer = None
         if system == "macos":
-            observer = Path(workspace) / "window-ready"
+            observer = Path(os.environ.get("QROW_WINDOW_OBSERVER", Path(workspace) / "window-ready"))
             source = Path(__file__).resolve().parents[2] / "tests/desktop/window_ready.swift"
-            subprocess.run(["swiftc", source, "-o", observer], check=True, timeout=60)
+            if not os.environ.get("QROW_WINDOW_OBSERVER"):
+                subprocess.run(["swiftc", source, "-o", observer], check=True, timeout=60)
         if system == "linux":
             env.pop("WAYLAND_DISPLAY", None)
             env["XDG_SESSION_TYPE"] = "x11"

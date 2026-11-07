@@ -19,7 +19,9 @@ qrow_target_dir="${CARGO_TARGET_DIR:-target}"
 qrow_tools="$qrow_target_dir/e2e-tools"
 qrow_driver="$qrow_tools/native-driver"
 mkdir -p "$qrow_tools"
-if [ ! -x "$qrow_driver" ] || [ -n "$(find tests/desktop/Driver.swift -newer "$qrow_driver" -print)" ]; then
+if [ "${QROW_NATIVE_PREPARED:-false}" = true ]; then
+    test -x "$qrow_driver" || { echo "Missing prepared native driver." >&2; exit 1; }
+elif [ ! -x "$qrow_driver" ] || [ -n "$(find tests/desktop/Driver.swift -newer "$qrow_driver" -print)" ]; then
     swiftc -warnings-as-errors tests/desktop/Driver.swift -o "$qrow_driver"
 fi
 # Only this mode runs the permission check. In the other modes, the driver

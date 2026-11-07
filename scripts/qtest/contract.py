@@ -13,7 +13,7 @@ import catalog
 import targets
 
 SCHEMA = 1
-BUILD_ENV = ("RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_BUILD_TARGET", "MACOSX_DEPLOYMENT_TARGET",
+BUILD_ENV = ("RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_BUILD_TARGET", "MACOSX_DEPLOYMENT_TARGET",
              "QROW_RELEASE_VERSION", "QROW_COMMIT", "CARGO_ENCODED_RUSTFLAGS", "RUSTUP_TOOLCHAIN",
              "CC", "CXX", "CFLAGS", "CXXFLAGS", "SDKROOT", "CARGO_HOME", "QROW_E2E_REUSE_MACOS_PACKAGE", "QROW_MACOS_PACKAGE")
 
@@ -173,13 +173,14 @@ def verify(value, result):
     for definition, item in zip(value["suites"], actual):
         if item.get("status") != "passed" or item.get("report_only"):
             raise ValueError(f"Required suite did not pass: {item.get('name')}")
-        if any(step["nextest_filter"] is not None for step in definition["definition"]["steps"]):
+        count = sum(step["nextest_filter"] is not None for step in definition["definition"]["steps"]) + definition["definition"]["test_runs"]
+        if count:
             reports = item.get("tests", [])
-            if len(reports) != value["repeat"] or any(report.get("count", 0) < 1 or report.get("failures") != 0 for report in reports):
+            if len(reports) != value["repeat"] * count or any(report.get("count", 0) < 1 or report.get("failures") != 0 for report in reports):
                 raise ValueError(f"Missing or empty test evidence: {item['name']}")
 
 
-def execute(value, root, output):
+def execute(value, root, output, reuse_builds=None):
     import runner
 
     validate_plan(value, root)
@@ -187,7 +188,10 @@ def execute(value, root, output):
     suites = catalog.suites_for_platform(target.system)
     selected = [runner.Selected(suites[item["name"]], item["filter"]) for item in value["suites"]]
     result = runner.run(selected, {"runtime": value["runtime"], "repeat": value["repeat"],
-                                   "isolated_reports": True}, [], output, require_all=True)
+                                   "isolated_reports": True, "reuse_builds": reuse_builds}, [], output, require_all=True)
+    if reuse_builds:
+        from builds import sha256
+        result["build_manifest_sha256"] = sha256(reuse_builds)
     result.update(schema=SCHEMA, plan_id=value["id"], target=target.name, snapshot=value["snapshot"],
                   source_sha=value["source_sha"])
     if snapshot(root) != value["snapshot"] or source_sha(root) != value["source_sha"]:

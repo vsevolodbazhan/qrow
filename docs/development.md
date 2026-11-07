@@ -132,68 +132,28 @@ Changes under `vendor/` trigger the Rust suites, including changes to its
 Markdown files, for example `QROW-PATCH.md`. Other Markdown changes, except
 `docs/testing.md`, do not trigger hook checks.
 
-The [test workflow](../.github/workflows/test.yml) checks pushes to `main`,
-manual dispatches, and pull requests into any branch with the `opened`,
-`reopened`, `synchronize`, `ready_for_review`, and `converted_to_draft`
-actions. Pull requests in a stack get checks before their base merges. The
-test workflow calls the [checks workflow](../.github/workflows/checks.yml),
-which has the check jobs. On `main`, the test workflow then deletes old Rust
-build caches. See [Testing](testing.md#hooks-and-continuous-integration). For a non-draft pull request, the `plan` job selects the
-jobs from the changed paths and always selects `static`. Pushes start the
-pull request jobs and the measurement jobs. Manual runs and releases start
-all jobs. [Testing](testing.md#hooks-and-continuous-integration)
-gives the paths that select each job. A draft pull request, including a
-`converted_to_draft` event, starts no jobs. To run the checks of a draft pull
-request, mark it as ready for review.
+The [test workflow](../.github/workflows/test.yml) runs for ready pull requests
+into any branch, pushes to `main`, manual runs, and scheduled runs. Draft
+pull requests start no validation. A newer pull request run cancels an older
+run. Runs on `main` finish so they can save build caches.
 
-Every job checks out the same commit: the pull request merge result, or the
-pushed commit. A newer run of a pull request cancels its older run. Other
-runs, like the runs on `main` and manual runs, do not stop: a newer run of the
-same branch waits, and it replaces an older run that also waits. A run that
-stops before its end saves no build caches.
+The test and release workflows share one validation graph. Common tests run
+once before native tests. Native compilation overlaps common validation.
+Each native test consumes the build of the same target. All four targets,
+including Intel macOS, have the same functional scope on pull requests and
+`main`. Full mode adds timing stress and report-only measurements.
+[Continuous integration](ci.md) describes every job and its evidence.
 
-The [platform workflow](../.github/workflows/platforms.yml) also validates all
-four supported native targets on each ready pull request. It runs application
-lint, unit tests, headless UI tests, packaging, and an extracted-package smoke
-check. On main, scheduled runs, manual runs, and release candidates, it also
-runs real-server E2E on all targets. Linux runs Postgres and Trino window tests
-with Docker. macOS uses the native Kyuubi fixture and runs desktop tests on the
-candidate package. The existing checks remain active during migration.
-Full runs repeat the UI timing regressions 100 times. The Sunday run and release
-candidates do not restore Rust build caches. A manual test run can select
-`cold-cache` for the same check. Candidate receipts record the host and runner
-image version. A failure on the first attempt still fails the run.
+Configure only `ci-required` as the required check in the `main` ruleset.
+After the new graph passes on its pull request, an administrator must remove
+the old `checks / ...` contexts from the same ruleset before merge. Those jobs
+no longer exist. After merge, inspect the first `main` run and its full-mode
+stress evidence. [CI merge steps](ci.md#merge-and-administration) give the
+complete procedure and current verification gaps.
 
-`ci-required` fails unless both workflow groups pass. The platform gate also
-requires one valid report and package receipt for every supported target. It
-rejects empty tests, duplicate results, missing results, and a different source
-commit. Windows remains a planned target. Linux package smoke uses X11 with
-Xvfb and software Vulkan; Wayland and hardware GPU qualification remain gaps.
-
-Configure these individual checks as required checks of the `main` ruleset:
-
-```text
-checks / plan
-checks / static
-checks / core
-checks / ui
-checks / ui-linux
-checks / package
-checks / backend
-checks / e2e
-checks / e2e-linux
-checks / perf
-```
-
-Do not require the other checks. Pull requests skip them. A push reports
-the failures of the measurement jobs, and a release or a manual run of the
-test workflow reports the failures of the Intel jobs and `desktop-package`.
-
-Add `ci-required` to the ruleset after its four-target workflow passes in
-GitHub. Keep the individual checks during this migration. The legacy `plan`
-check remains required. Do not require the reusable `checks` context.
-Fork pull requests use disposable runners and synthetic credentials for the
-server jobs. They do not get secrets.
+Fork pull requests use disposable runners and synthetic credentials. They do
+not get secrets. Linux package smoke uses X11 and software Vulkan. Windows,
+Wayland, and hardware GPU qualification remain gaps; see [CI limitations](ci.md#known-gaps).
 
 The [release workflow](../.github/workflows/release.yml) is manual. Use it to
 publish a nightly or stable release. It accepts an optional commit SHA or ref. The resolved commit must match the
@@ -205,13 +165,13 @@ tag is `v<version>`. The nightly tag is
 The jobs run in this order:
 
 ```text
-resolve-target -> checks and platforms -> dmg and linux -> publish
+resolve-target -> platforms (common and native validation) -> dmg and linux -> publish
 ```
 
-`resolve-target` finds the commit and the release version. `checks` is the
-checks workflow with all jobs. The platform workflow builds each native package and tests the extracted
-application. The macOS desktop suite uses that candidate archive. The
-legacy package and desktop jobs remain as migration checks. `dmg` puts each tested package in a DMG
+`resolve-target` finds the commit and release version. The validation
+workflow builds each native package and tests its extracted application.
+The macOS desktop suite uses that candidate archive. `dmg` puts each tested
+package in a DMG
 with `arm64` or `x86_64` in its name. It runs
 [`scripts/package/dmg.py`](../scripts/package/dmg.py). When the DMG mounts,
 Finder shows the app icon, an Applications shortcut, and an arrow between
