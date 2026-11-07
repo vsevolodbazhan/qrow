@@ -127,10 +127,10 @@ The pane header has **New conversation**, **More**, and **Conversations**.
 **More** opens the menu of the conversation. **Conversations** shows or hides
 the conversation list.
 
-While the assistant works on a reply, a shimmering **Working…** line shows at the end of
-the conversation. It shows from the time that you send a message until the
-turn ends or fails. It also shows while the assistant writes text or uses tools. It does
-not show while a query waits for your approval.
+A shimmering **Working…** line shows while the assistant waits to write a
+reply or uses tools. The first words of a reply replace this line in the same
+space. The line does not show below a reply that is still being written, or
+while a query waits for your approval.
 
 See [Conversation state](#conversation-state) for the status that the thread
 list and the assistant toggle show.

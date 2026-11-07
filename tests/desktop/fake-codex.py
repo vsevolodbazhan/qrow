@@ -960,6 +960,8 @@ for line in sys.stdin:
                     "| Column | Value |\n| --- | --- |\n| Result | 1 |"
                 )
             )
+            if message.startswith("Show leading whitespace reply"):
+                answer = "\n\n" + answer
             send(
                 {
                     "method": "item/agentMessage/delta",

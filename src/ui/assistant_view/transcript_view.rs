@@ -26,25 +26,7 @@ pub(super) fn transcript_row(
                 }))
                 .into_any_element()
         }
-        Row::Working => Message::new()
-            .flex_shrink_0()
-            .alignment(MessageAlignment::Start)
-            .content(
-                MessageContent::new().bubble(
-                    Bubble::new().with_variant(BubbleVariant::Ghost).child(
-                        div()
-                            .id("assistant-working")
-                            .test_support()
-                            .role(Role::Status)
-                            .aria_label("Assistant is working")
-                            .child(
-                                ShimmerText::new("Working…")
-                                    .text_color(cx.theme().muted_foreground),
-                            ),
-                    ),
-                ),
-            )
-            .into_any_element(),
+        Row::Working => working_entry(qrow, cx),
         Row::Entry { id, .. } => {
             // The rows before the entries hold at most the button.
             let offset = usize::from(
@@ -59,10 +41,47 @@ pub(super) fn transcript_row(
             let thread = shown.thread.as_deref().unwrap_or("");
             match &entry.tool {
                 Some(tool) => tool_entry(qrow, handle, thread, index, entry, tool, cx),
+                None if entry.speaker == Speaker::Assistant
+                    && entry.shown_text().trim().is_empty()
+                    && (entry.revealing()
+                        || shown.run.is_some_and(|run| {
+                            run.active_turn
+                                .as_deref()
+                                .is_some_and(|turn| entry.turn_id.as_deref() == Some(turn))
+                        }))
+                    && shown.entries.last().is_some_and(|last| last.id == entry.id) =>
+                {
+                    working_entry(qrow, cx)
+                }
                 None => message_entry(qrow, entry, cx),
             }
         }
     }
+}
+
+/// The status occupies the first reply line until its first word is ready.
+fn working_entry(qrow: &Qrow, cx: &App) -> AnyElement {
+    Message::new()
+        .flex_shrink_0()
+        .alignment(MessageAlignment::Start)
+        .content(
+            MessageContent::new().bubble(
+                Bubble::new().with_variant(BubbleVariant::Ghost).child(
+                    div()
+                        .id("assistant-working")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label("Assistant is working")
+                        .font_family(qrow.settings.assistant_font_family.clone())
+                        .text_size(qrow.ui_px(qrow.settings.assistant_font_size))
+                        .line_height(relative(qrow.settings.assistant_line_height))
+                        .child(
+                            ShimmerText::new("Working…").text_color(cx.theme().muted_foreground),
+                        ),
+                ),
+            ),
+        )
+        .into_any_element()
 }
 
 /// A message, a reply, or an error.

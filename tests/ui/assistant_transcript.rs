@@ -254,6 +254,58 @@ fn a_streamed_reply_shows_word_by_word(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn arriving_replies_do_not_move_the_transcript_down(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.smooth_transitions = true;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    for _ in 0..5 {
+        app.send(cx, "select 1");
+        app.wait_reply(cx, "| Result | 1 |");
+        app.wait_idle(cx);
+    }
+    cx.update(|cx| cx.set_reduce_motion(false));
+    for message in ["select 1 again", "Show leading whitespace reply"] {
+        app.send(cx, message);
+        let prefix = format!("You: {message}");
+        let mut previous = None;
+        let mut samples = Vec::new();
+        wait_drawn(&app, cx, "the stable streamed reply", |window| {
+            let entries = crate::support::labelled_starting(window, &prefix);
+            if let Some(entry) = entries.first() {
+                let y = f32::from(entry.bounds().top());
+                if previous != Some(y) {
+                    samples.push(y);
+                    previous = Some(y);
+                }
+            }
+            transcript(window)
+                .last()
+                .is_some_and(|text| text.contains("| Result | 1 |"))
+        });
+        app.wait_idle(cx);
+        let settled = app.update(cx, |window, _| {
+            f32::from(
+                crate::support::labelled_starting(window, &prefix)[0]
+                    .bounds()
+                    .top(),
+            )
+        });
+        samples.push(settled);
+        assert!(
+            samples.windows(2).all(|pair| pair[1] <= pair[0] + 1.),
+            "transcript moved down for {message}: {samples:?}"
+        );
+        assert!(
+            samples.len() > 1,
+            "did not exercise tail following: {samples:?}"
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn a_streamed_reply_shows_at_once_with_reduced_motion(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
     let workspace = codex.workspace(Workspace::default());
