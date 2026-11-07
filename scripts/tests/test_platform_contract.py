@@ -269,6 +269,23 @@ class CommonGateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Missing common'):
                 platforms.verify_common(root, sha)
 
+    def test_static_level_needs_only_static_evidence_and_rejects_other_jobs(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha = self.evidence(root)
+            with self.assertRaisesRegex(ValueError, 'unexpected common result'):
+                platforms.verify_common(root, sha, jobs=['static'])
+            for name in platforms.COMMON:
+                if name != 'static':
+                    shutil.rmtree(root / name)
+            platforms.verify_common(root, sha, jobs=['static'])
+            with self.assertRaisesRegex(ValueError, 'Missing common'):
+                platforms.verify_common(root, sha)
+            for jobs in ([], ['core'], ['static', 'unknown']):
+                with self.subTest(jobs=jobs), self.assertRaisesRegex(ValueError, 'selection'):
+                    platforms.verify_common(root, sha, jobs=jobs)
+
     def test_full_common_gate_requires_stress_from_the_same_build(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

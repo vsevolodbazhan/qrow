@@ -87,20 +87,60 @@ class ValidationGraphTests(unittest.TestCase):
                 value[platforms.TEST_JOB.format(name.replace("_", "-"))] = {"result": "skipped"}
             value.update({key.replace("_", "-"): {"result": result} for key, result in overrides.items()})
             return value
-        platforms.gate(results(test_linux_x86_64="success"), ["linux-x86_64"])
-        everything = {f"test_{name.replace('-', '_')}": "success" for name in platforms.native_targets("full")}
-        platforms.gate(results(**everything), platforms.native_targets("full"))
+        full = platforms.native_targets("full")
+        platforms.gate(results(test_linux_x86_64="success"), ["linux-x86_64"], "pr", "pull_request")
+        platforms.gate(results(), [], "static", "pull_request")
+        everything = {f"test_{name.replace('-', '_')}": "success" for name in full}
+        platforms.gate(results(**everything), full, "full", "push")
+        platforms.gate(results(**everything), full, "merge", "merge_group")
         failures = [
-            (results(test_linux_x86_64="failure"), ["linux-x86_64"]),
-            (results(test_linux_x86_64="success", common_required="failure"), ["linux-x86_64"]),
-            (results(test_linux_x86_64="success", test_macos_arm64="success"), ["linux-x86_64"]),
-            (results(test_linux_x86_64="success"), platforms.native_targets("full")),
-            (results(**everything), ["macos-arm64"]),
-            (results(test_linux_x86_64="success"), ["linux-x86_64", "windows-x86_64"]),
+            (results(test_linux_x86_64="failure"), ["linux-x86_64"], "pr", "pull_request"),
+            (results(test_linux_x86_64="success", common_required="failure"), ["linux-x86_64"], "pr", "pull_request"),
+            (results(test_linux_x86_64="success", test_macos_arm64="success"), ["linux-x86_64"], "pr", "pull_request"),
+            (results(test_linux_x86_64="success"), full, "full", "push"),
+            (results(**everything), ["macos-arm64"], "full", "push"),
+            (results(test_linux_x86_64="success"), ["linux-x86_64", "windows-x86_64"], "pr", "pull_request"),
+            # Only a pull request can select fewer than all targets.
+            (results(test_linux_x86_64="success"), ["linux-x86_64"], "pr", "push"),
+            (results(), [], "static", "push"),
+            (results(), [], "static", "merge_group"),
+            # The static level runs no native test, and its target list must be empty.
+            (results(test_linux_x86_64="success"), [], "static", "pull_request"),
+            (results(test_linux_x86_64="success"), ["linux-x86_64"], "static", "pull_request"),
         ]
-        for value, targets in failures:
-            with self.subTest(targets=targets), self.assertRaises(ValueError):
-                platforms.gate(value, targets)
+        for value, targets, selected, event in failures:
+            with self.subTest(targets=targets, tier=selected, event=event), self.assertRaises(ValueError):
+                platforms.gate(value, targets, selected, event)
+
+    def test_pull_requests_that_cannot_change_a_build_run_only_static_checks(self):
+        light = ["docs/ci.md", "README.md", "AGENTS.md", "scripts/README.md", "scripts/tests/test_workflows.py",
+                 ".github/workflows/maintenance.yml", ".github/workflows/release.yml", "scripts/ci/rust_caches.py",
+                 ".agents/skills/x/SKILL.md", ".claude"]
+        self.assertTrue(platforms.static_only(light))
+        self.assertEqual(platforms.tier("pull_request", paths=light), "static")
+        outputs = platforms.outputs("pull_request", paths=light)
+        self.assertEqual(outputs["targets"], "[]")
+        self.assertEqual(outputs["common_jobs"], '["static"]')
+        self.assertEqual([item["job"] for item in platforms.common_matrix("static")["include"]], ["static"])
+        heavy = ["src/lib.rs", "Cargo.lock", "tests/ui/queries.rs", "tests/fixture/server/Oidc.java",
+                 ".github/workflows/test.yml", ".github/actions/ci-setup/action.yml", "scripts/ci/platforms.py",
+                 "scripts/qtest/runner.py", "scripts/e2e/trino.py", ".config/nextest.toml",
+                 # A vendored crate can embed its README in the build.
+                 "vendor/reqwest/README.md", "docs"]
+        for path in heavy:
+            with self.subTest(path=path):
+                self.assertFalse(platforms.static_only([*light, path]))
+                self.assertEqual(platforms.tier("pull_request", paths=[*light, path]), "pr")
+        self.assertFalse(platforms.static_only([]))
+        self.assertEqual(platforms.tier("pull_request", paths=[]), "pr")
+        # main and release runs always qualify everything.
+        for event in ("push", "schedule", "workflow_dispatch", "merge_group"):
+            self.assertNotEqual(platforms.tier(event, paths=light), "static")
+        plan = job("plan")
+        self.assertIn("fetch-depth: 2", plan)
+        self.assertIn("git diff --name-only HEAD^1 HEAD", plan)
+        self.assertIn('--jobs "$JOBS"', job("common-required"))
+        self.assertIn("if: needs.plan.outputs.targets != '[]'", job("ci-required"))
 
     def test_cache_cleanup_knows_every_current_cache_key(self):
         import importlib.util

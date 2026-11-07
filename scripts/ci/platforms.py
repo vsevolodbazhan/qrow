@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qtest"))
@@ -25,28 +26,54 @@ PR_TARGETS = ("linux-x86_64",)
 TEST_JOB = "test-{}"
 
 
-def tier(event, full=False):
-    """pr, merge, or full. Full mode adds timing stress and measurements."""
+# Changes that cannot alter a Rust build, a test binary, a fixture, or the
+# validation graph. The static job checks them. Any other path selects the
+# complete level. Vendored crates can embed their README, so only these
+# Markdown files qualify.
+STATIC_ONLY = re.compile(r"(docs/.+|[^/]+\.md|scripts/README\.md|scripts/tests/.+|scripts/ci/rust_caches\.py"
+                         r"|\.agents/.+|\.claude|\.plans/.+|\.github/workflows/(maintenance|release)\.yml)")
+# The levels that each event can select. Other combinations fail the gate.
+EVENT_TIERS = {"pull_request": ("static", "pr", "full"), "merge_group": ("merge", "full")}
+
+
+def static_only(paths):
+    return bool(paths) and all(STATIC_ONLY.fullmatch(path) for path in paths)
+
+
+def tier(event, full=False, paths=None):
+    """static, pr, merge, or full. Full mode adds timing stress and measurements.
+
+    A pull request that changes only STATIC_ONLY paths runs the static job."""
     if full:
         return "full"
+    if event == "pull_request" and paths is not None and static_only(paths):
+        return "static"
     return {"pull_request": "pr", "merge_group": "merge"}.get(event, "full")
 
 
 def native_targets(selected_tier):
     supported = [name for name, target in TARGETS.items() if target.supported]
+    if selected_tier == "static":
+        return []
     return [name for name in supported if selected_tier != "pr" or name in PR_TARGETS]
 
 
-def outputs(event, full=False):
-    selected = tier(event, full)
-    return {"common": json.dumps(common_matrix()), "tier": selected,
-            "full": "true" if selected == "full" else "false",
+def common_jobs(selected_tier):
+    return ["static"] if selected_tier == "static" else list(COMMON)
+
+
+def outputs(event, full=False, paths=None):
+    selected = tier(event, full, paths)
+    return {"common": json.dumps(common_matrix(selected)), "common_jobs": json.dumps(common_jobs(selected)),
+            "tier": selected, "full": "true" if selected == "full" else "false",
             "targets": json.dumps(native_targets(selected))}
 
 
-def gate(results, targets):
+def gate(results, targets, selected_tier, event):
     """Require the plan, common validation, and the tests of the selected targets. Other targets must not run."""
-    if set(targets) - set(native_targets("full")) or not set(PR_TARGETS) <= set(targets):
+    if selected_tier not in EVENT_TIERS.get(event, ("full",)):
+        raise ValueError(f"A {event} run cannot use the {selected_tier} level")
+    if list(targets) != native_targets(selected_tier):
         raise ValueError(f"Unexpected native target selection: {targets}")
     for name in ("plan", "common-required"):
         if results.get(name, {}).get("result") != "success":
@@ -76,9 +103,9 @@ def matrix(full=False):
                          "suites": " ".join(suites(target, full))} for target in TARGETS.values() if target.supported]}
 
 
-def common_matrix():
-    return {"include": [{"job": name, "suites": " ".join(suites),
-                         "prepare": name in ("backend", "headless-ui")} for name, suites in COMMON.items()]}
+def common_matrix(selected_tier="full"):
+    return {"include": [{"job": name, "suites": " ".join(COMMON[name]),
+                         "prepare": name in ("backend", "headless-ui")} for name in common_jobs(selected_tier)]}
 
 
 def check_plan(value, result, sha, selectors, target, runtime):
@@ -90,13 +117,16 @@ def check_plan(value, result, sha, selectors, target, runtime):
     contract.verify(value, result)
 
 
-def verify_common(directory, sha, full=False):
+def verify_common(directory, sha, full=False, jobs=None):
+    expected = set(COMMON if jobs is None else jobs)
+    if not expected or not expected <= set(COMMON) or "static" not in expected:
+        raise ValueError(f"Unexpected common job selection: {sorted(expected)}")
     seen = set()
     for path in Path(directory).rglob("result.json"):
         value = json.loads((path.parent / "plan.json").read_text())
         result = json.loads(path.read_text())
         matches = [name for name, selectors in COMMON.items() if value.get("selectors") == selectors]
-        if len(matches) != 1 or matches[0] in seen:
+        if len(matches) != 1 or matches[0] in seen or matches[0] not in expected:
             raise ValueError("Duplicate or unexpected common result")
         check_plan(value, result, sha, COMMON[matches[0]], COMMON_TARGET, "docker")
         if matches[0] in ("backend", "headless-ui"):
@@ -115,14 +145,15 @@ def verify_common(directory, sha, full=False):
                 raise ValueError("Missing UI stress contract")
             contract.verify(stress, stress_result)
         seen.add(matches[0])
-    if seen != set(COMMON):
-        raise ValueError(f"Missing common results: {sorted(set(COMMON) - seen)}")
+    if seen != expected:
+        raise ValueError(f"Missing common results: {sorted(expected - seen)}")
 
 
 def verify(directory, sha, full=False, targets=None):
     supported = {name for name, target in TARGETS.items() if target.supported}
     expected = supported if targets is None else set(targets)
-    if not expected <= supported or not set(PR_TARGETS) <= expected:
+    # An empty selection belongs to the static level, which gate() checks.
+    if not expected <= supported or (expected and not set(PR_TARGETS) <= expected):
         raise ValueError(f"Unexpected native target selection: {sorted(expected)}")
     seen = set()
     for path in Path(directory).rglob("result.json"):
@@ -160,7 +191,8 @@ def main():
     plan = commands.add_parser("outputs", help="Print the plan job outputs for GITHUB_OUTPUT.")
     plan.add_argument("--event", required=True)
     plan.add_argument("--full", action="store_true")
-    commands.add_parser("gate", help="Check the job results in RESULTS for the targets in TARGETS.")
+    plan.add_argument("--changed", type=Path, help="File with the changed paths of a pull request, one per line.")
+    commands.add_parser("gate", help="Check the job results in RESULTS for TARGETS, TIER, and EVENT.")
     for name in ("verify", "verify-common"):
         evidence = commands.add_parser(name)
         evidence.add_argument("directory", type=Path)
@@ -168,23 +200,27 @@ def main():
         evidence.add_argument("--full", action="store_true")
         if name == "verify":
             evidence.add_argument("--targets", type=json.loads, help="JSON list of the selected native targets.")
+        else:
+            evidence.add_argument("--jobs", type=json.loads, help="JSON list of the selected common jobs.")
     args = parser.parse_args()
     if args.command == "matrix":
         print(json.dumps(matrix(args.full)))
     elif args.command == "common-matrix":
         print(json.dumps(common_matrix()))
     elif args.command == "outputs":
-        for key, value in outputs(args.event, args.full).items():
+        paths = args.changed.read_text().splitlines() if args.changed else None
+        for key, value in outputs(args.event, args.full, paths).items():
             print(f"{key}={value}")
     elif args.command == "gate":
         try:
-            gate(json.loads(os.environ["RESULTS"]), json.loads(os.environ["TARGETS"]))
+            gate(json.loads(os.environ["RESULTS"]), json.loads(os.environ["TARGETS"]), os.environ["TIER"],
+                 os.environ["EVENT"])
         except (KeyError, ValueError) as error:
             sys.exit(str(error))
         print("All required jobs passed.")
     else:
         if args.command == "verify-common":
-            verify_common(args.directory, args.sha, args.full)
+            verify_common(args.directory, args.sha, args.full, args.jobs)
         else:
             verify(args.directory, args.sha, args.full, args.targets)
         print("All expected validation evidence passed.")

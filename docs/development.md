@@ -139,7 +139,9 @@ Runs on `main` finish so they can save build caches.
 
 The test and release workflows share one validation graph. Common tests run
 once, and native compilation overlaps them. Each native test consumes the
-build of the same target. A pull request tests Linux x86-64 natively. `main`
+build of the same target. A pull request tests Linux x86-64 natively. A pull
+request that changes only documentation or other static paths runs only the
+static checks. `main`
 and release candidates test all four targets, including Intel macOS, in full
 mode with timing stress and report-only measurements. Check the `main` run
 after each merge, and fix or revert a failed target.
