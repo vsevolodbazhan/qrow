@@ -287,6 +287,14 @@ class ValidationGraphTests(unittest.TestCase):
         self.assertIn("--reuse-builds", job("common"))
         self.assertIn("cold-cache", read(TEST))
         self.assertIn("full: true", job("validation", RELEASE))
+        # Releases restore the caches of main. The weekly scheduled run stays cold
+        # and has its own concurrency group, so a push to main cannot replace it.
+        self.assertNotIn("cold-cache", job("validation", RELEASE))
+        self.assertEqual(re.findall(r'cron: "([^"]+)"', read(TEST)), ["17 2 * * 0"])
+        self.assertIn("github.event_name == 'schedule'", job("common"))
+        self.assertIn("github.event_name == 'schedule' && 'weekly'", read(TEST))
+        # A skipped draft run must not cancel the run of the ready pull request.
+        self.assertIn("${{ github.event.pull_request.draft && '-draft' || '' }}", read(TEST))
 
     def test_caches_have_single_saving_owners_and_tests_only_download_artifacts(self):
         validation = read(VALIDATION)
