@@ -313,3 +313,62 @@ fn smooth_composer_sends_a_multiline_draft_and_runs_sql(cx: &mut TestAppContext)
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 42 AS value", crate::support::fixture::PASSWORD);
+    let first = workspace.tabs[0].id;
+    let mut workspace = codex.workspace(workspace);
+    workspace.settings.smooth_transitions = true;
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        window.click("assistant-maximize", cx);
+    });
+    app.wait_status(cx, "Complete");
+    // Expanding results behind the assistant must not acknowledge them.
+    app.dispatch(cx, qrow::ui::ToggleResults);
+    app.dispatch(cx, qrow::ui::ToggleResults);
+    app.dispatch(cx, qrow::ui::NewTab);
+    app.click(cx, "assistant-maximize");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .find(format!("query-status-{first}"))
+                .label()
+                .unwrap()
+                .contains("unread query result")
+        );
+    });
+    app.click_labelled(cx, "Query 1, unread query result");
+    app.wait_cell(cx, 0, 1, "42");
+    app.click(cx, "assistant-maximize");
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.hover_labelled(cx, "Show tab");
+    app.click_labelled(cx, "Show tab");
+    app.wait_gone(cx, "activity");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.wait_label(cx, "Maximize");
+    app.wait_cell(cx, 0, 1, "42");
+}

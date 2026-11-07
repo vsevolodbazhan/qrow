@@ -457,7 +457,10 @@ impl Qrow {
         }
         self.settings.results_minimized = !self.settings.results_minimized;
         self.resize = None;
-        if !self.settings.results_minimized {
+        if !self.settings.results_minimized
+            && !self.assistant_maximized()
+            && !self.activity.read(cx).is_open()
+        {
             self.tabs[self.active].panel.content_visible();
         }
         self.changed(cx);
@@ -985,8 +988,17 @@ impl Qrow {
             .min((viewport - self.ui_px(SIDEBAR_YIELDS_TO_WIDTH)).max(least))
     }
 
+    pub(super) fn assistant_maximized(&self) -> bool {
+        self.settings.assistant.enabled
+            && self.assistant_state.open
+            && self.assistant_state.maximized
+    }
+
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
+        if self.assistant_maximized() {
+            return viewport;
+        }
         let available = viewport
             - self.ui_px(MIN_WORK_AREA_WIDTH)
             - if self.sidebar {
@@ -1019,6 +1031,19 @@ impl Qrow {
             window,
             cx,
         );
+        // Opening keeps fixed-width content; maximize/restore follows the
+        // presented width so controls and wrapping stay inside the moving pane.
+        let assistant_content_width =
+            if self.assistant_maximized() || animated_assistant_width > assistant_width {
+                animated_assistant_width.max(px(1.))
+            } else {
+                assistant_width
+            };
+        if assistant_shown {
+            self.assistant_pane.update(cx, |pane, cx| {
+                pane.set_layout_width(assistant_content_width, cx)
+            });
+        }
         let activity_open = self.activity.read(cx).is_open();
         let activity_width = self.workspace_body_size.get().width;
         let animated_activity_width = motion::panel_extent(
@@ -1186,24 +1211,29 @@ impl Qrow {
                                         .flex_1()
                                         .min_w_0()
                                         .min_h_0()
-                                        .child(changed_view(cx.entity().into(), window)),
+                                        .overflow_hidden()
+                                        .when(!self.assistant_maximized(), |el| {
+                                            el.child(changed_view(cx.entity().into(), window))
+                                        }),
                                 )
                                 .when(assistant_shown || animated_assistant_width > px(0.), |el| {
-                                    el.child(if assistant_shown {
-                                        self.assistant_splitter(cx).into_any_element()
-                                    } else {
-                                        div()
-                                            .w(self.ui_px(1.))
-                                            .h_full()
-                                            .bg(cx.theme().border)
-                                            .into_any_element()
+                                    el.when(!self.assistant_maximized(), |el| {
+                                        el.child(if assistant_shown {
+                                            self.assistant_splitter(cx).into_any_element()
+                                        } else {
+                                            div()
+                                                .w(self.ui_px(1.))
+                                                .h_full()
+                                                .bg(cx.theme().border)
+                                                .into_any_element()
+                                        })
                                     })
                                     .child(
                                         motion::sidebar_panel(
                                             "assistant-motion",
                                             assistant_shown,
                                             animated_assistant_width,
-                                            assistant_width,
+                                            assistant_content_width,
                                             changed_view(
                                                 self.assistant_pane.clone().into(),
                                                 window,

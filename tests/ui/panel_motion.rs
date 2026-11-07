@@ -301,3 +301,88 @@ fn activity_reveal_fits_the_body_above_a_workspace_warning(cx: &mut TestAppConte
         app.wait_gone(cx, "activity-motion");
     }
 }
+
+#[gpui_kit::test]
+fn assistant_maximize_motion_reverses_and_preserves_the_draft(cx: &mut TestAppContext) {
+    use crate::support::{
+        MemoryCredentials,
+        assistant::{FakeCodex, composer_text},
+    };
+    use qrow::ui::{ToggleActivity, ToggleAssistant};
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.smooth_transitions = true;
+    workspace.settings.assistant.panel_width = 360.;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.type_message(cx, "Черновик запроса");
+    let panel =
+        |cx: &mut TestAppContext| app.update(cx, |window, _| bounds_of(window, "assistant-panel"));
+    let original = panel(cx);
+    let full = app.update(cx, |window, _| window.viewport_size().width);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.click(cx, "assistant-maximize");
+    assert_eq!(panel(cx).size.width, original.size.width);
+    app.update(cx, |window, cx| {
+        assert!(labelled(window, "SQL Editor").is_none());
+        assert!(window.try_find("assistant-splitter").is_none());
+        window.input("x", cx);
+        assert_eq!(composer_text(window).as_deref(), Some("Черновик запросаx"));
+    });
+    advance(&app, cx, 40);
+    let middle = panel(cx);
+    assert!(middle.size.width > original.size.width && middle.size.width < full);
+    assert_eq!(middle.right(), full);
+    app.update(cx, |window, _| {
+        assert!(
+            (bounds_of(window, "assistant-motion").size.width - middle.size.width).abs() < px(0.5)
+        );
+    });
+    app.click(cx, "assistant-maximize");
+    assert!((panel(cx).size.width - middle.size.width).abs() < px(0.5));
+    advance(&app, cx, 20);
+    let restoring = panel(cx);
+    assert!(restoring.size.width < middle.size.width);
+    app.click(cx, "assistant-maximize");
+    assert!((panel(cx).size.width - restoring.size.width).abs() < px(0.5));
+    advance(&app, cx, 250);
+    assert_eq!(panel(cx).size.width, full);
+    assert_eq!(panel(cx).left(), px(0.));
+    app.dispatch(cx, ToggleActivity);
+    app.wait_gone(cx, "assistant-panel");
+    app.dispatch(cx, ToggleActivity);
+    advance(&app, cx, 250);
+    assert_eq!(panel(cx).size.width, full);
+    app.click(cx, "assistant-maximize");
+    advance(&app, cx, 250);
+    assert_eq!(panel(cx), original);
+    assert_eq!(app.saved().settings.assistant.panel_width, 360.);
+    app.update(cx, |window, _| {
+        assert_eq!(composer_text(window).as_deref(), Some("Черновик запросаx"));
+        assert!(labelled(window, "SQL Editor").is_some());
+    });
+    advance(&app, cx, 0);
+    app.update(cx, |window, cx| {
+        assert_eq!(window.simulate_next_frame(cx), 0)
+    });
+    cx.update(|cx| cx.set_reduce_motion(true));
+    app.click(cx, "assistant-maximize");
+    assert_eq!(panel(cx).size.width, full);
+    // A direct window resize follows immediately even while maximized.
+    cx.simulate_window_resize(app.window, gpui_kit::size(px(900.), px(820.)));
+    app.settle(cx);
+    assert_eq!(panel(cx).size.width, px(900.));
+    app.dispatch(cx, ToggleAssistant);
+    app.wait_gone(cx, "assistant-panel");
+    app.open_assistant(cx);
+    app.wait_label(cx, "Maximize");
+    assert_eq!(panel(cx).size.width, original.size.width);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.click(cx, "assistant-maximize");
+    advance(&app, cx, 40);
+    assert!(panel(cx).size.width > original.size.width && panel(cx).size.width < px(900.));
+    cx.simulate_window_resize(app.window, gpui_kit::size(px(1280.), px(820.)));
+    app.settle(cx);
+    assert_eq!(panel(cx).size.width, px(1280.));
+}

@@ -100,7 +100,6 @@ pub(super) fn takeover_panel(
 struct PanelGeometry {
     viewport: Size<Pixels>,
     rem: Pixels,
-    extent: Pixels,
 }
 
 /// Keep one channel mounted at zero extent so closing can reverse mid-flight.
@@ -117,7 +116,6 @@ pub(super) fn panel_extent(
     let geometry = PanelGeometry {
         viewport: window.viewport_size(),
         rem: window.rem_size(),
-        extent: width,
     };
     let previous =
         window.use_keyed_state((ElementId::from(channel), "geometry"), cx, |_, _| geometry);

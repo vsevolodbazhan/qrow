@@ -1,7 +1,7 @@
 //! Geometry of the transcript at a scale and width where replies were cut
 //! off. Pixel checks, like text that reaches the edge of a reply, stay in the
 //! desktop suite.
-use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, jump_to_latest};
+use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, composer_text, jump_to_latest};
 use crate::support::{MemoryCredentials, TestApp, bounds_of, labelled_starting};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Bounds, Pixels, ScrollDelta, TestAppContext, point, px, size};
@@ -200,4 +200,57 @@ fn a_message_keeps_its_line_breaks(cx: &mut TestAppContext) {
         three >= one * 2.5,
         "A message of three lines is {three:?} high, one line is {one:?}"
     );
+}
+
+#[gpui_kit::test]
+fn maximizing_the_assistant_replaces_the_workspace_and_restores_its_width(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.type_message(cx, "Черновик запроса");
+    let original = composer(&app, cx);
+    app.click(cx, "assistant-maximize");
+    app.wait_label(cx, "Minimize");
+    app.wait_gone(cx, "assistant-splitter");
+    app.wait_gone(cx, "add-connection");
+    let maximized = composer(&app, cx);
+    assert!(maximized.size.width > original.size.width);
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.wait_gone(cx, "assistant-composer");
+    app.click(cx, "activity-close");
+    app.wait_label(cx, "Minimize");
+    assert_eq!(composer(&app, cx), maximized);
+    app.click(cx, "assistant-maximize");
+    app.wait_label(cx, "Maximize");
+    app.wait_for(cx, "assistant-splitter");
+    app.wait_for(cx, "add-connection");
+    assert_eq!(composer(&app, cx), original);
+    app.update(cx, |window, _| {
+        assert_eq!(composer_text(window).as_deref(), Some("Черновик запроса"));
+    });
+    app.click(cx, "assistant-maximize");
+    app.click(cx, "toggle-assistant");
+    app.wait_gone(cx, "assistant-composer");
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.wait_label(cx, "Maximize");
+    assert_eq!(composer(&app, cx), original);
+}
+
+#[gpui_kit::test]
+fn maximized_assistant_follows_the_window_width(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.click(cx, "assistant-maximize");
+    for width in [900., 1280.] {
+        cx.simulate_window_resize(app.window, size(px(width), px(820.)));
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            let panel = bounds_of(window, "assistant-panel");
+            assert_eq!(panel.left(), px(0.));
+            assert_eq!(panel.size.width, window.viewport_size().width);
+        });
+    }
 }

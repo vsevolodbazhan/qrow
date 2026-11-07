@@ -1573,8 +1573,9 @@ impl Qrow {
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let mut activity = Vec::new();
-        let workspace_visible =
-            !self.activity.read(cx).is_open() && !self.settings.results_minimized;
+        let workspace_visible = !self.activity.read(cx).is_open()
+            && !self.assistant_maximized()
+            && !self.settings.results_minimized;
         let mut waits = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let events: Vec<_> = tab
@@ -2146,7 +2147,7 @@ impl Qrow {
         {
             self.tab_scroll.scroll_to_item(position);
         }
-        if !self.activity.read(cx).is_open() {
+        if !self.activity.read(cx).is_open() && !self.assistant_maximized() {
             if !self.settings.results_minimized {
                 self.tabs[index].panel.content_visible();
             }
@@ -2155,7 +2156,7 @@ impl Qrow {
                     .input
                     .update(cx, |s, cx| s.focus(window, cx));
             }
-        } else {
+        } else if self.activity.read(cx).is_open() {
             let focus = self.tabs[index].input.read(cx).focus_handle(cx);
             self.activity
                 .update(cx, |view, _| view.return_focus_to(focus));
@@ -2340,13 +2341,15 @@ impl Qrow {
         }
         self.restore_results(cx);
         let query = self.selected_tab_sql(index, window, cx);
+        let active = index == self.active
+            && !self.activity.read(cx).is_open()
+            && !self.assistant_maximized();
         let tab = &mut self.tabs[index];
         let query = match query {
             Ok(query) => query,
             // The demo always shows its results.
             Err(_) if self.demo => tab.input.read(cx).value().to_string(),
             Err(message) => {
-                let active = index == self.active && !self.activity.read(cx).is_open();
                 Self::record_log(
                     tab,
                     LogEvent::new(None, Severity::Error, LogKind::Error, message),
@@ -2408,7 +2411,9 @@ impl Qrow {
             cx.notify();
             return true;
         }
-        let active = index == self.active && !self.activity.read(cx).is_open();
+        let active = index == self.active
+            && !self.activity.read(cx).is_open()
+            && !self.assistant_maximized();
         let database_type = self.tab_database_type(self.tabs[index].saved.profile);
         let tab = &mut self.tabs[index];
         if let Err(e) = sql::validate_single_for(&query, database_type) {

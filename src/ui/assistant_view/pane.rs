@@ -71,12 +71,15 @@ pub(super) fn assistant_selector_labels(available: f32, labeled: [Option<f32>; 3
 
 impl Qrow {
     pub(in crate::ui) fn assistant_transcript_visible(&self, window: &Window, cx: &App) -> bool {
-        let narrow = self.assistant_width(window.viewport_size().width) < self.ui_px(600.);
+        let pane = self.assistant_pane.read(cx);
+        let width = pane
+            .layout_width
+            .unwrap_or_else(|| self.assistant_width(window.viewport_size().width));
+        let narrow = width < self.ui_px(600.);
         self.settings.assistant.enabled
             && self.assistant_state.open
             && !self.activity.read(cx).is_open()
-            && (!narrow
-                || !show_thread_list(narrow, self.assistant_pane.read(cx).thread_list_override))
+            && (!narrow || !show_thread_list(narrow, pane.thread_list_override))
     }
 
     /// The dot of a conversation state. An idle conversation has no dot.
@@ -140,6 +143,8 @@ pub(in crate::ui) struct AssistantPane {
     typography: Option<Typography>,
     /// The most rows that the message field grows to at this window height.
     composer_max_rows: usize,
+    /// Content width presented by the shell during resize transitions.
+    layout_width: Option<Pixels>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -195,7 +200,15 @@ impl AssistantPane {
             rows: TranscriptRows::default(),
             typography: None,
             composer_max_rows: COMPOSER_MIN_ROWS,
+            layout_width: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    pub(in crate::ui) fn set_layout_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        if self.layout_width != Some(width) {
+            self.layout_width = Some(width);
+            cx.notify();
         }
     }
 
@@ -266,7 +279,9 @@ impl Render for AssistantPane {
         // Defer acknowledgement until this render releases the pane borrow.
         let unread_visible = {
             let qrow = qrow.read(cx);
-            let width = qrow.assistant_width(window.viewport_size().width);
+            let width = self
+                .layout_width
+                .unwrap_or_else(|| qrow.assistant_width(window.viewport_size().width));
             let narrow = width < qrow.ui_px(600.);
             (!narrow || !show_thread_list(narrow, self.thread_list_override))
                 && qrow
@@ -279,7 +294,9 @@ impl Render for AssistantPane {
         }
         self.sync_composer_rows(window, cx);
         let qrow = qrow.read(cx);
-        let width = qrow.assistant_width(window.viewport_size().width);
+        let width = self
+            .layout_width
+            .unwrap_or_else(|| qrow.assistant_width(window.viewport_size().width));
         self.panel(qrow, width, window, cx).into_any_element()
     }
 }
@@ -545,6 +562,8 @@ impl AssistantPane {
             );
         let title_generating = qrow.assistant_title_generating(selected);
         h_flex()
+            .id("assistant-panel")
+            .test_support()
             .size_full()
             .min_w_0()
             .bg(cx.theme().sidebar)
@@ -615,13 +634,48 @@ impl AssistantPane {
                             }),
                     )
                     .child(
+                        Button::new("assistant-maximize")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
+                            .icon(if qrow.assistant_state.maximized {
+                                IconName::Minimize
+                            } else {
+                                IconName::Maximize
+                            })
+                            .accessibility_label(if qrow.assistant_state.maximized {
+                                "Minimize"
+                            } else {
+                                "Maximize"
+                            })
+                            .tooltip(if qrow.assistant_state.maximized {
+                                "Minimize"
+                            } else {
+                                "Maximize"
+                            })
+                            .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
+                                this.assistant_state.maximized = !this.assistant_state.maximized;
+                                this.assistant_state.resizing = None;
+                                if !this.assistant_state.maximized
+                                    && !this.settings.results_minimized
+                                {
+                                    this.tabs[this.active].panel.content_visible();
+                                }
+                                this.assistant_composer(cx)
+                                    .update(cx, |composer, cx| composer.focus(window, cx));
+                                cx.notify();
+                            })),
+                    )
+                    .child(
                         Button::new("assistant-toggle-threads")
                             .ghost()
                             .small()
                             .w(action_size)
                             .h(action_size)
                             .flex_shrink_0()
-                            .icon(IconName::Menu)
+                            .icon(AssetIconName::List)
                             .accessibility_label("Toggle conversation list")
                             .tooltip("Conversations")
                             .on_click(cx.listener(move |pane, _, window, cx| {
