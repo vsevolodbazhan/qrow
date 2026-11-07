@@ -111,7 +111,6 @@ jobs:
       ref: ${{ needs.resolve-target.outputs.target_sha }}
       release-version: ${{ needs.resolve-target.outputs.release_version }}
       full: true
-      cold-cache: true
 
   dmg:
     name: dmg-${{ matrix.arch }}

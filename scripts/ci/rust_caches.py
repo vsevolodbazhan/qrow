@@ -8,9 +8,9 @@ limit. Of the caches with the same name before the hashes, this script keeps
 the newest and deletes the others. It also deletes the caches of shared keys
 that the workflow no longer uses.
 
-Only pushes to `main` save these caches. Pull requests restore them too,
-so the time of last use does not show which cache `main` uses. Release
-qualification and scheduled cold-cache runs do not save caches.
+Only pushes to `main` save these caches. Pull requests and release
+qualification restore them too, so the time of last use does not show which
+cache `main` uses. The Sunday cold-cache run restores and saves no cache.
 """
 import argparse
 import datetime

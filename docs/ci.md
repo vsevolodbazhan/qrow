@@ -190,8 +190,9 @@ measurement baseline host. These probes are report-only. They do not change
 the native functional contract for Intel or Linux. Measurements from `main`
 remain for 90 days in `performance-common-*` and `performance-macos-arm64`.
 
-The Sunday run and release candidates skip Rust cache restoration. A manual
-test run can select `cold-cache`. The release workflow downloads qualified
+Release candidates restore the Rust caches of `main`, like other runs, but do
+not save caches. The Sunday run skips cache restoration. This proves weekly
+that a clean checkout builds. A manual test run can select `cold-cache`. The release workflow downloads qualified
 candidates. It wraps the macOS app in a DMG, mounts and launches that app, and
 forwards the Linux archives. It does not compile the application again.
 See [Development](development.md#hooks-and-continuous-integration) for release

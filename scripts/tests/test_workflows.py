@@ -287,6 +287,9 @@ class ValidationGraphTests(unittest.TestCase):
         self.assertIn("--reuse-builds", job("common"))
         self.assertIn("cold-cache", read(TEST))
         self.assertIn("full: true", job("validation", RELEASE))
+        # Releases restore the caches of main. The Sunday run stays cold.
+        self.assertNotIn("cold-cache", job("validation", RELEASE))
+        self.assertIn("github.event.schedule == '17 2 * * 0'", job("common"))
 
     def test_caches_have_single_saving_owners_and_tests_only_download_artifacts(self):
         validation = read(VALIDATION)
