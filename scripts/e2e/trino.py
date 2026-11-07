@@ -54,13 +54,16 @@ def accepts_queries(origin, context):
         request = urllib.request.Request(origin + "/v1/statement", data=b"SELECT count(*) FROM tpch.tiny.region",
                                          headers=headers)
         deadline = time.monotonic() + 30
+        rows = []
         while request is not None:
             with urllib.request.urlopen(request, context=context, timeout=5) as response:
                 body = json.load(response)
             if body.get("error"):
                 return False
+            # Rows can arrive on any page. The last page often has none.
+            rows.extend(body.get("data", []))
             if "nextUri" not in body:
-                return body.get("data") == [[5]]
+                return rows == [[5]]
             if time.monotonic() >= deadline:
                 return False
             request = urllib.request.Request(body["nextUri"], headers=headers)

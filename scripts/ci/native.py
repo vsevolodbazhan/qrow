@@ -49,11 +49,15 @@ def cargo_target(target, cross):
     if not cross:
         yield
         return
+    previous = os.environ.get("CARGO_BUILD_TARGET")
     os.environ["CARGO_BUILD_TARGET"] = target.triple
     try:
         yield
     finally:
-        os.environ.pop("CARGO_BUILD_TARGET", None)
+        if previous is None:
+            os.environ.pop("CARGO_BUILD_TARGET", None)
+        else:
+            os.environ["CARGO_BUILD_TARGET"] = previous
 
 
 def build(full, target_name=None):

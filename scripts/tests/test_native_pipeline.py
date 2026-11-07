@@ -92,6 +92,17 @@ class NativePipelineTests(unittest.TestCase):
         self.assertEqual({target.system for target in TARGETS.values() if target.name in native.platforms.LINT_TARGETS},
                          {"macos", "linux"})
 
+    def test_cross_build_scope_keeps_an_existing_target_setting(self):
+        target = TARGETS["macos-x86_64"]
+        for previous in (None, target.triple):
+            with self.subTest(previous=previous), patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CARGO_BUILD_TARGET", None)
+                if previous:
+                    os.environ["CARGO_BUILD_TARGET"] = previous
+                with native.cargo_target(target, True):
+                    self.assertEqual(os.environ["CARGO_BUILD_TARGET"], target.triple)
+                self.assertEqual(os.environ.get("CARGO_BUILD_TARGET"), previous)
+
     def test_cross_builds_stay_within_one_os(self):
         with patch.object(native, "host_target", return_value=TARGETS["linux-x86_64"]):
             with self.assertRaisesRegex(ValueError, "Cannot build macos-x86_64 on linux-x86_64"):
