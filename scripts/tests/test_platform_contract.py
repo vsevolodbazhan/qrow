@@ -70,6 +70,23 @@ class MatrixGateTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Missing'):
                     platforms.verify(root, sha, full)
 
+    def test_pull_request_evidence_needs_only_its_target_and_rejects_extra_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha = self.evidence(root)
+            # Evidence of other targets is unexpected in a pull request run.
+            with self.assertRaisesRegex(ValueError, 'unexpected'):
+                platforms.verify(root, sha, targets=['linux-x86_64'])
+            for name in ('linux-arm64', 'macos-arm64', 'macos-x86_64'):
+                for path in (root / name).iterdir():
+                    path.unlink()
+            platforms.verify(root, sha, targets=['linux-x86_64'])
+            with self.assertRaisesRegex(ValueError, 'Missing'):
+                platforms.verify(root, sha)
+            for targets in (['macos-arm64'], ['linux-x86_64', 'windows-x86_64']):
+                with self.subTest(targets=targets), self.assertRaisesRegex(ValueError, 'selection'):
+                    platforms.verify(root, sha, targets=targets)
+
     def test_stale_and_cancelled_results_fail_even_with_passing_other_targets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

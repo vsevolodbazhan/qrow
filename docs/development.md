@@ -133,23 +133,22 @@ Markdown files, for example `QROW-PATCH.md`. Other Markdown changes, except
 `docs/testing.md`, do not trigger hook checks.
 
 The [test workflow](../.github/workflows/test.yml) runs for ready pull requests
-into any branch, pushes to `main`, manual runs, and scheduled runs. Draft
-pull requests start no validation. A newer pull request run cancels an older
-run. Runs on `main` finish so they can save build caches.
+into any branch, the merge queue, pushes to `main`, manual runs, and scheduled
+runs. Draft pull requests start no validation. A newer pull request run
+cancels an older run. Runs on `main` finish so they can save build caches.
 
 The test and release workflows share one validation graph. Common tests run
-once before native tests. Native compilation overlaps common validation.
-Each native test consumes the build of the same target. All four targets,
-including Intel macOS, have the same functional scope on pull requests and
-`main`. Full mode adds timing stress and report-only measurements.
-[Continuous integration](ci.md) describes every job and its evidence.
+once, and native compilation overlaps them. Each native test consumes the
+build of the same target. A pull request tests Linux x86-64 natively. The
+merge queue and `main` test all four targets, including Intel macOS. Full mode
+on `main` adds timing stress and report-only measurements.
+[Continuous integration](ci.md) describes every level, job, and its evidence.
 
-Configure only `ci-required` as the required check in the `main` ruleset.
-After the new graph passes on its pull request, an administrator must remove
-the old `checks / ...` contexts from the same ruleset before merge. Those jobs
-no longer exist. After merge, inspect the first `main` run and its full-mode
-stress evidence. [CI merge steps](ci.md#merge-and-administration) give the
-complete procedure and current verification gaps.
+Configure only `ci-required` as the required check in the `main` ruleset, and
+enable the merge queue. Merge a pull request through the queue. After merge,
+inspect the first `main` run and its full-mode stress evidence.
+[CI merge steps](ci.md#merge-and-administration) give the complete procedure
+and current verification gaps.
 
 Fork pull requests use disposable runners and synthetic credentials. They do
 not get secrets. Linux package smoke uses X11 and software Vulkan. Windows,

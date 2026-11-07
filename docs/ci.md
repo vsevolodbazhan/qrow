@@ -5,8 +5,21 @@ Use the `ci-required` check to decide if a commit passes CI. Open the
 job name identifies common validation, a native build, or a native test.
 Use [Testing](testing.md) to run an individual suite locally.
 
-Every ready pull request, push to `main`, manual run, and release candidate
-has the same functional tests on these native targets:
+CI has three levels. Each level runs all five common jobs:
+
+| Event | Native targets | Full mode |
+| --- | --- | --- |
+| Ready pull request | Linux x86-64 | No |
+| Merge queue | All four | No |
+| Push to `main`, scheduled run, manual run, release candidate | All four | Yes |
+
+A pull request gets fast feedback from the common jobs and one native target.
+The merge queue then tests the merge commit on all native targets before the
+change goes into `main`. Thus `main` gets the same qualification as before, and
+a pull request does not wait for macOS builds. Full mode adds timing stress
+and measurements; see [Full runs and releases](#full-runs-and-releases).
+
+The native targets and their runners are:
 
 | Target | Build runner | Test runner |
 | --- | --- | --- |
@@ -22,14 +35,15 @@ the macOS ARM64 runner compiles the Intel candidate and test binaries for
 A draft pull request starts no validation. Mark it ready to start the checks.
 Fork pull requests use disposable servers and synthetic credentials. They do
 not receive repository secrets. All source changes, including documentation
-changes, currently run the complete graph. There is no path-based exclusion.
+changes, run their level completely. There is no path-based exclusion.
 
 ## Job order
 
 The [test workflow](../.github/workflows/test.yml) contains the shared graph.
 It runs directly for pull requests and `main`, so check names have no wrapper
 prefix. The release workflow calls this same graph. Each job checks out one
-immutable commit. A pull request uses its merge commit.
+immutable commit. A pull request uses its merge commit. The merge queue uses
+the commit that it will merge.
 
 ```mermaid
 flowchart LR
@@ -37,16 +51,16 @@ flowchart LR
     C --> G[common-required]
     P --> B[build native target]
     B --> T[test same native target]
-    G --> T
     T --> R[ci-required]
     G --> R
 ```
 
-There is one build/test pair for each supported native target. Native builds
-start with common validation. This lets compilation overlap the common tests.
-A native test waits for common validation and its own build. It does not wait
-for the other native builds. A common failure can leave some compilation
-unused, but it prevents native test execution.
+There is one build/test pair for each supported native target. The `plan`
+job selects the level and the native targets. Jobs of other targets are
+skipped. Native builds start with common validation, so compilation overlaps
+the common tests. A native test starts when its own build is complete. It does
+not wait for common validation or for the other native builds. A common
+failure can thus leave native tests running, but `ci-required` fails.
 
 ## Common jobs
 
@@ -106,8 +120,10 @@ The few macOS headless assertions remain because they contain OS-dependent
 expectations. They do not repeat the complete portable UI or backend suites.
 The package uses production features. Test support is confined to test builds.
 
-The final `ci-required` job requires all common and native tests to pass.
-It verifies a result and package receipt for all four targets. The receipt
+The final `ci-required` job requires common validation and the tests of the
+selected targets to pass. The jobs of the other targets must be skipped. It
+verifies a result and package receipt for each selected target, and rejects
+evidence from other targets. The receipt
 digest must match the candidate digest in the build manifest.
 
 ## Prepared builds and results
@@ -130,16 +146,22 @@ the manifest digest. Logs and per-attempt reports remain separate.
 Common evidence, native evidence, and candidates remain available for 14 days.
 Prepared transfer artifacts remain for two days. They are artifacts of the
 current workflow run, not caches. Rust caches only speed up compilation.
-Each cache has one saving job. Only pushes to `main` save caches. A separate
-[cache cleanup workflow](../.github/workflows/cache-cleanup.yml) removes
-replaced caches after a `main` push run completes, including failed runs.
+Each cache has one saving job. Only pushes to `main` save caches. Pull
+requests and the merge queue restore them. `common-static` compiles nothing
+and has no cache. A separate
+[cache cleanup workflow](../.github/workflows/cache-cleanup.yml) runs after a
+`main` push run completes, including failed runs. It removes replaced caches
+and the caches of shared keys that the workflow no longer uses. The repository
+cache limit is 10 GB. When the caches use more, GitHub removes the least
+recently used caches, and builds compile from the start.
 Validation keeps read-only permissions. Cleanup uses trusted default-branch
 code and has permission to delete caches.
 
 ## Full runs and releases
 
 Pushes to `main`, scheduled runs, manual runs, and release candidates use full
-mode. Pull requests run the same functional tests. Full mode also repeats the
+mode. The merge queue runs the same functional tests without full mode, so a
+merge does not wait for measurements. Full mode also repeats the
 three portable UI timing regressions 100 times with the prepared UI binaries.
 A failed repetition fails common validation; no assertion retry hides it.
 
@@ -158,10 +180,12 @@ publication and channel details.
 
 ## Merge and administration
 
-After this graph passes on the pull request, an administrator must change the
-`main` ruleset to require only `ci-required`. Remove the old `checks / ...`
-contexts from the same ruleset. This change removes those legacy jobs, so
-leaving their contexts required prevents the pull request from merging.
+The `main` ruleset must require only the `ci-required` check and must enable
+the merge queue. Without the merge queue, a pull request merges after only the
+Linux x86-64 native target passed. A required check also applies to the merge
+queue, so `ci-required` runs again there with all native targets.
+Remove the old `checks / ...` contexts from the same ruleset. Those jobs no
+longer exist, so leaving their contexts required prevents merges.
 
 After merge, check the first `main` run. It must contain the five common jobs
 and all four native build/test pairs, including Intel macOS. Check a full run

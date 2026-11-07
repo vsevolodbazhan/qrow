@@ -65,5 +65,23 @@ class SupersededTests(unittest.TestCase):
         ), [])
 
 
+class RetiredTests(unittest.TestCase):
+    def test_caches_of_removed_jobs_are_deleted_and_current_keys_are_kept(self):
+        caches = [
+            cache(1, "v0-rust-native-intel-Darwin-x64-d0bd5839-6d15defd", "2026-11-06T20:00:00Z"),
+            cache(2, "v0-rust-static-Linux-x64-4d0ce471-6d15defd", "2026-11-07T01:46:00Z"),
+            cache(3, "v0-rust-native-macos-x86_64-Darwin-arm64-0f7e5248-6d15defd", "2026-11-07T01:46:00Z"),
+            cache(4, "v0-rust-common-headless-ui-Linux-x64-4d0ce471-6d15defd", "2026-11-07T01:46:00Z"),
+            cache(5, "v0-rust-native-intel-Darwin-x64-d0bd5839-6d15defd", "2026-11-06T20:00:00Z", ref="refs/pull/1/merge"),
+            cache(6, "setup-uv-1-x86_64-unknown-linux-gnu-3.12.3-pruned-280628a8", "2026-11-07T01:46:00Z"),
+        ]
+        self.assertEqual([entry["id"] for entry in rust_caches.retired(caches)], [1, 2])
+
+    def test_a_cache_both_retired_and_superseded_is_deleted_once(self):
+        caches = [cache(1, "v0-rust-core-Linux-x64-c9181961-577146a6", "2026-10-03T10:00:00Z"),
+                  cache(2, "v0-rust-core-Linux-x64-c9181961-9377a56a", "2026-10-05T10:00:00Z")]
+        self.assertEqual([entry["id"] for entry in rust_caches.stale(caches)], [1, 2])
+
+
 if __name__ == "__main__":
     unittest.main()

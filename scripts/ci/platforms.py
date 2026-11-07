@@ -1,6 +1,7 @@
 """Common validation, native build/test ownership, and the offline evidence gate."""
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -16,6 +17,46 @@ COMMON = {
     "performance": ["perf"],
 }
 COMMON_TARGET = "linux-x86_64"
+# Pull requests qualify one native target for fast feedback. The merge queue
+# qualifies all supported targets before a change reaches `main`.
+PR_TARGETS = ("linux-x86_64",)
+# A test job name uses hyphens: test-macos-x86-64 tests macos-x86_64.
+TEST_JOB = "test-{}"
+
+
+def tier(event, full=False):
+    """pr, merge, or full. Full mode adds timing stress and measurements."""
+    if full:
+        return "full"
+    return {"pull_request": "pr", "merge_group": "merge"}.get(event, "full")
+
+
+def native_targets(selected_tier):
+    supported = [name for name, target in TARGETS.items() if target.supported]
+    return [name for name in supported if selected_tier != "pr" or name in PR_TARGETS]
+
+
+def outputs(event, full=False):
+    selected = tier(event, full)
+    return {"common": json.dumps(common_matrix()), "tier": selected,
+            "full": "true" if selected == "full" else "false",
+            "targets": json.dumps(native_targets(selected))}
+
+
+def gate(results, targets):
+    """Require the plan, common validation, and the tests of the selected targets. Other targets must not run."""
+    if set(targets) - set(native_targets("full")) or not set(PR_TARGETS) <= set(targets):
+        raise ValueError(f"Unexpected native target selection: {targets}")
+    for name in ("plan", "common-required"):
+        if results.get(name, {}).get("result") != "success":
+            raise ValueError(f"{name} did not pass")
+    for name in native_targets("full"):
+        job = TEST_JOB.format(name.replace("_", "-"))
+        expected = "success" if name in targets else "skipped"
+        if results.get(job, {}).get("result") != expected:
+            raise ValueError(f"{job} must be {expected}")
+
+
 # Production Clippy runs on one architecture of each OS. Other architectures
 # add little lint coverage and a complete check build.
 LINT_TARGETS = ("macos-arm64", "linux-x86_64")
@@ -77,8 +118,11 @@ def verify_common(directory, sha, full=False):
         raise ValueError(f"Missing common results: {sorted(set(COMMON) - seen)}")
 
 
-def verify(directory, sha, full=False):
-    expected = {name for name, target in TARGETS.items() if target.supported}
+def verify(directory, sha, full=False, targets=None):
+    supported = {name for name, target in TARGETS.items() if target.supported}
+    expected = supported if targets is None else set(targets)
+    if not expected <= supported or not set(PR_TARGETS) <= expected:
+        raise ValueError(f"Unexpected native target selection: {sorted(expected)}")
     seen = set()
     for path in Path(directory).rglob("result.json"):
         value = json.loads((path.parent / "plan.json").read_text())
@@ -112,21 +156,36 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("matrix").add_argument("--full", action="store_true")
     commands.add_parser("common-matrix")
+    plan = commands.add_parser("outputs", help="Print the plan job outputs for GITHUB_OUTPUT.")
+    plan.add_argument("--event", required=True)
+    plan.add_argument("--full", action="store_true")
+    commands.add_parser("gate", help="Check the job results in RESULTS for the targets in TARGETS.")
     for name in ("verify", "verify-common"):
-        gate = commands.add_parser(name)
-        gate.add_argument("directory", type=Path)
-        gate.add_argument("sha")
-        gate.add_argument("--full", action="store_true")
+        evidence = commands.add_parser(name)
+        evidence.add_argument("directory", type=Path)
+        evidence.add_argument("sha")
+        evidence.add_argument("--full", action="store_true")
+        if name == "verify":
+            evidence.add_argument("--targets", type=json.loads, help="JSON list of the selected native targets.")
     args = parser.parse_args()
     if args.command == "matrix":
         print(json.dumps(matrix(args.full)))
     elif args.command == "common-matrix":
         print(json.dumps(common_matrix()))
+    elif args.command == "outputs":
+        for key, value in outputs(args.event, args.full).items():
+            print(f"{key}={value}")
+    elif args.command == "gate":
+        try:
+            gate(json.loads(os.environ["RESULTS"]), json.loads(os.environ["TARGETS"]))
+        except (KeyError, ValueError) as error:
+            sys.exit(str(error))
+        print("All required jobs passed.")
     else:
         if args.command == "verify-common":
             verify_common(args.directory, args.sha, args.full)
         else:
-            verify(args.directory, args.sha, args.full)
+            verify(args.directory, args.sha, args.full, args.targets)
         print("All expected validation evidence passed.")
 
 

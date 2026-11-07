@@ -33,13 +33,16 @@ def needs(body):
 
 
 class ValidationGraphTests(unittest.TestCase):
-    def test_common_gate_precedes_each_native_test_but_builds_overlap(self):
+    def test_native_tests_start_after_their_build_and_the_final_gate_needs_everything(self):
         targets = [target for target in platforms.TARGETS.values() if target.supported]
         for target in targets:
             key = target.name.replace("_", "-")
             build, test = job("build-" + key), job("test-" + key)
             self.assertEqual(needs(build), ["plan"])
-            self.assertEqual(needs(test), ["common-required", "build-" + key])
+            self.assertIn(f"if: contains(fromJSON(needs.plan.outputs.targets), '{target.name}')", build)
+            # A native test does not wait for common validation. ci-required needs both.
+            self.assertEqual(needs(test), ["plan", "build-" + key])
+            self.assertEqual(platforms.TEST_JOB.format(key), "test-" + key)
             self.assertIn("runs-on: " + target.build_runner, build)
             self.assertIn("runs-on: " + target.runner, test)
             self.assertIn(f"native.py build --target {target.name} ", build)
@@ -52,11 +55,63 @@ class ValidationGraphTests(unittest.TestCase):
             self.assertIn("name: candidate-" + target.name, test)
             self.assertNotIn("rust-cache@", test)
         self.assertEqual(needs(job("common-required")), ["plan", "common"])
-        self.assertEqual(set(needs(job("ci-required"))), {"common-required", *("test-" + t.name.replace("_", "-") for t in targets)})
+        self.assertEqual(set(needs(job("ci-required"))), {"plan", "common-required", *("test-" + t.name.replace("_", "-") for t in targets)})
+        self.assertIn("platforms.py gate", job("ci-required"))
+        self.assertIn('--targets "$TARGETS"', job("ci-required"))
         self.assertIn("always()", job("common-required"))
         self.assertIn("always()", job("ci-required"))
         self.assertIn("verify-common evidence", job("common-required"))
         self.assertIn("platforms.py verify evidence", job("ci-required"))
+
+    def test_pull_requests_qualify_one_target_and_the_merge_queue_qualifies_all(self):
+        supported = [name for name, target in platforms.TARGETS.items() if target.supported]
+        self.assertIn("merge_group:", read(TEST))
+        self.assertEqual(platforms.tier("pull_request"), "pr")
+        self.assertEqual(platforms.tier("merge_group"), "merge")
+        for event in ("push", "schedule", "workflow_dispatch"):
+            self.assertEqual(platforms.tier(event), "full")
+        self.assertEqual(platforms.tier("pull_request", full=True), "full")
+        self.assertEqual(platforms.native_targets("pr"), ["linux-x86_64"])
+        self.assertEqual(platforms.native_targets("merge"), supported)
+        self.assertEqual(platforms.native_targets("full"), supported)
+        self.assertEqual(platforms.outputs("merge_group")["full"], "false")
+        self.assertEqual(platforms.outputs("push")["full"], "true")
+        # Full-mode work comes only from the plan, never from the event name.
+        self.assertNotIn("inputs.full || github.event_name", read(TEST))
+        self.assertIn("platforms.py outputs --event", job("plan"))
+
+    def test_gate_requires_selected_tests_and_rejects_unselected_runs(self):
+        def results(**overrides):
+            value = {"plan": {"result": "success"}, "common-required": {"result": "success"}}
+            for name in platforms.native_targets("full"):
+                value[platforms.TEST_JOB.format(name.replace("_", "-"))] = {"result": "skipped"}
+            value.update({key.replace("_", "-"): {"result": result} for key, result in overrides.items()})
+            return value
+        platforms.gate(results(test_linux_x86_64="success"), ["linux-x86_64"])
+        everything = {f"test_{name.replace('-', '_')}": "success" for name in platforms.native_targets("full")}
+        platforms.gate(results(**everything), platforms.native_targets("full"))
+        failures = [
+            (results(test_linux_x86_64="failure"), ["linux-x86_64"]),
+            (results(test_linux_x86_64="success", common_required="failure"), ["linux-x86_64"]),
+            (results(test_linux_x86_64="success", test_macos_arm64="success"), ["linux-x86_64"]),
+            (results(test_linux_x86_64="success"), platforms.native_targets("full")),
+            (results(**everything), ["macos-arm64"]),
+            (results(test_linux_x86_64="success"), ["linux-x86_64", "windows-x86_64"]),
+        ]
+        for value, targets in failures:
+            with self.subTest(targets=targets), self.assertRaises(ValueError):
+                platforms.gate(value, targets)
+
+    def test_cache_cleanup_knows_every_current_cache_key(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rust_caches", ROOT / "scripts/ci/rust_caches.py")
+        rust_caches = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rust_caches)
+        keys = set(re.findall(r"shared-key: (native-[a-z0-9_-]+)", read(VALIDATION)))
+        self.assertIn("shared-key: common-${{ matrix.job }}", job("common"))
+        self.assertIn("matrix.job != 'static'", job("common"))
+        keys |= {"common-" + name for name in platforms.COMMON if name != "static"}
+        self.assertEqual(keys, rust_caches.CURRENT_KEYS)
 
     def test_intel_macos_compiles_on_apple_silicon_and_tests_on_intel(self):
         intel = platforms.TARGETS["macos-x86_64"]
