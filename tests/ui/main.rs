@@ -25,5 +25,6 @@ mod result_tabs;
 mod results;
 mod sign_ins;
 mod smooth_caret;
+mod smooth_scrolling;
 mod tabs;
 mod timing;

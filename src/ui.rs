@@ -12,6 +12,7 @@ mod environment;
 mod export_dialog;
 mod format_sql;
 mod log_row;
+mod motion;
 mod output;
 mod profile_view;
 mod result_tabs;
@@ -2785,6 +2786,8 @@ impl Qrow {
         self.settings.editor_font_size = settings.editor_font_size;
         self.settings.editor_line_height = settings.editor_line_height;
         self.settings.editor_smooth_caret = settings.editor_smooth_caret;
+        self.settings.editor_smooth_scrolling = settings.editor_smooth_scrolling;
+        self.settings.smooth_transitions = settings.smooth_transitions;
         self.set_editor_tab_size(settings.editor_tab_size, cx);
         self.settings.assistant.sql_keyword_case = settings.assistant.sql_keyword_case;
         self.settings.logs_font_family = settings.logs_font_family;

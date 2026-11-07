@@ -141,3 +141,5 @@ Remove the patch when a GPUI Kit release includes the fixes. Update the crate
 with the other GPUI crates as one set.
 
 - `Editor::smooth_caret(bool)` enables a 70 ms caret transition. The default is off. Text input stays immediate.
+
+- `Editor::smooth_scrolling(bool)` opts into short transitions for discrete mouse-wheel steps. Pixel trackpad gestures stay direct. The default is off.

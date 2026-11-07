@@ -105,3 +105,5 @@ Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.
 
 - Input paint can interpolate short horizontal caret movements with the existing motion engine. The styled layer supplies the duration. Logical input and popup geometry stay immediate. Mouse placement, selection, IME, scrolling, layout changes, and large jumps disable interpolation. Reduced motion remains immediate.
+
+- Discrete input wheel events can use a caller-supplied transition duration. Targets accumulate and stay within the viewport limits. Pixel gestures, typing, mouse placement, and direct viewport changes cancel pending travel. Frame requests stop when the target is reached.

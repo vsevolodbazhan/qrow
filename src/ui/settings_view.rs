@@ -857,7 +857,7 @@ impl Qrow {
                     .page(appearance_page(
                         form,
                         cx.entity().downgrade(),
-                        self.settings.editor_smooth_caret,
+                        &self.settings,
                     ))
                     .page(
                         SettingPage::new("Export")
@@ -941,8 +941,13 @@ impl Qrow {
 fn appearance_page(
     form: &SettingsForm,
     owner: WeakEntity<Qrow>,
-    smooth_caret: bool,
+    settings: &Settings,
 ) -> SettingPage {
+    let smooth_caret = settings.editor_smooth_caret;
+    let smooth_scrolling = settings.editor_smooth_scrolling;
+    let smooth_transitions = settings.smooth_transitions;
+    let transitions_owner = owner.clone();
+    let scrolling_owner = owner.clone();
     SettingPage::new("Appearance")
         .default_open(true)
         // The footer resets all appearance settings, so this page does not
@@ -956,6 +961,23 @@ fn appearance_page(
                     "Colors of the interface. System follows your system settings.",
                     &["appearance", "colors", "dark", "light"],
                     theme_field(form),
+                ))
+                .item(setting_item(
+                    "Smooth Transitions",
+                    "Fade content when switching tabs and panels.",
+                    &["interface", "ui", "motion", "animation", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = transitions_owner.clone();
+                        Switch::new("smooth-transitions")
+                            .checked(smooth_transitions)
+                            .accessibility_label("Smooth Transitions")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.smooth_transitions = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
                 ))
                 .item(setting_item(
                     "Scale",
@@ -1029,6 +1051,31 @@ fn appearance_page(
                             .on_click(move |next, _, cx| {
                                 let _ = owner.update(cx, |this, cx| {
                                     this.settings.editor_smooth_caret = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Smooth Scrolling",
+                    "Smooth mouse-wheel steps; trackpad gestures stay direct.",
+                    &[
+                        "editor",
+                        "sql",
+                        "scroll",
+                        "wheel",
+                        "motion",
+                        "animation",
+                        "smooth",
+                    ],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = scrolling_owner.clone();
+                        Switch::new("editor-smooth-scrolling")
+                            .checked(smooth_scrolling)
+                            .accessibility_label("Smooth Scrolling")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.editor_smooth_scrolling = *next;
                                     this.changed(cx);
                                 });
                             })

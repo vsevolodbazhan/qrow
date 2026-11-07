@@ -159,6 +159,10 @@ pub struct Settings {
     pub editor_tab_size: u8,
     /// Animate short horizontal caret movements in the SQL editor.
     pub editor_smooth_caret: bool,
+    /// Ease discrete mouse-wheel steps in the SQL editor.
+    pub editor_smooth_scrolling: bool,
+    /// Fade content when switching tabs and panels.
+    pub smooth_transitions: bool,
     pub logs_font_family: String,
     pub logs_font_size: f32,
     pub logs_line_height: f32,
@@ -186,6 +190,8 @@ impl Default for Settings {
             editor_line_height: 1.2,
             editor_tab_size: 2,
             editor_smooth_caret: false,
+            editor_smooth_scrolling: false,
+            smooth_transitions: false,
             logs_font_family: MONOSPACE_FONT_FAMILY.into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
@@ -2683,6 +2689,8 @@ mod tests {
             editor_line_height: f32::NAN,
             editor_tab_size: 0,
             editor_smooth_caret: false,
+            editor_smooth_scrolling: false,
+            smooth_transitions: false,
             logs_font_family: "   ".into(),
             logs_font_size: f32::NAN,
             logs_line_height: f32::NAN,

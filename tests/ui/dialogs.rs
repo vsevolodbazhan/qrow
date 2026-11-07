@@ -313,3 +313,36 @@ fn smooth_caret_is_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
         !workspace.settings.editor_smooth_caret
     });
 }
+
+#[gpui_kit::test]
+fn scrolling_and_panel_motion_are_independent_opt_ins_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.editor_smooth_scrolling);
+    assert!(!app.saved().settings.smooth_transitions);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "smooth-transitions");
+    app.click(cx, "smooth-transitions");
+    wait_saved(&app, cx, "panel transitions enabled", |workspace| {
+        workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+    app.click(cx, "editor-smooth-scrolling");
+    wait_saved(&app, cx, "wheel scrolling enabled", |workspace| {
+        workspace.settings.smooth_transitions
+            && workspace.settings.editor_smooth_scrolling
+            && !workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "smooth-transitions");
+    app.click(cx, "editor-smooth-scrolling");
+    wait_saved(&app, cx, "wheel scrolling disabled", |workspace| {
+        workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "motion defaults", |workspace| {
+        !workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+}

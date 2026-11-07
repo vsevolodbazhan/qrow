@@ -26,6 +26,17 @@ short horizontal caret movements. Text appears immediately. Mouse clicks,
 line changes, selections, scrolling, and large jumps keep immediate caret
 movement. The system reduced-motion setting disables the animation.
 
+**Smooth Scrolling** is also off by default. Enable it in the Editor section
+to smooth discrete mouse-wheel steps. Trackpad gestures, caret navigation,
+and scrollbar dragging keep their immediate response. Typing, a mouse click,
+or a direct scroll change stops pending wheel movement.
+
+**Smooth Transitions** is in the Interface section and is off by default.
+Enable it for short fades when query tabs, result tabs, and sidebar panels
+change, or when Activity, the assistant, or the results content opens.
+The layout and controls respond immediately. Both options follow the system
+reduced-motion setting.
+
 Editor settings apply to SQL. Logs settings apply to log entries.
 Conversations settings apply to assistant messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the
