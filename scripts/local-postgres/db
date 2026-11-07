@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+compose=(docker compose --project-name qrow-local-postgres --file "$script_dir/compose.yml")
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/local-postgres/db COMMAND
+
+Commands:
+  up       Start Postgres and wait until it is ready
+  down     Stop Postgres and keep its data volume
+  reset    Delete the demo volume and recreate the database from the SQL files
+  status   Show the container status
+  logs     Follow the Postgres logs
+  query    Open psql in the running container
+EOF
+}
+
+command="${1:-}"
+case "$command" in
+  up)
+    "${compose[@]}" up --detach --wait
+    printf 'Qrow demo Postgres is ready at 127.0.0.1:55432 (database qrow_demo).\n'
+    ;;
+  down)
+    "${compose[@]}" down
+    ;;
+  reset)
+    "${compose[@]}" down --volumes
+    "${compose[@]}" up --detach --wait
+    printf 'Qrow demo Postgres was reset and is ready at 127.0.0.1:55432.\n'
+    ;;
+  status)
+    "${compose[@]}" ps
+    ;;
+  logs)
+    "${compose[@]}" logs --follow postgres
+    ;;
+  query)
+    "${compose[@]}" exec postgres psql --username qrow_demo --dbname qrow_demo
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
