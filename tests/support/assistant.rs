@@ -501,6 +501,16 @@ impl TestApp {
     }
 }
 
+/// The reply's code-copy actions, independent of their visible text.
+pub fn code_copy_buttons(window: &Window) -> Vec<gpui_kit::base::test_support::ElementSnapshot> {
+    elements(window)
+        .into_iter()
+        .filter(|element| {
+            matches!(element.path().last(), Some(gpui_kit::ElementId::Name(id)) if id.starts_with("assistant-copy-code-"))
+        })
+        .collect()
+}
+
 /// Copies two distinct blocks through the reply's real buttons.
 pub fn assert_copyable_code_blocks(app: &TestApp, cx: &mut TestAppContext) {
     app.send(
@@ -518,9 +528,17 @@ pub fn assert_copyable_code_blocks(app: &TestApp, cx: &mut TestAppContext) {
     {
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()));
         app.update(cx, |window, cx| {
-            let mut buttons = super::labelled_starting(window, "Copy code");
+            let mut buttons = code_copy_buttons(window);
             buttons.sort_by(|a, b| a.bounds().top().partial_cmp(&b.bounds().top()).unwrap());
             assert_eq!(buttons.len(), 2);
+            for button in &buttons {
+                assert_eq!(button.label(), Some("Copy"));
+                let size = button.bounds().size;
+                assert!(
+                    f32::from(size.width - size.height).abs() <= 1.,
+                    "The code copy action should be an icon-only square: {size:?}"
+                );
+            }
             super::click_element(window, &buttons[index], cx);
         });
         assert_eq!(

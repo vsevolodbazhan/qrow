@@ -139,7 +139,7 @@ Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables. Each line break that you
 type in a message shows as a line break.
 
-Select **Copy code** above a code block in an assistant reply to copy its
+Select the **Copy** icon above a code block in an assistant reply to copy its
 contents. The copy keeps spaces and line breaks. It does not include the
 Markdown fences or the text around the block.
 

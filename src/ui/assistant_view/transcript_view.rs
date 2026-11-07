@@ -140,8 +140,8 @@ fn message_entry(
             .ghost()
             .small()
             .icon(IconName::Copy)
-            .label("Copy code")
-            .tooltip("Copy code")
+            .accessibility_label("Copy")
+            .tooltip("Copy")
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));

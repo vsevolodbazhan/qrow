@@ -598,7 +598,7 @@ fn assistant_code_blocks_copy_only_their_own_contents(cx: &mut TestAppContext) {
     app.open_assistant(cx);
     app.wait_reply(cx, "last line");
     app.update(cx, |window, cx| {
-        let mut buttons = crate::support::labelled_starting(window, "Copy code");
+        let mut buttons = crate::support::assistant::code_copy_buttons(window);
         buttons.sort_by(|a, b| a.bounds().top().partial_cmp(&b.bounds().top()).unwrap());
         crate::support::click_element(window, &buttons[0], cx);
     });
@@ -627,7 +627,7 @@ fn assistant_code_block_copy_is_keyboard_accessible(cx: &mut TestAppContext) {
         for _ in 0..100 {
             window.focus_next(cx);
             window.render_frame(cx);
-            if crate::support::labelled_starting(window, "Copy code")
+            if crate::support::assistant::code_copy_buttons(window)
                 .iter()
                 .any(|button| button.focused() == Some(true))
             {
