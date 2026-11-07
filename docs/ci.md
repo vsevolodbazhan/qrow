@@ -5,19 +5,24 @@ Use the `ci-required` check to decide if a commit passes CI. Open the
 job name identifies common validation, a native build, or a native test.
 Use [Testing](testing.md) to run an individual suite locally.
 
-CI has three levels. Each level runs all five common jobs:
+CI has two levels. Each level runs all five common jobs:
 
 | Event | Native targets | Full mode |
 | --- | --- | --- |
 | Ready pull request | Linux x86-64 | No |
-| Merge queue | All four | No |
 | Push to `main`, scheduled run, manual run, release candidate | All four | Yes |
 
 A pull request gets fast feedback from the common jobs and one native target.
-The merge queue then tests the merge commit on all native targets before the
-change goes into `main`. Thus `main` gets the same qualification as before, and
-a pull request does not wait for macOS builds. Full mode adds timing stress
-and measurements; see [Full runs and releases](#full-runs-and-releases).
+It does not wait for macOS builds. After the merge, the `main` run tests all
+four native targets. If a target fails on `main`, fix the change or revert it.
+A release candidate always passes all four native targets before publication,
+because the release workflow runs its own full validation. Full mode adds
+timing stress and measurements; see [Full runs and releases](#full-runs-and-releases).
+
+The workflow also accepts merge queue runs (`merge_group`). Such a run tests
+all four native targets before the merge, without full mode. GitHub offers a
+merge queue only to repositories that an organization owns. This repository
+belongs to a personal account, so it does not use a merge queue.
 
 The native targets and their runners are:
 
@@ -42,8 +47,7 @@ changes, run their level completely. There is no path-based exclusion.
 The [test workflow](../.github/workflows/test.yml) contains the shared graph.
 It runs directly for pull requests and `main`, so check names have no wrapper
 prefix. The release workflow calls this same graph. Each job checks out one
-immutable commit. A pull request uses its merge commit. The merge queue uses
-the commit that it will merge.
+immutable commit. A pull request uses its merge commit.
 
 ```mermaid
 flowchart LR
@@ -146,8 +150,8 @@ the manifest digest. Logs and per-attempt reports remain separate.
 Common evidence, native evidence, and candidates remain available for 14 days.
 Prepared transfer artifacts remain for two days. They are artifacts of the
 current workflow run, not caches. Rust caches only speed up compilation.
-Each cache has one saving job. Only pushes to `main` save caches. Pull
-requests and the merge queue restore them. `common-static` compiles nothing
+Each cache has one saving job. Only pushes to `main` save caches. Other runs
+restore them. `common-static` compiles nothing
 and has no cache. A separate
 [cache cleanup workflow](../.github/workflows/cache-cleanup.yml) runs after a
 `main` push run completes, including failed runs. It removes replaced caches
@@ -160,8 +164,8 @@ code and has permission to delete caches.
 ## Full runs and releases
 
 Pushes to `main`, scheduled runs, manual runs, and release candidates use full
-mode. The merge queue runs the same functional tests without full mode, so a
-merge does not wait for measurements. Full mode also repeats the
+mode. Pull requests run the same functional tests on Linux x86-64, without
+full mode. Full mode also repeats the
 three portable UI timing regressions 100 times with the prepared UI binaries.
 A failed repetition fails common validation; no assertion retry hides it.
 
@@ -180,14 +184,12 @@ publication and channel details.
 
 ## Merge and administration
 
-The `main` ruleset must require only the `ci-required` check and must enable
-the merge queue. Without the merge queue, a pull request merges after only the
-Linux x86-64 native target passed. A required check also applies to the merge
-queue, so `ci-required` runs again there with all native targets.
-Remove the old `checks / ...` contexts from the same ruleset. Those jobs no
-longer exist, so leaving their contexts required prevents merges.
+The `main` ruleset requires only the `ci-required` check. A pull request
+merges when its own level passes, so it can merge with a defect that only
+macOS or Linux ARM64 shows. Check the `main` run after each merge. Fix or
+revert a failed native target before the next release.
 
-After merge, check the first `main` run. It must contain the five common jobs
+After a change to this graph, check the first `main` run. It must contain the five common jobs
 and all four native build/test pairs, including Intel macOS. Check a full run
 for the timing stress evidence. A release still needs a successful manual
 release run before its new publication path has live release evidence.

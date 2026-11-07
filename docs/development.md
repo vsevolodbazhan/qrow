@@ -133,20 +133,19 @@ Markdown files, for example `QROW-PATCH.md`. Other Markdown changes, except
 `docs/testing.md`, do not trigger hook checks.
 
 The [test workflow](../.github/workflows/test.yml) runs for ready pull requests
-into any branch, the merge queue, pushes to `main`, manual runs, and scheduled
-runs. Draft pull requests start no validation. A newer pull request run
-cancels an older run. Runs on `main` finish so they can save build caches.
+into any branch, pushes to `main`, manual runs, and scheduled runs. Draft pull
+requests start no validation. A newer pull request run cancels an older run.
+Runs on `main` finish so they can save build caches.
 
 The test and release workflows share one validation graph. Common tests run
 once, and native compilation overlaps them. Each native test consumes the
-build of the same target. A pull request tests Linux x86-64 natively. The
-merge queue and `main` test all four targets, including Intel macOS. Full mode
-on `main` adds timing stress and report-only measurements.
+build of the same target. A pull request tests Linux x86-64 natively. `main`
+and release candidates test all four targets, including Intel macOS, in full
+mode with timing stress and report-only measurements. Check the `main` run
+after each merge, and fix or revert a failed target.
 [Continuous integration](ci.md) describes every level, job, and its evidence.
 
-Configure only `ci-required` as the required check in the `main` ruleset, and
-enable the merge queue. Merge a pull request through the queue. After merge,
-inspect the first `main` run and its full-mode stress evidence.
+Configure only `ci-required` as the required check in the `main` ruleset.
 [CI merge steps](ci.md#merge-and-administration) give the complete procedure
 and current verification gaps.
 

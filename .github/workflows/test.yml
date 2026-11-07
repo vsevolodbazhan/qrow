@@ -20,7 +20,8 @@ on:
   # Pull requests into any branch, so that stacked pull requests also get checks.
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
-  # The merge queue qualifies all native targets before a change reaches main.
+  # Unused while the repository has no merge queue (personal accounts cannot
+  # have one). A merge queue run would qualify all native targets.
   merge_group:
     types: [checks_requested]
   workflow_dispatch:

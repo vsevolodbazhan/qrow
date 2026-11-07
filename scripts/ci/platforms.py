@@ -17,8 +17,9 @@ COMMON = {
     "performance": ["perf"],
 }
 COMMON_TARGET = "linux-x86_64"
-# Pull requests qualify one native target for fast feedback. The merge queue
-# qualifies all supported targets before a change reaches `main`.
+# Pull requests qualify one native target for fast feedback. main and release
+# candidates qualify all supported targets. A merge queue would too, but this
+# personal-account repository cannot have one.
 PR_TARGETS = ("linux-x86_64",)
 # A test job name uses hyphens: test-macos-x86-64 tests macos-x86_64.
 TEST_JOB = "test-{}"
