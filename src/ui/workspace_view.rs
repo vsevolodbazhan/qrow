@@ -1010,7 +1010,7 @@ impl Qrow {
     ) -> impl IntoElement {
         let assistant_width = self.assistant_width(window.viewport_size().width);
         let assistant_shown = self.settings.assistant.enabled && self.assistant_state.open;
-        let animated_assistant_width = motion::sidebar_width(
+        let animated_assistant_width = motion::panel_extent(
             "assistant-sidebar",
             assistant_shown,
             assistant_width,
@@ -1020,6 +1020,16 @@ impl Qrow {
             cx,
         );
         let activity_open = self.activity.read(cx).is_open();
+        let activity_width = self.workspace_body_size.get().width;
+        let animated_activity_width = motion::panel_extent(
+            "activity-panel",
+            activity_open,
+            activity_width,
+            self.settings.smooth_transitions,
+            false,
+            window,
+            cx,
+        );
         v_flex()
             .relative()
             .size_full()
@@ -1145,58 +1155,75 @@ impl Qrow {
                             .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
                     ),
             )
-            // Activity covers the workspace and the assistant pane while it
-            // is open.
-            .when(activity_open, |el| {
-                el.child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .opacity(motion::fade_in(
-                            "activity-fade",
-                            "open".into(),
-                            self.settings.smooth_transitions,
-                            window,
+            // Activity takes over this area from the right. Its fixed-width
+            // contents keep their layout during the transition.
+            .child(
+                div()
+                    .id("workspace-body")
+                    .test_support()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .map(|el| {
+                        use gpui_kit::component::ElementExt as _;
+                        let size = self.workspace_body_size.clone();
+                        el.on_prepaint(move |bounds, window, _| {
+                            if size.replace(bounds.size) != bounds.size {
+                                window.request_animation_frame();
+                            }
+                        })
+                    })
+                    .when(!activity_open, |el| {
+                        el.child(
+                            h_flex()
+                                .items_stretch()
+                                .size_full()
+                                .min_h_0()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .min_h_0()
+                                        .child(changed_view(cx.entity().into(), window)),
+                                )
+                                .when(assistant_shown || animated_assistant_width > px(0.), |el| {
+                                    el.child(if assistant_shown {
+                                        self.assistant_splitter(cx).into_any_element()
+                                    } else {
+                                        div()
+                                            .w(self.ui_px(1.))
+                                            .h_full()
+                                            .bg(cx.theme().border)
+                                            .into_any_element()
+                                    })
+                                    .child(
+                                        motion::sidebar_panel(
+                                            "assistant-motion",
+                                            assistant_shown,
+                                            animated_assistant_width,
+                                            assistant_width,
+                                            changed_view(
+                                                self.assistant_pane.clone().into(),
+                                                window,
+                                            )
+                                            .into_any_element(),
+                                            cx,
+                                        ),
+                                    )
+                                }),
+                        )
+                    })
+                    .when(activity_open || animated_activity_width > px(0.), |el| {
+                        el.child(motion::takeover_panel(
+                            activity_open,
+                            animated_activity_width,
+                            activity_width,
+                            changed_view(self.activity.clone().into(), window),
                             cx,
                         ))
-                        .child(changed_view(self.activity.clone().into(), window)),
-                )
-            })
-            .when(!activity_open, |el| {
-                el.child(
-                    h_flex()
-                        .items_stretch()
-                        .flex_1()
-                        .min_h_0()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .min_h_0()
-                                .child(changed_view(cx.entity().into(), window)),
-                        )
-                        .when(assistant_shown || animated_assistant_width > px(0.), |el| {
-                            el.child(if assistant_shown {
-                                self.assistant_splitter(cx).into_any_element()
-                            } else {
-                                div()
-                                    .w(self.ui_px(1.))
-                                    .h_full()
-                                    .bg(cx.theme().border)
-                                    .into_any_element()
-                            })
-                            .child(motion::sidebar_panel(
-                                "assistant-motion",
-                                assistant_shown,
-                                animated_assistant_width,
-                                assistant_width,
-                                changed_view(self.assistant_pane.clone().into(), window)
-                                    .into_any_element(),
-                                cx,
-                            ))
-                        }),
-                )
-            })
+                    }),
+            )
             .when_some(self.menu.as_ref(), |el, menu| {
                 el.child(
                     deferred(
@@ -1241,7 +1268,7 @@ impl Render for Qrow {
             .min(window.viewport_size().height - self.ui_px(294.))
             .max(self.ui_px(100.));
         let sidebar_width = self.shown_sidebar_width(window.viewport_size().width);
-        let animated_sidebar_width = motion::sidebar_width(
+        let animated_sidebar_width = motion::panel_extent(
             "connections-sidebar",
             self.sidebar,
             sidebar_width,

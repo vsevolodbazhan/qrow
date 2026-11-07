@@ -1,5 +1,5 @@
 //! Interruptible sidebar motion and content transitions that preserve input.
-use gpui_kit::base::{Presence, TestSupportExt as _, Transition, transition};
+use gpui_kit::base::{TestSupportExt as _, Transition, transition};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -7,27 +7,6 @@ use gpui_kit::{
     Styled, Window, div, px,
 };
 use std::time::{Duration, Instant};
-
-pub(super) fn fade_in(
-    channel: &'static str,
-    key: String,
-    enabled: bool,
-    window: &mut Window,
-    cx: &mut App,
-) -> f32 {
-    let duration = if enabled {
-        cx.theme().motion_tokens().duration_fast
-    } else {
-        Duration::ZERO
-    };
-    Presence::new(
-        ElementId::NamedChild(ElementId::from(channel).into(), key.into()),
-        true,
-    )
-    .transition(Transition::new(duration))
-    .sample(window, cx)
-    .progress
-}
 
 /// Clip fixed-width content while opening. Remove controls when closing so
 /// focus traversal and accessibility cannot reach the exiting pane.
@@ -74,15 +53,59 @@ pub(super) fn sidebar_panel(
         })
 }
 
-#[derive(Clone, Copy, PartialEq)]
-struct SidebarGeometry {
-    viewport: Size<Pixels>,
-    rem: Pixels,
+/// Reveal a full-width takeover from the right without reflowing its rows.
+/// Exiting controls leave immediately, as with the sidebars.
+pub(super) fn takeover_panel(
+    shown: bool,
+    width: Pixels,
+    full_width: Pixels,
+    content: AnyElement,
+    cx: &App,
+) -> impl IntoElement {
+    div()
+        .id("activity-motion")
+        .test_support()
+        .absolute()
+        .top_0()
+        .right_0()
+        .w(width)
+        .h_full()
+        .overflow_hidden()
+        .bg(cx.theme().background)
+        .when(shown, |el| {
+            el.child(
+                div()
+                    .w(full_width)
+                    .h_full()
+                    .opacity((width / full_width.max(px(1.))).clamp(0., 1.))
+                    .child(content),
+            )
+        })
+        .when(!shown, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .occlude()
+                    .capture_any_mouse_down(|_, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .on_scroll_wheel(|_, _, cx| cx.stop_propagation()),
+            )
+        })
 }
 
-/// Keep one channel mounted at zero width so closing can reverse mid-flight.
+#[derive(Clone, Copy, PartialEq)]
+struct PanelGeometry {
+    viewport: Size<Pixels>,
+    rem: Pixels,
+    extent: Pixels,
+}
+
+/// Keep one channel mounted at zero extent so closing can reverse mid-flight.
 /// A resize follows the pointer or window immediately.
-pub(super) fn sidebar_width(
+pub(super) fn panel_extent(
     channel: &'static str,
     shown: bool,
     width: Pixels,
@@ -91,9 +114,10 @@ pub(super) fn sidebar_width(
     window: &mut Window,
     cx: &mut App,
 ) -> Pixels {
-    let geometry = SidebarGeometry {
+    let geometry = PanelGeometry {
         viewport: window.viewport_size(),
         rem: window.rem_size(),
+        extent: width,
     };
     let previous =
         window.use_keyed_state((ElementId::from(channel), "geometry"), cx, |_, _| geometry);
@@ -210,77 +234,6 @@ mod tests {
     use gpui_kit::{AppContext as _, Context, IntoElement, Render, TestAppContext, div, px, size};
     use std::{cell::Cell, rc::Rc};
 
-    struct Probe {
-        key: Rc<Cell<usize>>,
-        enabled: Rc<Cell<bool>>,
-        opacity: Rc<Cell<f32>>,
-    }
-    impl Render for Probe {
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.opacity.set(fade_in(
-                "probe-fade",
-                self.key.get().to_string(),
-                self.enabled.get(),
-                window,
-                cx,
-            ));
-            div()
-        }
-    }
-
-    #[gpui_kit::test]
-    fn panel_fades_are_opt_in_bounded_and_respect_reduced_motion(cx: &mut TestAppContext) {
-        cx.update(super::super::init);
-        cx.update(|cx| cx.set_reduce_motion(false));
-        let key = Rc::new(Cell::new(0));
-        let enabled = Rc::new(Cell::new(false));
-        let opacity = Rc::new(Cell::new(-1.));
-        let window = cx.open_window(size(px(200.), px(100.)), |_, _| Probe {
-            key: key.clone(),
-            enabled: enabled.clone(),
-            opacity: opacity.clone(),
-        });
-        let render = |cx: &mut TestAppContext| {
-            cx.update_window(window.into(), |_, window, cx| {
-                window.refresh();
-                window.draw(cx).clear(cx);
-            })
-            .unwrap();
-            opacity.get()
-        };
-        assert_eq!(render(cx), 1.);
-        enabled.set(true);
-        assert_eq!(
-            render(cx),
-            1.,
-            "enabling does not fade content already shown"
-        );
-        key.set(1);
-        assert_eq!(render(cx), 0.);
-        cx.executor().advance_clock(Duration::from_millis(60));
-        cx.update_window(window.into(), |_, window, cx| {
-            assert!(window.simulate_next_frame(cx) > 0);
-            window.draw(cx).clear(cx);
-        })
-        .unwrap();
-        assert!(opacity.get() > 0. && opacity.get() < 1.);
-        cx.executor().advance_clock(Duration::from_millis(100));
-        cx.update_window(window.into(), |_, window, cx| {
-            window.simulate_next_frame(cx);
-            window.draw(cx).clear(cx);
-            assert_eq!(window.simulate_next_frame(cx), 0);
-        })
-        .unwrap();
-        assert_eq!(opacity.get(), 1.);
-        cx.update(|cx| cx.set_reduce_motion(true));
-        key.set(2);
-        assert_eq!(render(cx), 1.);
-        cx.update(|cx| cx.set_reduce_motion(false));
-        enabled.set(false);
-        key.set(3);
-        assert_eq!(render(cx), 1.);
-    }
-
     struct RefinementProbe {
         shown: Rc<Cell<bool>>,
         width: Rc<Cell<f32>>,
@@ -293,7 +246,7 @@ mod tests {
     }
     impl Render for RefinementProbe {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            self.sampled_width.set(sidebar_width(
+            self.sampled_width.set(panel_extent(
                 "probe-sidebar",
                 self.shown.get(),
                 px(self.width.get()),

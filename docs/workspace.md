@@ -38,8 +38,9 @@ their contents during the transition. Controls leave the sidebar when it
 starts to close. A second toggle reverses the motion.
 Content changes keep text visible. Editor text stays in position when tabs
 change. Typing stops the editor fade at once.
-Window and splitter resizing stay immediate. Activity keeps a short entrance
-fade. These options follow the system reduced-motion setting.
+Window and splitter resizing stay immediate. Activity slides in from the right
+and closes toward the right. Its contents keep their full width during motion.
+These options follow the system reduced-motion setting.
 
 **Smooth Composer Caret** and **Smooth Composer Resize** are in the
 Conversations section. Both are off by default. The caret option animates

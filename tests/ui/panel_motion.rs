@@ -209,3 +209,95 @@ fn assistant_sidebar_reverses_from_its_current_width(cx: &mut TestAppContext) {
     advance(&app, cx, 250);
     app.wait_gone(cx, "assistant-motion");
 }
+
+#[gpui_kit::test]
+fn activity_motion_reveals_reverses_and_removes_closed_controls(cx: &mut TestAppContext) {
+    use qrow::ui::ToggleActivity;
+    let mut workspace = Workspace::default();
+    workspace.settings.smooth_transitions = true;
+    let app = TestApp::launch(cx, workspace);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.dispatch(cx, ToggleActivity);
+    advance(&app, cx, 40);
+    let (opening, full) = app.update(cx, |window, _| {
+        (
+            bounds_of(window, "activity-motion").size.width,
+            bounds_of(window, "activity").size.width,
+        )
+    });
+    assert!(opening > px(0.) && opening < full);
+    app.update(cx, |window, _| {
+        let panel = bounds_of(window, "activity-motion");
+        let body = bounds_of(window, "workspace-body");
+        assert_eq!(
+            panel.right(),
+            body.right(),
+            "Activity enters from the right"
+        );
+        assert_eq!(panel.top(), body.top());
+        assert_eq!(panel.size.height, body.size.height);
+    });
+    app.dispatch(cx, ToggleActivity);
+    app.update(cx, |window, _| {
+        assert!((bounds_of(window, "activity-motion").size.width - opening).abs() < px(0.5));
+        assert!(labelled(window, "Close activity").is_none());
+        assert!(labelled(window, "SQL Editor").is_some());
+    });
+    advance(&app, cx, 20);
+    let closing = app.update(cx, |window, _| {
+        bounds_of(window, "activity-motion").size.width
+    });
+    assert!(closing < opening);
+    app.dispatch(cx, ToggleActivity);
+    app.update(cx, |window, _| {
+        assert!((bounds_of(window, "activity-motion").size.width - closing).abs() < px(0.5))
+    });
+    advance(&app, cx, 250);
+    app.update(cx, |window, _| {
+        assert_eq!(bounds_of(window, "activity-motion").size.width, full)
+    });
+    app.click_labelled(cx, "Close activity");
+    advance(&app, cx, 250);
+    app.wait_gone(cx, "activity-motion");
+    advance(&app, cx, 0);
+    app.update(cx, |window, cx| {
+        assert_eq!(window.simulate_next_frame(cx), 0)
+    });
+    cx.update(|cx| cx.set_reduce_motion(true));
+    app.dispatch(cx, ToggleActivity);
+    app.update(cx, |window, _| {
+        assert_eq!(bounds_of(window, "activity-motion").size.width, full)
+    });
+    app.dispatch(cx, ToggleActivity);
+    app.wait_gone(cx, "activity-motion");
+}
+
+#[gpui_kit::test]
+fn activity_reveal_fits_the_body_above_a_workspace_warning(cx: &mut TestAppContext) {
+    use gpui_kit::size;
+    use qrow::ui::ToggleActivity;
+    for enabled in [false, true] {
+        let mut workspace = Workspace::default();
+        workspace.settings.smooth_transitions = enabled;
+        workspace.settings.theme = "Synthetic unavailable theme".into();
+        workspace.settings.editor_font_family = "Synthetic unavailable editor font".into();
+        workspace.settings.logs_font_family = "Synthetic unavailable logs font".into();
+        let app = TestApp::launch(cx, workspace);
+        app.wait_for(cx, "workspace-message");
+        app.dispatch(cx, ToggleActivity);
+        for (width, height) in [(1280., 820.), (900., 600.)] {
+            cx.simulate_window_resize(app.window, size(px(width), px(height)));
+            app.settle(cx);
+            advance(&app, cx, 0);
+            app.update(cx, |window, _| {
+                let body = bounds_of(window, "workspace-body");
+                let activity = bounds_of(window, "activity");
+                assert_eq!(activity, body);
+                let close = bounds_of(window, "Close activity");
+                assert!(close.top() >= body.top() && close.bottom() <= body.bottom());
+            });
+        }
+        app.click_labelled(cx, "Close activity");
+        app.wait_gone(cx, "activity-motion");
+    }
+}

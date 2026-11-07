@@ -798,6 +798,8 @@ pub struct Qrow {
     /// The height of the status bar in the last frame. Side sheets end
     /// above it.
     status_bar_height: std::rc::Rc<std::cell::Cell<Pixels>>,
+    /// Measured space available to the workspace and Activity takeover.
+    workspace_body_size: std::rc::Rc<std::cell::Cell<Size<Pixels>>>,
     _demo_manifest: Option<tempfile::NamedTempFile>,
 }
 impl Qrow {
@@ -1054,6 +1056,7 @@ impl Qrow {
             dbt_details: None,
             dbt_details_origin: None,
             status_bar_height: Default::default(),
+            workspace_body_size: Default::default(),
             _demo_manifest: demo_manifest,
         };
         for tab in workspace.tabs {

@@ -528,6 +528,13 @@ fn smooth_motion_keeps_typed_sql_and_query_execution_immediate(cx: &mut TestAppC
     workspace.settings.smooth_transitions = true;
     let app = TestApp::launch_with(cx, workspace, credentials);
     cx.update(|cx| cx.set_reduce_motion(false));
+    app.dispatch(cx, qrow::ui::ToggleActivity);
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.dispatch(cx, qrow::ui::ToggleActivity);
     app.dispatch(cx, qrow::ui::ShowSignIns);
     app.dispatch(cx, qrow::ui::ShowConnections);
     app.dispatch(cx, qrow::ui::ToggleSidebar);
