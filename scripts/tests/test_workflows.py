@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/qtest"))
@@ -138,9 +139,34 @@ class ValidationGraphTests(unittest.TestCase):
             self.assertNotEqual(platforms.tier(event, paths=light), "static")
         plan = job("plan")
         self.assertIn("fetch-depth: 2", plan)
-        self.assertIn("git diff --name-only HEAD^1 HEAD", plan)
+        self.assertIn("--changed-since HEAD^1", plan)
         self.assertIn('--jobs "$JOBS"', job("common-required"))
         self.assertIn("if: needs.plan.outputs.targets != '[]'", job("ci-required"))
+
+    def test_a_file_moved_into_a_static_directory_selects_the_complete_level(self):
+        import os
+        import subprocess
+        import tempfile
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                subprocess.run(["git", "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", *args],
+                               cwd=root, env=env, check=True, capture_output=True)
+            git("init", "-q")
+            (root / "tests").mkdir()
+            (root / "tests/format.sql").write_text("SELECT 1;\n" * 20)
+            (root / "docs").mkdir()
+            (root / "docs/ci.md").write_text("synthetic\n")
+            git("add", ".")
+            git("commit", "-qm", "base")
+            git("mv", "tests/format.sql", "docs/format with space.sql")
+            git("commit", "-qm", "move")
+            with patch.dict(os.environ, env, clear=True):
+                paths = platforms.changed_paths("HEAD^1", root)
+            self.assertEqual(sorted(paths), ["docs/format with space.sql", "tests/format.sql"])
+            self.assertEqual(platforms.tier("pull_request", paths=paths), "pr")
 
     def test_cache_cleanup_knows_every_current_cache_key(self):
         import importlib.util

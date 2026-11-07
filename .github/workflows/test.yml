@@ -71,10 +71,7 @@ jobs:
         run: |
           flags=()
           if [ "$FULL" = true ]; then flags+=(--full); fi
-          if [ "$EVENT" = pull_request ]; then
-            git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed"
-            flags+=(--changed "$RUNNER_TEMP/changed")
-          fi
+          if [ "$EVENT" = pull_request ]; then flags+=(--changed-since HEAD^1); fi
           python3 scripts/ci/platforms.py outputs --event "$EVENT" "${flags[@]}" | tee -a "$GITHUB_OUTPUT"
 
   common:
