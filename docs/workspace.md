@@ -21,6 +21,11 @@ Tab key and SQL that Qrow formats for the assistant and **Format** use this
 size. The editor indents with spaces. **SQL Keyword Case** is the last Editor
 setting. It applies to **Format** and SQL that the [assistant](assistant.md)
 writes.
+**Smooth Caret** is off by default. Enable it in the Editor section to animate
+short horizontal caret movements. Text appears immediately. Mouse clicks,
+line changes, selections, scrolling, and large jumps keep immediate caret
+movement. The system reduced-motion setting disables the animation.
+
 Editor settings apply to SQL. Logs settings apply to log entries.
 Conversations settings apply to assistant messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the

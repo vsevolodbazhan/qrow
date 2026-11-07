@@ -1,11 +1,11 @@
 use crate::input::{InputExtras as _, InputModeKind};
 use gpui::Corners;
 use gpui::Half;
-use gpui::{Font, LineFragment};
 use gpui::{
     AnyElement, App, Bounds, Edges, Element, ElementId, ElementInputHandler, Entity,
     GlobalElementId,
 };
+use gpui::{Font, LineFragment};
 use gpui::{
     HighlightStyle, Hitbox, HitboxBehavior, Hsla, InteractiveElement, IntoElement, LayoutId,
     LongPressEvent, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Path, Pixels,
@@ -1935,8 +1935,13 @@ impl<M: InputModeKind> Element for TextElement<M> {
         let wrapped_placeholder;
         let display_text = if is_empty && multi_line {
             let width = bounds.size.width - line_number_width - RIGHT_MARGIN;
-            wrapped_placeholder =
-                Rope::from(wrap_placeholder(&placeholder, text_style.font(), text_size, width, cx));
+            wrapped_placeholder = Rope::from(wrap_placeholder(
+                &placeholder,
+                text_style.font(),
+                text_size,
+                width,
+                cx,
+            ));
             &wrapped_placeholder
         } else {
             display_text
@@ -2544,10 +2549,63 @@ impl<M: InputModeKind> Element for TextElement<M> {
             }
         }
 
-        // Paint blinking cursors (shared blink state for all carets)
+        // The logical caret stays at its destination for input, IME and popups.
+        // Only the painted primary caret can travel between adjacent positions.
+        let cursors = prepaint.cursor_infos_with_scroll();
+        let primary = cursors.first().map(|cursor| cursor.bounds);
+        let duration = {
+            let state = self.state.read(cx);
+            let snapshot =
+                primary.map(|caret| (caret, prepaint.cursor_scroll_offset, input_bounds));
+            let previous = state.caret_snapshot.replace(snapshot);
+            let eligible = focused
+                && show_cursor
+                && !disabled
+                && selected_range.is_empty()
+                && cursors.len() == 1
+                && !state.selecting
+                && state.ime_marked_range.is_none();
+            let continuous = previous.zip(snapshot).is_some_and(|(before, after)| {
+                before.1 == after.1
+                    && before.2 == after.2
+                    && before.0.origin.y == after.0.origin.y
+                    && before.0.size == after.0.size
+                    && (before.0.origin.x - after.0.origin.x).abs() <= line_height * 2.
+            });
+            if !eligible {
+                state.caret_snapshot.set(None);
+            }
+            if eligible && continuous {
+                editor_style.caret_transition
+            } else {
+                std::time::Duration::ZERO
+            }
+        };
+        let painted = primary.map(|target| {
+            crate::motion::transition(
+                ElementId::from(("caret", self.state.entity_id())),
+                target,
+                crate::motion::Transition::new(duration),
+                window,
+                cx,
+            )
+        });
+        self.state
+            .read(cx)
+            .caret_presentation
+            .set(if focused && show_cursor {
+                painted
+            } else {
+                None
+            });
         if focused && show_cursor {
-            for cursor_info in prepaint.cursor_infos_with_scroll() {
-                window.paint_quad(fill(cursor_info.bounds, editor_style.caret));
+            for (ix, cursor_info) in cursors.iter().enumerate() {
+                let caret = if ix == 0 {
+                    painted.unwrap_or(cursor_info.bounds)
+                } else {
+                    cursor_info.bounds
+                };
+                window.paint_quad(fill(caret, editor_style.caret));
             }
         }
 

@@ -157,6 +157,8 @@ pub struct Settings {
     pub editor_line_height: f32,
     /// Spaces for each indent level in the SQL editor.
     pub editor_tab_size: u8,
+    /// Animate short horizontal caret movements in the SQL editor.
+    pub editor_smooth_caret: bool,
     pub logs_font_family: String,
     pub logs_font_size: f32,
     pub logs_line_height: f32,
@@ -183,6 +185,7 @@ impl Default for Settings {
             editor_font_size: 13.,
             editor_line_height: 1.2,
             editor_tab_size: 2,
+            editor_smooth_caret: false,
             logs_font_family: MONOSPACE_FONT_FAMILY.into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
@@ -2679,6 +2682,7 @@ mod tests {
             editor_font_size: f32::NAN,
             editor_line_height: f32::NAN,
             editor_tab_size: 0,
+            editor_smooth_caret: false,
             logs_font_family: "   ".into(),
             logs_font_size: f32::NAN,
             logs_line_height: f32::NAN,

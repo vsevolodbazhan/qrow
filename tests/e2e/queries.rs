@@ -516,3 +516,24 @@ fn linux_application_menu_opens_settings_after_a_query(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert!(app.settings_window(cx).is_none());
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn smooth_caret_keeps_typed_sql_and_query_execution_immediate(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let (mut workspace, credentials) = kyuubi.workspace("SELECT 4", PASSWORD);
+    workspace.settings.editor_smooth_caret = true;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.click_labelled(cx, "SQL Editor");
+    app.press(cx, "secondary-end");
+    app.press(cx, "2");
+    app.press(cx, "secondary-enter");
+    app.wait_until(
+        cx,
+        "the SQL typed with smooth caret",
+        QUERY_TIMEOUT,
+        |window, _| cell(window, 0, 1).as_deref() == Some("42"),
+    );
+    assert!(app.saved().settings.editor_smooth_caret);
+}

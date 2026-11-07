@@ -283,3 +283,33 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
             && w.settings.assistant_font_family == "IBM Plex Sans"
     });
 }
+
+#[gpui_kit::test]
+fn smooth_caret_is_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.editor_smooth_caret);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "editor-smooth-caret");
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret enabled", |workspace| {
+        workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "editor-smooth-caret");
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret disabled", |workspace| {
+        !workspace.settings.editor_smooth_caret
+    });
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret enabled again", |workspace| {
+        workspace.settings.editor_smooth_caret
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "smooth caret default", |workspace| {
+        !workspace.settings.editor_smooth_caret
+    });
+}

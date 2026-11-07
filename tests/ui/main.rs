@@ -24,5 +24,6 @@ mod queries;
 mod result_tabs;
 mod results;
 mod sign_ins;
+mod smooth_caret;
 mod tabs;
 mod timing;
