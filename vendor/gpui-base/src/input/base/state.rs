@@ -407,6 +407,8 @@ pub struct InputBaseState<M: InputModeKind> {
     /// is rebuilt at the top of every render, which is what keeps it current
     /// when the palette changes after the state was built.
     pub(super) editor_style: InputEditorStyle,
+    pub(super) caret_snapshot: Cell<Option<(Bounds<Pixels>, Point<Pixels>, Bounds<Pixels>)>>,
+    pub(super) caret_presentation: Cell<Option<Bounds<Pixels>>>,
     /// What a consumer projected, kept verbatim so that resolution never
     /// consumes its own output: resolving in place would fill the unset
     /// colours once and then never see them as unset again, which is the same
@@ -535,6 +537,12 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub fn cursor_layout(&self) -> Option<(Bounds<Pixels>, Pixels)> {
         let layout = self.last_layout.as_ref()?;
         Some((layout.cursor_bounds?, layout.line_height))
+    }
+
+    /// Last painted primary caret in window coordinates. Logical input and popup
+    /// geometry continue to use `cursor_layout`, even during a transition.
+    pub fn caret_presentation_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.caret_presentation.get()
     }
 
     pub fn input_bounds(&self) -> Bounds<Pixels> {
@@ -730,6 +738,8 @@ impl<M: InputModeKind> InputBaseState<M> {
             mask_pattern: MaskPattern::default(),
             mask_pattern_set: false,
             editor_style: InputEditorStyle::default(),
+            caret_snapshot: Cell::new(None),
+            caret_presentation: Cell::new(None),
             projected_editor_style: InputEditorStyle::default(),
             diagnostic_popover: None,
             context_menu_handler: None,
@@ -2247,6 +2257,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.caret_snapshot.set(None);
         self.undo_manager.break_transaction_coalescing();
         // Input has its own text selection; suppress the window-level text
         // selection (Root) so it does not start a drag from here.

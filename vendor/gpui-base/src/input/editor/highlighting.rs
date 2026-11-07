@@ -88,6 +88,7 @@ pub struct DiagnosticColors {
 
 /// Application-owned colors and highlight resolver consumed by editor painting.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct InputEditorStyle {
     pub foreground: Hsla,
     pub muted_foreground: Hsla,
@@ -95,6 +96,8 @@ pub struct InputEditorStyle {
     pub border: Hsla,
     pub selection: Hsla,
     pub caret: Hsla,
+    /// Duration of short horizontal caret transitions. Zero keeps movement immediate.
+    pub caret_transition: std::time::Duration,
     pub diagnostics: DiagnosticColors,
     pub highlight_styles: SharedHighlightStyleResolver,
     pub editor_invisible: Option<Hsla>,
@@ -150,6 +153,7 @@ impl Default for InputEditorStyle {
             border: Hsla::default(),
             selection: Hsla::default(),
             caret: Hsla::default(),
+            caret_transition: std::time::Duration::ZERO,
             diagnostics: DiagnosticColors::default(),
             highlight_styles: Arc::new(NoHighlightStyles),
             editor_invisible: None,

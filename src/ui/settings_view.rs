@@ -854,7 +854,11 @@ impl Qrow {
             .overflow_hidden()
             .child(
                 settings_panel("settings", window, cx)
-                    .page(appearance_page(form))
+                    .page(appearance_page(
+                        form,
+                        cx.entity().downgrade(),
+                        self.settings.editor_smooth_caret,
+                    ))
                     .page(
                         SettingPage::new("Export")
                             .resettable(false)
@@ -934,7 +938,11 @@ impl Qrow {
 }
 
 /// Appearance settings for the interface, assistant messages, editor, and logs.
-fn appearance_page(form: &SettingsForm) -> SettingPage {
+fn appearance_page(
+    form: &SettingsForm,
+    owner: WeakEntity<Qrow>,
+    smooth_caret: bool,
+) -> SettingPage {
     SettingPage::new("Appearance")
         .default_open(true)
         // The footer resets all appearance settings, so this page does not
@@ -1008,6 +1016,23 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                     "Space between SQL lines, times the font size.",
                     &["editor", "sql", "spacing"],
                     number_field(form, NumberSetting::EditorLineHeight),
+                ))
+                .item(setting_item(
+                    "Smooth Caret",
+                    "Animate short caret movements unless reduced motion is on.",
+                    &["editor", "sql", "cursor", "motion", "animation", "typing"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = owner.clone();
+                        Switch::new("editor-smooth-caret")
+                            .checked(smooth_caret)
+                            .accessibility_label("Smooth Caret")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.editor_smooth_caret = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
                 ))
                 .item(setting_item(
                     "Tab Size",

@@ -24,6 +24,7 @@ pub struct Editor {
     bordered: bool,
     disabled: bool,
     readonly: bool,
+    smooth_caret: bool,
     tab_index: isize,
     role: RoleOverride,
     aria_label: Option<SharedString>,
@@ -48,6 +49,7 @@ impl Editor {
             bordered: true,
             disabled: false,
             readonly: false,
+            smooth_caret: false,
             tab_index: 0,
             role: RoleOverride::default(),
             aria_label: None,
@@ -83,6 +85,12 @@ impl Editor {
     /// made by the user.
     pub fn readonly(mut self, readonly: bool) -> Self {
         self.readonly = readonly;
+        self
+    }
+
+    /// Animate short horizontal caret movements. Off by default; respects reduced motion.
+    pub fn smooth_caret(mut self, enabled: bool) -> Self {
+        self.smooth_caret = enabled;
         self
     }
 
@@ -162,6 +170,7 @@ impl RenderOnce for Editor {
             .focus_bordered(false)
             .disabled(self.disabled)
             .readonly(self.readonly)
+            .smooth_caret(self.smooth_caret)
             .tab_index(self.tab_index)
             .role(self.role)
             .when_some(self.height, |this, height| this.h(height))

@@ -1210,6 +1210,7 @@ impl Render for Qrow {
                             .line_height(relative(self.settings.editor_line_height))
                             .child(
                                 Editor::new(&self.tabs[self.active].input)
+                                    .smooth_caret(self.settings.editor_smooth_caret)
                                     .appearance(false)
                                     .context_menu_with_capabilities(|_, capabilities, _, cx| {
                                         gpui_kit::component::native_menu::NativeMenu::from(

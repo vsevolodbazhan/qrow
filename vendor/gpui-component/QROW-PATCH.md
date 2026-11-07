@@ -139,3 +139,5 @@ Qrow changes these files:
 
 Remove the patch when a GPUI Kit release includes the fixes. Update the crate
 with the other GPUI crates as one set.
+
+- `Editor::smooth_caret(bool)` enables a 70 ms caret transition. The default is off. Text input stays immediate.
