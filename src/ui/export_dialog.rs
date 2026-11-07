@@ -1842,6 +1842,14 @@ mod tests {
                     .unwrap()
                     .contains("Ready to retry")
             );
+            // The format change cleared the error, but the job is still
+            // retained and must stay retryable.
+            assert_eq!(
+                window
+                    .find(SharedString::from(format!("export-details-{id}")))
+                    .label(),
+                Some("Retry…")
+            );
             assert!(retained.as_ref().unwrap().upgrade().is_some());
             notice_id = Some(id);
         })

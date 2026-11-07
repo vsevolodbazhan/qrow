@@ -103,6 +103,11 @@ impl Render for ProgressNotice {
         let multiple = owner
             .upgrade()
             .is_some_and(|owner| owner.read(cx).exports.len() > 1);
+        // Success and cancellation remove the job before its card closes.
+        // A job that remains, with or without its error, can still retry.
+        let retained = owner
+            .upgrade()
+            .is_some_and(|owner| owner.read(cx).exports.iter().any(|entry| entry.view == job));
         v_flex()
             .id(SharedString::from(format!("export-job-{id}")))
             .test_support()
@@ -133,7 +138,7 @@ impl Render for ProgressNotice {
                     .justify_end()
                     .flex_wrap()
                     .gap_2()
-                    .when(!running, |view| {
+                    .when(!running && retained, |view| {
                         view.child(
                             Button::new(SharedString::from(format!("export-details-{id}")))
                                 .small()
@@ -578,6 +583,82 @@ mod tests {
         download.cancel();
         worker.shutdown();
         worker.wait_for_shutdown(Duration::from_secs(3));
+    }
+
+    #[gpui_kit::test]
+    fn a_successful_background_export_offers_no_retry_while_its_card_closes(
+        cx: &mut TestAppContext,
+    ) {
+        use super::*;
+        cx.update(crate::ui::init);
+        let mut owner = None;
+        let window = cx.open_window(size(px(900.), px(620.)), |window, cx| {
+            let qrow = cx.new(|cx| Qrow::new(Environment::demo(), Instant::now(), window, cx));
+            owner = Some(qrow.downgrade());
+            crate::ui::root(qrow, window, cx)
+        });
+        let owner = owner.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            let tab = owner.upgrade().unwrap().read(cx).tabs[0].saved.id;
+            let columns = [crate::model::Column {
+                name: "n".into(),
+                data_type: "INT".into(),
+            }];
+            let rows = export::Rows::from(vec![vec![Some("1".into())]]);
+            let source = Arc::new(Snapshot::new(&columns, &rows).unwrap());
+            let (spool, producer) =
+                export::spool::Spool::new(&columns, &export::Context::default()).unwrap();
+            producer.finish(&AtomicBool::new(false)).unwrap();
+            let result = ExportResult {
+                tab,
+                execution: None,
+                cursor: crate::worker::Cursor::Downloaded,
+                replay: Some(spool.clone()),
+            };
+            let view = cx.new(|cx| {
+                ExportDialog::new(
+                    source,
+                    export::Settings::default(),
+                    "done.csv".into(),
+                    false,
+                    result,
+                    None,
+                    owner.clone(),
+                    window,
+                    cx,
+                )
+            });
+            view.update(cx, |job, cx| {
+                job.running = true;
+                job.retained = Some(spool);
+                job.start_background(window, cx);
+            });
+            let id = view.read(cx).id;
+            view.update(cx, |job, cx| {
+                job.complete(
+                    Ok((1, None)),
+                    Some(directory.path().join("done.csv")),
+                    None,
+                    window,
+                    cx,
+                );
+            });
+            // The clock has not advanced, so the card is still closing.
+            window.render_frame(cx);
+            assert!(
+                window
+                    .try_find(SharedString::from(format!("export-job-{id}")))
+                    .is_some()
+            );
+            assert!(
+                window
+                    .try_find(SharedString::from(format!("export-details-{id}")))
+                    .is_none()
+            );
+            assert!(window.try_find("export-complete-notice").is_some());
+        })
+        .unwrap();
     }
 
     #[gpui_kit::test]
