@@ -100,6 +100,10 @@ actions!(
         Quit
     ]
 );
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = qrow, no_json)]
+struct SelectTab(usize);
+
 /// Initializes GPUI Kit, themes, the SQL language, key bindings, and menus.
 /// Call once before opening a Qrow window.
 pub fn init(cx: &mut App) {
@@ -176,6 +180,13 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-up", MoveConnectionUp, Some("Connections > Tree")),
         KeyBinding::new("alt-down", MoveConnectionDown, Some("Connections > Tree")),
     ]);
+    cx.bind_keys((1..=9).map(|number| {
+        KeyBinding::new(
+            &format!("secondary-{number}"),
+            SelectTab(number - 1),
+            Some("Qrow"),
+        )
+    }));
     set_menus(cx, false);
 }
 
@@ -2184,6 +2195,14 @@ impl Qrow {
             || self.result_form.is_some()
             || self.assistant_state.rename_form.is_some()
             || self.sign_in_ui.editor.is_some()
+    }
+    fn select_tab(&mut self, action: &SelectTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            return;
+        }
+        if let Some(index) = self.visible_tab_indices().get(action.0).copied() {
+            self.activate(index, window, cx);
+        }
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
