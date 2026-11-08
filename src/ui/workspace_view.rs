@@ -99,6 +99,14 @@ impl Qrow {
                                 PopupMenuItem::new("Toggle assistant")
                                     .action(Box::new(ToggleAssistant)),
                             )
+                            .item(
+                                PopupMenuItem::new("Maximize assistant")
+                                    .action(Box::new(MaximizeAssistant)),
+                            )
+                            .item(
+                                PopupMenuItem::new("Minimize assistant")
+                                    .action(Box::new(MinimizeAssistant)),
+                            )
                         } else {
                             menu
                         };
@@ -160,15 +168,33 @@ impl Qrow {
         let rem = cx.theme().font_size;
         let room = self.tab_scroll.bounds().size.width - rem * 0.75;
         let selected = visible.iter().position(|index| *index == self.active);
-        let selected_width = selected
-            .and_then(|position| self.tab_scroll.bounds_for_item(position))
-            .map_or(px(0.), |item| item.size.width);
+        // Width from the shared minimum is not intrinsic title width. Reserve
+        // extra room only for content that extends beyond the previous minimum.
+        // Otherwise equally short tabs cannot share the available room evenly.
+        let previous_minimum = self.tab_min_width.get().unwrap_or(rem * 10.5);
+        let shared_width = room / visible.len().max(1) as f32;
+        let reserved_width = visible
+            .iter()
+            .enumerate()
+            .filter_map(|(position, index)| {
+                let width = self.tab_scroll.bounds_for_item(position)?.size.width;
+                Some(if *index == self.active {
+                    width
+                } else {
+                    width.min(self.ui_px(MAX_QUERY_TAB_WIDTH))
+                })
+            })
+            .filter(|width| *width > previous_minimum + px(0.5))
+            .max()
+            .unwrap_or(px(0.))
+            .max(shared_width);
         let others = visible
             .len()
             .saturating_sub(usize::from(selected.is_some())) as f32;
-        let fit = (others > 0. && room > px(0.) && rem * 10.5 * others + selected_width > room)
-            .then(|| (room - selected_width) / others)
+        let fit = (others > 0. && room > px(0.) && rem * 10.5 * others + reserved_width > room)
+            .then(|| (room - reserved_width) / others)
             .filter(|&width| width >= rem * 8.5);
+        self.tab_min_width.set(Some(fit.unwrap_or(rem * 10.5)));
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
             // The selected tab shows its whole title, up to the visible strip.
@@ -439,7 +465,10 @@ impl Qrow {
         }
         self.settings.results_minimized = !self.settings.results_minimized;
         self.resize = None;
-        if !self.settings.results_minimized {
+        if !self.settings.results_minimized
+            && !self.assistant_maximized()
+            && !self.activity.read(cx).is_open()
+        {
             self.tabs[self.active].panel.content_visible();
         }
         self.changed(cx);
@@ -473,7 +502,7 @@ impl Qrow {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_results(window, cx)))
     }
 
-    fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn query_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.settings.results_minimized {
             return self.result_tabs(cx).into_any_element();
         }
@@ -503,7 +532,33 @@ impl Qrow {
             .min_h_0()
             .overflow_hidden()
             .child(self.result_tabs(cx))
-            .child(div().flex_1().min_h_0().min_w_0().child(content))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .opacity(
+                        motion::content(
+                            "query-panel",
+                            format!(
+                                "{}-{:?}-{}",
+                                self.tabs[self.active].saved.id,
+                                self.tabs[self.active].panel.selected,
+                                if self.tabs[self.active].panel.selected == Panel::Results {
+                                    self.tabs[self.active].shown_result().id
+                                } else {
+                                    0
+                                }
+                            ),
+                            0,
+                            self.settings.smooth_transitions,
+                            window,
+                            cx,
+                        )
+                        .opacity(),
+                    )
+                    .child(content),
+            )
             .into_any_element()
     }
 
@@ -856,6 +911,7 @@ impl Qrow {
     fn assistant_splitter(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("assistant-splitter")
+            .test_support()
             .relative()
             .flex_shrink_0()
             .w(self.ui_px(5.))
@@ -940,8 +996,17 @@ impl Qrow {
             .min((viewport - self.ui_px(SIDEBAR_YIELDS_TO_WIDTH)).max(least))
     }
 
+    pub(super) fn assistant_maximized(&self) -> bool {
+        self.settings.assistant.enabled
+            && self.assistant_state.open
+            && self.assistant_state.maximized
+    }
+
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
+        if self.assistant_state.maximized {
+            return viewport;
+        }
         let available = viewport
             - self.ui_px(MIN_WORK_AREA_WIDTH)
             - if self.sidebar {
@@ -964,7 +1029,40 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let assistant_width = self.assistant_width(window.viewport_size().width);
+        let assistant_shown = self.settings.assistant.enabled && self.assistant_state.open;
+        let animated_assistant_width = motion::panel_extent(
+            "assistant-sidebar",
+            assistant_shown,
+            assistant_width,
+            self.settings.smooth_transitions && self.settings.assistant.enabled,
+            self.assistant_state.resizing.is_some(),
+            window,
+            cx,
+        );
+        // Opening keeps fixed-width content; maximize/restore follows the
+        // presented width so controls and wrapping stay inside the moving pane.
+        let assistant_content_width =
+            if self.assistant_maximized() || animated_assistant_width > assistant_width {
+                animated_assistant_width.max(px(1.))
+            } else {
+                assistant_width
+            };
+        if assistant_shown {
+            self.assistant_pane.update(cx, |pane, cx| {
+                pane.set_layout_width(assistant_content_width, cx)
+            });
+        }
         let activity_open = self.activity.read(cx).is_open();
+        let activity_width = self.workspace_body_size.get().width;
+        let animated_activity_width = motion::panel_extent(
+            "activity-panel",
+            activity_open,
+            activity_width,
+            self.settings.smooth_transitions,
+            false,
+            window,
+            cx,
+        );
         v_flex()
             .relative()
             .size_full()
@@ -999,6 +1097,12 @@ impl Qrow {
             )
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MaximizeAssistant, window, cx| {
+                this.set_assistant_maximized(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MinimizeAssistant, window, cx| {
+                this.set_assistant_maximized(false, window, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &ToggleActivity, window, cx| {
@@ -1091,41 +1195,80 @@ impl Qrow {
                             .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
                     ),
             )
-            // Activity covers the workspace and the assistant pane while it
-            // is open.
-            .when(activity_open, |el| {
-                el.child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(changed_view(self.activity.clone().into(), window)),
-                )
-            })
-            .when(!activity_open, |el| {
-                el.child(
-                    h_flex()
-                        .items_stretch()
-                        .flex_1()
-                        .min_h_0()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
+            // Activity takes over this area from the right. Its fixed-width
+            // contents keep their layout during the transition.
+            .child(
+                div()
+                    .id("workspace-body")
+                    .test_support()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .map(|el| {
+                        use gpui_kit::component::ElementExt as _;
+                        let size = self.workspace_body_size.clone();
+                        el.on_prepaint(move |bounds, window, _| {
+                            if size.replace(bounds.size) != bounds.size {
+                                window.request_animation_frame();
+                            }
+                        })
+                    })
+                    .when(!activity_open, |el| {
+                        el.child(
+                            h_flex()
+                                .items_stretch()
+                                .size_full()
                                 .min_h_0()
-                                .child(changed_view(cx.entity().into(), window)),
-                        )
-                        .when(
-                            self.settings.assistant.enabled && self.assistant_state.open,
-                            |el| {
-                                el.child(self.assistant_splitter(cx)).child(
-                                    div().w(assistant_width).flex_shrink_0().min_h_0().child(
-                                        changed_view(self.assistant_pane.clone().into(), window),
-                                    ),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .min_h_0()
+                                        .overflow_hidden()
+                                        .when(!self.assistant_maximized(), |el| {
+                                            el.child(changed_view(cx.entity().into(), window))
+                                        }),
                                 )
-                            },
-                        ),
-                )
-            })
+                                .when(assistant_shown || animated_assistant_width > px(0.), |el| {
+                                    el.when(!self.assistant_maximized(), |el| {
+                                        el.child(if assistant_shown {
+                                            self.assistant_splitter(cx).into_any_element()
+                                        } else {
+                                            div()
+                                                .w(self.ui_px(1.))
+                                                .h_full()
+                                                .bg(cx.theme().border)
+                                                .into_any_element()
+                                        })
+                                    })
+                                    .child(
+                                        motion::sidebar_panel(
+                                            "assistant-motion",
+                                            assistant_shown,
+                                            animated_assistant_width,
+                                            assistant_content_width,
+                                            changed_view(
+                                                self.assistant_pane.clone().into(),
+                                                window,
+                                            )
+                                            .into_any_element(),
+                                            cx,
+                                        ),
+                                    )
+                                }),
+                        )
+                    })
+                    .when(activity_open || animated_activity_width > px(0.), |el| {
+                        el.child(motion::takeover_panel(
+                            activity_open,
+                            animated_activity_width,
+                            activity_width,
+                            changed_view(self.activity.clone().into(), window),
+                            cx,
+                        ))
+                    }),
+            )
             .when_some(self.menu.as_ref(), |el, menu| {
                 el.child(
                     deferred(
@@ -1169,15 +1312,70 @@ impl Render for Qrow {
             .editor_height
             .min(window.viewport_size().height - self.ui_px(294.))
             .max(self.ui_px(100.));
+        let results_expansion = motion::panel_fraction(
+            "query-results",
+            !self.settings.results_minimized,
+            self.settings.smooth_transitions,
+            self.resize.is_some_and(|(horizontal, _, _)| !horizontal),
+            window,
+            cx,
+        );
+        let results_settled = !self.settings.results_minimized && results_expansion == 1.;
+        let sidebar_width = self.shown_sidebar_width(window.viewport_size().width);
+        let animated_sidebar_width = motion::panel_extent(
+            "connections-sidebar",
+            self.sidebar,
+            sidebar_width,
+            self.settings.smooth_transitions,
+            self.resize.is_some_and(|(horizontal, _, _)| horizontal),
+            window,
+            cx,
+        );
+        let sidebar_content = motion::content(
+            "sidebar-panel",
+            format!("{:?}", self.sidebar_panel),
+            0,
+            self.settings.smooth_transitions,
+            window,
+            cx,
+        );
+        let editor_content = motion::content(
+            "query-editor",
+            self.tabs[self.active].saved.id.to_string(),
+            self.tabs[self.active].revision,
+            self.settings.smooth_transitions,
+            window,
+            cx,
+        );
+        let editor = Editor::new(&self.tabs[self.active].input)
+            .smooth_caret(self.settings.editor_smooth_caret)
+            .smooth_scrolling(self.settings.editor_smooth_scrolling)
+            .appearance(false)
+            .context_menu_with_capabilities(|_, capabilities, _, cx| {
+                gpui_kit::component::native_menu::NativeMenu::from(format_sql::editor_menu(
+                    capabilities,
+                    cx.read_from_clipboard().is_some(),
+                ))
+            })
+            .font_family(self.settings.editor_font_family.clone())
+            .text_size(self.ui_px(self.settings.editor_font_size))
+            .size_full()
+            .aria_label("SQL Editor");
         h_flex()
             .size_full()
             .items_stretch()
-            .when(self.sidebar, |el| {
-                el.child(
+            .when(self.sidebar || animated_sidebar_width > px(0.), |el| {
+                el.child(motion::sidebar_panel(
+                    "sidebar-motion",
+                    self.sidebar,
+                    animated_sidebar_width,
+                    sidebar_width,
                     div()
+                        .relative()
+                        .left(sidebar_content.offset())
+                        .opacity(sidebar_content.opacity())
                         .track_focus(&self.sidebar_focus)
-                        .w(self.shown_sidebar_width(window.viewport_size().width))
-                        .flex_shrink_0()
+                        .size_full()
                         .map(|el| match self.sidebar_panel {
                             SidebarPanel::Connections => {
                                 el.child(self.connections(window, cx).into_any_element())
@@ -1185,9 +1383,19 @@ impl Render for Qrow {
                             SidebarPanel::SignIns => {
                                 el.child(self.sign_ins_sidebar(cx).into_any_element())
                             }
-                        }),
-                )
-                .child(self.splitter(true, cx))
+                        })
+                        .into_any_element(),
+                    cx,
+                ))
+                .child(if self.sidebar {
+                    self.splitter(true, cx).into_any_element()
+                } else {
+                    div()
+                        .w(self.ui_px(1.))
+                        .h_full()
+                        .bg(cx.theme().border)
+                        .into_any_element()
+                })
             })
             .child(
                 v_flex()
@@ -1202,44 +1410,35 @@ impl Render for Qrow {
                         // editor through its container.
                         div()
                             .id("sql-editor")
+                            .overflow_hidden()
                             .test_support()
-                            .when(self.settings.results_minimized, |el| el.flex_1().min_h_0())
-                            .when(!self.settings.results_minimized, |el| {
-                                el.h(editor_height).flex_shrink_0()
-                            })
+                            .flex_basis(editor_height)
+                            .flex_grow(1. - results_expansion)
+                            .flex_shrink_0()
+                            .min_h_0()
                             .min_w_0()
                             .line_height(relative(self.settings.editor_line_height))
                             .child(
-                                Editor::new(&self.tabs[self.active].input)
-                                    .appearance(false)
-                                    .context_menu_with_capabilities(|_, capabilities, _, cx| {
-                                        gpui_kit::component::native_menu::NativeMenu::from(
-                                            format_sql::editor_menu(
-                                                capabilities,
-                                                cx.read_from_clipboard().is_some(),
-                                            ),
-                                        )
-                                    })
-                                    .font_family(self.settings.editor_font_family.clone())
-                                    .text_size(self.ui_px(self.settings.editor_font_size))
+                                div()
+                                    .opacity(editor_content.opacity())
                                     .size_full()
-                                    .aria_label("SQL Editor"),
+                                    .child(editor),
                             ),
                     )
-                    .when(!self.settings.results_minimized, |el| {
-                        el.child(self.splitter(false, cx))
-                    })
-                    .when(self.settings.results_minimized, |el| {
+                    .when(results_settled, |el| el.child(self.splitter(false, cx)))
+                    .when(!results_settled, |el| {
                         el.child(div().h(self.ui_px(1.)).bg(cx.theme().border))
                     })
                     .child(
                         div()
-                            .when(self.settings.results_minimized, |el| {
-                                el.h(self.ui_px(result_tabs::RESULT_TAB_BAR_HEIGHT))
-                                    .flex_shrink_0()
-                            })
-                            .when(!self.settings.results_minimized, |el| el.flex_1().min_h_0())
-                            .child(self.query_panel(cx)),
+                            .id("results-motion")
+                            .test_support()
+                            .flex_basis(self.ui_px(result_tabs::RESULT_TAB_BAR_HEIGHT))
+                            .flex_grow(results_expansion)
+                            .flex_shrink_0()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(self.query_panel(window, cx)),
                     ),
             )
     }

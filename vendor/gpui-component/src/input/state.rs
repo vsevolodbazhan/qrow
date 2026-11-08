@@ -187,11 +187,12 @@ impl TextInputState {
     /// Builds and syncs this input's overlays. See [`super::overlay`].
     pub(super) fn render_overlays(
         &self,
+        smooth_caret: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> super::overlay::InputOverlays {
         dispatch!(self, |state| super::overlay::render_overlays(
-            state, window, cx
+            state, smooth_caret, window, cx
         ))
     }
 

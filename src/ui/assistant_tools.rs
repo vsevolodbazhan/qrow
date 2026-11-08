@@ -553,7 +553,11 @@ impl Qrow {
                 .transcripts
                 .entry(call.thread_id.clone())
                 .or_default()
-                .push(TranscriptEntry::tool(tool, call.turn_id.clone()).with_detail(detail));
+                .push(
+                    TranscriptEntry::tool(tool, call.turn_id.clone())
+                        .with_detail(detail)
+                        .appearing(cx.background_executor().now()),
+                );
             self.answer_assistant_call(call, result.success, result.content, cx);
         }
     }
@@ -922,7 +926,11 @@ impl Qrow {
 
     pub(super) fn cancel_assistant_approval(&mut self, thread_id: &str, cx: &mut Context<Self>) {
         if let Some(pending) = self.thread_run_mut(thread_id).pending_query.take() {
-            self.record_assistant_query_cancelled(&pending, "You cancelled this query request.");
+            self.record_assistant_query_cancelled(
+                &pending,
+                "You cancelled this query request.",
+                cx,
+            );
             self.answer_assistant_call(
                 pending.call,
                 false,
@@ -1035,12 +1043,14 @@ impl Qrow {
         &mut self,
         pending: &PendingQuery,
         reason: &str,
+        cx: &mut Context<Self>,
     ) {
         let entry = TranscriptEntry::tool(
             self.assistant_query_tool(pending, ToolState::Cancelled),
             pending.call.turn_id.clone(),
         )
-        .with_detail(bound_text(&format!("{reason}\nQuery:\n{}", pending.sql)).0);
+        .with_detail(bound_text(&format!("{reason}\nQuery:\n{}", pending.sql)).0)
+        .appearing(cx.background_executor().now());
         self.assistant_state
             .transcripts
             .entry(pending.call.thread_id.clone())
@@ -1061,7 +1071,11 @@ impl Qrow {
         let detail = bound_text(&format!("Query:\n{}", pending.sql)).0;
         let entries = self.assistant_state.transcripts.entry(thread).or_default();
         let index = entries.len();
-        entries.push(TranscriptEntry::tool(tool, turn).with_detail(detail));
+        entries.push(
+            TranscriptEntry::tool(tool, turn)
+                .with_detail(detail)
+                .appearing(cx.background_executor().now()),
+        );
         if let Some(pending) = &mut self.thread_run_mut(thread_id).pending_query {
             pending.activity_index = Some(index);
         }
@@ -1160,19 +1174,14 @@ impl Qrow {
         };
         let status = (!ok).then(|| format!("Status: {}\n", tab.status_label()));
         let pending = self.thread_run_mut(thread_id).pending_query.take().unwrap();
-        let entry = TranscriptEntry::tool(
-            self.assistant_query_tool(&pending, state),
-            pending.call.turn_id.clone(),
-        )
-        .with_detail(
-            bound_text(&format!(
-                "{}Query:\n{}\nResult:\n{}",
-                status.unwrap_or_default(),
-                pending.sql,
-                content
-            ))
-            .0,
-        );
+        let tool = self.assistant_query_tool(&pending, state);
+        let detail = bound_text(&format!(
+            "{}Query:\n{}\nResult:\n{}",
+            status.unwrap_or_default(),
+            pending.sql,
+            content
+        ))
+        .0;
         let entries = self
             .assistant_state
             .transcripts
@@ -1182,9 +1191,13 @@ impl Qrow {
             .activity_index
             .and_then(|index| entries.get_mut(index))
         {
-            *existing = entry;
+            existing.update_tool(tool, detail);
         } else {
-            entries.push(entry);
+            entries.push(
+                TranscriptEntry::tool(tool, pending.call.turn_id.clone())
+                    .with_detail(detail)
+                    .appearing(cx.background_executor().now()),
+            );
         }
         if !pending.detached {
             self.answer_assistant_call(pending.call, ok, content, cx);

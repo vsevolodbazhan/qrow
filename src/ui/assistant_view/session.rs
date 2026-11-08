@@ -261,6 +261,7 @@ pub(in crate::ui) enum ComposerTarget {
 /// the workspace file use it too. The pane view keeps its own view state.
 pub(in crate::ui) struct AssistantState {
     pub open: bool,
+    pub maximized: bool,
     pub status: Status,
     pub service: Option<Service>,
     /// The harness that `service` runs.
@@ -317,6 +318,7 @@ impl AssistantState {
     pub fn new(cx: &App) -> Self {
         Self {
             open: false,
+            maximized: false,
             status: Status::Idle,
             service: None,
             harness: None,
@@ -399,6 +401,16 @@ impl Shown<'_> {
     /// The rows of the transcript list: the button for older messages, the
     /// entries, and the line that shows while Codex works.
     pub fn rows(&self, has_older: bool, active_tab: Option<Uuid>) -> TranscriptRows {
+        // A streamed reply takes the Working row's place. Keeping both
+        // would move the transcript down when the turn drops the status.
+        let has_reply = self.entries.last().is_some_and(|entry| {
+            entry.speaker == Speaker::Assistant
+                && self.run.is_some_and(|run| {
+                    run.active_turn
+                        .as_deref()
+                        .is_some_and(|turn| entry.turn_id.as_deref() == Some(turn))
+                })
+        });
         let entries = self
             .entries
             .iter()
@@ -417,7 +429,7 @@ impl Shown<'_> {
                 .then_some(Row::Older)
                 .into_iter()
                 .chain(entries)
-                .chain(self.waiting_for_agent.then_some(Row::Working))
+                .chain((self.waiting_for_agent && !has_reply).then_some(Row::Working))
                 .collect(),
         }
     }

@@ -44,10 +44,15 @@ impl Reveal {
     /// The text became longer.
     pub fn received(&mut self) {
         self.waited = 0.;
+        self.complete = false;
     }
 
     pub fn complete(&mut self) {
         self.complete = true;
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.complete
     }
 
     /// Shows all of `text` at once.
@@ -317,7 +322,13 @@ fn marker_end(text: &str, shown: usize, cut: usize, settled: bool) -> usize {
 
 impl Qrow {
     /// Starts the steps that show streamed replies, unless they run.
-    pub(super) fn reveal_assistant_replies(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn reveal_assistant_replies(&mut self, cx: &mut Context<Self>) {
+        if self.settings.assistant_buffer_replies {
+            // Completion events wake buffered replies. Waiting for the
+            // harness does not need a frame timer.
+            self.advance_assistant_replies(Duration::ZERO, cx);
+            return;
+        }
         if self.assistant_state.revealing {
             return;
         }
@@ -344,18 +355,51 @@ impl Qrow {
         .detach();
     }
 
+    /// Release received text when a turn ends or its harness stops.
+    pub(super) fn finish_assistant_replies(
+        &mut self,
+        thread: Option<&str>,
+        turn: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        for (_, entries) in self
+            .assistant_state
+            .transcripts
+            .iter_mut()
+            .filter(|(id, _)| thread.is_none_or(|thread| thread == id.as_str()))
+        {
+            for entry in entries
+                .iter_mut()
+                .filter(|entry| turn.is_none_or(|turn| entry.turn_id.as_deref() == Some(turn)))
+            {
+                entry.finish_reply();
+            }
+        }
+        self.reveal_assistant_replies(cx);
+    }
+
     /// Shows more of the streamed replies of the shown conversation. Other
     /// conversations show their replies at once. Returns whether a reply
     /// still has text to show.
     fn advance_assistant_replies(&mut self, elapsed: Duration, cx: &mut Context<Self>) -> bool {
         let displayed = self.displayed_thread();
         let paced = !cx.reduce_motion();
+        let buffered = self.settings.assistant_buffer_replies;
+        let now = cx.background_executor().now();
         let mut changed = false;
         let mut more = false;
         for (thread, entries) in &mut self.assistant_state.transcripts {
             let shown = paced && displayed.as_deref() == Some(thread.as_str());
             for entry in entries.iter_mut().filter(|entry| entry.revealing()) {
-                if shown {
+                if buffered {
+                    if entry.reply_complete() {
+                        changed |= if shown {
+                            entry.show_buffered(now)
+                        } else {
+                            entry.show_all()
+                        };
+                    }
+                } else if shown {
                     changed |= entry.advance_reveal(elapsed);
                     more |= entry.revealing();
                 } else {

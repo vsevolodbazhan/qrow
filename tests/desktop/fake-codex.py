@@ -913,6 +913,43 @@ for line in sys.stdin:
                     },
                 }
             )
+        elif message.startswith("Hold a buffered reply"):
+            def buffered_reply(thread=thread_id, turn=turn_id, message=message):
+                first = "**Buffered reply**"
+                send({"method": "item/agentMessage/delta",
+                      "params": {"threadId": thread, "turnId": turn, "delta": first}})
+                open(os.path.join(state_dir, "buffered-partial"), "w").close()
+                wait_for_marker("buffered-release")
+                if message.endswith("disconnect"):
+                    os._exit(0)
+                if message.endswith("failure"):
+                    send({"method": "turn/completed", "params": {
+                        "threadId": thread, "turn": {"id": turn, "status": "failed",
+                        "error": {"message": "Synthetic buffered failure"}, "items": []}}})
+                    return
+                rest = "\n\n| Column | Value |\n| --- | --- |\n| Result | 1 |"
+                if message.endswith("long"):
+                    rest = "\n\n" + "word " * 2000 + rest
+                send({"method": "item/agentMessage/delta",
+                      "params": {"threadId": thread, "turnId": turn, "delta": rest}})
+                send({"method": "item/completed", "params": {"threadId": thread, "turnId": turn,
+                      "item": {"type": "agentMessage", "text": first + rest}}})
+                open(os.path.join(state_dir, "buffered-complete"), "w").close()
+                if message.endswith("twice"):
+                    wait_for_marker("buffered-second-start")
+                    send({"method": "item/agentMessage/delta", "params": {
+                        "threadId": thread, "turnId": turn, "delta": "Second buffered"}})
+                    open(os.path.join(state_dir, "buffered-second-partial"), "w").close()
+                    wait_for_marker("buffered-second-release")
+                    send({"method": "item/agentMessage/delta", "params": {
+                        "threadId": thread, "turnId": turn, "delta": " reply."}})
+                    send({"method": "item/completed", "params": {"threadId": thread,
+                          "turnId": turn, "item": {"type": "agentMessage", "text": "Second buffered reply."}}})
+                wait_for_marker("buffered-turn-release")
+                send({"method": "turn/completed", "params": {
+                    "threadId": thread, "turn": {"id": turn, "status": "completed", "items": []}}})
+
+            threading.Thread(target=buffered_reply, daemon=True).start()
         elif message.startswith("Stream a reply in bursts"):
             # Three parts of 20 words with pauses, like a model that sends a
             # reply in large parts at irregular times.
@@ -965,6 +1002,8 @@ for line in sys.stdin:
                     "| Column | Value |\n| --- | --- |\n| Result | 1 |"
                 )
             )
+            if message.startswith("Show leading whitespace reply"):
+                answer = "\n\n" + answer
             send(
                 {
                     "method": "item/agentMessage/delta",

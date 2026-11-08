@@ -1,7 +1,7 @@
 //! The messages and tool cards of a conversation.
 use super::*;
 use std::borrow::Cow;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::ui) enum Speaker {
@@ -213,6 +213,7 @@ pub(in crate::ui) struct TranscriptEntry {
     /// by step. See [`Reveal`].
     shown: SharedString,
     reveal: Option<Reveal>,
+    appearance_started: Option<Instant>,
     pub turn_id: Option<String>,
     pub tool: Option<ToolActivity>,
     pub detail: Option<String>,
@@ -230,6 +231,7 @@ impl TranscriptEntry {
             label: SharedString::default(),
             shown: SharedString::default(),
             reveal: None,
+            appearance_started: None,
             turn_id,
             tool: None,
             detail: None,
@@ -333,6 +335,36 @@ impl TranscriptEntry {
         self.reveal.is_some() && self.shown.len() < self.text.len()
     }
 
+    pub fn finish_reply(&mut self) {
+        if let Some(reveal) = &mut self.reveal {
+            reveal.complete();
+        }
+    }
+
+    pub fn reply_complete(&self) -> bool {
+        self.reveal.as_ref().is_none_or(Reveal::is_complete)
+    }
+
+    pub fn appearance_started(&self) -> Option<Instant> {
+        self.appearance_started
+    }
+
+    /// Mark a live message for appearance motion. Restored entries stay still.
+    pub fn appearing(mut self, now: Instant) -> Self {
+        self.appearance_started = Some(now);
+        self
+    }
+
+    /// Show a completed message without changing its layout during the fade.
+    pub fn show_buffered(&mut self, now: Instant) -> bool {
+        let first = self.shown.trim().is_empty();
+        let changed = self.show_all();
+        if changed && first {
+            self.appearance_started = Some(now);
+        }
+        changed
+    }
+
     /// Shows more of the streamed text. Returns whether the shown text changed.
     pub fn advance_reveal(&mut self, elapsed: std::time::Duration) -> bool {
         let Some(reveal) = &mut self.reveal else {
@@ -367,6 +399,14 @@ impl TranscriptEntry {
     pub fn with_detail(mut self, detail: String) -> Self {
         self.detail = Some(detail);
         self
+    }
+
+    /// Update a card without replacing its identity or appearance clock.
+    pub fn update_tool(&mut self, tool: ToolActivity, detail: String) {
+        let label = tool.label();
+        self.tool = Some(tool);
+        self.detail = Some(detail);
+        self.set_text(label);
     }
 
     /// Replaces the tool state and keeps the accessible text in step with it.
@@ -487,6 +527,43 @@ pub(in crate::ui) fn row_change(old: &[Row], new: &[Row]) -> RowChange {
 mod tests {
     use super::*;
     use crate::assistant::WORKSPACE_CONTEXT_SEPARATOR;
+
+    #[::core::prelude::v1::test]
+    fn tool_updates_keep_identity_appearance_and_expansion() {
+        let now = Instant::now();
+        let mut entry = TranscriptEntry::tool(
+            ToolActivity {
+                kind: ToolKind::RunQuery,
+                target: None,
+                state: ToolState::Running("Preparing".into()),
+            },
+            "turn-1".into(),
+        )
+        .appearing(now);
+        let id = entry.id;
+        entry.toggle_expanded();
+        let revision = entry.revision();
+        entry.update_tool(
+            ToolActivity {
+                kind: ToolKind::RunQuery,
+                target: Some("Query 1".into()),
+                state: ToolState::QueryResult {
+                    rows: 1,
+                    more: false,
+                    elapsed: Some(Duration::from_millis(50)),
+                },
+            },
+            "The result".into(),
+        );
+        assert_eq!(entry.id, id);
+        assert_eq!(entry.appearance_started(), Some(now));
+        assert!(entry.expanded());
+        assert!(entry.revision() > revision);
+        assert!(entry.label().contains("1 row"));
+        entry.set_tool_state(ToolState::Failed);
+        assert_eq!(entry.appearance_started(), Some(now));
+        assert_eq!(entry.id, id);
+    }
 
     #[::core::prelude::v1::test]
     fn the_icon_of_each_tool_kind_loads() {

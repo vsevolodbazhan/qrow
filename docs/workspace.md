@@ -21,6 +21,47 @@ Tab key and SQL that Qrow formats for the assistant and **Format** use this
 size. The editor indents with spaces. **SQL Keyword Case** is the last Editor
 setting. It applies to **Format** and SQL that the [assistant](assistant.md)
 writes.
+Find and Replace buttons show tooltips with their available shortcuts.
+
+**Smooth Caret** is off by default. Enable it in the Editor section to animate
+short horizontal caret movements in the editor, its Find and Replace fields,
+and the connection and conversation search fields. Text appears immediately. Mouse clicks,
+line changes, selections, scrolling, and large jumps keep immediate caret
+movement. The system reduced-motion setting disables the animation.
+
+**Smooth Scrolling** is also off by default. Enable it in the Editor section
+to smooth discrete mouse-wheel steps. Trackpad gestures, caret navigation,
+and scrollbar dragging keep their immediate response. Typing, a mouse click,
+or a direct scroll change stops pending wheel movement.
+
+**Smooth Transitions** is in the Interface section and is off by default.
+Enable it for short transitions when query tabs, result tabs, and sidebar
+panels change. Collapsing and expanding results also uses this option. The
+previous split returns on expansion, and a second toggle reverses the motion.
+Assistant maximize and restore also use this option. Sidebars expand and
+collapse without changing the width of
+their contents during the transition. Controls leave the sidebar when it
+starts to close. A second toggle reverses the motion.
+Content changes keep text visible. Editor text stays in position when tabs
+change. Typing stops the editor fade at once.
+Your messages fade in as a whole, without sliding. Each new part of an
+assistant reply fades as it arrives.
+New tool-call cards also fade in. Their status and result updates stay immediate.
+Window and splitter resizing stay immediate. Activity slides in from the right
+and closes toward the right. Its contents keep their full width during motion.
+These options follow the system reduced-motion setting.
+
+**Smooth Composer Caret** and **Smooth Composer Resize** are in the
+Conversations section. Both are off by default. The caret option animates
+short horizontal movements while text appears immediately. The resize option
+animates message-field growth and shrinkage, including after Send. Window and
+splitter resizing stay immediate. Both options follow reduced motion.
+
+**Buffered Replies** is also in Conversations and is off by default. Enable
+it to wait for complete assistant messages and then fade them in at their
+full height. Reduced motion removes this fade. See
+[assistant replies](assistant.md#work-with-sql) for the wait and interruption behavior.
+
 Editor settings apply to SQL. Logs settings apply to log entries.
 Conversations settings apply to assistant messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the

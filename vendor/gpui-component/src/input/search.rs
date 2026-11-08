@@ -64,11 +64,19 @@ pub(super) struct SearchPanel<M: crate::input::overlay::OverlayMode> {
     replace_input: Entity<InputState>,
     session: gpui_base::input::SearchSession,
     input_width: Pixels,
+    smooth_caret: bool,
 
     _subscriptions: Vec<Subscription>,
 }
 
 impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
+    pub(super) fn set_smooth_caret(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.smooth_caret != enabled {
+            self.smooth_caret = enabled;
+            cx.notify();
+        }
+    }
+
     pub(super) fn sync_session(&mut self, session: &gpui_base::input::SearchSession) {
         self.session = session.clone();
     }
@@ -110,6 +118,7 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
             Self {
                 editor: editor.downgrade(),
                 search_input,
+                smooth_caret: false,
                 replace_input,
                 session: gpui_base::input::SearchSession::default(),
                 input_width: Pixels::ZERO,
@@ -352,6 +361,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             .gap_1()
                             .child(
                                 Input::new(&self.search_input)
+                                    .smooth_caret(self.smooth_caret)
                                     .focus_bordered(false)
                                     .suffix(
                                         Button::new("case-insensitive")
@@ -361,6 +371,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                                             .compact()
                                             .text()
                                             .icon(IconName::CaseSensitive)
+                                            .accessibility_label("Match case")
+                                            .tooltip("Match case")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.session.case_insensitive =
                                                     !this.session.case_insensitive;
@@ -385,6 +397,12 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                                 .xsmall()
                                 .ghost()
                                 .icon(IconName::Replace)
+                                .accessibility_label("Toggle replace")
+                                .tooltip_with_action(
+                                    if self.session.replace_mode { "Hide replace field" } else { "Show replace field" },
+                                    &Replace,
+                                    Some("Input"),
+                                )
                                 .selected(self.session.replace_mode)
                                 .toggled(self.session.replace_mode)
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -397,6 +415,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             .xsmall()
                             .ghost()
                             .icon(IconName::ChevronLeft)
+                            .accessibility_label("Previous match")
+                            .tooltip_with_action("Previous match", &Enter { secondary: false, shift: true }, Some("Input"))
                             .disabled(!has_matches)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.prev(window, cx);
@@ -407,6 +427,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             .xsmall()
                             .ghost()
                             .icon(IconName::ChevronRight)
+                            .accessibility_label("Next match")
+                            .tooltip_with_action("Next match", &Enter { secondary: false, shift: false }, Some("Input"))
                             .disabled(!has_matches)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.next(window, cx);
@@ -426,6 +448,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             .xsmall()
                             .ghost()
                             .icon(IconName::Close)
+                            .accessibility_label("Close search")
+                            .tooltip_with_action("Close search", &Escape, Some("Input"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_action_escape(&Escape, window, cx);
                             })),
@@ -438,6 +462,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                         .gap_2()
                         .child(
                             Input::new(&self.replace_input)
+                                    .smooth_caret(self.smooth_caret)
                                 .focus_bordered(false)
                                 .small()
                                 .w(self.input_width)
@@ -447,6 +472,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             Button::new("replace-one")
                                 .small()
                                 .label(t!("Input.Replace"))
+                                .accessibility_label("Replace match")
+                                .tooltip("Replace match")
                                 .disabled(!has_matches)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.replace_next(window, cx);
@@ -456,6 +483,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             Button::new("replace-all")
                                 .small()
                                 .label(t!("Input.Replace All"))
+                                .accessibility_label("Replace all matches")
+                                .tooltip("Replace all matches")
                                 .disabled(!has_matches)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.replace_all(window, cx);

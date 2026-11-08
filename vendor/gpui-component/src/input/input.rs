@@ -122,6 +122,9 @@ pub struct Input {
     mask_toggle: bool,
     disabled: bool,
     readonly: bool,
+    caret_transition: std::time::Duration,
+    smooth_resize: bool,
+    smooth_scrolling: bool,
     bordered: bool,
     focus_bordered: bool,
     /// Whether the focused input draws a ring outside its border. The
@@ -212,6 +215,9 @@ impl Input {
             mask_toggle: false,
             disabled: false,
             readonly: false,
+            caret_transition: std::time::Duration::ZERO,
+            smooth_resize: false,
+            smooth_scrolling: false,
             bordered: true,
             focus_bordered: true,
             focus_ring: true,
@@ -329,6 +335,30 @@ impl Input {
     /// made by the user.
     pub fn readonly(mut self, readonly: bool) -> Self {
         self.readonly = readonly;
+        self
+    }
+
+    pub(crate) fn smooth_resize(mut self, enabled: bool) -> Self {
+        self.smooth_resize = enabled;
+        self
+    }
+
+    /// Animate short horizontal caret movements. Off by default; respects reduced motion.
+    pub fn smooth_caret(self, enabled: bool) -> Self {
+        self.caret_transition(if enabled {
+            std::time::Duration::from_millis(35)
+        } else {
+            std::time::Duration::ZERO
+        })
+    }
+
+    pub(crate) fn caret_transition(mut self, duration: std::time::Duration) -> Self {
+        self.caret_transition = duration;
+        self
+    }
+
+    pub(crate) fn smooth_scrolling(mut self, enabled: bool) -> Self {
+        self.smooth_scrolling = enabled;
         self
     }
 
@@ -516,41 +546,50 @@ impl RenderOnce for Input {
         sync_focused_input_registry(&state, window, cx);
 
         state.ensure_highlighter_factory(crate::highlighter::input_highlighter_factory(), cx);
-        state.set_editor_style(
-            gpui_base::input::InputEditorStyle {
-                foreground: cx.theme().foreground,
-                muted_foreground: cx.theme().muted_foreground,
-                background: cx.theme().editor_background(),
-                border: cx.theme().border,
-                selection: cx.theme().selection,
-                caret: cx.theme().caret,
-                diagnostics: gpui_base::input::DiagnosticColors {
-                    error: cx.theme().highlight_theme.style.status.error(cx),
-                    warning: cx.theme().highlight_theme.style.status.warning(cx),
-                    info: cx.theme().highlight_theme.style.status.info(cx),
-                    hint: cx.theme().highlight_theme.style.status.hint(cx),
-                },
-                highlight_styles: cx.theme().highlight_theme.clone(),
-                editor_invisible: cx.theme().highlight_theme.style.editor_invisible,
-                editor_active_line: cx.theme().highlight_theme.style.editor_active_line,
-                editor_gutter_background: cx.theme().highlight_theme.style.editor_gutter_background,
-                fold_icon_renderer: Some(Rc::new(|ix, is_folded| {
-                    Button::new(("fold-icon", ix))
-                        .ghost()
-                        .icon(if is_folded {
-                            IconName::ChevronRight
-                        } else {
-                            IconName::ChevronDown
-                        })
-                        .xsmall()
-                        .rounded(ButtonRounded::Small)
-                        .size(px(14.))
-                        .selected(is_folded)
-                        .into_any_element()
-                })),
-            },
-            cx,
-        );
+        let mut editor_style = gpui_base::input::InputEditorStyle::default();
+        editor_style.foreground = cx.theme().foreground;
+        editor_style.muted_foreground = cx.theme().muted_foreground;
+        editor_style.background = cx.theme().editor_background();
+        editor_style.border = cx.theme().border;
+        editor_style.selection = cx.theme().selection;
+        editor_style.caret = cx.theme().caret;
+        editor_style.caret_transition = self.caret_transition;
+        editor_style.auto_grow_transition = if self.smooth_resize {
+            cx.theme().motion_tokens().duration_fast
+        } else {
+            std::time::Duration::ZERO
+        };
+        editor_style.scroll_transition = if self.smooth_scrolling {
+            cx.theme().motion_tokens().duration_fast
+        } else {
+            std::time::Duration::ZERO
+        };
+        editor_style.diagnostics = gpui_base::input::DiagnosticColors {
+            error: cx.theme().highlight_theme.style.status.error(cx),
+            warning: cx.theme().highlight_theme.style.status.warning(cx),
+            info: cx.theme().highlight_theme.style.status.info(cx),
+            hint: cx.theme().highlight_theme.style.status.hint(cx),
+        };
+        editor_style.highlight_styles = cx.theme().highlight_theme.clone();
+        editor_style.editor_invisible = cx.theme().highlight_theme.style.editor_invisible;
+        editor_style.editor_active_line = cx.theme().highlight_theme.style.editor_active_line;
+        editor_style.editor_gutter_background =
+            cx.theme().highlight_theme.style.editor_gutter_background;
+        editor_style.fold_icon_renderer = Some(Rc::new(|ix, is_folded| {
+            Button::new(("fold-icon", ix))
+                .ghost()
+                .icon(if is_folded {
+                    IconName::ChevronRight
+                } else {
+                    IconName::ChevronDown
+                })
+                .xsmall()
+                .rounded(ButtonRounded::Small)
+                .size(px(14.))
+                .selected(is_folded)
+                .into_any_element()
+        }));
+        state.set_editor_style(editor_style, cx);
         state.set_editor_paddings(
             if state.presentation(cx).is_multi_line() {
                 Edges {
@@ -623,7 +662,7 @@ impl RenderOnce for Input {
             .paste_handler
             .clone()
             .filter(|_| state.presentation(cx).is_editable());
-        let mut overlays = state.render_overlays(window, cx);
+        let mut overlays = state.render_overlays(!self.caret_transition.is_zero(), window, cx);
         overlays
             .floating
             .extend(Self::render_touch_selection(&state, window, cx));

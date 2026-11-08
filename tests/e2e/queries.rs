@@ -4,7 +4,7 @@ use crate::support::{
     cell, header, label,
 };
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{TestAppContext, px, size};
+use gpui_kit::{ScrollDelta, TestAppContext, point, px, size};
 use qrow::model::SavedTab;
 use std::time::Duration;
 
@@ -471,22 +471,29 @@ fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
-    let (workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    workspace.settings.smooth_transitions = true;
     let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.update(|cx| cx.set_reduce_motion(false));
     let height = app.update(cx, |window, _| {
         window.find("sql-editor").bounds().size.height
     });
     app.click(cx, "toggle-results");
-    app.update(cx, |window, _| {
-        assert!(window.find("sql-editor").bounds().size.height > height);
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+    app.wait_until(cx, "results collapsing", QUERY_TIMEOUT, |window, _| {
+        window.find("sql-editor").bounds().size.height > height
+            && window.find("toggle-results").label() == Some("Expand")
     });
     app.click(cx, "run");
     app.wait_cell(cx, 0, 1, "233");
-    app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
-        assert_eq!(window.find("sql-editor").bounds().size.height, height);
-    });
+    app.wait_until(
+        cx,
+        "results restored to their previous height",
+        QUERY_TIMEOUT,
+        |window, _| {
+            window.find("toggle-results").label() == Some("Collapse")
+                && window.find("sql-editor").bounds().size.height == height
+        },
+    );
     app.press(cx, "secondary-j");
     app.press(cx, "secondary-j");
     app.wait_cell(cx, 0, 1, "233");
@@ -515,6 +522,73 @@ fn linux_application_menu_opens_settings_after_a_query(cx: &mut TestAppContext) 
     app.press(cx, "secondary-w");
     cx.run_until_parked();
     assert!(app.settings_window(cx).is_none());
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn smooth_motion_keeps_typed_sql_and_query_execution_immediate(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let sql = format!("SELECT 4;\n{}", "-- Synthetic scroll padding\n".repeat(100));
+    let (mut workspace, credentials) = kyuubi.workspace(&sql, PASSWORD);
+    workspace.settings.editor_smooth_caret = true;
+    workspace.settings.editor_smooth_scrolling = true;
+    workspace.settings.smooth_transitions = true;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.dispatch(cx, qrow::ui::ToggleActivity);
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.dispatch(cx, qrow::ui::ToggleActivity);
+    app.dispatch(cx, qrow::ui::ShowSignIns);
+    app.dispatch(cx, qrow::ui::ShowConnections);
+    app.dispatch(cx, qrow::ui::ToggleSidebar);
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.click_labelled(cx, "SQL Editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
+    for _ in 0..8 {
+        app.press(cx, "right");
+    }
+    app.press(cx, "2");
+    app.update(cx, |window, cx| {
+        window.scroll("sql-editor", ScrollDelta::Lines(point(0., -20.)), cx)
+    });
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.press(cx, "secondary-enter");
+    app.wait_until(
+        cx,
+        "the SQL typed and scrolled with smooth motion",
+        QUERY_TIMEOUT,
+        |window, _| cell(window, 0, 1).as_deref() == Some("42"),
+    );
+    let expected_sql = sql.replacen("SELECT 4;", "SELECT 42;", 1);
+    app.wait_until(
+        cx,
+        "the typed SQL to be saved",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == expected_sql,
+    );
+    app.click_labelled(cx, "SQL Editor");
+    app.press(cx, "secondary-f");
+    app.update(cx, |window, cx| window.input("SELECT", cx));
+    app.press(cx, "left");
+    app.press(cx, "escape");
+    let saved = app.saved();
+    assert!(saved.settings.editor_smooth_caret);
+    assert!(saved.settings.editor_smooth_scrolling);
+    assert!(saved.settings.smooth_transitions);
+    assert_eq!(saved.tabs[0].sql, expected_sql);
 }
 
 #[gpui_kit::test]

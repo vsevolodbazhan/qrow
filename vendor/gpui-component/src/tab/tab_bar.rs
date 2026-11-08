@@ -137,9 +137,9 @@ impl TabBar {
         self
     }
 
-    /// Qrow: when set, each tab with a maximum width except the selected one
-    /// shrinks down to this width instead of the usual least width. A bar
-    /// that would scroll only a little sets it so that all tabs fit.
+    /// Qrow: inactive capped tabs can shrink to this width. Selected document
+    /// tabs use the same minimum and keep their natural title width above it.
+    /// A bar that would scroll only a little sets it so that all tabs fit.
     pub fn fit_width(mut self, width: Option<Pixels>) -> Self {
         self.fit_width = width;
         self

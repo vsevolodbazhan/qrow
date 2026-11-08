@@ -75,12 +75,28 @@ Claude Code works as Codex does, with these differences:
 
 ## Work with SQL
 
+Click **Maximize** in the conversation header or press **⇧⌘R** to fill the work area,
+as Activity does. Click **Minimize** or press **⌥⌘R** to return to the side pane at
+its previous width. With **Smooth Transitions**, maximizing and restoring
+animate the width. A second click reverses the motion. Reduced motion makes
+the change immediate. Activity can cover the maximized assistant. Close Activity
+to return to it. **Show tab** in Activity restores the side pane and shows
+the query tab. **⌘R** closes and opens the assistant without changing its
+maximized state or saved side-pane width. The width adjusts only if the
+window does not have enough space. Maximize also opens a closed assistant.
+Minimize has no effect when the assistant is closed.
+
+
 Select a query tab. Click the assistant button near the right end of the
 status bar, select **Toggle assistant** in the **View** menu, or press **⌘R**. Write a message and press **Enter** or
 **⌘Enter** to send it. Press **Shift-Enter** to start a new line. The message
 field shows three lines. It grows with a longer message to 40% of the window
 height, and then scrolls. After you send the message, the field shows three
-lines again. While the assistant works, the Send button becomes
+lines again. To animate these height changes or short caret movements, enable
+**Smooth Composer Resize** or **Smooth Composer Caret** in
+[Appearance → Conversations](workspace.md). Both options are off by default
+and follow reduced motion. Text entry stays immediate.
+While the assistant works, the Send button becomes
 **Cancel**. While the harness starts a new conversation after its first message, you
 cannot send or cancel. Type a follow-up and press **Enter** to steer the current
 turn. With Claude Code, the follow-up starts the next turn. **Cancel**
@@ -114,10 +130,10 @@ The pane header has **New conversation**, **More**, and **Conversations**.
 **More** opens the menu of the conversation. **Conversations** shows or hides
 the conversation list.
 
-While the assistant works on a reply, a shimmering **Working…** line shows at the end of
-the conversation. It shows from the time that you send a message until the
-turn ends or fails. It also shows while the assistant writes text or uses tools. It does
-not show while a query waits for your approval.
+A shimmering **Working…** line shows while the assistant waits to write a
+reply or uses tools. The first words of a reply replace this line in the same
+space. The line does not show below a reply that is still being written, or
+while a query waits for your approval.
 
 See [Conversation state](#conversation-state) for the status that the thread
 list and the assistant toggle show.
@@ -126,7 +142,7 @@ Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables. Each line break that you
 type in a message shows as a line break.
 
-Select **Copy code** above a code block in an assistant reply to copy its
+Select the **Copy** icon above a code block in an assistant reply to copy its
 contents. The copy keeps spaces and line breaks. It does not include the
 Markdown fences or the text around the block.
 
@@ -135,12 +151,25 @@ word at an even speed, about 0.3 seconds after the text arrives, and each word
 fades in. Qrow does not split bold text, inline code, a link, or a table row.
 If you reduce motion in macOS, each part shows when it arrives.
 
+To show complete replies, enable **Appearance → Conversations → Buffered
+Replies** in Settings. This option is off by default. It waits for each reply
+message to finish, then shows it at its full height with a short fade. A long
+reply stays hidden until it is complete. Tool activity still shows as it
+occurs. If you cancel a reply, or the harness fails or disconnects, the text
+received so far shows. Reduced motion removes the fade but keeps the wait.
+**Smooth Transitions** also fades new messages that you send, without moving
+them.
+Turn this option off to return to word-by-word replies, including text that
+is currently waiting.
+
 Your messages show at the right. Assistant replies and errors use the full width
 of the conversation. If a table is too wide for a reply, its columns become
 narrower and their text wraps. If the columns are at their minimum width, you
 can scroll the table horizontally.
 
 Each Qrow tool call shows as a card across the full width of the conversation.
+With **Smooth Transitions**, new cards fade in. Status updates do not start
+the fade again.
 The card is collapsed. It shows the tool icon, the tool name, for example
 **Edit query** or **Run query**, and the state at the right:
 

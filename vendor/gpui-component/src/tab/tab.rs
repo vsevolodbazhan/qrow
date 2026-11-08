@@ -1,3 +1,4 @@
+use gpui_base::TestSupportExt as _;
 use std::{rc::Rc, time::Duration};
 
 use crate::animation::{Lerp, ease_in_out_cubic};
@@ -632,7 +633,7 @@ impl Sizable for Tab {
 }
 
 impl RenderOnce for Tab {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let mut normal_style = self.variant.normal(cx);
         let mut selected_style = self.variant.selected(cx);
         let mut disabled_style = self.variant.disabled(self.selected, cx);
@@ -723,6 +724,12 @@ impl RenderOnce for Tab {
             .whitespace_nowrap()
             .items_center()
             .justify_center()
+            // Capped document tabs can have spare label room at their minimum
+            // width. Keep their titles at the leading padding in both states.
+            .when(
+                max_width.is_some() && self.variant == TabVariant::Tab,
+                |this| this.justify_start(),
+            )
             .overflow_hidden()
             .margins(inner_margins)
             // Normally the label decides the tab width, so it never shrinks. With
@@ -747,6 +754,8 @@ impl RenderOnce for Tab {
                         // that is allowed to shrink to ellipsize inside of.
                         (Some(label), Some(_)) => this.child(
                             div()
+                                .id("tab-label")
+                                .test_support()
                                 .min_w_0()
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -815,13 +824,23 @@ impl RenderOnce for Tab {
             // A capped tab also gives way when the bar is short of room: its
             // label shrinks to an ellipsis and its suffix, like a close
             // button, keeps its size. Below the least width, the bar scrolls.
-            // Qrow: the selected tab keeps its whole label, up to the
-            // maximum width. The others shrink to their least width, or to
-            // the fit width when the bar fits all tabs by shrinking them.
+            // Document tabs share a minimum in both states, so selecting a
+            // short title does not shrink it. Selected long titles keep their
+            // natural width up to the cap; only inactive tabs shrink to fit.
             .map(|this| match (max_width, self.fit_width) {
                 (Some(_), Some(fit)) if !self.selected => this.flex_shrink_1().min_w(fit),
                 (Some(_), None) if !self.selected => {
                     this.flex_shrink_1().min_w(rems(TAB_MIN_WIDTH_REMS))
+                }
+                (Some(max_width), Some(fit)) if self.variant == TabVariant::Tab => {
+                    this.flex_shrink_0().min_w(fit.min(max_width))
+                }
+                (Some(max_width), None) if self.variant == TabVariant::Tab => {
+                    this.flex_shrink_0().min_w(
+                        rems(TAB_MIN_WIDTH_REMS)
+                            .to_pixels(window.rem_size())
+                            .min(max_width),
+                    )
                 }
                 _ => this.flex_shrink_0(),
             })
