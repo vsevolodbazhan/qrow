@@ -1074,3 +1074,34 @@ fn cut_columns_fade_only_where_more_columns_are_hidden(cx: &mut TestAppContext) 
         "end: {left} start fades, {right} end fades"
     );
 }
+
+#[gpui_kit::test]
+fn transpose_results_maps_cells_selection_and_pages(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.click(cx, "transpose-results");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("transpose-results").label(), Some("Show rows"));
+        assert_eq!(crate::support::header(window, 0).as_deref(), Some("Column"));
+        assert_eq!(crate::support::header(window, 1).as_deref(), Some("Row 1"));
+        assert_eq!(cell(window, 0, 0).as_deref(), Some("route"));
+        assert_eq!(cell(window, 1, 1).as_deref(), Some("NULL"));
+        assert_eq!(cell(window, 0, 2).as_deref(), Some(ROUTES[1]));
+    });
+    click_cell(&app, cx, 0, 1, MouseButton::Left, Modifiers::default());
+    app.press(cx, "shift-down");
+    assert_eq!(copy(&app, cx), format!("{}\nNULL", ROUTES[0]));
+    app.click(cx, "next-page");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::header(window, 1).as_deref(),
+            Some("Row 1001")
+        );
+        assert_eq!(cell(window, 0, 1).as_deref(), Some(ROUTES[1000 % 6]));
+    });
+    app.click(cx, "transpose-results");
+    app.update(cx, |window, _| {
+        assert_eq!(crate::support::header(window, 1).as_deref(), Some("route"));
+        assert_eq!(cell(window, 0, 0).as_deref(), Some("1001"));
+        assert_eq!(cell(window, 0, 1).as_deref(), Some(ROUTES[1000 % 6]));
+    });
+}

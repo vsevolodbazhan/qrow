@@ -585,3 +585,44 @@ fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
         |_, _| app.saved().tabs[0].sql == sql,
     );
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn transpose_results_preserves_query_values(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace(
+        "SELECT id, CASE WHEN id = 0 THEN CAST(NULL AS TEXT) ELSE '東京' END AS city FROM generate_series(0, 1) AS t(id) ORDER BY id",
+    );
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 1, 2, "東京");
+    app.click(cx, "transpose-results");
+    app.update(cx, |window, _| {
+        assert_eq!(header(window, 1).as_deref(), Some("Row 1"));
+        assert_eq!(header(window, 2).as_deref(), Some("Row 2"));
+        assert_eq!(cell(window, 0, 0).as_deref(), Some("id"));
+        assert_eq!(cell(window, 0, 2).as_deref(), Some("1"));
+        assert_eq!(cell(window, 1, 1).as_deref(), Some("NULL"));
+        assert_eq!(cell(window, 1, 2).as_deref(), Some("東京"));
+    });
+    app.click(cx, "transpose-results");
+    app.wait_cell(cx, 1, 2, "東京");
+    app.run_sql(cx, "SELECT 1 AS empty WHERE false");
+    app.wait_status(cx, "Complete");
+    app.wait_until(
+        cx,
+        "the empty result disables transpose",
+        std::time::Duration::from_secs(10),
+        |window, _| {
+            header(window, 1).as_deref() == Some("empty")
+                && !window.find("transpose-results").is_clickable()
+        },
+    );
+    app.click(cx, "transpose-results");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("transpose-results").label(),
+            Some("Transpose results")
+        );
+    });
+}

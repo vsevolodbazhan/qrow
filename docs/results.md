@@ -44,6 +44,20 @@ If a result has no columns, the panel shows a status message without a table
 header and without the result toolbar. Column headers and the toolbar remain
 visible when a query returns columns but no rows.
 
+## Transpose results
+
+Click **Transpose results** in the result toolbar to exchange rows and columns
+on the current page. The first column shows field names. The other column
+headers show the original row numbers. Click **Show rows** to restore the usual
+view. The control is disabled when the result has no rows.
+
+Each result tab keeps its own view until a new query replaces that result.
+Changing pages keeps the view. Changing pages or the view clears the selection
+and resets scrolling. Selection, arrow keys, and copy commands follow the
+visible rows and columns. Copy formats use row numbers as column headers in
+the transposed view. Full-result exports keep the original rows and columns.
+The toolbar counts always describe the original result.
+
 ## Minimize the panel
 
 Press **⌘J**, select **View → Toggle results**, or use **Collapse**
