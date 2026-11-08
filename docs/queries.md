@@ -4,6 +4,23 @@ Each query tab contains SQL, a selected connection, one or more
 [result tabs](results.md#result-tabs), and a Logs panel. A tab can run one query at a time. Other tabs can run
 concurrently.
 
+## SQL files
+
+Select a connection, then use **File → Import SQL file…** (**⌘O**) to open
+a UTF-8 SQL file. The file opens in a new query tab under that
+connection. The tab uses the file name without its extension. Duplicate
+names get a copy suffix. Import does not run SQL. An unreadable file shows
+an error and does not add a tab.
+
+Right-click a tab and select **Save as SQL file…** to save its full SQL text.
+Press **⇧⌘S** to save the active tab.
+Choose a path in the save panel. The suggested name has a `.sql` extension.
+On Linux, use Ctrl in place of ⌘.
+
+Tabs and files are separate copies. Workspace autosave does not change an
+imported or saved file. Use **Save as SQL file…** again to write later edits.
+Files contain SQL only; they do not contain results or connection settings.
+
 ## Run SQL
 
 1. Select a [connection profile](connections.md). Qrow shows that connection's tabs.

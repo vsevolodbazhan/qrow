@@ -22,6 +22,7 @@ mod setting_row;
 mod settings_view;
 mod settings_window;
 mod sign_in_view;
+mod sql_files;
 mod status_dot;
 mod status_tooltip;
 mod tab_view;
@@ -78,6 +79,8 @@ actions!(
         RunAndExport,
         SendAssistantMessage,
         NewTab,
+        ImportSqlFile,
+        SaveAsSqlFile,
         CloseTab,
         ToggleSidebar,
         ShowConnections,
@@ -137,6 +140,8 @@ pub fn init(cx: &mut App) {
             Some("AssistantComposer > Input"),
         ),
         KeyBinding::new("secondary-t", NewTab, None),
+        KeyBinding::new("secondary-o", ImportSqlFile, None),
+        KeyBinding::new("secondary-shift-s", SaveAsSqlFile, None),
         KeyBinding::new("secondary-w", CloseTab, None),
         KeyBinding::new("secondary-b", ShowConnections, None),
         KeyBinding::new("secondary-r", ToggleAssistant, None),
@@ -213,6 +218,7 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New query tab", NewTab),
+                MenuItem::action("Import SQL file…", ImportSqlFile),
                 MenuItem::action("Close tab", CloseTab),
             ],
         },
@@ -2905,6 +2911,9 @@ impl Qrow {
         let rename = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.open_tab_rename(tab, window, cx)
         });
+        let save = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.save_sql_tab(tab, window, cx);
+        });
         let duplicate = cx.listener(move |this, _: &ClickEvent, window, cx| {
             if let Some(profile) = this
                 .tabs
@@ -2926,6 +2935,7 @@ impl Qrow {
             position,
             move |menu, window, cx| {
                 let menu = menu
+                    .item(PopupMenuItem::new("Save as SQL file…").on_click(save))
                     .item(PopupMenuItem::new("Rename…").on_click(rename))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate));
                 let menu = if destinations.is_empty() {
