@@ -248,23 +248,38 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
     workspace.settings.smooth_transitions = true;
     workspace.settings.assistant.panel_width = 573.;
     let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
-    cx.update(|cx| cx.set_reduce_motion(false));
+    cx.update(|cx| cx.set_reduce_motion(true));
     app.dispatch(cx, ToggleSidebar);
     app.open_assistant(cx);
     app.show_conversation(cx);
     app.type_message(cx, "Черновик запроса");
+    // Start an opening transition without depending on harness startup speed.
+    app.press(cx, "secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.press(cx, "secondary-r");
+    app.update(cx, |window, _| {
+        // Inner content has its full width even while the reveal is clipped.
+        assert_eq!(bounds_of(window, "assistant-panel").size.width, px(573.));
+        assert!(bounds_of(window, "assistant-motion").size.width < px(573.));
+    });
     app.wait_until(cx, "settled assistant", REPLY_TIMEOUT, |window, _| {
-        bounds_of(window, "assistant-panel").size.width == px(573.)
+        bounds_of(window, "assistant-motion").size.width == px(573.)
+            && bounds_of(window, "assistant-panel").right() == window.viewport_size().width
     });
     let original_panel = app.update(cx, |window, _| bounds_of(window, "assistant-panel"));
     let original = composer(&app, cx);
-    // The panel owns the saved width. Composer height can change after text
-    // shaping at a different width, so compare its horizontal edges only.
+    // Keep exact geometry checks and report distinct bounds on failure.
+    let last_bounds = std::cell::Cell::new(None);
     let restored = |window: &mut gpui_kit::Window, _: &mut gpui_kit::App| {
         let composer = bounds_of(window, "assistant-composer");
-        bounds_of(window, "assistant-panel") == original_panel
-            && composer.left() == original.left()
-            && composer.right() == original.right()
+        let panel = bounds_of(window, "assistant-panel");
+        if last_bounds.replace(Some((panel, composer))) != Some((panel, composer)) {
+            eprintln!(
+                "Assistant restoration: expected panel {original_panel:?}, composer {original:?}; actual panel {panel:?}, composer {composer:?}"
+            );
+        }
+        panel == original_panel && composer == original
     };
     for _ in 0..2 {
         app.press(cx, "secondary-r");
@@ -275,14 +290,14 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
     app.press(cx, "secondary-shift-r");
     app.press(cx, "secondary-shift-r");
     app.wait_until(cx, "maximized assistant", REPLY_TIMEOUT, |window, _| {
-        bounds_of(window, "assistant-panel").size.width == window.viewport_size().width
+        bounds_of(window, "assistant-motion").size.width == window.viewport_size().width
     });
     for _ in 0..2 {
         app.press(cx, "secondary-r");
         app.wait_gone(cx, "assistant-composer");
         app.press(cx, "secondary-r");
         app.wait_until(cx, "restored maximized pane", REPLY_TIMEOUT, |window, _| {
-            bounds_of(window, "assistant-panel").size.width == window.viewport_size().width
+            bounds_of(window, "assistant-motion").size.width == window.viewport_size().width
         });
         app.wait_label(cx, "Minimize");
     }
