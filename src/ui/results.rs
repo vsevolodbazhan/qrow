@@ -60,8 +60,9 @@ pub(super) fn bindings() -> [KeyBinding; 10] {
     ]
 }
 
-/// A rectangle of result cells. Rows are indices into all downloaded rows.
-/// Columns are indices into the result columns, without the row number column.
+/// A rectangle of displayed cells, without the leading label column.
+/// In the usual view, row indices refer to all downloaded rows. In the
+/// transposed view, rows refer to fields and columns to records on the page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
     /// The cell where the selection started. Shift extends from it.
@@ -90,6 +91,8 @@ impl Selection {
     }
 }
 
+type CopyRange = (Range<usize>, RangeInclusive<usize>);
+
 /// A copy command with the data that it copies. A menu command copies the
 /// cells that were selected when the menu opened.
 #[derive(Clone)]
@@ -97,7 +100,7 @@ enum ClipboardCopy {
     Text(String),
     Export {
         source: Arc<crate::export::Snapshot>,
-        range: (Range<usize>, RangeInclusive<usize>),
+        range: CopyRange,
         options: crate::export::Settings,
         profile: Option<(uuid::Uuid, u8)>,
     },
@@ -133,10 +136,12 @@ pub struct Results {
     pub copy_format: CopyFormat,
     export_profile: Option<(uuid::Uuid, u8)>,
     pub empty_message: Option<&'static str>,
+    transposed: bool,
     headers: Vec<Column>,
     /// The width of each column name in the header font, and whether the
     /// last frame cut the name to fit its column.
     names: Vec<(Pixels, Rc<Cell<bool>>)>,
+    labels: Vec<(Pixels, Rc<Cell<bool>>)>,
     /// Whether each column holds numbers, which align on the trailing edge.
     numeric: Vec<bool>,
     pub selection: Option<Selection>,
@@ -155,8 +160,10 @@ impl Default for Results {
             copy_format: CopyFormat::default(),
             export_profile: None,
             empty_message: None,
+            transposed: false,
             headers: vec![],
             names: vec![],
+            labels: vec![],
             numeric: vec![],
             selection: None,
             drag: None,
@@ -203,6 +210,47 @@ impl Results {
     }
 
     pub fn schema(&mut self, columns: Vec<DataColumn>, cx: &App) {
+        self.columns = columns;
+        self.rebuild_headers(cx);
+    }
+
+    pub(super) fn is_transposed(&self) -> bool {
+        self.transposed
+    }
+
+    fn display_columns(&self) -> Vec<DataColumn> {
+        if self.transposed {
+            self.pagination
+                .range(self.rows.len())
+                .map(|row| DataColumn {
+                    name: format!("Row {}", row + 1),
+                    data_type: String::new(),
+                })
+                .collect()
+        } else {
+            self.columns.clone()
+        }
+    }
+
+    fn column_count(&self) -> usize {
+        if self.transposed {
+            self.pagination.range(self.rows.len()).len()
+        } else {
+            self.columns.len()
+        }
+    }
+
+    pub(super) fn rows_changed(&mut self, cx: &App) -> bool {
+        if self.transposed && self.headers.len() != self.column_count() + 1 {
+            self.rebuild_headers(cx);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn rebuild_headers(&mut self, cx: &App) {
+        let columns = self.display_columns();
         let scale = self.ui_scale;
         let header = HeaderMeasure::new(scale, cx);
         // At 100% scale, the inner 4px inset keeps the original 6px text offset.
@@ -213,8 +261,16 @@ impl Results {
             right: self.px(2.),
         };
         self.headers = vec![
-            Column::new("row", "#")
-                .width(self.px(48.))
+            Column::new("row", if self.transposed { "Column" } else { "#" })
+                .width(if self.transposed {
+                    self.columns
+                        .iter()
+                        .map(|c| header.width(c))
+                        .fold(self.px(MIN_COLUMN_WIDTH), Pixels::max)
+                        .min(self.px(320.))
+                } else {
+                    self.px(48.)
+                })
                 .paddings(padding)
                 .fixed_left()
                 .movable(false),
@@ -231,11 +287,15 @@ impl Results {
             .iter()
             .map(|c| (header.text(&c.name, false), Rc::default()))
             .collect();
+        self.labels = self
+            .columns
+            .iter()
+            .map(|c| (header.text(&c.name, false), Rc::default()))
+            .collect();
         self.numeric = columns
             .iter()
             .map(|column| is_numeric(&column.data_type))
             .collect();
-        self.columns = columns;
     }
     pub fn clear(&mut self) {
         // The next timer turn releases this gesture's capture after a reset.
@@ -252,7 +312,15 @@ impl Results {
 
     /// The rows of the current page.
     fn page(&self) -> std::ops::Range<usize> {
-        self.pagination.range(self.rows.len())
+        if self.transposed {
+            0..if self.rows.is_empty() {
+                0
+            } else {
+                self.columns.len()
+            }
+        } else {
+            self.pagination.range(self.rows.len())
+        }
     }
 
     /// Select one cell, or extend the selection to it from the anchor.
@@ -268,7 +336,7 @@ impl Results {
 
     /// Select whole rows: one row, or the rows from the anchor to `row`.
     pub fn select_rows(&mut self, row: usize, extend: bool) {
-        let Some(last) = self.columns.len().checked_sub(1) else {
+        let Some(last) = self.column_count().checked_sub(1) else {
             return;
         };
         let anchor = match self.selection {
@@ -301,7 +369,7 @@ impl Results {
     /// Select all cells of the current page.
     pub fn select_page(&mut self) {
         let page = self.page();
-        if let (false, Some(last)) = (page.is_empty(), self.columns.len().checked_sub(1)) {
+        if let (false, Some(last)) = (page.is_empty(), self.column_count().checked_sub(1)) {
             self.selection = Some(Selection {
                 anchor: (page.start, 0),
                 focus: (page.end - 1, last),
@@ -319,7 +387,7 @@ impl Results {
         extend: bool,
     ) -> Option<(usize, usize)> {
         let page = self.page();
-        let last = self.columns.len().checked_sub(1)?;
+        let last = self.column_count().checked_sub(1)?;
         if page.is_empty() {
             return None;
         }
@@ -339,6 +407,11 @@ impl Results {
 
     /// The stored value of a cell, or `None` for a null.
     fn value(&self, row: usize, column: usize) -> Option<&str> {
+        let (row, column) = if self.transposed {
+            (self.pagination.range(self.rows.len()).start + column, row)
+        } else {
+            (row, column)
+        };
         self.rows
             .get(row)
             .and_then(|values| values.get(column))
@@ -423,6 +496,59 @@ impl Results {
         }
     }
 
+    fn copy_source(
+        &self,
+        selection: Option<Selection>,
+    ) -> std::io::Result<(crate::export::Snapshot, Option<CopyRange>)> {
+        if !self.transposed {
+            return Ok((
+                crate::export::Snapshot::new(&self.columns, &self.rows)?,
+                selection.map(|s| (*s.rows().start()..s.rows().end() + 1, s.columns())),
+            ));
+        }
+        let selection = selection.unwrap_or(Selection {
+            anchor: (0, 0),
+            focus: (
+                self.page().end.saturating_sub(1),
+                self.column_count().saturating_sub(1),
+            ),
+        });
+        let columns = self.display_columns();
+        let columns: Vec<_> = selection
+            .columns()
+            .filter_map(|c| columns.get(c).cloned())
+            .collect();
+        // Refuse oversized clipboard requests before cloning full cell values.
+        let mut bytes = selection
+            .rows()
+            .count()
+            .saturating_mul(std::mem::size_of::<crate::model::Row>());
+        for row in selection.rows() {
+            for column in selection.columns() {
+                bytes = bytes
+                    .saturating_add(std::mem::size_of::<Option<String>>())
+                    .saturating_add(self.value(row, column).map_or(0, str::len));
+                if bytes > crate::export::CLIPBOARD_BYTES {
+                    return Err(std::io::Error::other(
+                        "The selection is too large for the clipboard",
+                    ));
+                }
+            }
+        }
+        let allocation = crate::export::budget::GLOBAL.acquire(bytes)?;
+        let rows: Vec<crate::model::Row> = selection
+            .rows()
+            .map(|r| {
+                selection
+                    .columns()
+                    .map(|c| self.value(r, c).map(str::to_owned))
+                    .collect()
+            })
+            .collect();
+        let rows = crate::export::Rows::accounted(rows, allocation, self.rows.context().clone());
+        Ok((crate::export::Snapshot::new(&columns, &rows)?, None))
+    }
+
     /// Copy `selection` in the copy format.
     fn clipboard_copy(&self, selection: Selection) -> ClipboardCopy {
         let Some(options) = self.copy_options() else {
@@ -431,13 +557,13 @@ impl Results {
                 Err(error) => ClipboardCopy::Failed(error.to_string()),
             };
         };
-        match crate::export::Snapshot::new(&self.columns, &self.rows) {
-            Ok(source) => ClipboardCopy::Export {
+        match self.copy_source(Some(selection)) {
+            Ok((source, range)) => ClipboardCopy::Export {
                 source: Arc::new(source),
-                range: (
-                    *selection.rows().start()..selection.rows().end() + 1,
-                    selection.columns(),
-                ),
+                range: range.unwrap_or((
+                    0..selection.rows().count(),
+                    0..=selection.columns().count() - 1,
+                )),
                 options,
                 profile: self.export_profile,
             },
@@ -574,7 +700,7 @@ impl TableDelegate for Results {
         self.headers.len()
     }
     fn rows_count(&self, _: &App) -> usize {
-        self.pagination.range(self.rows.len()).len()
+        self.page().len()
     }
     fn column(&self, c: usize, _: &App) -> Column {
         self.headers[c].clone()
@@ -623,7 +749,7 @@ impl TableDelegate for Results {
             // Column names start at the left, also over numbers, which align
             // on the right in the cells. The row-number header stays over its
             // numbers.
-            .when(c == 0, |el| el.justify_end())
+            .when(c == 0 && !self.transposed, |el| el.justify_end())
             // A column name that its column cuts shows in full in a tooltip.
             .when_some(self.names.get(c.wrapping_sub(1)), |el, (_, cut)| {
                 let name = self.headers[c].name.clone();
@@ -650,7 +776,7 @@ impl TableDelegate for Results {
                     })
                     .child(self.headers[c].name.clone()),
             )
-            .when(c > 0, |el| {
+            .when(c > 0 && !self.transposed, |el| {
                 el.child(
                     div()
                         .flex_shrink_0()
@@ -661,7 +787,7 @@ impl TableDelegate for Results {
             })
     }
     fn cell_background(&self, r: usize, c: usize, cx: &App) -> Option<Hsla> {
-        let r = self.pagination.range(self.rows.len()).start + r;
+        let r = self.page().start + r;
         let selection = self.selection.filter(|_| c > 0)?;
         if selection.contains(r, c - 1) {
             Some(cx.theme().selection)
@@ -678,12 +804,16 @@ impl TableDelegate for Results {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let r = self.pagination.range(self.rows.len()).start + r;
-        let number = (r + 1).to_string();
+        let r = self.page().start + r;
+        let number = if self.transposed {
+            self.columns[r].name.clone()
+        } else {
+            (r + 1).to_string()
+        };
         let value = if c == 0 {
             Some(number.as_str())
         } else {
-            self.rows[r].get(c - 1).and_then(|value| value.as_deref())
+            self.value(r, c - 1)
         };
         let null = value.is_none();
         let display: String = value.unwrap_or("NULL").chars().take(500).collect();
@@ -706,7 +836,18 @@ impl TableDelegate for Results {
             .items_center()
             .text_size(rems(12. / 14.))
             .font_features(tabular_numbers())
-            .when(self.is_numeric_column(c) && !null, |el| el.justify_end())
+            .when(
+                (if self.transposed {
+                    c > 0
+                        && self
+                            .columns
+                            .get(r)
+                            .is_some_and(|column| is_numeric(&column.data_type))
+                } else {
+                    self.is_numeric_column(c)
+                }) && !null,
+                |el| el.justify_end(),
+            )
             .overflow_hidden()
             .text_color(cx.theme().foreground)
             .when(c == 0 || null, |el| {
@@ -720,7 +861,27 @@ impl TableDelegate for Results {
                     .text_color(cx.theme().foreground)
             })
             .when(focus, |el| el.border_1().border_color(cx.theme().ring))
-            .child(div().truncate().child(display))
+            .when(self.transposed && c == 0, |el| {
+                let cut = self.labels[r].1.clone();
+                let label = self.columns[r].name.clone();
+                el.managed_tooltip_when(
+                    move || cut.get(),
+                    move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)
+                    },
+                )
+            })
+            .child(
+                div()
+                    .truncate()
+                    .when(self.transposed && c == 0, |el| {
+                        let (width, cut) = self.labels[r].clone();
+                        el.on_prepaint(move |bounds, _, _| {
+                            cut.set(bounds.size.width + px(0.5) < width)
+                        })
+                    })
+                    .child(display),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |state, event: &MouseDownEvent, window, cx| {
@@ -770,7 +931,7 @@ impl TableDelegate for Results {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        let row = self.pagination.range(self.rows.len()).start + row;
+        let row = self.page().start + row;
         let label = match self.selection {
             Some(selection) if selection.is_cell() && selection.focus.0 == row => "Copy cell",
             Some(selection) if !selection.is_cell() && selection.rows().contains(&row) => {
@@ -782,19 +943,14 @@ impl TableDelegate for Results {
             .selection
             .filter(|_| !label.is_empty())
             .map(|selection| self.clipboard_copy(selection));
-        let last = self.columns.len().saturating_sub(1);
+        let last = self.column_count().saturating_sub(1);
         let row_copy = self.clipboard_copy(Selection {
             anchor: (row, 0),
             focus: (row, last),
         });
-        let source =
-            crate::export::Snapshot::new(&self.columns, &self.rows).map(std::sync::Arc::new);
-        let range = self.selection.map(|selection| {
-            (
-                *selection.rows().start()..selection.rows().end() + 1,
-                selection.columns(),
-            )
-        });
+        let source = self
+            .copy_source(self.selection)
+            .map(|(source, range)| (Arc::new(source), range));
         let plain_text = self
             .selection
             .map(|selection| match self.plain_text(selection) {
@@ -809,7 +965,7 @@ impl TableDelegate for Results {
         ]
         .map(|format| (format.label(), self.copy_as_options(format)));
         let export_profile = self.export_profile;
-        let menu = if let Ok(source) = source {
+        let menu = if let Ok((source, range)) = source {
             let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
                 let menu = menu.when_some(plain_text, |menu, copy| {
                     menu.item(
@@ -1203,6 +1359,28 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
         })
 }
 
+pub(super) fn toggle_transpose(
+    table: &Entity<TableState<Results>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    table.update(cx, |state, cx| {
+        let data = state.delegate_mut();
+        data.transposed = !data.transposed;
+        data.selection = None;
+        data.drag = None;
+        data.drag_task = None;
+        data.rebuild_headers(cx);
+        window.release_pointer();
+        state.clear_selection(cx);
+        state.refresh(cx);
+        state.horizontal_scroll_handle.set_offset(Point::default());
+        state.scroll_to_row(0, cx);
+        window.focus(&state.focus_handle(cx), cx);
+        cx.notify();
+    });
+}
+
 /// Move within downloaded results and reset selection and vertical position.
 pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut App) {
     table.update(cx, |state, cx| {
@@ -1210,6 +1388,11 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
         if data.pagination.select(page, data.rows.len()) {
             data.selection = None;
             data.drag = None;
+            if data.transposed {
+                data.rebuild_headers(cx);
+                state.refresh(cx);
+                state.horizontal_scroll_handle.set_offset(Point::default());
+            }
             state.clear_selection(cx);
             state.scroll_to_row(0, cx);
             cx.notify();
@@ -1221,6 +1404,26 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
 mod tests {
     use super::{DataColumn, Event, Results};
     use gpui_kit::{TestAppContext, px};
+
+    #[gpui_kit::test]
+    fn transpose_bounds_labels_and_refuses_large_copy(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let mut results = Results::default();
+            results.schema(vec![column(&"長い名前".repeat(200), "STRING")], cx);
+            results.rows.extend(vec![vec![Some(
+                "x".repeat(crate::export::CLIPBOARD_BYTES + 1),
+            )]]);
+            results.transposed = true;
+            results.rebuild_headers(cx);
+            assert!(results.headers[0].width <= px(320.));
+            assert!(
+                results
+                    .copy_source(Some(super::Selection::cell(0, 0)))
+                    .is_err()
+            );
+        });
+    }
 
     fn column(name: &str, data_type: &str) -> DataColumn {
         DataColumn {

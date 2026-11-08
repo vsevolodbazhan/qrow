@@ -187,6 +187,9 @@ impl Qrow {
         let data = result.table.read(cx).delegate();
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
+        let transposed = data.is_transposed();
+        let transpose_disabled = data.rows.is_empty();
+        let transpose_table = result.table.clone();
         let export_disabled = data.columns.is_empty();
         // Without a result set, counts and pages describe nothing.
         let no_result = data.columns.is_empty();
@@ -263,6 +266,28 @@ impl Qrow {
                     .child(
                         h_flex()
                             .gap_1()
+                            .child(
+                                Button::new("transpose-results")
+                                    .small()
+                                    .ghost()
+                                    .icon(Icon::new(AssetIconName::ArrowRightLeft))
+                                    .selected(transposed)
+                                    .tooltip(if transposed {
+                                        "Show rows"
+                                    } else {
+                                        "Transpose results"
+                                    })
+                                    .accessibility_label(if transposed {
+                                        "Show rows"
+                                    } else {
+                                        "Transpose results"
+                                    })
+                                    .disabled(transpose_disabled)
+                                    .on_click(cx.listener(move |_, _, window, cx| {
+                                        results::toggle_transpose(&transpose_table, window, cx);
+                                        cx.notify();
+                                    })),
+                            )
                             .child(
                                 Button::new("export-results")
                                     .small()

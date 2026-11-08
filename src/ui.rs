@@ -1821,6 +1821,9 @@ impl Qrow {
                 {
                     table.update(cx, |table, cx| {
                         table.delegate_mut().rows.append_shared(&rows);
+                        if table.delegate_mut().rows_changed(cx) {
+                            table.refresh(cx);
+                        }
                         cx.notify();
                     });
                 }
@@ -1846,6 +1849,9 @@ impl Qrow {
                 if let Some(table) = &live {
                     table.update(cx, |t, cx| {
                         t.delegate_mut().rows.extend(rows);
+                        if t.delegate_mut().rows_changed(cx) {
+                            t.refresh(cx);
+                        }
                         cx.notify();
                     });
                     if let Some(page) = tab.pending_page.take() {
