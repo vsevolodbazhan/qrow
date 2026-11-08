@@ -101,8 +101,8 @@ Qrow changes these files:
   short of room, down to a least width of 10.5 rems, which fits a short label
   like "Query 12" in the large size. The selected tab does not shrink, so it
   shows its whole label up to the maximum width. `TabBar::fit_width` gives
-  the tabs other than the selected one a smaller least width, so that a bar
-  that would scroll only a little fits all its tabs. `TabBar::grow_selected` lets the
+  capped document tabs a shared smaller least width in both selection states,
+  so that a bar that would scroll only a little fits all its tabs. `TabBar::grow_selected` lets the
   selected tab grow past the maximum width to the visible width of the bar,
   so it shows its whole label. A label that does not fit
   ends in an ellipsis, and the suffix, like a close button, keeps its size.
@@ -139,3 +139,32 @@ Qrow changes these files:
 
 Remove the patch when a GPUI Kit release includes the fixes. Update the crate
 with the other GPUI crates as one set.
+
+- `Editor::smooth_caret(bool)` enables a 70 ms caret transition. The default is off. Text input stays immediate.
+
+- `Editor::smooth_scrolling(bool)` opts into short transitions for discrete mouse-wheel steps. Pixel trackpad gestures stay direct. The default is off.
+
+- Capped document tab labels start at the same leading padding in active and
+  inactive states. Extra space from the minimum tab width follows the label.
+  Other tab variants keep their existing alignment.
+
+- Capped document tabs keep the same minimum width when selected. Short tabs
+  do not shrink on selection. A selected long title can still grow. The minimum
+  of the selected tab does not exceed the available tab width.
+
+- `Textarea::smooth_caret(bool)` uses a 35 ms horizontal caret transition.
+  The shorter duration keeps the caret close to newly typed text. `Textarea::smooth_resize(bool)` opts into auto-grow height
+  transitions using the fast motion duration. Both default to off. Text input
+  stays immediate and the system reduced-motion setting disables motion.
+
+- `Input::smooth_caret(bool)` enables a 35 ms horizontal caret transition for
+  search fields. The default is off. Text stays immediate, and reduced motion
+  disables the animation.
+
+- An input's Find and Replace fields follow its smooth-caret option, including
+  changes while Find is open. The fields use the same 35 ms transition as
+  other search inputs and honor reduced motion.
+
+- Find and Replace buttons have accessible names and managed tooltips. Previous
+  and next match, the replacement-field toggle, and Close show their bound
+  shortcuts. The replacement-field tooltip follows the current state.

@@ -12,6 +12,7 @@ mod environment;
 mod export_dialog;
 mod format_sql;
 mod log_row;
+mod motion;
 mod output;
 mod profile_view;
 mod result_tabs;
@@ -86,6 +87,8 @@ actions!(
         ShowConnections,
         ShowSignIns,
         ToggleAssistant,
+        MaximizeAssistant,
+        MinimizeAssistant,
         ToggleResults,
         ToggleActivity,
         OpenAbout,
@@ -145,6 +148,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-w", CloseTab, None),
         KeyBinding::new("secondary-b", ShowConnections, None),
         KeyBinding::new("secondary-r", ToggleAssistant, None),
+        KeyBinding::new("secondary-shift-r", MaximizeAssistant, None),
+        KeyBinding::new("alt-secondary-r", MinimizeAssistant, None),
         KeyBinding::new("secondary-j", ToggleResults, None),
         KeyBinding::new("secondary-shift-u", ToggleActivity, None),
         KeyBinding::new(
@@ -249,6 +254,8 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
     ];
     if assistant_enabled {
         view.push(MenuItem::action("Toggle assistant", ToggleAssistant));
+        view.push(MenuItem::action("Maximize assistant", MaximizeAssistant));
+        view.push(MenuItem::action("Minimize assistant", MinimizeAssistant));
     }
     view.push(MenuItem::action("Activity", ToggleActivity));
     menus.push(Menu {
@@ -758,6 +765,8 @@ pub struct Qrow {
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
     tab_scroll: ScrollHandle,
+    /// Minimum projected onto the tab bounds of the previous render.
+    tab_min_width: std::cell::Cell<Option<Pixels>>,
     /// The Logs font, size, and line height that the Logs rows were measured
     /// with.
     output_typography: Option<(SharedString, Pixels, f32)>,
@@ -812,6 +821,8 @@ pub struct Qrow {
     /// The height of the status bar in the last frame. Side sheets end
     /// above it.
     status_bar_height: std::rc::Rc<std::cell::Cell<Pixels>>,
+    /// Measured space available to the workspace and Activity takeover.
+    workspace_body_size: std::rc::Rc<std::cell::Cell<Size<Pixels>>>,
     _demo_manifest: Option<tempfile::NamedTempFile>,
 }
 impl Qrow {
@@ -1027,6 +1038,7 @@ impl Qrow {
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),
+            tab_min_width: std::cell::Cell::new(None),
             output_typography: None,
             form: None,
             tab_form: None,
@@ -1067,6 +1079,7 @@ impl Qrow {
             dbt_details: None,
             dbt_details_origin: None,
             status_bar_height: Default::default(),
+            workspace_body_size: Default::default(),
             _demo_manifest: demo_manifest,
         };
         for tab in workspace.tabs {
@@ -1572,8 +1585,9 @@ impl Qrow {
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let mut activity = Vec::new();
-        let workspace_visible =
-            !self.activity.read(cx).is_open() && !self.settings.results_minimized;
+        let workspace_visible = !self.activity.read(cx).is_open()
+            && !self.assistant_maximized()
+            && !self.settings.results_minimized;
         let mut waits = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let events: Vec<_> = tab
@@ -2145,7 +2159,7 @@ impl Qrow {
         {
             self.tab_scroll.scroll_to_item(position);
         }
-        if !self.activity.read(cx).is_open() {
+        if !self.activity.read(cx).is_open() && !self.assistant_maximized() {
             if !self.settings.results_minimized {
                 self.tabs[index].panel.content_visible();
             }
@@ -2154,7 +2168,7 @@ impl Qrow {
                     .input
                     .update(cx, |s, cx| s.focus(window, cx));
             }
-        } else {
+        } else if self.activity.read(cx).is_open() {
             let focus = self.tabs[index].input.read(cx).focus_handle(cx);
             self.activity
                 .update(cx, |view, _| view.return_focus_to(focus));
@@ -2339,13 +2353,15 @@ impl Qrow {
         }
         self.restore_results(cx);
         let query = self.selected_tab_sql(index, window, cx);
+        let active = index == self.active
+            && !self.activity.read(cx).is_open()
+            && !self.assistant_maximized();
         let tab = &mut self.tabs[index];
         let query = match query {
             Ok(query) => query,
             // The demo always shows its results.
             Err(_) if self.demo => tab.input.read(cx).value().to_string(),
             Err(message) => {
-                let active = index == self.active && !self.activity.read(cx).is_open();
                 Self::record_log(
                     tab,
                     LogEvent::new(None, Severity::Error, LogKind::Error, message),
@@ -2407,7 +2423,9 @@ impl Qrow {
             cx.notify();
             return true;
         }
-        let active = index == self.active && !self.activity.read(cx).is_open();
+        let active = index == self.active
+            && !self.activity.read(cx).is_open()
+            && !self.assistant_maximized();
         let database_type = self.tab_database_type(self.tabs[index].saved.profile);
         let tab = &mut self.tabs[index];
         if let Err(e) = sql::validate_single_for(&query, database_type) {
@@ -2809,6 +2827,9 @@ impl Qrow {
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
         self.settings.editor_line_height = settings.editor_line_height;
+        self.settings.editor_smooth_caret = settings.editor_smooth_caret;
+        self.settings.editor_smooth_scrolling = settings.editor_smooth_scrolling;
+        self.settings.smooth_transitions = settings.smooth_transitions;
         self.set_editor_tab_size(settings.editor_tab_size, cx);
         self.settings.assistant.sql_keyword_case = settings.assistant.sql_keyword_case;
         self.settings.logs_font_family = settings.logs_font_family;
@@ -2817,6 +2838,10 @@ impl Qrow {
         self.settings.assistant_font_family = settings.assistant_font_family;
         self.settings.assistant_font_size = settings.assistant_font_size;
         self.settings.assistant_line_height = settings.assistant_line_height;
+        self.settings.assistant_smooth_caret = settings.assistant_smooth_caret;
+        self.settings.assistant_smooth_resize = settings.assistant_smooth_resize;
+        self.settings.assistant_buffer_replies = settings.assistant_buffer_replies;
+        self.reveal_assistant_replies(cx);
         self.apply_ui_scale(settings.ui_scale, window, cx);
         themes::apply(&self.settings.theme, Some(window), cx);
         apply_ui_theme(&self.settings, window, cx);

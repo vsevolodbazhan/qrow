@@ -828,6 +828,127 @@ fn the_selected_tab_shows_its_whole_title(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn inactive_query_tabs_keep_the_same_leading_inset_as_active_tabs(cx: &mut TestAppContext) {
+    use crate::support::elements;
+    use gpui_kit::ElementId;
+    for scale in [0.75, 1., 1.5] {
+        let profile = offline_profile("Tab inset");
+        let mut workspace = Workspace {
+            profiles: vec![profile.clone()],
+            tabs: vec![
+                tab(profile.id, "Route overview", "SELECT 1"),
+                tab(profile.id, "Запрос 2", "SELECT 2"),
+            ],
+            active_tab: 0,
+            ..Workspace::default()
+        };
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch(cx, workspace);
+        for width in [900., 1000., 1100., 1280., 1500.] {
+            cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(820.)));
+            app.settle(cx);
+            for selected in ["Route overview", "Запрос 2"] {
+                app.click_labelled(cx, selected);
+                app.settle(cx);
+                app.update(cx, |window, _| {
+                    for title in ["Route overview", "Запрос 2"] {
+                        let tab = bounds_of(window, title);
+                        let label = elements(window).into_iter().find(|element| {
+                            element.path().last() == Some(&ElementId::Name("tab-label".into()))
+                                && tab.contains(&element.bounds().center())
+                        }).expect("the visible tab has a measured label");
+                        let inset = label.bounds().left() - tab.left();
+                        assert!((inset - px(16.)).abs() <= px(1.),
+                            "{title}, selected {selected}, width {width}, scale {scale}: leading inset {inset:?} must stay at the tab padding");
+                    }
+                });
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn selecting_short_query_tabs_does_not_resize_them_or_move_their_neighbors(
+    cx: &mut TestAppContext,
+) {
+    let titles = ["Route overview", "Query 1", "Query 2", "Query 3"];
+    let profile = offline_profile("Stable tab widths");
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: titles
+                .iter()
+                .map(|title| tab(profile.id, title, "SELECT 1"))
+                .collect(),
+            profiles: vec![profile],
+            active_tab: 0,
+            ..Workspace::default()
+        },
+    );
+    for width in [900., 1000., 1100., 1280., 1500.] {
+        cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(820.)));
+        app.settle(cx);
+        app.settle(cx);
+        let before = app.update(cx, |window, _| titles.map(|title| bounds_of(window, title)));
+        for title in titles.into_iter().cycle().take(8) {
+            app.click_labelled(cx, title);
+            app.settle(cx);
+            app.update(cx, |window, _| {
+                for (title, before) in titles.iter().zip(before) {
+                    let after = bounds_of(window, title);
+                    assert!(
+                        (before.size.width - after.size.width).abs() <= px(0.5),
+                        "{title} changed width on selection at {width}: {before:?} -> {after:?}"
+                    );
+                    assert!(
+                        (before.left() - after.left()).abs() <= px(0.5),
+                        "{title} moved on selection at {width}: {before:?} -> {after:?}"
+                    );
+                }
+            });
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn four_short_query_tabs_fit_when_the_shared_minimum_has_room(cx: &mut TestAppContext) {
+    let profile = offline_profile("Fitted short tabs");
+    let mut workspace = Workspace {
+        tabs: (1..=4)
+            .map(|number| SavedTab::new(number, Some(profile.id)))
+            .collect(),
+        profiles: vec![profile],
+        active_tab: 0,
+        ..Workspace::default()
+    };
+    workspace.settings.ui_scale = 1.25;
+    let app = TestApp::launch(cx, workspace);
+    cx.simulate_window_resize(app.window, gpui_kit::size(px(900.), px(820.)));
+    for _ in 0..6 {
+        app.settle(cx);
+    }
+    app.update(cx, |window, _| {
+        let first = bounds_of(window, "Query 1");
+        let last = bounds_of(window, "Query 4");
+        let end = bounds_of(window, "new-tab").left();
+        assert!(
+            last.right() <= end,
+            "four short tabs must fit without scrolling: {first:?}, {last:?}, end {end:?}"
+        );
+    });
+    for title in ["Query 4", "Query 2", "Query 1", "Query 3"] {
+        app.click_labelled(cx, title);
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            let first = bounds_of(window, "Query 1");
+            let last = bounds_of(window, "Query 4");
+            assert!(first.left() >= bounds_of(window, "sql-editor").left());
+            assert!(last.right() <= bounds_of(window, "new-tab").left());
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn numbered_shortcuts_select_visible_query_tabs(cx: &mut TestAppContext) {
     let alpha = offline_profile("Alpha");
     let beta = offline_profile("Beta");

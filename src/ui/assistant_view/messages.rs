@@ -53,7 +53,8 @@ impl Qrow {
             self.assistant_state.draft_modes.remove(&tab_id);
             self.assistant_state.first_messages.push_back(FirstMessage {
                 tab_id,
-                entry: TranscriptEntry::new(Speaker::User, text.clone(), None),
+                entry: TranscriptEntry::new(Speaker::User, text.clone(), None)
+                    .appearing(cx.background_executor().now()),
                 text,
                 mode,
             });
@@ -126,7 +127,8 @@ impl Qrow {
             .is_some_and(|run| run.active_turn.is_some())
             && !self.harness_features().steer
         {
-            let entry = TranscriptEntry::new(Speaker::User, text.clone(), None);
+            let entry = TranscriptEntry::new(Speaker::User, text.clone(), None)
+                .appearing(cx.background_executor().now());
             let run = self.thread_run_mut(thread_id);
             run.queued_messages.push_back(QueuedMessage {
                 entry: entry.id,
@@ -279,6 +281,7 @@ impl Qrow {
             self.record_assistant_query_cancelled(
                 &pending,
                 "A new instruction replaced this query request.",
+                cx,
             );
             self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
         }
@@ -294,7 +297,10 @@ impl Qrow {
                 .transcripts
                 .entry(thread_id.to_owned())
                 .or_default()
-                .push(TranscriptEntry::new(Speaker::User, text, active_turn));
+                .push(
+                    TranscriptEntry::new(Speaker::User, text, active_turn)
+                        .appearing(cx.background_executor().now()),
+                );
         }
         self.request_assistant_title(thread_id, cx);
         self.schedule_transcript_save(cx);

@@ -71,12 +71,15 @@ pub(super) fn assistant_selector_labels(available: f32, labeled: [Option<f32>; 3
 
 impl Qrow {
     pub(in crate::ui) fn assistant_transcript_visible(&self, window: &Window, cx: &App) -> bool {
-        let narrow = self.assistant_width(window.viewport_size().width) < self.ui_px(600.);
+        let pane = self.assistant_pane.read(cx);
+        let width = pane
+            .layout_width
+            .unwrap_or_else(|| self.assistant_width(window.viewport_size().width));
+        let narrow = width < self.ui_px(600.);
         self.settings.assistant.enabled
             && self.assistant_state.open
             && !self.activity.read(cx).is_open()
-            && (!narrow
-                || !show_thread_list(narrow, self.assistant_pane.read(cx).thread_list_override))
+            && (!narrow || !show_thread_list(narrow, pane.thread_list_override))
     }
 
     /// The dot of a conversation state. An idle conversation has no dot.
@@ -140,6 +143,8 @@ pub(in crate::ui) struct AssistantPane {
     typography: Option<Typography>,
     /// The most rows that the message field grows to at this window height.
     composer_max_rows: usize,
+    /// Content width presented by the shell during resize transitions.
+    layout_width: Option<Pixels>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -167,8 +172,7 @@ impl AssistantPane {
                 .submit_on_enter(true)
                 .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MIN_ROWS)
         });
-        let thread_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations…"));
+        let thread_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search…"));
         let transcript = cx.new(|cx| MessageScrollerState::new(0, cx));
         let subscriptions = [
             // The pane reads the assistant state of Qrow.
@@ -195,7 +199,15 @@ impl AssistantPane {
             rows: TranscriptRows::default(),
             typography: None,
             composer_max_rows: COMPOSER_MIN_ROWS,
+            layout_width: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    pub(in crate::ui) fn set_layout_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        if self.layout_width != Some(width) {
+            self.layout_width = Some(width);
+            cx.notify();
         }
     }
 
@@ -266,7 +278,9 @@ impl Render for AssistantPane {
         // Defer acknowledgement until this render releases the pane borrow.
         let unread_visible = {
             let qrow = qrow.read(cx);
-            let width = qrow.assistant_width(window.viewport_size().width);
+            let width = self
+                .layout_width
+                .unwrap_or_else(|| qrow.assistant_width(window.viewport_size().width));
             let narrow = width < qrow.ui_px(600.);
             (!narrow || !show_thread_list(narrow, self.thread_list_override))
                 && qrow
@@ -279,7 +293,9 @@ impl Render for AssistantPane {
         }
         self.sync_composer_rows(window, cx);
         let qrow = qrow.read(cx);
-        let width = qrow.assistant_width(window.viewport_size().width);
+        let width = self
+            .layout_width
+            .unwrap_or_else(|| qrow.assistant_width(window.viewport_size().width));
         self.panel(qrow, width, window, cx).into_any_element()
     }
 }
@@ -300,7 +316,7 @@ impl AssistantPane {
                 MessageScroller::new(
                     "assistant-messages",
                     self.transcript.clone(),
-                    move |index, _, cx| {
+                    move |index, window, cx| {
                         let (Some(qrow_entity), Some(pane)) = (qrow.upgrade(), pane.upgrade())
                         else {
                             return div().into_any_element();
@@ -308,7 +324,15 @@ impl AssistantPane {
                         let Some(row) = pane.read(cx).rows.rows.get(index).copied() else {
                             return div().into_any_element();
                         };
-                        transcript_row(qrow_entity.read(cx), &qrow, row, index, cx)
+                        transcript_row(
+                            qrow_entity.read(cx),
+                            &qrow,
+                            row,
+                            index,
+                            &pane.downgrade(),
+                            window,
+                            cx,
+                        )
                     },
                 )
                 // Like the transcript before it, the list has no scrollbar.
@@ -545,6 +569,8 @@ impl AssistantPane {
             );
         let title_generating = qrow.assistant_title_generating(selected);
         h_flex()
+            .id("assistant-panel")
+            .test_support()
             .size_full()
             .min_w_0()
             .bg(cx.theme().sidebar)
@@ -615,13 +641,41 @@ impl AssistantPane {
                             }),
                     )
                     .child(
+                        Button::new("assistant-maximize")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
+                            .icon(if qrow.assistant_state.maximized {
+                                IconName::Minimize
+                            } else {
+                                IconName::Maximize
+                            })
+                            .accessibility_label(if qrow.assistant_state.maximized {
+                                "Minimize"
+                            } else {
+                                "Maximize"
+                            })
+                            .map(|button| {
+                                if qrow.assistant_state.maximized {
+                                    button.tooltip_with_action("Minimize", &MinimizeAssistant, None)
+                                } else {
+                                    button.tooltip_with_action("Maximize", &MaximizeAssistant, None)
+                                }
+                            })
+                            .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
+                                this.set_assistant_maximized(!this.assistant_state.maximized, window, cx);
+                            })),
+                    )
+                    .child(
                         Button::new("assistant-toggle-threads")
                             .ghost()
                             .small()
                             .w(action_size)
                             .h(action_size)
                             .flex_shrink_0()
-                            .icon(IconName::Menu)
+                            .icon(AssetIconName::List)
                             .accessibility_label("Toggle conversation list")
                             .tooltip("Conversations")
                             .on_click(cx.listener(move |pane, _, window, cx| {
@@ -792,6 +846,8 @@ impl AssistantPane {
                         // message field through its container.
                         div().id("assistant-composer").test_support().key_context("AssistantComposer").child(
                             Textarea::new(&self.composer)
+                                .smooth_caret(qrow.settings.assistant_smooth_caret)
+                                .smooth_resize(qrow.settings.assistant_smooth_resize && qrow.assistant_state.resizing.is_none())
                                 .focus_ring(false)
                                 .w_full()
                                 .aria_label("Assistant Message")),

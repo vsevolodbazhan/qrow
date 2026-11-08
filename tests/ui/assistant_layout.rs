@@ -1,7 +1,7 @@
 //! Geometry of the transcript at a scale and width where replies were cut
 //! off. Pixel checks, like text that reaches the edge of a reply, stay in the
 //! desktop suite.
-use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, jump_to_latest};
+use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, composer_text, jump_to_latest};
 use crate::support::{MemoryCredentials, TestApp, bounds_of, labelled_starting};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Bounds, Pixels, ScrollDelta, TestAppContext, point, px, size};
@@ -200,4 +200,153 @@ fn a_message_keeps_its_line_breaks(cx: &mut TestAppContext) {
         three >= one * 2.5,
         "A message of three lines is {three:?} high, one line is {one:?}"
     );
+}
+
+#[gpui_kit::test]
+fn maximizing_the_assistant_replaces_the_workspace_and_restores_its_width(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.type_message(cx, "Черновик запроса");
+    let original = composer(&app, cx);
+    app.click(cx, "assistant-maximize");
+    app.wait_label(cx, "Minimize");
+    app.wait_gone(cx, "assistant-splitter");
+    app.wait_gone(cx, "add-connection");
+    let maximized = composer(&app, cx);
+    assert!(maximized.size.width > original.size.width);
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.wait_gone(cx, "assistant-composer");
+    app.click(cx, "activity-close");
+    app.wait_label(cx, "Minimize");
+    assert_eq!(composer(&app, cx), maximized);
+    app.click(cx, "assistant-maximize");
+    app.wait_label(cx, "Maximize");
+    app.wait_for(cx, "assistant-splitter");
+    app.wait_for(cx, "add-connection");
+    assert_eq!(composer(&app, cx), original);
+    app.update(cx, |window, _| {
+        assert_eq!(composer_text(window).as_deref(), Some("Черновик запроса"));
+    });
+    app.click(cx, "assistant-maximize");
+    app.click(cx, "toggle-assistant");
+    app.wait_gone(cx, "assistant-composer");
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.wait_label(cx, "Minimize");
+    assert_eq!(composer(&app, cx), maximized);
+    app.press(cx, "alt-secondary-r");
+    app.wait_label(cx, "Maximize");
+    assert_eq!(composer(&app, cx), original);
+}
+
+#[gpui_kit::test]
+fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.smooth_transitions = true;
+    workspace.settings.assistant.panel_width = 573.;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    cx.update(|cx| cx.set_reduce_motion(true));
+    app.dispatch(cx, ToggleSidebar);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.type_message(cx, "Черновик запроса");
+    // Start an opening transition without depending on harness startup speed.
+    app.press(cx, "secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.press(cx, "secondary-r");
+    app.update(cx, |window, _| {
+        // Inner content has its full width even while the reveal is clipped.
+        assert_eq!(bounds_of(window, "assistant-panel").size.width, px(573.));
+        assert!(bounds_of(window, "assistant-motion").size.width < px(573.));
+    });
+    app.wait_until(cx, "settled assistant", REPLY_TIMEOUT, |window, _| {
+        bounds_of(window, "assistant-motion").size.width == px(573.)
+            && bounds_of(window, "assistant-panel").right() == window.viewport_size().width
+    });
+    let original_panel = app.update(cx, |window, _| bounds_of(window, "assistant-panel"));
+    let original = composer(&app, cx);
+    // Keep exact geometry checks and report distinct bounds on failure.
+    let last_bounds = std::cell::Cell::new(None);
+    let restored = |window: &mut gpui_kit::Window, _: &mut gpui_kit::App| {
+        let composer = bounds_of(window, "assistant-composer");
+        let panel = bounds_of(window, "assistant-panel");
+        if last_bounds.replace(Some((panel, composer))) != Some((panel, composer)) {
+            eprintln!(
+                "Assistant restoration: expected panel {original_panel:?}, composer {original:?}; actual panel {panel:?}, composer {composer:?}"
+            );
+        }
+        panel == original_panel && composer == original
+    };
+    for _ in 0..2 {
+        app.press(cx, "secondary-r");
+        app.wait_gone(cx, "assistant-composer");
+        app.press(cx, "secondary-r");
+        app.wait_until(cx, "restored side pane", REPLY_TIMEOUT, &restored);
+    }
+    app.press(cx, "secondary-shift-r");
+    app.press(cx, "secondary-shift-r");
+    app.wait_until(cx, "maximized assistant", REPLY_TIMEOUT, |window, _| {
+        bounds_of(window, "assistant-motion").size.width == window.viewport_size().width
+    });
+    for _ in 0..2 {
+        app.press(cx, "secondary-r");
+        app.wait_gone(cx, "assistant-composer");
+        app.press(cx, "secondary-r");
+        app.wait_until(cx, "restored maximized pane", REPLY_TIMEOUT, |window, _| {
+            bounds_of(window, "assistant-motion").size.width == window.viewport_size().width
+        });
+        app.wait_label(cx, "Minimize");
+    }
+    app.press(cx, "alt-secondary-r");
+    app.press(cx, "alt-secondary-r");
+    app.wait_until(cx, "original side-pane width", REPLY_TIMEOUT, &restored);
+    assert_eq!(app.saved().settings.assistant.panel_width, 573.);
+    app.update(cx, |window, _| {
+        assert_eq!(composer_text(window).as_deref(), Some("Черновик запроса"))
+    });
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.press(cx, "secondary-shift-r");
+    app.press(cx, "alt-secondary-r");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.press(cx, "secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.press(cx, "secondary-shift-r");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.wait_label(cx, "Minimize");
+    app.press(cx, "secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.update(cx, |window, cx| window.input("SELECT 73", cx));
+    app.wait_until(cx, "editor focus after closing", REPLY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == "SELECT 73"
+    });
+    app.press(cx, "alt-secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.press(cx, "secondary-shift-r");
+    app.wait_label(cx, "Minimize");
+}
+
+#[gpui_kit::test]
+fn maximized_assistant_follows_the_window_width(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.click(cx, "assistant-maximize");
+    for width in [900., 1280.] {
+        cx.simulate_window_resize(app.window, size(px(width), px(820.)));
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            let panel = bounds_of(window, "assistant-panel");
+            assert_eq!(panel.left(), px(0.));
+            assert_eq!(panel.size.width, window.viewport_size().width);
+        });
+    }
 }

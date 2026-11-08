@@ -1783,6 +1783,7 @@ impl Qrow {
                         .flex_shrink_0()
                         .child(
                             Input::new(&self.catalog.search)
+                                .smooth_caret(self.settings.editor_smooth_caret)
                                 .flex_1()
                                 .min_w_0()
                                 .focus_ring(false)

@@ -111,6 +111,7 @@ impl AssistantPane {
                     })
                     .child(
                         Input::new(&self.thread_search)
+                            .smooth_caret(qrow.settings.editor_smooth_caret)
                             .small()
                             .flex_1()
                             .min_w_0()

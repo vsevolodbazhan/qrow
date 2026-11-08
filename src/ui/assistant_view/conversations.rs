@@ -228,6 +228,7 @@ impl Qrow {
         while let Some(first) = self.assistant_state.first_messages.pop_front() {
             self.restore_first_message(first, window, cx);
         }
+        self.finish_assistant_replies(None, None, cx);
     }
 
     pub(super) fn restore_first_message(

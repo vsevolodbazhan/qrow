@@ -854,7 +854,11 @@ impl Qrow {
             .overflow_hidden()
             .child(
                 settings_panel("settings", window, cx)
-                    .page(appearance_page(form))
+                    .page(appearance_page(
+                        form,
+                        cx.entity().downgrade(),
+                        &self.settings,
+                    ))
                     .page(
                         SettingPage::new("Export")
                             .resettable(false)
@@ -934,7 +938,22 @@ impl Qrow {
 }
 
 /// Appearance settings for the interface, assistant messages, editor, and logs.
-fn appearance_page(form: &SettingsForm) -> SettingPage {
+fn appearance_page(
+    form: &SettingsForm,
+    owner: WeakEntity<Qrow>,
+    settings: &Settings,
+) -> SettingPage {
+    let smooth_caret = settings.editor_smooth_caret;
+    let smooth_scrolling = settings.editor_smooth_scrolling;
+    let smooth_transitions = settings.smooth_transitions;
+    let composer_caret = settings.assistant_smooth_caret;
+    let composer_resize = settings.assistant_smooth_resize;
+    let buffer_replies = settings.assistant_buffer_replies;
+    let composer_caret_owner = owner.clone();
+    let composer_resize_owner = owner.clone();
+    let buffer_replies_owner = owner.clone();
+    let transitions_owner = owner.clone();
+    let scrolling_owner = owner.clone();
     SettingPage::new("Appearance")
         .default_open(true)
         // The footer resets all appearance settings, so this page does not
@@ -948,6 +967,23 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                     "Colors of the interface. System follows your system settings.",
                     &["appearance", "colors", "dark", "light"],
                     theme_field(form),
+                ))
+                .item(setting_item(
+                    "Smooth Transitions",
+                    "Animate sidebars and soften tab and panel changes.",
+                    &["interface", "ui", "motion", "animation", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = transitions_owner.clone();
+                        Switch::new("smooth-transitions")
+                            .checked(smooth_transitions)
+                            .accessibility_label("Smooth Transitions")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.smooth_transitions = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
                 ))
                 .item(setting_item(
                     "Scale",
@@ -986,6 +1022,65 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                     "Space between message lines, times the font size.",
                     &["assistant", "messages", "spacing"],
                     number_field(form, NumberSetting::AssistantLineHeight),
+                ))
+                .item(setting_item(
+                    "Smooth Composer Caret",
+                    "Animate short caret movements in the message field.",
+                    &["assistant", "typing", "cursor", "motion", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = composer_caret_owner.clone();
+                        Switch::new("assistant-smooth-caret")
+                            .checked(composer_caret)
+                            .accessibility_label("Smooth Composer Caret")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_smooth_caret = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Buffered Replies",
+                    "Wait for each complete reply, then fade it in.",
+                    &[
+                        "assistant",
+                        "messages",
+                        "streaming",
+                        "buffer",
+                        "motion",
+                        "smooth",
+                    ],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = buffer_replies_owner.clone();
+                        Switch::new("assistant-buffer-replies")
+                            .checked(buffer_replies)
+                            .accessibility_label("Buffered Replies")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_buffer_replies = *next;
+                                    this.reveal_assistant_replies(cx);
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Smooth Composer Resize",
+                    "Ease message-field growth and shrinkage.",
+                    &["assistant", "height", "resize", "motion", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = composer_resize_owner.clone();
+                        Switch::new("assistant-smooth-resize")
+                            .checked(composer_resize)
+                            .accessibility_label("Smooth Composer Resize")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_smooth_resize = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
                 )),
         )
         .group(
@@ -1008,6 +1103,48 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                     "Space between SQL lines, times the font size.",
                     &["editor", "sql", "spacing"],
                     number_field(form, NumberSetting::EditorLineHeight),
+                ))
+                .item(setting_item(
+                    "Smooth Caret",
+                    "Animate caret movement in the editor and search fields.",
+                    &["editor", "sql", "cursor", "motion", "animation", "typing"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = owner.clone();
+                        Switch::new("editor-smooth-caret")
+                            .checked(smooth_caret)
+                            .accessibility_label("Smooth Caret")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.editor_smooth_caret = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Smooth Scrolling",
+                    "Smooth mouse-wheel steps; trackpad gestures stay direct.",
+                    &[
+                        "editor",
+                        "sql",
+                        "scroll",
+                        "wheel",
+                        "motion",
+                        "animation",
+                        "smooth",
+                    ],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = scrolling_owner.clone();
+                        Switch::new("editor-smooth-scrolling")
+                            .checked(smooth_scrolling)
+                            .accessibility_label("Smooth Scrolling")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.editor_smooth_scrolling = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
                 ))
                 .item(setting_item(
                     "Tab Size",

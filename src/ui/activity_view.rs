@@ -758,10 +758,15 @@ impl Qrow {
                     return;
                 };
                 self.activity.update(cx, |view, cx| view.close(window, cx));
+                self.assistant_state.maximized = false;
                 self.activate(index, window, cx);
             }
             ActivityViewEvent::Closed => {
-                if !self.settings.results_minimized {
+                if self.assistant_maximized() {
+                    self.assistant_composer(cx)
+                        .update(cx, |composer, cx| composer.focus(window, cx));
+                }
+                if !self.settings.results_minimized && !self.assistant_maximized() {
                     self.tabs[self.active].panel.content_visible();
                 }
                 if self.assistant_transcript_visible(window, cx)

@@ -283,3 +283,122 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
             && w.settings.assistant_font_family == "IBM Plex Sans"
     });
 }
+
+#[gpui_kit::test]
+fn smooth_caret_is_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.editor_smooth_caret);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "editor-smooth-caret");
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret enabled", |workspace| {
+        workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "editor-smooth-caret");
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret disabled", |workspace| {
+        !workspace.settings.editor_smooth_caret
+    });
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret enabled again", |workspace| {
+        workspace.settings.editor_smooth_caret
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "smooth caret default", |workspace| {
+        !workspace.settings.editor_smooth_caret
+    });
+}
+
+#[gpui_kit::test]
+fn scrolling_and_panel_motion_are_independent_opt_ins_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.editor_smooth_scrolling);
+    assert!(!app.saved().settings.smooth_transitions);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "smooth-transitions");
+    app.click(cx, "smooth-transitions");
+    wait_saved(&app, cx, "panel transitions enabled", |workspace| {
+        workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+    app.click(cx, "editor-smooth-scrolling");
+    wait_saved(&app, cx, "wheel scrolling enabled", |workspace| {
+        workspace.settings.smooth_transitions
+            && workspace.settings.editor_smooth_scrolling
+            && !workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "smooth-transitions");
+    app.click(cx, "editor-smooth-scrolling");
+    wait_saved(&app, cx, "wheel scrolling disabled", |workspace| {
+        workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "motion defaults", |workspace| {
+        !workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+}
+
+#[gpui_kit::test]
+fn composer_motion_options_are_independent_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.assistant_smooth_caret);
+    assert!(!app.saved().settings.assistant_smooth_resize);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "composer");
+    app.wait_for(cx, "assistant-smooth-caret");
+    app.click(cx, "assistant-smooth-caret");
+    wait_saved(&app, cx, "composer caret enabled", |workspace| {
+        workspace.settings.assistant_smooth_caret && !workspace.settings.assistant_smooth_resize
+    });
+    app.click(cx, "assistant-smooth-resize");
+    wait_saved(&app, cx, "composer resize enabled", |workspace| {
+        workspace.settings.assistant_smooth_caret
+            && workspace.settings.assistant_smooth_resize
+            && !workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "composer");
+    app.wait_for(cx, "assistant-smooth-resize");
+    app.click(cx, "assistant-smooth-caret");
+    wait_saved(&app, cx, "composer caret disabled", |workspace| {
+        !workspace.settings.assistant_smooth_caret && workspace.settings.assistant_smooth_resize
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "composer defaults", |workspace| {
+        !workspace.settings.assistant_smooth_caret && !workspace.settings.assistant_smooth_resize
+    });
+}
+
+#[gpui_kit::test]
+fn buffered_replies_are_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.assistant_buffer_replies);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "buffered");
+    app.wait_for(cx, "assistant-buffer-replies");
+    app.click(cx, "assistant-buffer-replies");
+    wait_saved(&app, cx, "buffered replies enabled", |workspace| {
+        workspace.settings.assistant_buffer_replies
+            && !workspace.settings.smooth_transitions
+            && !workspace.settings.assistant_smooth_resize
+    });
+    app.press(cx, "secondary-w");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "buffered");
+    app.wait_for(cx, "assistant-buffer-replies");
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "buffered replies reset", |workspace| {
+        !workspace.settings.assistant_buffer_replies
+    });
+}

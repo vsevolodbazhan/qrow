@@ -357,6 +357,32 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
+    fn saved_messages_do_not_replay_their_appearance_fade() {
+        let now = std::time::Instant::now();
+        for speaker in [Speaker::User, Speaker::Assistant] {
+            let entry = TranscriptEntry::new(speaker, "A live message", Some("turn-1".into()))
+                .appearing(now);
+            assert_eq!(entry.appearance_started(), Some(now));
+            let restored = TranscriptEntry::from_stored(entry.stored());
+            assert_eq!(restored.appearance_started(), None);
+            assert_eq!(restored.text(), entry.text());
+        }
+        let card = TranscriptEntry::tool(
+            ToolActivity {
+                kind: ToolKind::Workspace,
+                target: None,
+                state: ToolState::Done(None),
+            },
+            "turn-1".into(),
+        )
+        .appearing(now);
+        assert_eq!(
+            TranscriptEntry::from_stored(card.stored()).appearance_started(),
+            None
+        );
+    }
+
+    #[::core::prelude::v1::test]
     fn stored_entries_show_as_they_did_live() {
         let mut card = TranscriptEntry::tool(
             ToolActivity {

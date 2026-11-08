@@ -31,6 +31,7 @@ const STATUS_BAR_ICONS: [&str; 4] = [
 // `KeyRound`, and the Sign-ins sidebar uses `KeyRound` and `ClipboardPaste`.
 // The result toolbar uses `FileCode` for Copy query and `Pin`, and the Logs
 // toolbar uses `Trash` for Clear. The Connections search uses `ListFilter`.
+// The conversation list toggle uses `List`.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
@@ -55,6 +56,7 @@ gpui_kit::assets::icon_assets!(
         Pin,
         Trash,
         ListFilter,
+        List,
     ]
 );
 
@@ -175,6 +177,16 @@ mod tests {
     #[test]
     fn the_search_scope_icon_is_available() {
         assert!(Assets.load("icons/list-filter.svg").unwrap().is_some());
+    }
+
+    #[test]
+    fn conversation_list_icon_is_embedded_and_listed() {
+        use gpui_kit::assets::IconName;
+
+        let path = IconName::List.path();
+        let bytes = Assets.load(&path).unwrap().expect("conversation list icon");
+        assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
+        assert!(Assets.list("icons/").unwrap().contains(&path));
     }
 
     #[test]
