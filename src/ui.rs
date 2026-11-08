@@ -779,8 +779,6 @@ pub struct Qrow {
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
     tab_scroll: ScrollHandle,
-    /// Minimum projected onto the tab bounds of the previous render.
-    tab_min_width: std::cell::Cell<Option<Pixels>>,
     /// The Logs font, size, and line height that the Logs rows were measured
     /// with.
     output_typography: Option<(SharedString, Pixels, f32)>,
@@ -1052,7 +1050,6 @@ impl Qrow {
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),
-            tab_min_width: std::cell::Cell::new(None),
             output_typography: None,
             form: None,
             tab_form: None,

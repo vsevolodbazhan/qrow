@@ -207,6 +207,9 @@ scrolls:
   tab and a tab with a status dot. Tab tooltips close when the pointer moves
   away, when the strip scrolls, and when the window changes size.
 
+After you close a tab, the remaining tabs keep their widths until the content,
+selection, or available space changes. Pointer movement does not change tab widths.
+
 Each connection always has at least one tab. Closing or moving the last tab
 creates a blank replacement. See [Connections](connections.md#manage-tabs-under-a-connection)
 for copy and move actions.

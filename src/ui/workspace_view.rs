@@ -160,45 +160,60 @@ impl Qrow {
             )
     }
 
-    fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn query_tabs(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
         // Tabs keep at least 10.5 rems, so a short title shows whole, and
         // the selected tab keeps its whole title. When the other tabs
         // overflow the strip but 8.5 rems each would not, they shrink to
         // share the rest of the strip instead, so a few tabs never scroll.
-        // The widths are from the last frame; the tab bar draws again when
-        // they change.
+        // The strip width is from the last frame; the bar draws again when
+        // it changes.
         let rem = cx.theme().font_size;
         let room = self.tab_scroll.bounds().size.width - rem * 0.75;
         let selected = visible.iter().position(|index| *index == self.active);
-        // Width from the shared minimum is not intrinsic title width. Reserve
-        // extra room only for content that extends beyond the previous minimum.
-        // Otherwise equally short tabs cannot share the available room evenly.
-        let previous_minimum = self.tab_min_width.get().unwrap_or(rem * 10.5);
-        let shared_width = room / visible.len().max(1) as f32;
-        let reserved_width = visible
-            .iter()
-            .enumerate()
-            .filter_map(|(position, index)| {
-                let width = self.tab_scroll.bounds_for_item(position)?.size.width;
-                Some(if *index == self.active {
-                    width
-                } else {
-                    width.min(self.ui_px(MAX_QUERY_TAB_WIDTH))
-                })
-            })
-            .filter(|width| *width > previous_minimum + px(0.5))
-            .max()
-            .unwrap_or(px(0.))
-            .max(shared_width);
         let others = visible
             .len()
             .saturating_sub(usize::from(selected.is_some())) as f32;
+        let shared_width = room / visible.len().max(1) as f32;
+        let inactive_room = (room - rem * 8.5 * others).max(px(0.));
+        // Measure natural titles, not fitted bounds from the last frame. The
+        // latter feed the fitted width back into its own next minimum.
+        let reserved_width = visible
+            .iter()
+            .enumerate()
+            .map(|(position, index)| {
+                let tab = &self.tabs[*index];
+                let title: SharedString = tab.saved.title.clone().into();
+                let style = window.text_style();
+                let title_width = window
+                    .text_system()
+                    .shape_line(title.clone(), rem, &[style.to_run(title.len())], None)
+                    .width;
+                // Match Kit's large tab padding and borders, its gap_1, and
+                // our small close button (size_6) plus suffix pr_2. The first
+                // tab has no leading border.
+                let chrome = px(32. + if position == 0 { 1. } else { 2. }) + rem * 2.25;
+                let status = if tab.dot_status().is_some() {
+                    rem * 0.625
+                } else {
+                    px(0.)
+                };
+                let natural = title_width + chrome + status;
+                if *index == self.active {
+                    natural
+                } else {
+                    natural
+                        .min(self.ui_px(MAX_QUERY_TAB_WIDTH))
+                        .min(inactive_room)
+                }
+            })
+            .max()
+            .unwrap_or(px(0.))
+            .max(shared_width);
         let fit = (others > 0. && room > px(0.) && rem * 10.5 * others + reserved_width > room)
             .then(|| (room - reserved_width) / others)
             .filter(|&width| width >= rem * 8.5);
-        self.tab_min_width.set(Some(fit.unwrap_or(rem * 10.5)));
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
             // The selected tab shows its whole title, up to the visible strip.
@@ -1413,7 +1428,7 @@ impl Render for Qrow {
                     .min_w_0()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(self.query_tabs(cx))
+                    .child(self.query_tabs(window, cx))
                     .child(self.query_toolbar(cx))
                     .child(
                         // GPUI Kit's Editor has no ID setter; tests find the
