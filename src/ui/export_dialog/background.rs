@@ -1,5 +1,6 @@
 //! Export notifications keep background jobs reachable after their form closes.
 use super::*;
+use crate::ui::toast::{self, NotificationType};
 use gpui_kit::component::{h_flex, scroll::ScrollableElement};
 use std::io::{self, Write};
 
@@ -64,10 +65,6 @@ impl Qrow {
     }
 }
 
-pub(super) fn notification_heading(id: &'static str, filename: String) -> impl IntoElement {
-    crate::ui::file_notice::filename_line(id, filename, FontWeight::SEMIBOLD)
-}
-
 struct ProgressNotice {
     job: WeakEntity<ExportDialog>,
     _subscription: Subscription,
@@ -82,7 +79,6 @@ impl Render for ProgressNotice {
         let id = state.id;
         let message = state.status_detail();
         let filename = state.output_filename();
-        let error = state.error.is_some();
         let running = state.running;
         let cancel = job.downgrade();
         let owner = state.owner.clone();
@@ -94,36 +90,29 @@ impl Render for ProgressNotice {
         let retained = owner
             .upgrade()
             .is_some_and(|owner| owner.read(cx).exports.iter().any(|entry| entry.view == job));
-        v_flex()
-            .id(SharedString::from(format!("export-job-{id}")))
+        let error = state.error.is_some();
+        let (kind, title) = if error {
+            (NotificationType::Error, "Export failed")
+        } else if !running {
+            (NotificationType::Info, "Export stopped")
+        } else {
+            (NotificationType::Info, "Exporting results")
+        };
+        toast::body(kind, SharedString::from(format!("export-job-{id}")))
             .test_support()
             .w_full()
-            .min_w_0()
-            .gap_1()
-            .child(notification_heading(
+            .child(toast::title_line("title", title.into()))
+            .child(toast::filename_line(
                 "export-notification-filename",
                 filename,
             ))
-            .child(
-                div()
-                    .id("status")
-                    .test_support()
-                    .role(Role::Status)
-                    .aria_label(message.clone())
-                    .text_sm()
-                    .whitespace_normal()
-                    .text_color(if error {
-                        cx.theme().danger
-                    } else {
-                        cx.theme().foreground
-                    })
-                    .child(message),
-            )
+            .child(toast::detail_line("status", message.into()))
             .child(
                 h_flex()
                     .id("export-progress-actions")
                     .test_support()
                     .w_full()
+                    .mt_2()
                     .justify_end()
                     .flex_wrap()
                     .gap_2()
@@ -310,6 +299,12 @@ impl ExportDialog {
         window.push_notification(
             Notification::new()
                 .id1::<ProgressNotice>(SharedString::from(self.id.to_string()))
+                // A failed job shows the notification again, with the error icon.
+                .with_type(if self.error.is_some() {
+                    NotificationType::Error
+                } else {
+                    NotificationType::Info
+                })
                 .autohide(false)
                 .content(move |_, _, _| view.clone().into_any_element())
                 .on_close(move |_, cx| {

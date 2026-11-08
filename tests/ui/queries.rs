@@ -770,6 +770,11 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
             window.find("format-sql-notice").role(),
             Some(gpui_kit::Role::Alert)
         );
+        // Every toast leads with a title that names the event.
+        let notice = window.within("format-sql-notice");
+        let title = notice.find("title");
+        assert_eq!(title.label(), Some("Could not format all SQL"));
+        assert!(notice.find("detail").bounds().top() >= title.bounds().bottom());
     });
     app.type_sql(cx, "select ${hivevar:dt}");
     app.press(cx, "secondary-a");

@@ -18,7 +18,11 @@ impl Qrow {
         }
         let Some(profile) = self.active_profile() else {
             window.push_notification(
-                Notification::error("Choose a connection before importing an SQL file."),
+                toast::error(
+                    "sql-file-error",
+                    "Could not import SQL file",
+                    "Choose a connection first.",
+                ),
                 cx,
             );
             return;
@@ -36,9 +40,11 @@ impl Qrow {
                 error => {
                     let _ = this.update_in(cx, |_, window, cx| {
                         window.push_notification(
-                            Notification::error(format!(
-                                "Could not open the file panel: {error:?}"
-                            )),
+                            toast::error(
+                                "sql-file-error",
+                                "Could not open the file panel",
+                                format!("{error:?}"),
+                            ),
                             cx,
                         );
                     });
@@ -95,10 +101,11 @@ impl Qrow {
                             this.activate(this.tabs.len() - 1, window, cx);
                         }
                         Err(error) => window.push_notification(
-                            Notification::error(format!(
-                                "Could not import {}: {error}",
-                                path.display()
-                            )),
+                            toast::error(
+                                "sql-file-error",
+                                "Could not import SQL file",
+                                format!("{}: {error}", path.display()),
+                            ),
                             cx,
                         ),
                     }
@@ -150,9 +157,11 @@ impl Qrow {
                 error => {
                     let _ = this.update_in(cx, |_, window, cx| {
                         window.push_notification(
-                            Notification::error(format!(
-                                "Could not open the save panel: {error:?}"
-                            )),
+                            toast::error(
+                                "sql-file-error",
+                                "Could not open the save panel",
+                                format!("{error:?}"),
+                            ),
                             cx,
                         )
                     });
@@ -165,7 +174,11 @@ impl Qrow {
             let _ = this.update_in(cx, |_, window, cx| match result {
                 Ok(path) => window.push_notification(saved_notification(path), cx),
                 Err(error) => window.push_notification(
-                    Notification::error(format!("Could not save SQL file: {error}")),
+                    toast::error(
+                        "sql-file-error",
+                        "Could not save SQL file",
+                        error.to_string(),
+                    ),
                     cx,
                 ),
             });
@@ -182,8 +195,8 @@ fn save_sql(path: &Path, sql: &str) -> std::io::Result<()> {
 
 /// A routine save hides on its own; hovering the notification pauses the timer.
 fn saved_notification(path: PathBuf) -> Notification {
-    super::file_notice::saved_file(
-        super::file_notice::SavedFileIds {
+    super::toast::saved_file(
+        super::toast::SavedFileIds {
             notice: "sql-file-saved-notice",
             title: "sql-file-saved-detail",
             filename: "sql-file-saved-filename",

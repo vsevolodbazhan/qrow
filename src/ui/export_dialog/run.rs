@@ -22,7 +22,11 @@ impl Qrow {
             .cloned()
         else {
             window.push_notification(
-                Notification::error("Choose a connection before running SQL."),
+                toast::error(
+                    "export-error",
+                    "Could not export results",
+                    "Choose a connection before running SQL.",
+                ),
                 cx,
             );
             return;
@@ -30,14 +34,24 @@ impl Qrow {
         let sql = match self.selected_tab_sql(index, window, cx) {
             Ok(sql) => sql,
             Err(message) => {
-                window.push_notification(Notification::error(message), cx);
+                window.push_notification(
+                    toast::error("export-error", "Could not export results", message),
+                    cx,
+                );
                 return;
             }
         };
         if let Err(error) = crate::sql::validate_single_for(&sql, profile.database_type)
             .and_then(|_| profile.validate())
         {
-            window.push_notification(Notification::error(error.to_string()), cx);
+            window.push_notification(
+                toast::error(
+                    "export-error",
+                    "Could not export results",
+                    error.to_string(),
+                ),
+                cx,
+            );
             return;
         }
         let tab = &self.tabs[index];
@@ -57,7 +71,14 @@ impl Qrow {
         } {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                window.push_notification(Notification::error(error.to_string()), cx);
+                window.push_notification(
+                    toast::error(
+                        "export-error",
+                        "Could not export results",
+                        error.to_string(),
+                    ),
+                    cx,
+                );
                 return;
             }
         };

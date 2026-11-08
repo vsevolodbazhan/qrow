@@ -114,7 +114,14 @@ impl Qrow {
         let source = match Snapshot::new(&data.columns, &data.rows) {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                window.push_notification(Notification::error(error.to_string()), cx);
+                window.push_notification(
+                    toast::error(
+                        "export-error",
+                        "Could not export results",
+                        error.to_string(),
+                    ),
+                    cx,
+                );
                 return;
             }
         };
@@ -855,8 +862,8 @@ impl ExportDialog {
                     // A background job can finish while the user works elsewhere,
                     // so this notification stays until it is closed.
                     window.push_notification(
-                        crate::ui::file_notice::saved_file(
-                            crate::ui::file_notice::SavedFileIds {
+                        crate::ui::toast::saved_file(
+                            crate::ui::toast::SavedFileIds {
                                 notice: "export-complete-notice",
                                 title: "export-complete-detail",
                                 filename: "export-notification-filename",
@@ -1289,7 +1296,10 @@ pub(super) fn copy_format(
     let guard = match guard {
         Ok(guard) => guard,
         Err(error) => {
-            window.push_notification(Notification::error(error.to_string()), cx);
+            window.push_notification(
+                toast::error("copy-error", "Could not copy results", error.to_string()),
+                cx,
+            );
             return;
         }
     };
@@ -1342,7 +1352,10 @@ pub(super) fn copy_format(
                 }
             }
             Ok(_) => {}
-            Err(error) => window.push_notification(Notification::error(error.to_string()), cx),
+            Err(error) => window.push_notification(
+                toast::error("copy-error", "Could not copy results", error.to_string()),
+                cx,
+            ),
         });
     })
     .detach();
@@ -1358,7 +1371,11 @@ fn confirm_markdown_copy(
             copy_text(text.into_string(), cx);
         } else {
             window.push_notification(
-                Notification::error("The clipboard changed. Choose Copy to try again."),
+                toast::error(
+                    "copy-error",
+                    "Could not copy results",
+                    "The clipboard changed. Choose Copy to try again.",
+                ),
                 cx,
             );
         }
@@ -1759,7 +1776,10 @@ mod tests {
             let id = dialog.read(cx).id;
             window.render_frame(cx);
             let notice = window.within(SharedString::from(format!("export-job-{id}")));
+            let title = notice.find("title");
+            assert_eq!(title.label(), Some("Exporting results"));
             let heading = notice.find("export-notification-filename");
+            assert!(heading.bounds().top() >= title.bounds().bottom());
             assert_eq!(heading.label(), Some("a-very-long-export-filename-that-needs-to-be-truncated-in-the-progress-notification.csv"));
             let status = notice.find("status");
             let detail = status.label().unwrap();
