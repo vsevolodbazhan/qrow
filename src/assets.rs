@@ -29,8 +29,9 @@ const STATUS_BAR_ICONS: [&str; 4] = [
 // Icons outside the GPUI Kit default set. The assistant tool call cards use
 // the icons after `Send`. The status bar uses `Activity`, `Plug`, and
 // `KeyRound`, and the Sign-ins sidebar uses `KeyRound` and `ClipboardPaste`.
-// The result toolbar uses `FileCode` for Copy query and `Pin`, and the Logs
-// toolbar uses `Trash` for Clear. The Connections search uses `ListFilter`.
+// The result toolbar uses `ArrowRightLeft` for Transpose results, `FileCode`
+// for Copy query, and `Pin`. The Logs toolbar uses `Trash` for Clear.
+// The Connections search uses `ListFilter`.
 // The conversation list toggle uses `List`.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
@@ -53,6 +54,7 @@ gpui_kit::assets::icon_assets!(
         ClipboardPaste,
         FileCode,
         Download,
+        ArrowRightLeft,
         Pin,
         Trash,
         ListFilter,
@@ -185,6 +187,14 @@ mod tests {
 
         let path = IconName::List.path();
         let bytes = Assets.load(&path).unwrap().expect("conversation list icon");
+        assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
+        assert!(Assets.list("icons/").unwrap().contains(&path));
+    }
+
+    #[test]
+    fn transpose_results_icon_is_embedded_and_listed() {
+        let path = gpui_kit::assets::IconName::ArrowRightLeft.path();
+        let bytes = Assets.load(&path).unwrap().expect("transpose results icon");
         assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
         assert!(Assets.list("icons/").unwrap().contains(&path));
     }
