@@ -64,10 +64,10 @@ impl Qrow {
     }
 }
 
-pub(super) fn notification_heading(filename: String) -> impl IntoElement {
+pub(in crate::ui) fn notification_heading(id: &'static str, filename: String) -> impl IntoElement {
     let tooltip = filename.clone();
     div()
-        .id("export-notification-filename")
+        .id(id)
         .test_support()
         .role(Role::Label)
         .aria_label(filename.clone())
@@ -114,7 +114,10 @@ impl Render for ProgressNotice {
             .w_full()
             .min_w_0()
             .gap_1()
-            .child(notification_heading(filename))
+            .child(notification_heading(
+                "export-notification-filename",
+                filename,
+            ))
             .child(
                 div()
                     .id("status")

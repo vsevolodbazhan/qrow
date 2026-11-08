@@ -620,4 +620,16 @@ fn imported_sql_file_runs_and_saves_as_a_query_tab(cx: &mut TestAppContext) {
         std::time::Duration::from_secs(10),
         |_, _| std::fs::read_to_string(&output).ok().as_deref() == Some(sql),
     );
+    app.wait_for(cx, "sql-file-saved-detail");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("sql-file-saved-filename").label(),
+            Some("saved.sql")
+        );
+        assert_eq!(
+            window.find("reveal-sql-file").label(),
+            Some("Reveal in Finder")
+        );
+        assert!(window.find("reveal-sql-file").visible());
+    });
 }

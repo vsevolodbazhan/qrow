@@ -1105,12 +1105,29 @@ fn sql_file_import_and_save_round_trip(cx: &mut TestAppContext) {
     assert_eq!(app.credentials.reads(), 0);
     let sql = "-- edited 😀\nSELECT 3;\nSELECT 4;\n";
     app.type_sql(cx, sql);
-    let output = directory.path().join("saved.sql");
+    let filename = "Очень-длинное-имя-сохранённого-запроса-для-проверки-уведомления.sql";
+    let output = directory.path().join(filename);
     app.press(cx, "secondary-shift-s");
     assert!(cx.did_prompt_for_new_path());
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_until(cx, "SQL file saved", Duration::from_secs(10), |_, _| {
         std::fs::read_to_string(&output).ok().as_deref() == Some(sql)
+    });
+    app.wait_for(cx, "sql-file-saved-detail");
+    app.update(cx, |window, _| {
+        let notice = window.find("sql-file-saved-notice");
+        let heading = window
+            .within("sql-file-saved-notice")
+            .find("sql-file-saved-filename");
+        assert_eq!(heading.label(), Some(filename));
+        assert!(heading.bounds().right() <= notice.bounds().right());
+        let detail = window.find("sql-file-saved-detail");
+        assert_eq!(detail.label(), Some("SQL file saved"));
+        let reveal = window.find("reveal-sql-file");
+        assert_eq!(reveal.label(), Some("Reveal in Finder"));
+        assert!(reveal.visible());
+        assert!(reveal.bounds().top() >= detail.bounds().bottom());
+        assert_eq!(reveal.bounds().right(), notice.bounds().right());
     });
     // Keep the native panel's exact destination; do not replace a sibling .sql file.
     let extensionless = directory.path().join("exact-name");

@@ -1,6 +1,10 @@
 use super::*;
-use gpui_kit::component::notification::Notification;
-use std::{io::Write, path::Path, sync::atomic::AtomicBool};
+use gpui_kit::component::{h_flex, notification::Notification, v_flex};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
+};
 
 impl Qrow {
     pub(super) fn import_sql_file(
@@ -156,10 +160,10 @@ impl Qrow {
                 }
             };
             let result = cx
-                .background_spawn(async move { save_sql(&path, &sql) })
+                .background_spawn(async move { save_sql(&path, &sql).map(|()| path) })
                 .await;
             let _ = this.update_in(cx, |_, window, cx| match result {
-                Ok(()) => window.push_notification("SQL file saved", cx),
+                Ok(path) => window.push_notification(saved_notification(path), cx),
                 Err(error) => window.push_notification(
                     Notification::error(format!("Could not save SQL file: {error}")),
                     cx,
@@ -173,5 +177,43 @@ impl Qrow {
 fn save_sql(path: &Path, sql: &str) -> std::io::Result<()> {
     crate::export::save(path, &AtomicBool::new(false), |out| {
         out.write_all(sql.as_bytes())
+    })
+}
+
+fn saved_notification(path: PathBuf) -> Notification {
+    let filename = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    Notification::new().autohide(false).content(move |_, _, _| {
+        let path = path.clone();
+        v_flex()
+            .id("sql-file-saved-notice")
+            .test_support()
+            .min_w_0()
+            .gap_1()
+            .child(super::export_dialog::background::notification_heading(
+                "sql-file-saved-filename",
+                filename.clone(),
+            ))
+            .child(
+                div()
+                    .id("sql-file-saved-detail")
+                    .test_support()
+                    .role(Role::Status)
+                    .aria_label("SQL file saved")
+                    .text_sm()
+                    .child("SQL file saved"),
+            )
+            .child(
+                h_flex().w_full().justify_end().child(
+                    Button::new("reveal-sql-file")
+                        .small()
+                        .label("Reveal in Finder")
+                        .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                ),
+            )
+            .into_any_element()
     })
 }

@@ -865,7 +865,10 @@ impl ExportDialog {
                                 .test_support()
                                 .min_w_0()
                                 .gap_1()
-                                .child(background::notification_heading(filename.clone()))
+                                .child(background::notification_heading(
+                                    "export-notification-filename",
+                                    filename.clone(),
+                                ))
                                 .child(
                                     div()
                                         .id("export-complete-detail")
