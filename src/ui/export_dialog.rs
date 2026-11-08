@@ -116,7 +116,7 @@ impl Qrow {
             Err(error) => {
                 window.push_notification(
                     toast::error(
-                        "export-error",
+                        "export-error-toast",
                         "Could not export results",
                         error.to_string(),
                     ),
@@ -1297,7 +1297,11 @@ pub(super) fn copy_format(
         Ok(guard) => guard,
         Err(error) => {
             window.push_notification(
-                toast::error("copy-error", "Could not copy results", error.to_string()),
+                toast::error(
+                    "copy-error-toast",
+                    "Could not copy results",
+                    error.to_string(),
+                ),
                 cx,
             );
             return;
@@ -1353,7 +1357,11 @@ pub(super) fn copy_format(
             }
             Ok(_) => {}
             Err(error) => window.push_notification(
-                toast::error("copy-error", "Could not copy results", error.to_string()),
+                toast::error(
+                    "copy-error-toast",
+                    "Could not copy results",
+                    error.to_string(),
+                ),
                 cx,
             ),
         });
@@ -1372,7 +1380,7 @@ fn confirm_markdown_copy(
         } else {
             window.push_notification(
                 toast::error(
-                    "copy-error",
+                    "copy-error-toast",
                     "Could not copy results",
                     "The clipboard changed. Choose Copy to try again.",
                 ),
@@ -1784,9 +1792,10 @@ mod tests {
             let status = notice.find("status");
             let detail = status.label().unwrap();
             let cancel_button = notice.find(SharedString::from(format!("export-stop-{id}")));
-            assert!(cancel_button.bounds().top() >= status.bounds().bottom());
-            let actions = notice.find("export-progress-actions");
-            assert_eq!(cancel_button.bounds().right(), actions.bounds().right());
+            // The only action shares the row with the text.
+            assert!(cancel_button.bounds().left() >= status.bounds().right());
+            assert!(cancel_button.bounds().top() < status.bounds().bottom());
+            assert!(cancel_button.bounds().bottom() > title.bounds().top());
             assert!(detail.starts_with("Writing 3 rows"));
             assert!(!detail.contains(".csv"));
             assert!(

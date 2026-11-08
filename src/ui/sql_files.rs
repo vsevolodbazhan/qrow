@@ -19,7 +19,7 @@ impl Qrow {
         let Some(profile) = self.active_profile() else {
             window.push_notification(
                 toast::error(
-                    "sql-file-error",
+                    "sql-file-error-toast",
                     "Could not import SQL file",
                     "Choose a connection first.",
                 ),
@@ -41,7 +41,7 @@ impl Qrow {
                     let _ = this.update_in(cx, |_, window, cx| {
                         window.push_notification(
                             toast::error(
-                                "sql-file-error",
+                                "sql-file-error-toast",
                                 "Could not open the file panel",
                                 format!("{error:?}"),
                             ),
@@ -102,7 +102,7 @@ impl Qrow {
                         }
                         Err(error) => window.push_notification(
                             toast::error(
-                                "sql-file-error",
+                                "sql-file-error-toast",
                                 "Could not import SQL file",
                                 format!("{}: {error}", path.display()),
                             ),
@@ -158,7 +158,7 @@ impl Qrow {
                     let _ = this.update_in(cx, |_, window, cx| {
                         window.push_notification(
                             toast::error(
-                                "sql-file-error",
+                                "sql-file-error-toast",
                                 "Could not open the save panel",
                                 format!("{error:?}"),
                             ),
@@ -175,7 +175,7 @@ impl Qrow {
                 Ok(path) => window.push_notification(saved_notification(path), cx),
                 Err(error) => window.push_notification(
                     toast::error(
-                        "sql-file-error",
+                        "sql-file-error-toast",
                         "Could not save SQL file",
                         error.to_string(),
                     ),

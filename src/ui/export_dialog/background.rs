@@ -67,6 +67,10 @@ impl Qrow {
 
 struct ProgressNotice {
     job: WeakEntity<ExportDialog>,
+    /// Whether the job had failed when this notification was shown. The type
+    /// icon is fixed when a notification is pushed, so the title and the role
+    /// follow this value too, even after the export form clears the error.
+    failed: bool,
     _subscription: Subscription,
 }
 
@@ -90,71 +94,87 @@ impl Render for ProgressNotice {
         let retained = owner
             .upgrade()
             .is_some_and(|owner| owner.read(cx).exports.iter().any(|entry| entry.view == job));
-        let error = state.error.is_some();
-        let (kind, title) = if error {
+        let (kind, title) = if self.failed {
             (NotificationType::Error, "Export failed")
-        } else if !running {
-            (NotificationType::Info, "Export stopped")
-        } else {
+        } else if running {
             (NotificationType::Info, "Exporting results")
+        } else {
+            (NotificationType::Info, "Export stopped")
         };
-        toast::body(kind, SharedString::from(format!("export-job-{id}")))
-            .test_support()
-            .w_full()
+        let mut actions = Vec::new();
+        if !running && retained {
+            actions.push(
+                Button::new(SharedString::from(format!("export-details-{id}")))
+                    .small()
+                    .label("Retry…")
+                    .on_click(move |_, window, cx| ExportDialog::open(&job, window, cx)),
+            );
+        }
+        if multiple {
+            actions.push(
+                Button::new(SharedString::from(format!("export-all-jobs-{id}")))
+                    .small()
+                    .ghost()
+                    .label("All exports…")
+                    .on_click(move |_, window, cx| ExportList::open(owner.clone(), window, cx)),
+            );
+        }
+        actions.push(
+            Button::new(SharedString::from(format!("export-stop-{id}")))
+                .small()
+                .label(if running { "Cancel" } else { "Dismiss" })
+                .on_click(move |_, window, cx| {
+                    let _ = cancel.update(cx, |job, cx| {
+                        if job.running {
+                            job.cancel.store(true, Ordering::Relaxed);
+                            job.cancel_download();
+                            cx.notify();
+                        } else {
+                            job.remove_background(window, cx);
+                        }
+                    });
+                }),
+        );
+        let text = v_flex()
+            .flex_1()
+            .min_w_0()
             .child(toast::title_line("title", title.into()))
             .child(toast::filename_line(
                 "export-notification-filename",
                 filename,
             ))
-            .child(toast::detail_line("status", message.into()))
-            .child(
+            .child(toast::detail_line("status", message.into()));
+        let actions_id = "export-progress-actions";
+        let body = toast::body(kind, SharedString::from(format!("export-job-{id}")))
+            .test_support()
+            .w_full();
+        // One action shares the row with the text, as in other notifications.
+        // More actions go on a row below the text.
+        let body = if actions.len() == 1 {
+            body.child(
+                h_flex().w_full().gap_3().items_center().child(text).child(
+                    h_flex()
+                        .id(actions_id)
+                        .test_support()
+                        .flex_none()
+                        .mr_3p5()
+                        .children(actions),
+                ),
+            )
+        } else {
+            body.child(text).child(
                 h_flex()
-                    .id("export-progress-actions")
+                    .id(actions_id)
                     .test_support()
                     .w_full()
                     .mt_2()
                     .justify_end()
                     .flex_wrap()
                     .gap_2()
-                    .when(!running && retained, |view| {
-                        view.child(
-                            Button::new(SharedString::from(format!("export-details-{id}")))
-                                .small()
-                                .label("Retry…")
-                                .on_click(move |_, window, cx| {
-                                    ExportDialog::open(&job, window, cx)
-                                }),
-                        )
-                    })
-                    .when(multiple, |view| {
-                        view.child(
-                            Button::new(SharedString::from(format!("export-all-jobs-{id}")))
-                                .small()
-                                .ghost()
-                                .label("All exports…")
-                                .on_click(move |_, window, cx| {
-                                    ExportList::open(owner.clone(), window, cx)
-                                }),
-                        )
-                    })
-                    .child(
-                        Button::new(SharedString::from(format!("export-stop-{id}")))
-                            .small()
-                            .label(if running { "Cancel" } else { "Dismiss" })
-                            .on_click(move |_, window, cx| {
-                                let _ = cancel.update(cx, |job, cx| {
-                                    if job.running {
-                                        job.cancel.store(true, Ordering::Relaxed);
-                                        job.cancel_download();
-                                        cx.notify();
-                                    } else {
-                                        job.remove_background(window, cx);
-                                    }
-                                });
-                            }),
-                    ),
+                    .children(actions),
             )
-            .into_any_element()
+        };
+        body.into_any_element()
     }
 }
 
@@ -287,11 +307,13 @@ impl ExportDialog {
     ) {
         self.notice_generation = self.notice_generation.wrapping_add(1);
         let generation = self.notice_generation;
+        let failed = self.error.is_some();
         let job = cx.entity();
         let view = cx.new(|cx| {
             let subscription = cx.observe(&job, |_, _, cx| cx.notify());
             ProgressNotice {
                 job: job.downgrade(),
+                failed,
                 _subscription: subscription,
             }
         });
@@ -300,7 +322,7 @@ impl ExportDialog {
             Notification::new()
                 .id1::<ProgressNotice>(SharedString::from(self.id.to_string()))
                 // A failed job shows the notification again, with the error icon.
-                .with_type(if self.error.is_some() {
+                .with_type(if failed {
                     NotificationType::Error
                 } else {
                     NotificationType::Info
@@ -670,6 +692,7 @@ mod tests {
                 export::spool::Spool::new(&columns, &export::Context::default()).unwrap();
             producer.finish(&AtomicBool::new(false)).unwrap();
             let mut last = None;
+            let mut last_view = None;
             for index in 0..8 {
                 let result = ExportResult {
                     tab,
@@ -721,6 +744,7 @@ mod tests {
                 });
                 first_id.get_or_insert(view.read(cx).id);
                 last = Some(view.read(cx).id);
+                last_view = Some(view.clone());
             }
             let last = last.unwrap();
             last_id = Some(last);
@@ -764,6 +788,24 @@ mod tests {
             assert_eq!(window.find(details).label(), Some("Retry…"));
             assert_eq!(window.find(dismiss).label(), Some("Dismiss"));
             assert_eq!(owner.upgrade().unwrap().read(cx).exports.len(), 8);
+            // The title and the role match the error icon of the notification,
+            // also after the export form clears the error.
+            let job = SharedString::from(format!("export-job-{last}"));
+            assert_eq!(window.find(job.clone()).role(), Some(gpui_kit::Role::Alert));
+            assert_eq!(
+                window.within(job.clone()).find("title").label(),
+                Some("Export failed")
+            );
+            last_view.as_ref().unwrap().update(cx, |job, cx| {
+                job.error = None;
+                cx.notify();
+            });
+            window.render_frame(cx);
+            assert_eq!(window.find(job.clone()).role(), Some(gpui_kit::Role::Alert));
+            assert_eq!(
+                window.within(job).find("title").label(),
+                Some("Export failed")
+            );
         })
         .unwrap();
         cx.executor().advance_clock(Duration::from_millis(500));

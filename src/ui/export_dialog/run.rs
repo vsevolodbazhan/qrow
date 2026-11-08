@@ -23,7 +23,7 @@ impl Qrow {
         else {
             window.push_notification(
                 toast::error(
-                    "export-error",
+                    "export-error-toast",
                     "Could not export results",
                     "Choose a connection before running SQL.",
                 ),
@@ -35,7 +35,7 @@ impl Qrow {
             Ok(sql) => sql,
             Err(message) => {
                 window.push_notification(
-                    toast::error("export-error", "Could not export results", message),
+                    toast::error("export-error-toast", "Could not export results", message),
                     cx,
                 );
                 return;
@@ -46,7 +46,7 @@ impl Qrow {
         {
             window.push_notification(
                 toast::error(
-                    "export-error",
+                    "export-error-toast",
                     "Could not export results",
                     error.to_string(),
                 ),
@@ -73,7 +73,7 @@ impl Qrow {
             Err(error) => {
                 window.push_notification(
                     toast::error(
-                        "export-error",
+                        "export-error-toast",
                         "Could not export results",
                         error.to_string(),
                     ),
