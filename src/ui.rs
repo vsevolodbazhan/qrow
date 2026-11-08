@@ -84,6 +84,8 @@ actions!(
         ShowConnections,
         ShowSignIns,
         ToggleAssistant,
+        MaximizeAssistant,
+        MinimizeAssistant,
         ToggleResults,
         ToggleActivity,
         OpenAbout,
@@ -141,6 +143,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-w", CloseTab, None),
         KeyBinding::new("secondary-b", ShowConnections, None),
         KeyBinding::new("secondary-r", ToggleAssistant, None),
+        KeyBinding::new("secondary-shift-r", MaximizeAssistant, None),
+        KeyBinding::new("alt-secondary-r", MinimizeAssistant, None),
         KeyBinding::new("secondary-j", ToggleResults, None),
         KeyBinding::new("secondary-shift-u", ToggleActivity, None),
         KeyBinding::new(
@@ -244,6 +248,8 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
     ];
     if assistant_enabled {
         view.push(MenuItem::action("Toggle assistant", ToggleAssistant));
+        view.push(MenuItem::action("Maximize assistant", MaximizeAssistant));
+        view.push(MenuItem::action("Minimize assistant", MinimizeAssistant));
     }
     view.push(MenuItem::action("Activity", ToggleActivity));
     menus.push(Menu {

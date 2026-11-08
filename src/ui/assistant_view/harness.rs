@@ -219,7 +219,11 @@ impl Qrow {
         }
         self.assistant_state.open = !self.assistant_state.open;
         if self.assistant_state.open {
-            self.assistant_state.previous_focus = window.focused(cx);
+            self.assistant_state.previous_focus = if self.activity.read(cx).is_open() {
+                Some(self.tabs[self.active].input.read(cx).focus_handle(cx))
+            } else {
+                window.focused(cx)
+            };
             if self.assistant_transcript_visible(window, cx)
                 && let Some(thread) = self.displayed_thread()
             {
@@ -231,20 +235,51 @@ impl Qrow {
             if let Some(thread) = self.displayed_thread() {
                 self.load_assistant_thread(&thread, cx);
             }
-            self.assistant_composer(cx)
-                .update(cx, |composer, cx| composer.focus(window, cx));
+            if !self.activity.read(cx).is_open() {
+                self.assistant_composer(cx)
+                    .update(cx, |composer, cx| composer.focus(window, cx));
+            }
         } else {
-            self.assistant_state.maximized = false;
             if !self.settings.results_minimized && !self.activity.read(cx).is_open() {
                 self.tabs[self.active].panel.content_visible();
             }
-            if let Some(focus) = self.assistant_state.previous_focus.take() {
+            if let Some(focus) = self.assistant_state.previous_focus.take()
+                && !self.activity.read(cx).is_open()
+            {
                 focus.focus(window, cx);
             }
             if self.assistant_state.service.is_some() {
                 self.note_codex_activity(cx);
                 self.schedule_idle_codex_stop(CODEX_IDLE_TIMEOUT, window, cx);
             }
+        }
+        cx.notify();
+    }
+
+    pub(in crate::ui) fn set_assistant_maximized(
+        &mut self,
+        maximized: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings.assistant.enabled {
+            return;
+        }
+        if !self.assistant_state.open {
+            if maximized {
+                self.assistant_state.maximized = true;
+                self.toggle_assistant(window, cx);
+            }
+            return;
+        }
+        self.assistant_state.maximized = maximized;
+        self.assistant_state.resizing = None;
+        if !maximized && !self.settings.results_minimized && !self.activity.read(cx).is_open() {
+            self.tabs[self.active].panel.content_visible();
+        }
+        if !self.activity.read(cx).is_open() {
+            self.assistant_composer(cx)
+                .update(cx, |composer, cx| composer.focus(window, cx));
         }
         cx.notify();
     }

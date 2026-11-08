@@ -75,13 +75,16 @@ Claude Code works as Codex does, with these differences:
 
 ## Work with SQL
 
-Click **Maximize** in the conversation header to fill the work area,
-as Activity does. Click **Minimize** to return to the side pane at
+Click **Maximize** in the conversation header or press **⇧⌘R** to fill the work area,
+as Activity does. Click **Minimize** or press **⌥⌘R** to return to the side pane at
 its previous width. With **Smooth Transitions**, maximizing and restoring
 animate the width. A second click reverses the motion. Reduced motion makes
 the change immediate. Activity can cover the maximized assistant. Close Activity
 to return to it. **Show tab** in Activity restores the side pane and shows
-the query tab. If you close the assistant, it opens as a side pane next time.
+the query tab. **⌘R** closes and opens the assistant without changing its
+maximized state or saved side-pane width. The width adjusts only if the
+window does not have enough space. Maximize also opens a closed assistant.
+Minimize has no effect when the assistant is closed.
 
 
 Select a query tab. Click the assistant button near the right end of the

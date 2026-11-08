@@ -762,6 +762,10 @@ impl Qrow {
                 self.activate(index, window, cx);
             }
             ActivityViewEvent::Closed => {
+                if self.assistant_maximized() {
+                    self.assistant_composer(cx)
+                        .update(cx, |composer, cx| composer.focus(window, cx));
+                }
                 if !self.settings.results_minimized && !self.assistant_maximized() {
                     self.tabs[self.active].panel.content_visible();
                 }

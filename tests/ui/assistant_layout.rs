@@ -234,8 +234,86 @@ fn maximizing_the_assistant_replaces_the_workspace_and_restores_its_width(cx: &m
     app.wait_gone(cx, "assistant-composer");
     app.open_assistant(cx);
     app.show_conversation(cx);
+    app.wait_label(cx, "Minimize");
+    assert_eq!(composer(&app, cx), maximized);
+    app.press(cx, "alt-secondary-r");
     app.wait_label(cx, "Maximize");
     assert_eq!(composer(&app, cx), original);
+}
+
+#[gpui_kit::test]
+fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.smooth_transitions = true;
+    workspace.settings.assistant.panel_width = 573.;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.dispatch(cx, ToggleSidebar);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    app.type_message(cx, "Черновик запроса");
+    app.wait_until(cx, "settled assistant", REPLY_TIMEOUT, |window, _| {
+        bounds_of(window, "assistant-panel").size.width == px(573.)
+    });
+    let original = composer(&app, cx);
+    for _ in 0..2 {
+        app.press(cx, "secondary-r");
+        app.wait_gone(cx, "assistant-composer");
+        app.press(cx, "secondary-r");
+        app.wait_until(cx, "restored side pane", REPLY_TIMEOUT, |window, _| {
+            bounds_of(window, "assistant-composer") == original
+        });
+    }
+    app.press(cx, "secondary-shift-r");
+    app.press(cx, "secondary-shift-r");
+    app.wait_until(cx, "maximized assistant", REPLY_TIMEOUT, |window, _| {
+        bounds_of(window, "assistant-panel").size.width == window.viewport_size().width
+    });
+    for _ in 0..2 {
+        app.press(cx, "secondary-r");
+        app.wait_gone(cx, "assistant-composer");
+        app.press(cx, "secondary-r");
+        app.wait_until(cx, "restored maximized pane", REPLY_TIMEOUT, |window, _| {
+            bounds_of(window, "assistant-panel").size.width == window.viewport_size().width
+        });
+        app.wait_label(cx, "Minimize");
+    }
+    app.press(cx, "alt-secondary-r");
+    app.press(cx, "alt-secondary-r");
+    app.wait_until(
+        cx,
+        "original side-pane width",
+        REPLY_TIMEOUT,
+        |window, _| bounds_of(window, "assistant-composer") == original,
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(composer_text(window).as_deref(), Some("Черновик запроса"))
+    });
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.press(cx, "secondary-shift-r");
+    app.press(cx, "alt-secondary-r");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.press(cx, "secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.press(cx, "secondary-shift-r");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.wait_label(cx, "Minimize");
+    app.press(cx, "secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.update(cx, |window, cx| window.input("SELECT 73", cx));
+    app.wait_until(cx, "editor focus after closing", REPLY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == "SELECT 73"
+    });
+    app.press(cx, "alt-secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.press(cx, "secondary-shift-r");
+    app.wait_label(cx, "Minimize");
 }
 
 #[gpui_kit::test]

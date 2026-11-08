@@ -99,6 +99,14 @@ impl Qrow {
                                 PopupMenuItem::new("Toggle assistant")
                                     .action(Box::new(ToggleAssistant)),
                             )
+                            .item(
+                                PopupMenuItem::new("Maximize assistant")
+                                    .action(Box::new(MaximizeAssistant)),
+                            )
+                            .item(
+                                PopupMenuItem::new("Minimize assistant")
+                                    .action(Box::new(MinimizeAssistant)),
+                            )
                         } else {
                             menu
                         };
@@ -996,7 +1004,7 @@ impl Qrow {
 
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
-        if self.assistant_maximized() {
+        if self.assistant_state.maximized {
             return viewport;
         }
         let available = viewport
@@ -1089,6 +1097,12 @@ impl Qrow {
             )
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MaximizeAssistant, window, cx| {
+                this.set_assistant_maximized(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MinimizeAssistant, window, cx| {
+                this.set_assistant_maximized(false, window, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &ToggleActivity, window, cx| {

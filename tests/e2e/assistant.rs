@@ -318,25 +318,35 @@ fn smooth_composer_sends_a_multiline_draft_and_runs_sql(cx: &mut TestAppContext)
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
-    let (workspace, credentials) =
+    let (mut workspace, credentials) =
         Kyuubi::get().workspace("SELECT 42 AS value", crate::support::fixture::PASSWORD);
+    let gate = crate::support::response_gate::ResponseGate::new(workspace.profiles[0].port);
+    workspace.profiles[0].port = gate.port;
     let first = workspace.tabs[0].id;
     let mut workspace = codex.workspace(workspace);
     workspace.settings.smooth_transitions = true;
     let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.run_complete(cx, "SELECT 42 AS value");
     app.open_assistant(cx);
     app.show_conversation(cx);
     cx.update(|cx| cx.set_reduce_motion(false));
+    gate.pause();
     app.update(cx, |window, cx| {
         window.click("run", cx);
         window.click("assistant-maximize", cx);
     });
+    app.wait_until(cx, "held query", QUERY_TIMEOUT, |_, _| gate.blocked());
+    app.press(cx, "secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.press(cx, "secondary-r");
+    app.wait_label(cx, "Minimize");
+    gate.resume();
     app.wait_status(cx, "Complete");
     // Expanding results behind the assistant must not acknowledge them.
     app.dispatch(cx, qrow::ui::ToggleResults);
     app.dispatch(cx, qrow::ui::ToggleResults);
     app.dispatch(cx, qrow::ui::NewTab);
-    app.click(cx, "assistant-maximize");
+    app.press(cx, "alt-secondary-r");
     cx.executor().advance_clock(Duration::from_millis(250));
     app.update(cx, |window, cx| {
         window.simulate_next_frame(cx);

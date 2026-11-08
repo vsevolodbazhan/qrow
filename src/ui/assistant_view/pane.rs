@@ -658,22 +658,15 @@ impl AssistantPane {
                             } else {
                                 "Maximize"
                             })
-                            .tooltip(if qrow.assistant_state.maximized {
-                                "Minimize"
-                            } else {
-                                "Maximize"
+                            .map(|button| {
+                                if qrow.assistant_state.maximized {
+                                    button.tooltip_with_action("Minimize", &MinimizeAssistant, None)
+                                } else {
+                                    button.tooltip_with_action("Maximize", &MaximizeAssistant, None)
+                                }
                             })
                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
-                                this.assistant_state.maximized = !this.assistant_state.maximized;
-                                this.assistant_state.resizing = None;
-                                if !this.assistant_state.maximized
-                                    && !this.settings.results_minimized
-                                {
-                                    this.tabs[this.active].panel.content_visible();
-                                }
-                                this.assistant_composer(cx)
-                                    .update(cx, |composer, cx| composer.focus(window, cx));
-                                cx.notify();
+                                this.set_assistant_maximized(!this.assistant_state.maximized, window, cx);
                             })),
                     )
                     .child(
