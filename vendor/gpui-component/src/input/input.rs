@@ -343,6 +343,15 @@ impl Input {
         self
     }
 
+    /// Animate short horizontal caret movements. Off by default; respects reduced motion.
+    pub fn smooth_caret(self, enabled: bool) -> Self {
+        self.caret_transition(if enabled {
+            std::time::Duration::from_millis(35)
+        } else {
+            std::time::Duration::ZERO
+        })
+    }
+
     pub(crate) fn caret_transition(mut self, duration: std::time::Duration) -> Self {
         self.caret_transition = duration;
         self

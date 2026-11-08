@@ -156,3 +156,85 @@ fn smooth_caret_animates_paint_and_respects_reduced_motion(cx: &mut TestAppConte
     })
     .unwrap();
 }
+
+struct SearchProbe {
+    input: Entity<gpui_kit::component::input::InputState>,
+    enabled: Rc<Cell<bool>>,
+}
+impl Render for SearchProbe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            gpui_kit::component::input::Input::new(&self.input)
+                .smooth_caret(self.enabled.get())
+                .w_full(),
+        )
+    }
+}
+
+#[gpui_kit::test]
+fn search_input_caret_animates_without_delaying_text(cx: &mut TestAppContext) {
+    use gpui_kit::component::input::InputState;
+    cx.update(qrow::ui::init);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let enabled = Rc::new(Cell::new(true));
+    let mut input = None;
+    let window = cx.open_window(size(px(640.), px(480.)), |window, cx| {
+        let state = cx.new(|cx| InputState::new(window, cx).default_value("search query"));
+        state.update(cx, |state, cx| state.set_selected_range(0..0, cx));
+        input = Some(state.clone());
+        let probe = cx.new(|_| SearchProbe {
+            input: state,
+            enabled: enabled.clone(),
+        });
+        Root::new(probe, window, cx)
+    });
+    let input = input.unwrap();
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.activate_window();
+        input.update(cx, |state, cx| state.focus(window, cx));
+    })
+    .unwrap();
+    let frame = |cx: &mut TestAppContext| {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            input.read(cx).caret_presentation_bounds().unwrap()
+        })
+        .unwrap()
+    };
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| window.press("left", cx))
+        .unwrap();
+    let start = frame(cx);
+    cx.update_window(window.into(), |_, window, cx| window.press("right", cx))
+        .unwrap();
+    assert_eq!(frame(cx), start);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    let middle = frame(cx);
+    assert!(middle.origin.x > start.origin.x);
+    cx.executor().advance_clock(Duration::from_millis(35));
+    let end = frame(cx);
+    assert!(end.origin.x > middle.origin.x);
+    cx.update_window(window.into(), |_, window, cx| {
+        window.input("Ж", cx);
+        assert_eq!(input.read(cx).value(), "sЖearch query");
+    })
+    .unwrap();
+    frame(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let before = frame(cx);
+    cx.update_window(window.into(), |_, window, cx| window.press("right", cx))
+        .unwrap();
+    let reduced = frame(cx);
+    assert!(reduced.origin.x > before.origin.x);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    assert_eq!(frame(cx), reduced);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    enabled.set(false);
+    cx.update_window(window.into(), |_, window, cx| window.press("right", cx))
+        .unwrap();
+    let disabled = frame(cx);
+    assert!(disabled.origin.x > reduced.origin.x);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    assert_eq!(frame(cx), disabled);
+}

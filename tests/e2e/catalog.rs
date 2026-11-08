@@ -337,6 +337,8 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     let schema = format!("qrow_search_{}", uuid::Uuid::new_v4().simple());
     let (mut workspace, credentials) =
         kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    workspace.settings.editor_smooth_caret = true;
+    cx.update(|cx| cx.set_reduce_motion(false));
     workspace.profiles[0].catalog.include = vec![schema.clone()];
     workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
     let profile = workspace.profiles[0].clone();

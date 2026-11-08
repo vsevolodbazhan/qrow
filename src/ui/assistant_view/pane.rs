@@ -172,8 +172,7 @@ impl AssistantPane {
                 .submit_on_enter(true)
                 .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MIN_ROWS)
         });
-        let thread_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations…"));
+        let thread_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search…"));
         let transcript = cx.new(|cx| MessageScrollerState::new(0, cx));
         let subscriptions = [
             // The pane reads the assistant state of Qrow.

@@ -156,3 +156,7 @@ with the other GPUI crates as one set.
   The shorter duration keeps the caret close to newly typed text. `Textarea::smooth_resize(bool)` opts into auto-grow height
   transitions using the fast motion duration. Both default to off. Text input
   stays immediate and the system reduced-motion setting disables motion.
+
+- `Input::smooth_caret(bool)` enables a 35 ms horizontal caret transition for
+  search fields. The default is off. Text stays immediate, and reduced motion
+  disables the animation.

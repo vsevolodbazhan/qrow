@@ -1106,7 +1106,7 @@ fn appearance_page(
                 ))
                 .item(setting_item(
                     "Smooth Caret",
-                    "Animate short caret movements unless reduced motion is on.",
+                    "Animate caret movement in the editor and search fields.",
                     &["editor", "sql", "cursor", "motion", "animation", "typing"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();

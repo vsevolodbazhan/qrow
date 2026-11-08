@@ -22,7 +22,8 @@ size. The editor indents with spaces. **SQL Keyword Case** is the last Editor
 setting. It applies to **Format** and SQL that the [assistant](assistant.md)
 writes.
 **Smooth Caret** is off by default. Enable it in the Editor section to animate
-short horizontal caret movements. Text appears immediately. Mouse clicks,
+short horizontal caret movements in the editor and the connection and
+conversation search fields. Text appears immediately. Mouse clicks,
 line changes, selections, scrolling, and large jumps keep immediate caret
 movement. The system reduced-motion setting disables the animation.
 
