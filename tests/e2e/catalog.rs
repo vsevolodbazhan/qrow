@@ -338,11 +338,11 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     let (mut workspace, credentials) =
         kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
     workspace.settings.editor_smooth_caret = true;
-    cx.update(|cx| cx.set_reduce_motion(false));
     workspace.profiles[0].catalog.include = vec![schema.clone()];
     workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
     let profile = workspace.profiles[0].clone();
     let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.update(|cx| cx.set_reduce_motion(false));
     app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
     app.run_complete(
         cx,
