@@ -1,5 +1,5 @@
 //! Interruptible sidebar motion and content transitions that preserve input.
-use gpui_kit::base::{TestSupportExt as _, Transition, transition};
+use gpui_kit::base::{Interpolate, TestSupportExt as _, Transition, transition};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -113,6 +113,43 @@ pub(super) fn panel_extent(
     window: &mut Window,
     cx: &mut App,
 ) -> Pixels {
+    panel_value(
+        channel,
+        if shown { width } else { px(0.) },
+        enabled,
+        resizing,
+        window,
+        cx,
+    )
+}
+
+/// Share surplus height between the editor and results without measuring either.
+pub(super) fn panel_fraction(
+    channel: &'static str,
+    expanded: bool,
+    enabled: bool,
+    resizing: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    panel_value(
+        channel,
+        if expanded { 1. } else { 0. },
+        enabled,
+        resizing,
+        window,
+        cx,
+    )
+}
+
+fn panel_value<T: Interpolate + PartialEq + 'static>(
+    channel: &'static str,
+    target: T,
+    enabled: bool,
+    resizing: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> T {
     let geometry = PanelGeometry {
         viewport: window.viewport_size(),
         rem: window.rem_size(),
@@ -129,8 +166,8 @@ pub(super) fn panel_extent(
         Duration::ZERO
     };
     transition(
-        ElementId::from((ElementId::from(channel), "width")),
-        if shown { width } else { px(0.) },
+        ElementId::from((ElementId::from(channel), "value")),
+        target,
         Transition::new(duration).easing(cx.theme().motion_tokens().easing_move.clone()),
         window,
         cx,

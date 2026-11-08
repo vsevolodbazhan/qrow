@@ -1312,6 +1312,15 @@ impl Render for Qrow {
             .editor_height
             .min(window.viewport_size().height - self.ui_px(294.))
             .max(self.ui_px(100.));
+        let results_expansion = motion::panel_fraction(
+            "query-results",
+            !self.settings.results_minimized,
+            self.settings.smooth_transitions,
+            self.resize.is_some_and(|(horizontal, _, _)| !horizontal),
+            window,
+            cx,
+        );
+        let results_settled = !self.settings.results_minimized && results_expansion == 1.;
         let sidebar_width = self.shown_sidebar_width(window.viewport_size().width);
         let animated_sidebar_width = motion::panel_extent(
             "connections-sidebar",
@@ -1403,10 +1412,10 @@ impl Render for Qrow {
                             .id("sql-editor")
                             .overflow_hidden()
                             .test_support()
-                            .when(self.settings.results_minimized, |el| el.flex_1().min_h_0())
-                            .when(!self.settings.results_minimized, |el| {
-                                el.h(editor_height).flex_shrink_0()
-                            })
+                            .flex_basis(editor_height)
+                            .flex_grow(1. - results_expansion)
+                            .flex_shrink_0()
+                            .min_h_0()
                             .min_w_0()
                             .line_height(relative(self.settings.editor_line_height))
                             .child(
@@ -1416,19 +1425,19 @@ impl Render for Qrow {
                                     .child(editor),
                             ),
                     )
-                    .when(!self.settings.results_minimized, |el| {
-                        el.child(self.splitter(false, cx))
-                    })
-                    .when(self.settings.results_minimized, |el| {
+                    .when(results_settled, |el| el.child(self.splitter(false, cx)))
+                    .when(!results_settled, |el| {
                         el.child(div().h(self.ui_px(1.)).bg(cx.theme().border))
                     })
                     .child(
                         div()
-                            .when(self.settings.results_minimized, |el| {
-                                el.h(self.ui_px(result_tabs::RESULT_TAB_BAR_HEIGHT))
-                                    .flex_shrink_0()
-                            })
-                            .when(!self.settings.results_minimized, |el| el.flex_1().min_h_0())
+                            .id("results-motion")
+                            .test_support()
+                            .flex_basis(self.ui_px(result_tabs::RESULT_TAB_BAR_HEIGHT))
+                            .flex_grow(results_expansion)
+                            .flex_shrink_0()
+                            .min_h_0()
+                            .overflow_hidden()
                             .child(self.query_panel(window, cx)),
                     ),
             )

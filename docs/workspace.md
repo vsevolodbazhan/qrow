@@ -36,7 +36,10 @@ or a direct scroll change stops pending wheel movement.
 
 **Smooth Transitions** is in the Interface section and is off by default.
 Enable it for short transitions when query tabs, result tabs, and sidebar
-panels change. Assistant maximize and restore also use this option. Sidebars expand and collapse without changing the width of
+panels change. Collapsing and expanding results also uses this option. The
+previous split returns on expansion, and a second toggle reverses the motion.
+Assistant maximize and restore also use this option. Sidebars expand and
+collapse without changing the width of
 their contents during the transition. Controls leave the sidebar when it
 starts to close. A second toggle reverses the motion.
 Content changes keep text visible. Editor text stays in position when tabs

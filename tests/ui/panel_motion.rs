@@ -389,3 +389,87 @@ fn assistant_maximize_motion_reverses_and_preserves_the_draft(cx: &mut TestAppCo
     app.settle(cx);
     assert_eq!(panel(cx).size.width, px(1280.));
 }
+
+#[gpui_kit::test]
+fn results_motion_reverses_and_restores_the_split(cx: &mut TestAppContext) {
+    use qrow::ui::ToggleResults;
+    let mut workspace = Workspace::default();
+    workspace.settings.smooth_transitions = true;
+    let app = TestApp::launch(cx, workspace);
+    let editor_height = |cx: &mut TestAppContext| {
+        app.update(cx, |window, _| bounds_of(window, "sql-editor").size.height)
+    };
+    let results =
+        |cx: &mut TestAppContext| app.update(cx, |window, _| bounds_of(window, "results-motion"));
+    let original_editor = editor_height(cx);
+    let original_results = results(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.dispatch(cx, ToggleResults);
+    assert_eq!(editor_height(cx), original_editor);
+    app.wait_gone(cx, "editor-splitter");
+    advance(&app, cx, 40);
+    let middle = results(cx);
+    assert!(middle.size.height < original_results.size.height);
+    assert!(editor_height(cx) > original_editor);
+    assert_eq!(middle.bottom(), original_results.bottom());
+    app.dispatch(cx, ToggleResults);
+    assert_eq!(results(cx), middle, "reversal keeps the current position");
+    advance(&app, cx, 20);
+    assert!(results(cx).size.height > middle.size.height);
+    advance(&app, cx, 250);
+    assert_eq!(results(cx), original_results);
+    assert_eq!(editor_height(cx), original_editor);
+    app.update(cx, |window, cx| {
+        let start = bounds_of(window, "editor-splitter").center();
+        window.drag(start, start + point(px(0.), px(-40.)), cx);
+    });
+    let resized = editor_height(cx);
+    assert!(resized < original_editor);
+    advance(&app, cx, 100);
+    assert_eq!(editor_height(cx), resized, "dragging remains immediate");
+    app.dispatch(cx, ToggleResults);
+    advance(&app, cx, 250);
+    let collapsed = results(cx);
+    assert!(collapsed.size.height < original_results.size.height);
+    app.dispatch(cx, ToggleResults);
+    advance(&app, cx, 250);
+    assert_eq!(editor_height(cx), resized);
+    // Reduced motion also settles an animation already in progress.
+    app.dispatch(cx, ToggleResults);
+    advance(&app, cx, 20);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    advance(&app, cx, 0);
+    assert_eq!(results(cx), collapsed);
+    app.dispatch(cx, ToggleResults);
+    assert_eq!(editor_height(cx), resized);
+    // Resizing the window during a collapse follows the new geometry directly.
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.dispatch(cx, ToggleResults);
+    advance(&app, cx, 20);
+    cx.simulate_window_resize(app.window, gpui_kit::size(px(1280.), px(900.)));
+    app.settle(cx);
+    assert_eq!(results(cx).size.height, collapsed.size.height);
+    app.dispatch(cx, ToggleResults);
+    advance(&app, cx, 250);
+    assert_eq!(editor_height(cx), resized);
+}
+
+#[gpui_kit::test]
+fn results_collapse_is_immediate_when_smooth_transitions_are_off(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let original = app.update(cx, |window, _| bounds_of(window, "sql-editor"));
+    app.dispatch(cx, qrow::ui::ToggleResults);
+    let collapsed = app.update(cx, |window, _| bounds_of(window, "sql-editor"));
+    assert!(collapsed.size.height > original.size.height);
+    advance(&app, cx, 40);
+    assert_eq!(
+        app.update(cx, |window, _| bounds_of(window, "sql-editor")),
+        collapsed
+    );
+    app.dispatch(cx, qrow::ui::ToggleResults);
+    assert_eq!(
+        app.update(cx, |window, _| bounds_of(window, "sql-editor")),
+        original
+    );
+}

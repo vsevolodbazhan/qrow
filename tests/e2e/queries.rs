@@ -471,22 +471,29 @@ fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
-    let (workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    workspace.settings.smooth_transitions = true;
     let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.update(|cx| cx.set_reduce_motion(false));
     let height = app.update(cx, |window, _| {
         window.find("sql-editor").bounds().size.height
     });
     app.click(cx, "toggle-results");
-    app.update(cx, |window, _| {
-        assert!(window.find("sql-editor").bounds().size.height > height);
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+    app.wait_until(cx, "results collapsing", QUERY_TIMEOUT, |window, _| {
+        window.find("sql-editor").bounds().size.height > height
+            && window.find("toggle-results").label() == Some("Expand")
     });
     app.click(cx, "run");
     app.wait_cell(cx, 0, 1, "233");
-    app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
-        assert_eq!(window.find("sql-editor").bounds().size.height, height);
-    });
+    app.wait_until(
+        cx,
+        "results restored to their previous height",
+        QUERY_TIMEOUT,
+        |window, _| {
+            window.find("toggle-results").label() == Some("Collapse")
+                && window.find("sql-editor").bounds().size.height == height
+        },
+    );
     app.press(cx, "secondary-j");
     app.press(cx, "secondary-j");
     app.wait_cell(cx, 0, 1, "233");
