@@ -149,8 +149,16 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-w", CloseTab, None),
         KeyBinding::new("secondary-b", ShowConnections, None),
         KeyBinding::new("secondary-r", ToggleAssistant, None),
-        KeyBinding::new("secondary-shift-r", MaximizeAssistant, None),
-        KeyBinding::new("alt-secondary-r", MinimizeAssistant, None),
+        KeyBinding::new(
+            "secondary-shift-r",
+            MaximizeAssistant,
+            Some("Qrow && !AssistantMaximized"),
+        ),
+        KeyBinding::new(
+            "secondary-shift-r",
+            MinimizeAssistant,
+            Some("Qrow && AssistantMaximized"),
+        ),
         KeyBinding::new("secondary-j", ToggleResults, None),
         KeyBinding::new("secondary-shift-u", ToggleActivity, None),
         KeyBinding::new(

@@ -346,7 +346,7 @@ fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppCon
     app.dispatch(cx, qrow::ui::ToggleResults);
     app.dispatch(cx, qrow::ui::ToggleResults);
     app.dispatch(cx, qrow::ui::NewTab);
-    app.press(cx, "alt-secondary-r");
+    app.press(cx, "secondary-shift-r");
     cx.executor().advance_clock(Duration::from_millis(250));
     app.update(cx, |window, cx| {
         window.simulate_next_frame(cx);

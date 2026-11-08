@@ -1070,7 +1070,11 @@ impl Qrow {
         v_flex()
             .relative()
             .size_full()
-            .key_context("Qrow")
+            .key_context(if self.assistant_maximized() {
+                "Qrow AssistantMaximized"
+            } else {
+                "Qrow"
+            })
             .track_focus(&self.focus)
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
