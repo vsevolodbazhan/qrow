@@ -188,7 +188,9 @@ and columns, and downloads or reruns the query when needed. If the text exceeds
 the limit, the clipboard does not change. You can save the downloaded result
 to a file. Parquet is available only as a file. **Save** opens the native save
 panel. Tab separators use the `.tsv` extension. Other separators
-use `.csv`. After a save, use **Reveal in Finder** to locate the file.
+use `.csv`. After a save, a notification shows the row count and the file
+name. Use **Reveal in Finder** to locate the file. The notification stays open
+until you close it, because an export can finish while you do other work.
 A successful copy or save stores the options for the next export. A save
 also stores the last output directory.
 

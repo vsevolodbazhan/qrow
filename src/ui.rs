@@ -10,6 +10,7 @@ mod dbt_details;
 mod demo;
 mod environment;
 mod export_dialog;
+mod file_notice;
 mod format_sql;
 mod log_row;
 mod motion;
@@ -714,6 +715,11 @@ fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
         theme.font_family = settings.ui_font_family.clone().into();
         theme.font_size = px(14. * settings.ui_scale);
         theme.mono_font_size = px(13. * settings.ui_scale);
+        // Notifications start below the query tabs, so they never cover the
+        // tab that a notification is about.
+        theme.notification.margins.top = gpui_kit::component::TITLE_BAR_HEIGHT
+            + px(workspace_view::TAB_BAR_HEIGHT * settings.ui_scale)
+            + theme.notification.margins.right;
         theme.font_size
     };
     gpui_kit::component::Theme::sync_base(cx);

@@ -1123,11 +1123,24 @@ fn sql_file_import_and_save_round_trip(cx: &mut TestAppContext) {
         assert!(heading.bounds().right() <= notice.bounds().right());
         let detail = window.find("sql-file-saved-detail");
         assert_eq!(detail.label(), Some("SQL file saved"));
+        assert!(heading.bounds().top() >= detail.bounds().bottom());
         let reveal = window.find("reveal-sql-file");
         assert_eq!(reveal.label(), Some("Reveal in Finder"));
         assert!(reveal.visible());
-        assert!(reveal.bounds().top() >= detail.bounds().bottom());
-        assert_eq!(reveal.bounds().right(), notice.bounds().right());
+        // The action shares the row with the text instead of adding a row.
+        assert!(reveal.bounds().left() >= notice.bounds().right());
+        assert!(reveal.bounds().top() < heading.bounds().bottom());
+        assert!(reveal.bounds().bottom() > detail.bounds().top());
+        // The notification starts below the query tabs, not over them.
+        assert!(detail.bounds().top() > window.find("query-toolbar").bounds().top());
+    });
+    // A routine save hides on its own.
+    for _ in 0..140 {
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+    }
+    app.update(cx, |window, _| {
+        assert!(window.try_find("sql-file-saved-notice").is_none());
     });
     // Keep the native panel's exact destination; do not replace a sibling .sql file.
     let extensionless = directory.path().join("exact-name");

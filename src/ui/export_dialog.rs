@@ -852,42 +852,19 @@ impl ExportDialog {
                     });
                 }
                 if let Some(path) = path {
-                    let filename = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned();
+                    // A background job can finish while the user works elsewhere,
+                    // so this notification stays until it is closed.
                     window.push_notification(
-                        Notification::new().autohide(false).content(move |_, _, _| {
-                            let path = path.clone();
-                            v_flex()
-                                .id("export-complete-notice")
-                                .test_support()
-                                .min_w_0()
-                                .gap_1()
-                                .child(background::notification_heading(
-                                    "export-notification-filename",
-                                    filename.clone(),
-                                ))
-                                .child(
-                                    div()
-                                        .id("export-complete-detail")
-                                        .test_support()
-                                        .role(Role::Status)
-                                        .aria_label(format!("Exported {count} rows"))
-                                        .text_sm()
-                                        .child(format!("Exported {count} rows")),
-                                )
-                                .child(
-                                    gpui_kit::component::h_flex().w_full().justify_end().child(
-                                        Button::new("reveal-export")
-                                            .small()
-                                            .label("Reveal in Finder")
-                                            .on_click(move |_, _, cx| cx.reveal_path(&path)),
-                                    ),
-                                )
-                                .into_any_element()
-                        }),
+                        crate::ui::file_notice::saved_file(
+                            crate::ui::file_notice::SavedFileIds {
+                                notice: "export-complete-notice",
+                                title: "export-complete-detail",
+                                filename: "export-notification-filename",
+                                reveal: "reveal-export",
+                            },
+                            format!("Exported {count} rows"),
+                            path,
+                        ),
                         cx,
                     );
                 }

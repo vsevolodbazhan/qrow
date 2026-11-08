@@ -64,22 +64,8 @@ impl Qrow {
     }
 }
 
-pub(in crate::ui) fn notification_heading(id: &'static str, filename: String) -> impl IntoElement {
-    let tooltip = filename.clone();
-    div()
-        .id(id)
-        .test_support()
-        .role(Role::Label)
-        .aria_label(filename.clone())
-        .w_full()
-        .min_w_0()
-        .text_sm()
-        .font_weight(FontWeight::SEMIBOLD)
-        .tooltip(move |window, cx| {
-            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-        })
-        .truncate()
-        .child(filename)
+pub(super) fn notification_heading(id: &'static str, filename: String) -> impl IntoElement {
+    crate::ui::file_notice::filename_line(id, filename, FontWeight::SEMIBOLD)
 }
 
 struct ProgressNotice {

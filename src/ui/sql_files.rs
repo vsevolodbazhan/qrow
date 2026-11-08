@@ -1,5 +1,5 @@
 use super::*;
-use gpui_kit::component::{h_flex, notification::Notification, v_flex};
+use gpui_kit::component::notification::Notification;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -180,40 +180,17 @@ fn save_sql(path: &Path, sql: &str) -> std::io::Result<()> {
     })
 }
 
+/// A routine save hides on its own; hovering the notification pauses the timer.
 fn saved_notification(path: PathBuf) -> Notification {
-    let filename = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
-    Notification::new().autohide(false).content(move |_, _, _| {
-        let path = path.clone();
-        v_flex()
-            .id("sql-file-saved-notice")
-            .test_support()
-            .min_w_0()
-            .gap_1()
-            .child(super::export_dialog::background::notification_heading(
-                "sql-file-saved-filename",
-                filename.clone(),
-            ))
-            .child(
-                div()
-                    .id("sql-file-saved-detail")
-                    .test_support()
-                    .role(Role::Status)
-                    .aria_label("SQL file saved")
-                    .text_sm()
-                    .child("SQL file saved"),
-            )
-            .child(
-                h_flex().w_full().justify_end().child(
-                    Button::new("reveal-sql-file")
-                        .small()
-                        .label("Reveal in Finder")
-                        .on_click(move |_, _, cx| cx.reveal_path(&path)),
-                ),
-            )
-            .into_any_element()
-    })
+    super::file_notice::saved_file(
+        super::file_notice::SavedFileIds {
+            notice: "sql-file-saved-notice",
+            title: "sql-file-saved-detail",
+            filename: "sql-file-saved-filename",
+            reveal: "reveal-sql-file",
+        },
+        "SQL file saved".into(),
+        path,
+    )
+    .autohide(true)
 }
