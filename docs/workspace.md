@@ -21,6 +21,8 @@ Tab key and SQL that Qrow formats for the assistant and **Format** use this
 size. The editor indents with spaces. **SQL Keyword Case** is the last Editor
 setting. It applies to **Format** and SQL that the [assistant](assistant.md)
 writes.
+Find and Replace buttons show tooltips with their available shortcuts.
+
 **Smooth Caret** is off by default. Enable it in the Editor section to animate
 short horizontal caret movements in the editor, its Find and Replace fields,
 and the connection and conversation search fields. Text appears immediately. Mouse clicks,

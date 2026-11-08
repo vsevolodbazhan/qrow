@@ -164,3 +164,7 @@ with the other GPUI crates as one set.
 - An input's Find and Replace fields follow its smooth-caret option, including
   changes while Find is open. The fields use the same 35 ms transition as
   other search inputs and honor reduced motion.
+
+- Find and Replace buttons have accessible names and managed tooltips. Previous
+  and next match, the replacement-field toggle, and Close show their bound
+  shortcuts. The replacement-field tooltip follows the current state.
