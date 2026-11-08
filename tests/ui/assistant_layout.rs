@@ -236,7 +236,7 @@ fn maximizing_the_assistant_replaces_the_workspace_and_restores_its_width(cx: &m
     app.show_conversation(cx);
     app.wait_label(cx, "Minimize");
     assert_eq!(composer(&app, cx), maximized);
-    app.press(cx, "alt-secondary-r");
+    app.press(cx, "secondary-shift-r");
     app.wait_label(cx, "Maximize");
     assert_eq!(composer(&app, cx), original);
 }
@@ -288,7 +288,6 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
         app.wait_until(cx, "restored side pane", REPLY_TIMEOUT, &restored);
     }
     app.press(cx, "secondary-shift-r");
-    app.press(cx, "secondary-shift-r");
     app.wait_until(cx, "maximized assistant", REPLY_TIMEOUT, |window, _| {
         bounds_of(window, "assistant-motion").size.width == window.viewport_size().width
     });
@@ -301,8 +300,7 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
         });
         app.wait_label(cx, "Minimize");
     }
-    app.press(cx, "alt-secondary-r");
-    app.press(cx, "alt-secondary-r");
+    app.press(cx, "secondary-shift-r");
     app.wait_until(cx, "original side-pane width", REPLY_TIMEOUT, &restored);
     assert_eq!(app.saved().settings.assistant.panel_width, 573.);
     app.update(cx, |window, _| {
@@ -311,7 +309,7 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
     app.click(cx, "toggle-activity");
     app.wait_for(cx, "activity");
     app.press(cx, "secondary-shift-r");
-    app.press(cx, "alt-secondary-r");
+    app.press(cx, "secondary-shift-r");
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
     app.press(cx, "secondary-r");
@@ -328,7 +326,7 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
     app.wait_until(cx, "editor focus after closing", REPLY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == "SELECT 73"
     });
-    app.press(cx, "alt-secondary-r");
+    app.dispatch(cx, qrow::ui::MinimizeAssistant);
     app.wait_gone(cx, "assistant-composer");
     app.press(cx, "secondary-shift-r");
     app.wait_label(cx, "Minimize");

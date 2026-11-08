@@ -378,7 +378,7 @@ fn assistant_maximize_motion_reverses_and_preserves_the_draft(cx: &mut TestAppCo
     app.open_assistant(cx);
     app.wait_label(cx, "Minimize");
     assert_eq!(panel(cx).size.width, px(900.));
-    app.press(cx, "alt-secondary-r");
+    app.press(cx, "secondary-shift-r");
     app.wait_label(cx, "Maximize");
     assert_eq!(panel(cx).size.width, original.size.width);
     cx.update(|cx| cx.set_reduce_motion(false));

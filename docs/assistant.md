@@ -76,7 +76,7 @@ Claude Code works as Codex does, with these differences:
 ## Work with SQL
 
 Click **Maximize** in the conversation header or press **⇧⌘R** to fill the work area,
-as Activity does. Click **Minimize** or press **⌥⌘R** to return to the side pane at
+as Activity does. Click **Minimize** or press **⇧⌘R** again to return to the side pane at
 its previous width. With **Smooth Transitions**, maximizing and restoring
 animate the width. A second click reverses the motion. Reduced motion makes
 the change immediate. Activity can cover the maximized assistant. Close Activity
