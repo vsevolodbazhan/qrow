@@ -1039,3 +1039,184 @@ fn numbered_shortcuts_ignore_missing_query_tabs(cx: &mut TestAppContext) {
         workspace.tabs.len() == 1 && workspace.active_tab == 0
     });
 }
+
+#[gpui_kit::test]
+fn sql_file_import_and_save_round_trip(cx: &mut TestAppContext) {
+    let profile = offline_profile("SQL files");
+    let id = profile.id;
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![tab(id, "Original", "SELECT 'original'")],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("Запрос.sql");
+    let second = directory.path().join("empty.sql");
+    let invalid = directory.path().join("invalid.sql");
+    let sql = "-- SQL 😀\r\nSELECT 'значение';\r\nSELECT 2;\n";
+    std::fs::write(&first, format!("\u{feff}{sql}")).unwrap();
+    std::fs::write(&second, "").unwrap();
+    std::fs::write(&invalid, [0xff]).unwrap();
+    app.press(cx, "secondary-o");
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|options| {
+        assert!(!options.multiple && options.files && !options.directories);
+        Some(vec![first.clone()])
+    });
+    wait_tabs(
+        &app,
+        cx,
+        id,
+        &[("Original", "SELECT 'original'"), ("Запрос", sql)],
+    );
+    for file in [&invalid, &second, &first] {
+        let before = app.update(cx, sql_file_notifications);
+        app.press(cx, "secondary-o");
+        cx.simulate_path_prompt_response(|_| Some(vec![file.clone()]));
+        app.wait_until(
+            cx,
+            "import finished",
+            Duration::from_secs(10),
+            |window, cx| {
+                if file == &invalid {
+                    sql_file_notifications(window, cx)
+                        .iter()
+                        .any(|id| !before.contains(id))
+                } else {
+                    app.saved().tabs.len() == if file == &second { 3 } else { 4 }
+                }
+            },
+        );
+    }
+    wait_tabs(
+        &app,
+        cx,
+        id,
+        &[
+            ("Original", "SELECT 'original'"),
+            ("Запрос", sql),
+            ("empty", ""),
+            ("Запрос (Copy)", sql),
+        ],
+    );
+    assert_eq!(app.credentials.reads(), 0);
+    let sql = "-- edited 😀\nSELECT 3;\nSELECT 4;\n";
+    app.type_sql(cx, sql);
+    let filename = "Очень-длинное-имя-сохранённого-запроса-для-проверки-уведомления.sql";
+    let output = directory.path().join(filename);
+    app.press(cx, "secondary-shift-s");
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| Some(output.clone()));
+    app.wait_until(cx, "SQL file saved", Duration::from_secs(10), |_, _| {
+        std::fs::read_to_string(&output).ok().as_deref() == Some(sql)
+    });
+    app.wait_for(cx, "sql-file-saved-detail");
+    app.update(cx, |window, _| {
+        let notice = window.find("sql-file-saved-notice");
+        let heading = window
+            .within("sql-file-saved-notice")
+            .find("sql-file-saved-filename");
+        assert_eq!(heading.label(), Some(filename));
+        assert!(heading.bounds().right() <= notice.bounds().right());
+        let detail = window.find("sql-file-saved-detail");
+        assert_eq!(detail.label(), Some("SQL file saved"));
+        assert!(heading.bounds().top() >= detail.bounds().bottom());
+        let reveal = window.find("reveal-sql-file");
+        assert_eq!(reveal.label(), Some("Reveal in Finder"));
+        assert!(reveal.visible());
+        // The action shares the row with the text instead of adding a row.
+        assert!(reveal.bounds().left() >= notice.bounds().right());
+        assert!(reveal.bounds().top() < heading.bounds().bottom());
+        assert!(reveal.bounds().bottom() > detail.bounds().top());
+        // The notification starts below the query tabs, not over them.
+        assert!(detail.bounds().top() > window.find("query-toolbar").bounds().top());
+    });
+    // A routine save hides on its own.
+    for _ in 0..140 {
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+    }
+    app.update(cx, |window, _| {
+        assert!(window.try_find("sql-file-saved-notice").is_none());
+    });
+    // Keep the native panel's exact destination; do not replace a sibling .sql file.
+    let extensionless = directory.path().join("exact-name");
+    let sibling = extensionless.with_extension("sql");
+    std::fs::write(&sibling, "keep this file").unwrap();
+    app.press(cx, "secondary-shift-s");
+    cx.simulate_new_path_selection(|_| Some(extensionless.clone()));
+    app.wait_until(cx, "exact destination", Duration::from_secs(10), |_, _| {
+        std::fs::read_to_string(&extensionless).ok().as_deref() == Some(sql)
+    });
+    assert_eq!(std::fs::read_to_string(sibling).unwrap(), "keep this file");
+    // The context action saves its target even when another tab is active.
+    app.context_menu_labelled(cx, "Original");
+    app.choose(cx, "popup-menu", "Save as SQL file…");
+    let original = directory.path().join("original.sql");
+    cx.simulate_new_path_selection(|_| Some(original.clone()));
+    app.wait_until(cx, "original SQL file", Duration::from_secs(10), |_, _| {
+        std::fs::read_to_string(&original).ok().as_deref() == Some("SELECT 'original'")
+    });
+}
+
+#[gpui_kit::test]
+fn sql_file_cancel_and_failures_keep_existing_tabs(cx: &mut TestAppContext) {
+    let profile = offline_profile("SQL files");
+    let id = profile.id;
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![tab(id, "Original", "SELECT 1")],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.press(cx, "secondary-o");
+    cx.simulate_path_prompt_response(|_| None);
+    app.press(cx, "secondary-shift-s");
+    cx.simulate_new_path_selection(|_| None);
+    let directory = tempfile::tempdir().unwrap();
+    app.press(cx, "secondary-o");
+    cx.simulate_path_prompt_response(|_| Some(vec![directory.path().join("missing.sql")]));
+    app.wait_until(
+        cx,
+        "import error notification",
+        Duration::from_secs(10),
+        |window, cx| !sql_file_notifications(window, cx).is_empty(),
+    );
+    let before = app.update(cx, sql_file_notifications);
+    app.press(cx, "secondary-shift-s");
+    cx.simulate_new_path_selection(|_| Some(directory.path().join("missing/query.sql")));
+    app.wait_until(
+        cx,
+        "save error notification",
+        Duration::from_secs(10),
+        |window, cx| {
+            sql_file_notifications(window, cx)
+                .iter()
+                .any(|id| !before.contains(id))
+        },
+    );
+    wait_tabs(&app, cx, id, &[("Original", "SELECT 1")]);
+    assert_eq!(app.credentials.reads(), 0);
+}
+
+fn sql_file_notifications(
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+) -> Vec<gpui_kit::EntityId> {
+    window
+        .root::<gpui_kit::component::Root>()
+        .unwrap()
+        .unwrap()
+        .read(cx)
+        .notification
+        .read(cx)
+        .notifications()
+        .iter()
+        .map(gpui_kit::Entity::entity_id)
+        .collect()
+}

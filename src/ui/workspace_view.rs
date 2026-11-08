@@ -61,6 +61,10 @@ impl Qrow {
                     .submenu("File", window, cx, move |menu, _, _| {
                         menu.action_context(file_focus.clone())
                             .item(PopupMenuItem::new("New query tab").action(Box::new(NewTab)))
+                            .item(
+                                PopupMenuItem::new("Import SQL file…")
+                                    .action(Box::new(ImportSqlFile)),
+                            )
                             .item(PopupMenuItem::new("Close tab").action(Box::new(CloseTab)))
                     })
                     .submenu("Edit", window, cx, move |menu, _, _| {
@@ -1077,6 +1081,8 @@ impl Qrow {
                 cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
             )
             .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::import_sql_file))
+            .on_action(cx.listener(Self::save_as_sql_file))
             .on_action(cx.listener(Self::select_tab))
             .on_action(
                 cx.listener(|this, _: &CloseTab, window, cx| {

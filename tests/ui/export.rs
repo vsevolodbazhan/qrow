@@ -422,10 +422,20 @@ fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppConte
             Some("Exported 2250 rows")
         );
         let detail = window.find("export-complete-detail");
+        assert!(heading.bounds().top() >= detail.bounds().bottom());
         let reveal = window.find("reveal-export");
         assert!(reveal.visible());
-        assert!(reveal.bounds().top() >= detail.bounds().bottom());
-        assert_eq!(reveal.bounds().right(), notice.bounds().right());
+        assert!(reveal.bounds().left() >= notice.bounds().right());
+        assert!(reveal.bounds().top() < heading.bounds().bottom());
+        assert!(reveal.bounds().bottom() > detail.bounds().top());
+    });
+    // A finished background job stays reported until the user closes it.
+    for _ in 0..140 {
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+    }
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-complete-notice").is_some());
     });
     let text = std::fs::read(&path).unwrap();
     assert_eq!(

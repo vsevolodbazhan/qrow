@@ -114,7 +114,14 @@ impl Qrow {
         let source = match Snapshot::new(&data.columns, &data.rows) {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                window.push_notification(Notification::error(error.to_string()), cx);
+                window.push_notification(
+                    toast::error(
+                        "export-error-toast",
+                        "Could not export results",
+                        error.to_string(),
+                    ),
+                    cx,
+                );
                 return;
             }
         };
@@ -852,39 +859,19 @@ impl ExportDialog {
                     });
                 }
                 if let Some(path) = path {
-                    let filename = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned();
+                    // A background job can finish while the user works elsewhere,
+                    // so this notification stays until it is closed.
                     window.push_notification(
-                        Notification::new().autohide(false).content(move |_, _, _| {
-                            let path = path.clone();
-                            v_flex()
-                                .id("export-complete-notice")
-                                .test_support()
-                                .min_w_0()
-                                .gap_1()
-                                .child(background::notification_heading(filename.clone()))
-                                .child(
-                                    div()
-                                        .id("export-complete-detail")
-                                        .test_support()
-                                        .role(Role::Status)
-                                        .aria_label(format!("Exported {count} rows"))
-                                        .text_sm()
-                                        .child(format!("Exported {count} rows")),
-                                )
-                                .child(
-                                    gpui_kit::component::h_flex().w_full().justify_end().child(
-                                        Button::new("reveal-export")
-                                            .small()
-                                            .label("Reveal in Finder")
-                                            .on_click(move |_, _, cx| cx.reveal_path(&path)),
-                                    ),
-                                )
-                                .into_any_element()
-                        }),
+                        crate::ui::toast::saved_file(
+                            crate::ui::toast::SavedFileIds {
+                                notice: "export-complete-notice",
+                                title: "export-complete-detail",
+                                filename: "export-notification-filename",
+                                reveal: "reveal-export",
+                            },
+                            format!("Exported {count} rows"),
+                            path,
+                        ),
                         cx,
                     );
                 }
@@ -1309,7 +1296,14 @@ pub(super) fn copy_format(
     let guard = match guard {
         Ok(guard) => guard,
         Err(error) => {
-            window.push_notification(Notification::error(error.to_string()), cx);
+            window.push_notification(
+                toast::error(
+                    "copy-error-toast",
+                    "Could not copy results",
+                    error.to_string(),
+                ),
+                cx,
+            );
             return;
         }
     };
@@ -1362,7 +1356,14 @@ pub(super) fn copy_format(
                 }
             }
             Ok(_) => {}
-            Err(error) => window.push_notification(Notification::error(error.to_string()), cx),
+            Err(error) => window.push_notification(
+                toast::error(
+                    "copy-error-toast",
+                    "Could not copy results",
+                    error.to_string(),
+                ),
+                cx,
+            ),
         });
     })
     .detach();
@@ -1378,7 +1379,11 @@ fn confirm_markdown_copy(
             copy_text(text.into_string(), cx);
         } else {
             window.push_notification(
-                Notification::error("The clipboard changed. Choose Copy to try again."),
+                toast::error(
+                    "copy-error-toast",
+                    "Could not copy results",
+                    "The clipboard changed. Choose Copy to try again.",
+                ),
                 cx,
             );
         }
@@ -1779,14 +1784,18 @@ mod tests {
             let id = dialog.read(cx).id;
             window.render_frame(cx);
             let notice = window.within(SharedString::from(format!("export-job-{id}")));
+            let title = notice.find("title");
+            assert_eq!(title.label(), Some("Exporting results"));
             let heading = notice.find("export-notification-filename");
+            assert!(heading.bounds().top() >= title.bounds().bottom());
             assert_eq!(heading.label(), Some("a-very-long-export-filename-that-needs-to-be-truncated-in-the-progress-notification.csv"));
             let status = notice.find("status");
             let detail = status.label().unwrap();
             let cancel_button = notice.find(SharedString::from(format!("export-stop-{id}")));
-            assert!(cancel_button.bounds().top() >= status.bounds().bottom());
-            let actions = notice.find("export-progress-actions");
-            assert_eq!(cancel_button.bounds().right(), actions.bounds().right());
+            // The only action shares the row with the text.
+            assert!(cancel_button.bounds().left() >= status.bounds().right());
+            assert!(cancel_button.bounds().top() < status.bounds().bottom());
+            assert!(cancel_button.bounds().bottom() > title.bounds().top());
             assert!(detail.starts_with("Writing 3 rows"));
             assert!(!detail.contains(".csv"));
             assert!(

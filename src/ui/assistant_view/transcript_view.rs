@@ -174,7 +174,15 @@ fn message_entry(
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
-                window.push_notification("Code copied", cx);
+                window.push_notification(
+                    crate::ui::toast::notice(
+                        crate::ui::toast::NotificationType::Success,
+                        "code-copied",
+                        "Code copied",
+                        None,
+                    ),
+                    cx,
+                );
             })
         })
     })

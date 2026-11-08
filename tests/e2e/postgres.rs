@@ -585,3 +585,51 @@ fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
         |_, _| app.saved().tabs[0].sql == sql,
     );
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn imported_sql_file_runs_and_saves_as_a_query_tab(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace("SELECT 1");
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("imported.sql");
+    let output = directory.path().join("saved.sql");
+    let sql = "SELECT 42 AS imported_value";
+    std::fs::write(&input, sql).unwrap();
+    app.press(cx, "secondary-o");
+    cx.simulate_path_prompt_response(|_| Some(vec![input]));
+    app.wait_until(
+        cx,
+        "imported tab",
+        std::time::Duration::from_secs(10),
+        |_, _| {
+            app.saved()
+                .tabs
+                .iter()
+                .any(|tab| tab.title == "imported" && tab.sql == sql)
+        },
+    );
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "42");
+    app.press(cx, "secondary-shift-s");
+    cx.simulate_new_path_selection(|_| Some(output.clone()));
+    app.wait_until(
+        cx,
+        "saved SQL",
+        std::time::Duration::from_secs(10),
+        |_, _| std::fs::read_to_string(&output).ok().as_deref() == Some(sql),
+    );
+    app.wait_for(cx, "sql-file-saved-detail");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("sql-file-saved-filename").label(),
+            Some("saved.sql")
+        );
+        assert_eq!(
+            window.find("reveal-sql-file").label(),
+            Some("Reveal in Finder")
+        );
+        assert!(window.find("reveal-sql-file").visible());
+    });
+}
