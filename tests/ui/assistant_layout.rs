@@ -256,14 +256,21 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
     app.wait_until(cx, "settled assistant", REPLY_TIMEOUT, |window, _| {
         bounds_of(window, "assistant-panel").size.width == px(573.)
     });
+    let original_panel = app.update(cx, |window, _| bounds_of(window, "assistant-panel"));
     let original = composer(&app, cx);
+    // The panel owns the saved width. Composer height can change after text
+    // shaping at a different width, so compare its horizontal edges only.
+    let restored = |window: &mut gpui_kit::Window, _: &mut gpui_kit::App| {
+        let composer = bounds_of(window, "assistant-composer");
+        bounds_of(window, "assistant-panel") == original_panel
+            && composer.left() == original.left()
+            && composer.right() == original.right()
+    };
     for _ in 0..2 {
         app.press(cx, "secondary-r");
         app.wait_gone(cx, "assistant-composer");
         app.press(cx, "secondary-r");
-        app.wait_until(cx, "restored side pane", REPLY_TIMEOUT, |window, _| {
-            bounds_of(window, "assistant-composer") == original
-        });
+        app.wait_until(cx, "restored side pane", REPLY_TIMEOUT, &restored);
     }
     app.press(cx, "secondary-shift-r");
     app.press(cx, "secondary-shift-r");
@@ -281,12 +288,8 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
     }
     app.press(cx, "alt-secondary-r");
     app.press(cx, "alt-secondary-r");
-    app.wait_until(
-        cx,
-        "original side-pane width",
-        REPLY_TIMEOUT,
-        |window, _| bounds_of(window, "assistant-composer") == original,
-    );
+    app.wait_until(cx, "original side-pane width", REPLY_TIMEOUT, &restored);
+    assert_eq!(app.saved().settings.assistant.panel_width, 573.);
     app.update(cx, |window, _| {
         assert_eq!(composer_text(window).as_deref(), Some("Черновик запроса"))
     });
