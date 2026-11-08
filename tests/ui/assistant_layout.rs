@@ -348,3 +348,33 @@ fn maximized_assistant_follows_the_window_width(cx: &mut TestAppContext) {
         });
     }
 }
+
+#[gpui_kit::test]
+fn assistant_size_tooltips_show_the_shortcut_in_both_states(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    for title in ["Maximize", "Minimize", "Maximize"] {
+        app.hover(cx, "assistant-maximize");
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, cx| {
+            assert_eq!(
+                crate::support::label(window, "status-tooltip-title").as_deref(),
+                Some(title)
+            );
+            assert_eq!(
+                crate::support::label(window, "status-tooltip-shortcut").as_deref(),
+                Some(if cfg!(target_os = "macos") {
+                    "⇧⌘R"
+                } else {
+                    "Ctrl+Shift+R"
+                })
+            );
+            crate::support::assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+        });
+        app.press(cx, "secondary-shift-r");
+        app.wait_gone(cx, "status-tooltip-shortcut");
+    }
+}

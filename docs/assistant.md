@@ -77,7 +77,8 @@ Claude Code works as Codex does, with these differences:
 
 Click **Maximize** in the conversation header or press **⇧⌘R** to fill the work area,
 as Activity does. Click **Minimize** or press **⇧⌘R** again to return to the side pane at
-its previous width. With **Smooth Transitions**, maximizing and restoring
+its previous width. The tooltip of each button shows its keyboard shortcut.
+With **Smooth Transitions**, maximizing and restoring
 animate the width. A second click reverses the motion. Reduced motion makes
 the change immediate. Activity can cover the maximized assistant. Close Activity
 to return to it. **Show tab** in Activity restores the side pane and shows
