@@ -238,3 +238,85 @@ fn search_input_caret_animates_without_delaying_text(cx: &mut TestAppContext) {
     cx.executor().advance_clock(Duration::from_millis(15));
     assert_eq!(frame(cx), disabled);
 }
+
+#[gpui_kit::test]
+fn editor_find_caret_follows_the_editor_option(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+    use gpui_kit::component::{WindowExt as _, input::AnyInputState};
+    cx.update(qrow::ui::init);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let enabled = Rc::new(Cell::new(true));
+    let mut editor = None;
+    let window = cx.open_window(size(px(640.), px(480.)), |window, cx| {
+        let state = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .searchable(true)
+                .default_value("select value")
+        });
+        editor = Some(state.clone());
+        let probe = cx.new(|_| Probe {
+            editor: state,
+            enabled: enabled.clone(),
+        });
+        Root::new(probe, window, cx)
+    });
+    let editor = editor.unwrap();
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| {
+        window.activate_window();
+        editor.update(cx, |state, cx| state.focus(window, cx));
+        window.press("secondary-f", cx);
+        window.render_frame(cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let input = cx
+        .update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let Some(AnyInputState::Input(input)) = window.focused_input(cx) else {
+                panic!("Find must focus its query input");
+            };
+            window.input("select", cx);
+            input.update(cx, |state, cx| state.set_selected_range(0..0, cx));
+            input
+        })
+        .unwrap();
+    let frame = |cx: &mut TestAppContext| {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            input.read(cx).caret_presentation_bounds().unwrap()
+        })
+        .unwrap()
+    };
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, cx| window.press("left", cx))
+        .unwrap();
+    let start = frame(cx);
+    cx.update_window(window.into(), |_, window, cx| {
+        assert_eq!(editor.read(cx).search_session().query, "select");
+        window.press("right", cx);
+    })
+    .unwrap();
+    assert_eq!(frame(cx), start);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    let middle = frame(cx);
+    assert!(middle.origin.x > start.origin.x);
+    cx.executor().advance_clock(Duration::from_millis(35));
+    assert!(frame(cx).origin.x > middle.origin.x);
+    enabled.set(false);
+    frame(cx);
+    cx.run_until_parked();
+    let before = frame(cx);
+    cx.update_window(window.into(), |_, window, cx| window.press("right", cx))
+        .unwrap();
+    let disabled = frame(cx);
+    assert!(disabled.origin.x > before.origin.x);
+    cx.executor().advance_clock(Duration::from_millis(15));
+    assert_eq!(frame(cx), disabled);
+    cx.update_window(window.into(), |_, window, cx| {
+        window.press("escape", cx);
+        window.render_frame(cx);
+        assert!(editor.read(cx).focus_handle(cx).is_focused(window));
+    })
+    .unwrap();
+}

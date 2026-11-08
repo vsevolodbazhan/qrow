@@ -160,3 +160,7 @@ with the other GPUI crates as one set.
 - `Input::smooth_caret(bool)` enables a 35 ms horizontal caret transition for
   search fields. The default is off. Text stays immediate, and reduced motion
   disables the animation.
+
+- An input's Find and Replace fields follow its smooth-caret option, including
+  changes while Find is open. The fields use the same 35 ms transition as
+  other search inputs and honor reduced motion.

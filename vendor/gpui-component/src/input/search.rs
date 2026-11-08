@@ -64,11 +64,19 @@ pub(super) struct SearchPanel<M: crate::input::overlay::OverlayMode> {
     replace_input: Entity<InputState>,
     session: gpui_base::input::SearchSession,
     input_width: Pixels,
+    smooth_caret: bool,
 
     _subscriptions: Vec<Subscription>,
 }
 
 impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
+    pub(super) fn set_smooth_caret(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.smooth_caret != enabled {
+            self.smooth_caret = enabled;
+            cx.notify();
+        }
+    }
+
     pub(super) fn sync_session(&mut self, session: &gpui_base::input::SearchSession) {
         self.session = session.clone();
     }
@@ -110,6 +118,7 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
             Self {
                 editor: editor.downgrade(),
                 search_input,
+                smooth_caret: false,
                 replace_input,
                 session: gpui_base::input::SearchSession::default(),
                 input_width: Pixels::ZERO,
@@ -352,6 +361,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             .gap_1()
                             .child(
                                 Input::new(&self.search_input)
+                                    .smooth_caret(self.smooth_caret)
                                     .focus_bordered(false)
                                     .suffix(
                                         Button::new("case-insensitive")
@@ -438,6 +448,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                         .gap_2()
                         .child(
                             Input::new(&self.replace_input)
+                                    .smooth_caret(self.smooth_caret)
                                 .focus_bordered(false)
                                 .small()
                                 .w(self.input_width)

@@ -662,7 +662,7 @@ impl RenderOnce for Input {
             .paste_handler
             .clone()
             .filter(|_| state.presentation(cx).is_editable());
-        let mut overlays = state.render_overlays(window, cx);
+        let mut overlays = state.render_overlays(!self.caret_transition.is_zero(), window, cx);
         overlays
             .floating
             .extend(Self::render_touch_selection(&state, window, cx));

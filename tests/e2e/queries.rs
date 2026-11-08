@@ -572,6 +572,11 @@ fn smooth_motion_keeps_typed_sql_and_query_execution_immediate(cx: &mut TestAppC
         Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql == expected_sql,
     );
+    app.click_labelled(cx, "SQL Editor");
+    app.press(cx, "secondary-f");
+    app.update(cx, |window, cx| window.input("SELECT", cx));
+    app.press(cx, "left");
+    app.press(cx, "escape");
     let saved = app.saved();
     assert!(saved.settings.editor_smooth_caret);
     assert!(saved.settings.editor_smooth_scrolling);

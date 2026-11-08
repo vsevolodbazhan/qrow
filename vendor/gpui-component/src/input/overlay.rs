@@ -389,6 +389,7 @@ impl<M: OverlayMode> InputOverlayHost<M> {
 
 pub(super) fn render_overlays<M: OverlayMode>(
     state: &Entity<InputBaseState<M>>,
+    smooth_caret: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> InputOverlays {
@@ -420,6 +421,7 @@ pub(super) fn render_overlays<M: OverlayMode>(
         .remove(&id)
         .map(|(_, host)| host)
         .unwrap_or_else(|| InputOverlayHost::new(state.clone(), window, cx));
+    host.search.update(cx, |search, cx| search.set_smooth_caret(smooth_caret, cx));
     let overlays = host.sync(state, window, cx);
     cx.global_mut::<InputOverlayRegistry<M>>()
         .hosts
@@ -616,7 +618,7 @@ mod tests {
         });
         let state = probe.read_with(cx, |probe, _| probe.state.clone());
         cx.update(|window, cx| {
-            assert!(render_overlays(&state, window, cx).is_empty());
+            assert!(render_overlays(&state, false, window, cx).is_empty());
             assert!(state.read(cx).has_overlay_action_handler());
             state.update(cx, |state, cx| {
                 state.set_value("foo bar foo", window, cx);
@@ -659,7 +661,7 @@ mod tests {
             assert!(overlays.search.is_some());
             assert_eq!(overlays.floating.len(), 4);
             assert_eq!(overlays.len(), 5);
-            assert_eq!(render_overlays(&state, window, cx).len(), 5);
+            assert_eq!(render_overlays(&state, false, window, cx).len(), 5);
             assert!(
                 cx.global::<InputOverlayRegistry<crate::input::EditorMode>>()
                     .hosts
@@ -675,7 +677,7 @@ mod tests {
                 state.clear_diagnostic_popover(cx);
             });
             assert!(host.sync(&state, window, cx).is_empty());
-            assert!(render_overlays(&state, window, cx).is_empty());
+            assert!(render_overlays(&state, false, window, cx).is_empty());
             assert!(
                 !cx.global::<InputOverlayRegistry<crate::input::EditorMode>>()
                     .hosts
@@ -690,9 +692,9 @@ mod tests {
                     .searchable(true)
             });
             ephemeral.update(cx, |state, cx| state.open_search(false, cx));
-            assert_eq!(render_overlays(&ephemeral, window, cx).len(), 1);
+            assert_eq!(render_overlays(&ephemeral, false, window, cx).len(), 1);
             ephemeral.update(cx, |state, cx| state.close_search(cx));
-            assert!(render_overlays(&ephemeral, window, cx).is_empty());
+            assert!(render_overlays(&ephemeral, false, window, cx).is_empty());
             assert!(
                 !cx.global::<InputOverlayRegistry<crate::input::EditorMode>>()
                     .hosts
