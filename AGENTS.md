@@ -11,6 +11,8 @@
 - Report what changed, what you verified, and any remaining verification gaps.
   Do not present attempted checks as successful checks.
 - Write pull request titles and descriptions in English.
+- Use Conventional Commits format for pull request titles, for example
+  `fix(ui): keep Logs query actions inside code blocks`.
 - Create all pull requests as draft pull requests.
 - Promote a draft pull request to "Ready for review" explicitly when it is
   ready for review.
