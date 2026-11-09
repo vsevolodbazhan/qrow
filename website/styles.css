@@ -94,12 +94,11 @@ h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px
 .cmd-prompt { color: var(--muted); }
 .cmd .copy { width: 30px; height: 30px; }
 
-/* Screenshot on a frosted glass plate. The glow behind the plate gives
-   the blur something to show. Colors: One Dark blue and violet. */
+/* Screenshot with a soft shadow over a blue and violet One Dark glow. */
 .stage {
   position: relative; isolation: isolate;
-  max-width: 1232px; margin: 56px auto 0;
-  margin-inline: max(var(--gutter), calc((100% - 1232px) / 2));
+  max-width: 1200px; margin: 56px auto 0;
+  margin-inline: max(var(--gutter), calc((100% - 1200px) / 2));
 }
 .stage::before {
   content: ""; position: absolute; inset: -4% 6% 25% 6%; z-index: -1;
@@ -109,15 +108,8 @@ h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px
   filter: blur(48px);
   pointer-events: none;
 }
-.glass {
-  margin: 0; padding: 14px;
-  border-radius: 24px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
-  -webkit-backdrop-filter: blur(28px) saturate(180%);
-  backdrop-filter: blur(28px) saturate(180%);
-}
-.glass img { width: 100%; filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.4)); }
+.shot { margin: 0; }
+.shot img { width: 100%; filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.5)); }
 
 /* Status bar footer */
 .statusbar { margin-top: 96px; background: var(--chrome); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
@@ -137,6 +129,5 @@ a.status-item:hover { background: var(--hover); color: var(--fg-strong); }
   .cta { flex-direction: column; align-items: stretch; }
   .cmd { width: 100%; }
   .stage { margin-top: 40px; }
-  .glass { padding: 6px; border-radius: 14px; }
   .statusbar { margin-top: 64px; }
 }
