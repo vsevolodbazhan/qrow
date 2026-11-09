@@ -149,16 +149,12 @@ fn assistant_composer_keystroke(cx: &mut TestAppContext) {
     }
     app.wait_idle(cx);
     app.click(cx, "assistant-composer");
-    let samples = app.update(cx, |window, cx| {
-        window.draw(cx).clear(cx);
-        sample(5, 40, || {
-            let mut key = Keystroke::parse("x").expect("x is a keystroke");
-            key.key_char = Some("x".into());
-            window.dispatch_keystroke(key, cx);
-            window.draw(cx).clear(cx);
-        })
-    });
-    report("ui.assistant.keystroke", median_ms(&samples), "ms", 50.);
+    report(
+        "ui.assistant.keystroke",
+        keystroke_frames(&app, cx),
+        "ms",
+        50.,
+    );
 }
 
 /// A cached catalog of two schemas with 1,000 tables of 40 columns each, with
@@ -525,11 +521,10 @@ fn catalog_search_100k(cx: &mut TestAppContext) {
     let mut total = Vec::new();
     for round in 0..23 {
         let key = if round % 2 == 0 { "7" } else { "backspace" };
+        let key = Keystroke::parse(key).expect("a keystroke");
         let started = Instant::now();
-        app.update(cx, |window, cx| {
-            window.press(key, cx);
-            window.render_frame(cx);
-        });
+        app.update(cx, |window, cx| window.dispatch_keystroke(key, cx));
+        app.update(cx, |window, cx| window.render_frame(cx));
         let typed = started.elapsed();
         cx.executor()
             .advance_clock(std::time::Duration::from_millis(500));
@@ -555,17 +550,22 @@ fn catalog_search_100k(cx: &mut TestAppContext) {
 }
 
 /// Types one character into the focused field and draws the next frame like
-/// the window does: only the views that changed render again.
+/// the window does: only the views that changed render again. Each
+/// keystroke is its own update, so the timing includes the work of the
+/// events that the change sends.
 fn keystroke_frames(app: &TestApp, cx: &mut TestAppContext) -> f64 {
-    let samples = app.update(cx, |window, cx| {
-        window.draw(cx).clear(cx);
-        sample(5, 40, || {
+    app.update(cx, |window, cx| window.draw(cx).clear(cx));
+    let samples: Vec<_> = (0..45)
+        .map(|_| {
             let mut key = Keystroke::parse("x").expect("x is a keystroke");
             key.key_char = Some("x".into());
-            window.dispatch_keystroke(key, cx);
-            window.draw(cx).clear(cx);
+            let started = Instant::now();
+            app.update(cx, |window, cx| window.dispatch_keystroke(key, cx));
+            app.update(cx, |window, cx| window.draw(cx).clear(cx));
+            started.elapsed()
         })
-    });
+        .skip(5)
+        .collect();
     median_ms(&samples)
 }
 
