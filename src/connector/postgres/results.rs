@@ -1,7 +1,6 @@
 //! A growing preview prefix or a capacity-one direct-export channel.
 use super::*;
 use crate::export::budget;
-use crate::sync::LockExt as _;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Mode {
