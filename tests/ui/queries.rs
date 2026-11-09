@@ -204,7 +204,9 @@ fn the_tint_follows_large_sql_after_its_background_index(cx: &mut TestAppContext
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "secondary-up");
+    // Ctrl+Up does not move to the start on Linux.
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
     app.settle(cx);
     let first = run_tint(&app, cx);
     assert_eq!(first.len(), 1, "{first:?}");
@@ -237,7 +239,9 @@ fn the_tint_follows_large_sql_after_its_background_index(cx: &mut TestAppContext
     paste(&app, cx, &sql);
     paste(&app, cx, "SELECT 5;");
     paste(&app, cx, &sql);
-    app.press(cx, "secondary-up");
+    // Ctrl+Up does not move to the start on Linux.
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
     app.settle(cx);
     let restored = run_tint(&app, cx);
     assert_eq!(restored.len(), 1, "{restored:?}");
