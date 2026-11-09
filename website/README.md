@@ -43,19 +43,16 @@ done
 
 ## Update the screenshot
 
-The screenshot shows `qrow --demo`, so it contains only synthetic data.
+The page uses the first screenshot of the project README,
+[assets/screenshots/demo.png](../assets/screenshots/demo.png), in both themes.
+After a change of that file, make the web media again:
 
-1. Capture the Qrow window without its shadow as `website/capture/hero.png`
-   (One Dark theme) and `website/capture/hero-light.png` (light theme). Use a
-   window of 1360 × 850 points. Git ignores this directory.
-2. Convert the captures:
+```sh
+sh website/optimize-media.sh
+```
 
-   ```sh
-   sh website/optimize-media.sh
-   ```
-
-   The script writes `hero.webp`, `hero-light.webp`, and the social preview
-   `og.jpg` to `website/media/`.
+The script crops the screenshot to the window, and writes `hero.webp` and the
+social preview `og.jpg` to `website/media/`.
 
 ## Limitations
 

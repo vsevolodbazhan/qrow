@@ -67,7 +67,7 @@
   --glow: rgba(37, 99, 235, 0.06);
 }
 
-/* Theme-dependent visibility (screenshot, theme toggle icon). */
+/* Theme-dependent visibility (theme toggle icon). */
 .only-light { display: none !important; }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) .only-light { display: block !important; }
@@ -134,7 +134,7 @@ a { color: inherit; text-decoration: none; }
 /* Hero */
 .hero { position: relative; padding: 80px var(--gutter) 0; text-align: center; }
 .hero::before {
-  content: ""; position: absolute; left: 50%; top: 320px; width: 1400px; height: 900px;
+  content: ""; position: absolute; left: 50%; top: 320px; width: min(1400px, 100%); height: 900px;
   transform: translateX(-50%);
   background: radial-gradient(closest-side, var(--glow), transparent);
   pointer-events: none; z-index: -1;
@@ -161,7 +161,7 @@ h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px
   background: var(--surface);
   box-shadow: var(--shadow);
 }
-.window img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+.window img { width: 100%; }
 
 /* Status bar footer */
 .statusbar { margin-top: 96px; background: var(--chrome); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
