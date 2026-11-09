@@ -1220,3 +1220,80 @@ fn sql_file_notifications(
         .map(gpui_kit::Entity::entity_id)
         .collect()
 }
+
+#[gpui_kit::test]
+fn closing_tabs_after_restoring_the_assistant_keeps_tab_geometry_stable(cx: &mut TestAppContext) {
+    const LONG: &str = "Неиспользуемые запросы для проверки вкладок";
+    for (scale, theme) in [(0.75, "Ayu Light"), (1., "One Dark"), (1.5, "Ayu Light")] {
+        for width in [900., 1000., 1100., 1280., 1500.] {
+            let (directory, codex) = crate::support::assistant::FakeCodex::new();
+            let profile = offline_profile("Restored tabs");
+            let mut workspace = codex.workspace(Workspace {
+                tabs: vec![tab(profile.id, LONG, "SELECT 1")],
+                profiles: vec![profile],
+                ..Workspace::default()
+            });
+            workspace.settings.ui_scale = scale;
+            workspace.settings.theme = theme.into();
+            workspace.settings.assistant.panel_width = 400.;
+            let app = TestApp::launch_in(
+                cx,
+                directory,
+                workspace,
+                crate::support::MemoryCredentials::default(),
+            );
+            cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(820.)));
+            app.open_assistant(cx);
+            app.click(cx, "assistant-maximize");
+            for _ in 0..5 {
+                app.press(cx, "secondary-t");
+            }
+            app.wait_saved(
+                cx,
+                "six tabs created while the workspace is hidden",
+                |workspace| workspace.tabs.len() == 6,
+            );
+            app.click(cx, "assistant-maximize");
+            for remaining in (1..=5).rev() {
+                if remaining % 2 == 0 {
+                    app.click_labelled(cx, &format!("Close Query {remaining}"));
+                } else {
+                    app.press(cx, "secondary-w");
+                }
+                for _ in 0..8 {
+                    app.settle(cx);
+                }
+                let titles: Vec<_> = std::iter::once(LONG.to_owned())
+                    .chain((1..remaining).map(|i| format!("Query {i}")))
+                    .collect();
+                let before = app.update(cx, |window, _| {
+                    titles
+                        .iter()
+                        .map(|t| bounds_of(window, t))
+                        .collect::<Vec<_>>()
+                });
+                for _ in 0..12 {
+                    app.hover(cx, "sql-editor");
+                    app.settle(cx);
+                    app.update(cx, |window, _| {
+                        for (title, before) in titles.iter().zip(&before) {
+                            let after = bounds_of(window, title);
+                            assert!((before.left() - after.left()).abs() <= px(0.5)
+                                && (before.size.width - after.size.width).abs() <= px(0.5),
+                                "{title} changed without input after closing to {remaining} tabs, width {width}, scale {scale}: {before:?} -> {after:?}");
+                        }
+                    });
+                }
+                let selected = if remaining == 1 {
+                    LONG.to_owned()
+                } else {
+                    format!("Query {}", remaining - 1)
+                };
+                selected_tab_in_strip(&app, cx, &selected);
+            }
+            app.click(cx, "toggle-assistant");
+            app.settle(cx);
+            selected_tab_in_strip(&app, cx, LONG);
+        }
+    }
+}
