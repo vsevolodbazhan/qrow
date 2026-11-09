@@ -345,7 +345,7 @@ impl Qrow {
 
     /// Opens a new query tab for a new conversation. Codex creates the
     /// conversation when you send the first message.
-    pub(super) fn create_assistant_conversation(
+    pub(in crate::ui) fn create_assistant_conversation(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -629,7 +629,7 @@ impl Qrow {
 
     /// Shows a conversation. A closed conversation stays detached until its
     /// next message needs a query tab.
-    pub(super) fn select_assistant_thread(
+    pub(in crate::ui) fn select_assistant_thread(
         &mut self,
         id: &str,
         window: &mut Window,

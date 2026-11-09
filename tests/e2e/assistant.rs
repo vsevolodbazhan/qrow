@@ -342,10 +342,9 @@ fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppCon
     app.wait_label(cx, "Minimize");
     gate.resume();
     app.wait_status(cx, "Complete");
-    // Expanding results behind the assistant must not acknowledge them.
-    app.dispatch(cx, qrow::ui::ToggleResults);
-    app.dispatch(cx, qrow::ui::ToggleResults);
+    // ⌘T starts a conversation in a new tab, so Query 1 stays unseen.
     app.dispatch(cx, qrow::ui::NewTab);
+    app.wait_label(cx, "Minimize");
     app.press(cx, "secondary-shift-r");
     cx.executor().advance_clock(Duration::from_millis(250));
     app.update(cx, |window, cx| {

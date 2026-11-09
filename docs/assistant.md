@@ -87,6 +87,23 @@ maximized state or saved side-pane width. The width adjusts only if the
 window does not have enough space. Maximize also opens a closed assistant.
 Minimize has no effect when the assistant is closed.
 
+The maximized assistant hides the query tabs, so the workspace shortcuts
+operate on the items that you can see:
+
+| Shortcut | When the assistant is maximized |
+|---|---|
+| **⌘T** | Starts a new conversation, like **New conversation**. The assistant stays maximized. |
+| **⌘1** to **⌘9** | Selects the conversation at that position in the conversation list. |
+| **⌘W** | Returns to the side pane. It does not close a query tab. |
+| **⌘O**, **⇧⌘S** | Returns to the side pane, then imports or saves the SQL file. |
+| **⌘B** | Returns to the side pane and shows the Connections sidebar. |
+| **⌘J** | Returns to the side pane and shows the results. |
+| **⌘Enter**, **⌥⌘L** | Do nothing outside the message field. The SQL editor is not visible. |
+
+The same rules apply to the menu items of these commands. Other shortcuts,
+for example **⌘R**, **⇧⌘R**, and **⇧⌘U**, do not change. When Activity covers
+the maximized assistant, the shortcuts operate as in the side pane.
+
 
 Select a query tab. Click the assistant button near the right end of the
 status bar, select **Toggle assistant** in the **View** menu, or press **⌘R**. Write a message and press **Enter** or

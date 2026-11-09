@@ -2,11 +2,11 @@
 //! off. Pixel checks, like text that reaches the edge of a reply, stay in the
 //! desktop suite.
 use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, composer_text, jump_to_latest};
-use crate::support::{MemoryCredentials, TestApp, bounds_of, labelled_starting};
+use crate::support::{MemoryCredentials, TestApp, bounds_of, labelled_starting, offline_profile};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Bounds, Pixels, ScrollDelta, TestAppContext, point, px, size};
-use qrow::model::Workspace;
-use qrow::ui::ToggleSidebar;
+use qrow::model::{AssistantConversation, SavedTab, Workspace};
+use qrow::ui::{FormatSql, RunQuery, ToggleSidebar};
 
 fn launch(cx: &mut TestAppContext) -> TestApp {
     let (directory, codex) = FakeCodex::new();
@@ -349,6 +349,143 @@ fn maximized_assistant_follows_the_window_width(cx: &mut TestAppContext) {
     }
 }
 
+/// A workspace with one Alpha tab and two conversations whose tabs closed.
+fn launch_with_conversations(cx: &mut TestAppContext) -> TestApp {
+    let (directory, codex) = FakeCodex::new();
+    let profile = offline_profile("Alpha");
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 1".into();
+    let mut workspace = codex.workspace(Workspace {
+        profiles: vec![profile.clone()],
+        tabs: vec![tab],
+        ..Workspace::default()
+    });
+    workspace.settings.assistant.panel_width = 536.;
+    for (thread, title, last_activity) in [
+        ("synthetic-recent", "Recent conversation", 200),
+        ("synthetic-older", "Older conversation", 100),
+    ] {
+        let mut conversation = AssistantConversation::new(thread, Default::default());
+        conversation.title = title.into();
+        conversation.last_activity = last_activity;
+        conversation.detached_profile = Some(profile.id);
+        workspace.assistant.conversations.push(conversation);
+    }
+    TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default())
+}
+
+fn maximize(app: &TestApp, cx: &mut TestAppContext) {
+    app.click(cx, "assistant-maximize");
+    app.wait_label(cx, "Minimize");
+    app.wait_gone(cx, "add-connection");
+}
+
+#[gpui_kit::test]
+fn workspace_shortcuts_act_on_what_the_maximized_assistant_shows(cx: &mut TestAppContext) {
+    let app = launch_with_conversations(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    maximize(&app, cx);
+    app.wait_for(cx, "assistant-thread-list");
+    let status = app.update(cx, |_, cx| app.status(cx));
+
+    // The New Conversation tooltip names ⌘T, which now starts a conversation.
+    app.hover(cx, "assistant-new");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            crate::support::label(window, "status-tooltip-title").as_deref(),
+            Some("New conversation")
+        );
+        assert_eq!(
+            crate::support::label(window, "status-tooltip-shortcut").as_deref(),
+            Some(if cfg!(target_os = "macos") {
+                "⌘T"
+            } else {
+                "Ctrl+T"
+            })
+        );
+        crate::support::assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+    });
+
+    // The New Conversation tooltip names ⌘T, which now starts a conversation.
+    app.hover(cx, "assistant-new");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            crate::support::label(window, "status-tooltip-title").as_deref(),
+            Some("New conversation")
+        );
+        assert_eq!(
+            crate::support::label(window, "status-tooltip-shortcut").as_deref(),
+            Some(if cfg!(target_os = "macos") {
+                "⌘T"
+            } else {
+                "Ctrl+T"
+            })
+        );
+        crate::support::assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+    });
+
+    // ⌘1 to ⌘9 select a conversation by its position in the list.
+    app.press(cx, "secondary-2");
+    app.wait_label(cx, "Conversation title: Older conversation");
+    app.press(cx, "secondary-1");
+    app.wait_label(cx, "Conversation title: Recent conversation");
+    app.press(cx, "secondary-9");
+    app.wait_label(cx, "Conversation title: Recent conversation");
+
+    // The hidden editor does not run or format its SQL.
+    app.dispatch(cx, RunQuery);
+    app.dispatch(cx, FormatSql);
+    app.settle(cx);
+    app.update(cx, |_, cx| assert_eq!(app.status(cx), status));
+    assert_eq!(app.saved().tabs[0].sql, "SELECT 1");
+
+    // ⌘T starts a conversation in a new tab, and the pane stays maximized.
+    app.press(cx, "secondary-t");
+    app.wait_label(cx, "Conversation title: New conversation");
+    app.wait_saved(cx, "the conversation tab", |saved| saved.tabs.len() == 2);
+    app.wait_label(cx, "Minimize");
+    // The message field of the new conversation has the focus.
+    app.update(cx, |window, cx| window.input("Новый вопрос", cx));
+    app.wait_until(
+        cx,
+        "typing in the new conversation",
+        REPLY_TIMEOUT,
+        |window, _| composer_text(window).as_deref() == Some("Новый вопрос"),
+    );
+
+    // ⌘W returns to the side pane and does not close the hidden tab.
+    app.press(cx, "secondary-w");
+    app.wait_label(cx, "Maximize");
+    app.wait_for(cx, "add-connection");
+    app.settle(cx);
+    assert_eq!(app.saved().tabs.len(), 2);
+
+    // ⌘J shows collapsed results instead of toggling them out of view.
+    app.press(cx, "secondary-j");
+    app.wait_saved(cx, "collapsed results", |saved| {
+        saved.settings.results_minimized
+    });
+    maximize(&app, cx);
+    app.press(cx, "secondary-j");
+    app.wait_label(cx, "Maximize");
+    app.wait_saved(cx, "expanded results", |saved| {
+        !saved.settings.results_minimized
+    });
+
+    // ⌘B shows the Connections sidebar, which the maximized pane hid.
+    maximize(&app, cx);
+    app.press(cx, "secondary-b");
+    app.wait_label(cx, "Maximize");
+    app.wait_for(cx, "add-connection");
+}
+
 #[gpui_kit::test]
 fn assistant_size_tooltips_show_the_shortcut_in_both_states(cx: &mut TestAppContext) {
     let app = launch(cx);
@@ -377,4 +514,51 @@ fn assistant_size_tooltips_show_the_shortcut_in_both_states(cx: &mut TestAppCont
         app.press(cx, "secondary-shift-r");
         app.wait_gone(cx, "status-tooltip-shortcut");
     }
+}
+
+#[gpui_kit::test]
+fn a_conversation_selected_by_number_scrolls_into_view(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let profile = offline_profile("Alpha");
+    let mut workspace = codex.workspace(Workspace {
+        profiles: vec![profile.clone()],
+        tabs: vec![SavedTab::new(1, Some(profile.id))],
+        ..Workspace::default()
+    });
+    for number in 1..=12u64 {
+        let mut conversation =
+            AssistantConversation::new(format!("synthetic-{number}"), Default::default());
+        conversation.title = format!("Разговор {number}");
+        conversation.last_activity = 1_000 - number;
+        conversation.detached_profile = Some(profile.id);
+        workspace.assistant.conversations.push(conversation);
+    }
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    cx.simulate_window_resize(app.window, size(px(1280.), px(480.)));
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    maximize(&app, cx);
+    app.wait_for(cx, "assistant-thread-list");
+    let visible = |app: &TestApp, cx: &mut TestAppContext, row: &str| {
+        app.update(cx, |window, _| {
+            let list = bounds_of(window, "assistant-thread-list");
+            let row = bounds_of(window, row);
+            row.top() >= list.top() && row.bottom() <= list.bottom()
+        })
+    };
+    // Scroll to the end of the list, so the first conversation is out of view.
+    app.update(cx, |window, cx| {
+        window.scroll(
+            "assistant-thread-list",
+            ScrollDelta::Pixels(point(px(0.), px(-2_000.))),
+            cx,
+        )
+    });
+    app.settle(cx);
+    assert!(!visible(&app, cx, "Разговор 1, Alpha, Tab Closed"));
+
+    app.press(cx, "secondary-1");
+    app.wait_label(cx, "Conversation title: Разговор 1");
+    app.settle(cx);
+    assert!(visible(&app, cx, "Разговор 1, Alpha, Tab Closed"));
 }

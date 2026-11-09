@@ -53,21 +53,20 @@ impl AssistantPane {
         matches
     }
 
-    pub(super) fn thread_list(
+    /// The conversations of the list, in their order on screen: the most
+    /// recent first, filtered by the search. Each one has its place.
+    pub(in crate::ui) fn listed_conversations<'a>(
         &self,
-        qrow: &Qrow,
-        narrow: bool,
-        width: Pixels,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+        qrow: &'a Qrow,
+        cx: &App,
+    ) -> Vec<(&'a AssistantConversation, (String, bool))> {
         let mut conversations: Vec<_> = qrow.assistant.conversations.iter().collect();
         conversations.sort_by_key(|conversation| std::cmp::Reverse(conversation.last_activity));
         let search = self.thread_search.read(cx).value().to_lowercase();
         if search.is_empty() {
             self.lowercase.borrow_mut().clear();
         }
-        let displayed = qrow.displayed_thread();
-        let visible: Vec<_> = conversations
+        conversations
             .into_iter()
             .map(|conversation| (conversation, qrow.conversation_place(conversation)))
             .filter(|(conversation, (place, closed))| {
@@ -76,7 +75,24 @@ impl AssistantPane {
                     || self.search_matches(place, &search)
                     || (*closed && self.search_matches("Tab closed", &search))
             })
-            .collect();
+            .collect()
+    }
+
+    /// Scrolls the conversation at `index` of the list fully into view.
+    pub(in crate::ui) fn reveal_listed_conversation(&self, index: usize) {
+        self.thread_list_scroll.scroll_to_item(index);
+    }
+
+    pub(super) fn thread_list(
+        &self,
+        qrow: &Qrow,
+        narrow: bool,
+        width: Pixels,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let search = self.thread_search.read(cx).value().to_lowercase();
+        let displayed = qrow.displayed_thread();
+        let visible = self.listed_conversations(qrow, cx);
         v_flex()
             .w(if narrow { width } else { qrow.ui_px(230.) })
             .max_w_full()
@@ -125,6 +141,7 @@ impl AssistantPane {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.thread_list_scroll)
                     .px_2()
                     .py_2()
                     .gap_1()
