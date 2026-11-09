@@ -1156,3 +1156,38 @@ fn a_long_logged_query_shows_five_lines_until_it_expands(cx: &mut TestAppContext
         "Copy query must copy the full SQL: {copied:?}"
     );
 }
+
+#[gpui_kit::test]
+fn toggle_comment_selection_cursor_undo_and_redo(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    let sql = "  SELECT '日本語😀';\n\n\tSELECT 2;";
+    app.type_sql(cx, sql);
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-/");
+    let commented = "  -- SELECT '日本語😀';\n\n\t-- SELECT 2;";
+    app.wait_until(cx, "commented lines", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == commented
+    });
+    app.press(cx, "secondary-/");
+    app.wait_until(cx, "uncommented lines", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.press(cx, "secondary-z");
+    app.wait_until(cx, "undo uncomment", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == commented
+    });
+    #[cfg(target_os = "macos")]
+    app.press(cx, "secondary-shift-z");
+    #[cfg(not(target_os = "macos"))]
+    app.press(cx, "ctrl-y");
+    app.wait_until(cx, "redo uncomment", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
+    app.press(cx, "secondary-/");
+    app.wait_until(cx, "current line only", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == "  -- SELECT '日本語😀';\n\n\tSELECT 2;"
+    });
+    assert_eq!(app.credentials.reads(), 0);
+}

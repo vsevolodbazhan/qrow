@@ -1120,6 +1120,7 @@ impl Qrow {
             .text_sm()
             .on_action(cx.listener(Self::run))
             .on_action(cx.listener(Self::format_sql))
+            .on_action(cx.listener(Self::toggle_comment))
             .on_action(
                 cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
             )
@@ -1468,6 +1469,7 @@ impl Render for Qrow {
                         div()
                             .id("sql-editor")
                             .overflow_hidden()
+                            .key_context("SqlEditor")
                             .test_support()
                             .flex_basis(editor_height)
                             .flex_grow(1. - results_expansion)
