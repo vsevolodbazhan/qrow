@@ -129,12 +129,16 @@ the memory of long results, does not stay in the footprint that Activity
 Monitor shows.
 See the [macOS platform patch](../vendor/gpui-pre-macos/QROW-PATCH.md).
 
-The assistant pane is a separate view. Typing in its message field or a
-streamed reply renders the pane again, but not the workspace. The transcript
-renders only the messages on screen. GPUI does not keep the accessibility
-nodes of a view that it does not render again. Thus, while an accessibility
-client such as VoiceOver reads the window, the workspace and the pane render
-again in each frame.
+The assistant pane, the sidebar, the SQL editor, and the result table are
+separate views. The workspace layout around them renders in each frame of
+the window. A separate view renders again only when the workspace state or
+its own state changes. Thus a keystroke in the editor renders the editor
+again, but not the sidebar or the result table. Typing in the message field or
+a streamed reply renders the pane again, but not the other views. The Logs
+panel renders with the workspace layout. The transcript renders only the
+messages on screen. GPUI does not keep the accessibility nodes of a view that
+it does not render again. Thus, while an accessibility client such as
+VoiceOver reads the window, all views render again in each frame.
 
 The catalog worker sleeps until a command arrives. It does not poll while it
 has no refresh. While a tab of one of its connections has a live session and

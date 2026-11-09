@@ -99,8 +99,12 @@ fn editor_with_one_megabyte_of_sql(cx: &mut TestAppContext) {
 
     app.click(cx, "sql-editor");
     app.press(cx, "cmd-down");
-    let samples = app.update(cx, |window, cx| sample(3, 20, || window.input("x", cx)));
-    report("ui.editor.keystroke_1mb", median_ms(&samples), "ms", 50.);
+    report(
+        "ui.editor.keystroke_1mb",
+        keystroke_frames(&app, cx),
+        "ms",
+        50.,
+    );
 }
 
 #[gpui_kit::test]
