@@ -3,7 +3,7 @@
 use crate::support::{
     MemoryCredentials, TestApp, assert_catalog_error_dot, assert_catalog_icon,
     assert_connection_dot, assert_connection_highlight, assert_connection_keyboard_position,
-    assert_tooltip_header_center, assert_tree_row_outline, bounds_of, connection_row, elements,
+    assert_tooltip_status_below, assert_tree_row_outline, bounds_of, connection_row, elements,
     label, labelled, labelled_starting, menu_item, offline_profile, press_at, selected_tree_rows,
     shows, value,
 };
@@ -2096,7 +2096,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
     assert_eq!(tooltip(&app, cx).as_deref(), Some("In use"));
-    app.update(cx, |window, cx| {
+    app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
             Some("Closing")
@@ -2105,14 +2105,11 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
             label(window, "status-tooltip-Host").as_deref(),
             Some("Host: 127.0.0.1")
         );
-        let title = bounds_of(window, "status-tooltip-title");
         let status = bounds_of(window, "status-tooltip-status");
         let detail = bounds_of(window, "status-tooltip-metadata");
-        assert!(status.left() > title.right());
-        assert!(status.top() < title.bottom());
-        assert_eq!(title.left(), detail.left());
-        assert!(detail.top() > title.bottom());
-        assert_tooltip_header_center(window, cx, "status-tooltip-status");
+        assert_tooltip_status_below(window);
+        assert_eq!(status.left(), detail.left());
+        assert!(detail.top() >= status.bottom());
     });
 
     // The pointer stays on the row. The open tooltip changes only its status.
