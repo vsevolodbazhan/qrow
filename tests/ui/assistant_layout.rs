@@ -515,3 +515,50 @@ fn assistant_size_tooltips_show_the_shortcut_in_both_states(cx: &mut TestAppCont
         app.wait_gone(cx, "status-tooltip-shortcut");
     }
 }
+
+#[gpui_kit::test]
+fn a_conversation_selected_by_number_scrolls_into_view(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let profile = offline_profile("Alpha");
+    let mut workspace = codex.workspace(Workspace {
+        profiles: vec![profile.clone()],
+        tabs: vec![SavedTab::new(1, Some(profile.id))],
+        ..Workspace::default()
+    });
+    for number in 1..=12u64 {
+        let mut conversation =
+            AssistantConversation::new(format!("synthetic-{number}"), Default::default());
+        conversation.title = format!("Разговор {number}");
+        conversation.last_activity = 1_000 - number;
+        conversation.detached_profile = Some(profile.id);
+        workspace.assistant.conversations.push(conversation);
+    }
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    cx.simulate_window_resize(app.window, size(px(1280.), px(480.)));
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    maximize(&app, cx);
+    app.wait_for(cx, "assistant-thread-list");
+    let visible = |app: &TestApp, cx: &mut TestAppContext, row: &str| {
+        app.update(cx, |window, _| {
+            let list = bounds_of(window, "assistant-thread-list");
+            let row = bounds_of(window, row);
+            row.top() >= list.top() && row.bottom() <= list.bottom()
+        })
+    };
+    // Scroll to the end of the list, so the first conversation is out of view.
+    app.update(cx, |window, cx| {
+        window.scroll(
+            "assistant-thread-list",
+            ScrollDelta::Pixels(point(px(0.), px(-2_000.))),
+            cx,
+        )
+    });
+    app.settle(cx);
+    assert!(!visible(&app, cx, "Разговор 1, Alpha, Tab Closed"));
+
+    app.press(cx, "secondary-1");
+    app.wait_label(cx, "Conversation title: Разговор 1");
+    app.settle(cx);
+    assert!(visible(&app, cx, "Разговор 1, Alpha, Tab Closed"));
+}

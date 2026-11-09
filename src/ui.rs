@@ -2235,6 +2235,9 @@ impl Qrow {
                 .map(|(conversation, _)| conversation.thread_id.clone());
             if let Some(thread) = thread {
                 self.select_assistant_thread(&thread, window, cx);
+                self.assistant_pane
+                    .read(cx)
+                    .reveal_listed_conversation(action.0);
             }
             return;
         }

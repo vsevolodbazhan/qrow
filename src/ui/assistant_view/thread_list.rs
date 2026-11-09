@@ -78,6 +78,11 @@ impl AssistantPane {
             .collect()
     }
 
+    /// Scrolls the conversation at `index` of the list fully into view.
+    pub(in crate::ui) fn reveal_listed_conversation(&self, index: usize) {
+        self.thread_list_scroll.scroll_to_item(index);
+    }
+
     pub(super) fn thread_list(
         &self,
         qrow: &Qrow,
@@ -136,6 +141,7 @@ impl AssistantPane {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.thread_list_scroll)
                     .px_2()
                     .py_2()
                     .gap_1()

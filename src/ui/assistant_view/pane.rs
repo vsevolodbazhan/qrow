@@ -136,6 +136,8 @@ pub(in crate::ui) struct AssistantPane {
     /// The render clears it when the search is empty.
     pub(super) lowercase: RefCell<HashMap<String, String>>,
     pub(super) thread_list_override: Option<bool>,
+    /// The scroll position of the conversation list.
+    pub(super) thread_list_scroll: ScrollHandle,
     transcript: Entity<MessageScrollerState>,
     /// The rows that `transcript` has.
     rows: TranscriptRows,
@@ -195,6 +197,7 @@ impl AssistantPane {
             thread_search,
             lowercase: RefCell::default(),
             thread_list_override: None,
+            thread_list_scroll: ScrollHandle::new(),
             transcript,
             rows: TranscriptRows::default(),
             typography: None,
