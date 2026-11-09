@@ -6,7 +6,7 @@
 
 A native (no JVM, no Electron) SQL workbench for macOS and Linux. Built with Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
-![Qrow demo with the schema catalog](assets/screenshots/demo.png)
+![Qrow demo with the schema catalog and assistant](assets/screenshots/demo.png)
 
 ## Why
 
@@ -41,6 +41,8 @@ a JVM, an ODBC driver, or a separately installed database driver.
 - **Trino** uses HTTP or HTTPS with a username, a password, or the browser
   sign-in of the coordinator.
 
+![Qrow demo with connection creation menu open](assets/screenshots/demo-connections.png)
+
 Qrow keeps passwords in macOS Keychain or the Linux desktop secret store. One OpenID Connect sign-in can
 authenticate several connections, and you can copy its settings to share them
 with a colleague. Drag connections to change their order. See
@@ -52,6 +54,8 @@ Each connection has its own query tabs, and each tab has its own session.
 Tabs run queries at the same time, also when you select another connection.
 Press **⌘Enter** to run the statement at the cursor or the selected SQL. A light tint shows the statement that runs. A
 status dot on each tab and connection shows work, unread results, and errors.
+
+![Qrow demo with query results shown](assets/screenshots/demo-results.png)
 
 Results show in pages of 1,000 rows as they arrive. Copy a cell or a row with
 its full value. The Logs panel of each tab shows the SQL, the session events,
@@ -75,6 +79,8 @@ when the connection has no session.
 - **Search** tables and views in all connections, and copy or insert their
   quoted names into the editor.
 
+![Qrow demo with schema catalog](assets/screenshots/demo-catalog.png)
+
 See [browse schemas](docs/connections.md#browse-schemas).
 
 ### Integrations with dbt
@@ -89,6 +95,8 @@ writes, and can read it again each time dbt changes it. Qrow does not run dbt.
   lineage.
 - A schema mapping, for example `dbt_dev_* = *`, matches development schemas
   with catalog schemas. The form shows how many models match tables.
+
+![Qrow demo with dbt model details](assets/screenshots/demo-dbt.png)
 
 See [attach a dbt project](docs/connections.md#attach-a-dbt-project).
 
@@ -110,16 +118,9 @@ Enable it in **Qrow → Settings… → Assistant**, then press **⌘R**.
 - Qrow keeps a copy of each conversation on your computer. You can read
   earlier conversations before the harness starts.
 
+![Qrow demo with assistant conversation](assets/screenshots/demo-assistant.png)
+
 See [assistant](docs/assistant.md) for setup, data sharing, and query safety.
-
-### Workspace
-
-Qrow saves your connections, tabs, and SQL automatically. Restored tabs do
-not connect until you run SQL. Select the theme, the interface scale, and the
-fonts of the interface, the editor, the Logs, and the assistant in the
-Settings window (**⌘,** on macOS, **Ctrl+,** or the application menu on Linux).
-Qrow includes IBM Plex Sans for the interface and
-JetBrains Mono for SQL and Logs. See [workspace](docs/workspace.md).
 
 ## Metrics
 
