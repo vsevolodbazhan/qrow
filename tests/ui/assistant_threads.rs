@@ -59,7 +59,7 @@ fn an_open_conversation_tooltip_follows_its_title_and_reply_state(cx: &mut TestA
     app.hover_labelled(cx, &row_label);
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
-    app.update(cx, |window, cx| {
+    app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-status").as_deref(),
             Some("Working")

@@ -55,7 +55,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
     app.hover_labelled(cx, "SQL only, connected, idle");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
-    app.update(cx, |window, cx| {
+    app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
             Some("SQL only")
