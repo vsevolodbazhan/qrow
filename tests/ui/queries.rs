@@ -1232,6 +1232,71 @@ fn a_long_logged_query_shows_five_lines_until_it_expands(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+fn logged_query_buttons_stay_inside_code_and_clear_of_long_sql(cx: &mut TestAppContext) {
+    use qrow::logs::{LogEvent, LogKind};
+
+    let app = TestApp::launch(cx, Workspace::default());
+    let sql = format!(
+        "SELECT '{}' AS value\n-- two\n-- three\n-- four\n-- five\n-- six",
+        "長い列名".repeat(80)
+    );
+    app.qrow
+        .update(cx, |qrow, cx| {
+            qrow.record_tab_logs(
+                0,
+                vec![LogEvent::new(
+                    None,
+                    Severity::Info,
+                    LogKind::Submitted,
+                    format!("Submitted query:\n{sql}"),
+                )],
+                cx,
+            );
+        })
+        .unwrap();
+    app.click(cx, "output-panel-tab");
+    let check = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| {
+            let block = bounds_of(window, "sql");
+            let text = bounds_of(window, "sql-text");
+            let copy = crate::support::elements(window)
+                .into_iter()
+                .find(|element| element.path().last() == Some(&("output-copy-query", 0_u64).into()))
+                .unwrap()
+                .bounds();
+            let expand = crate::support::elements(window)
+                .into_iter()
+                .find(|element| element.path().last() == Some(&("output-expand", 0_u64).into()))
+                .unwrap()
+                .bounds();
+            assert!(copy.left() >= block.left() && expand.right() <= block.right());
+            assert!(copy.top() >= block.top() && copy.bottom() <= block.bottom());
+            assert!(expand.top() >= block.top() && expand.bottom() <= block.bottom());
+            assert!(
+                text.right() <= copy.left(),
+                "SQL must leave a separate button lane"
+            );
+            assert!(block.right() <= window.viewport_size().width);
+        });
+    };
+    for width in [1280., 900.] {
+        cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(820.)));
+        app.settle(cx);
+        check(&app, cx);
+        app.click(cx, ("output-copy-query", 0_u64));
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(sql.clone())
+        );
+        app.click(cx, ("output-expand", 0_u64));
+        app.settle(cx);
+        check(&app, cx);
+        app.click(cx, ("output-expand", 0_u64));
+        app.settle(cx);
+    }
+}
+
+#[gpui_kit::test]
 fn toggle_comment_selection_cursor_undo_and_redo(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     let sql = "  SELECT '日本語😀';\n\n\tSELECT 2;";

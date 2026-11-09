@@ -152,7 +152,7 @@ impl Qrow {
                         .filter(|_| entry.kind == LogKind::Submitted)
                         .map(str::to_owned),
                     |row, sql| {
-                        row.action(
+                        row.code_action(
                             Button::new(("output-copy-query", entry.id()))
                                 .ghost()
                                 .xsmall()
@@ -172,7 +172,7 @@ impl Qrow {
                     } else {
                         "Expand query"
                     };
-                    row.collapsed(!expanded).action(
+                    row.collapsed(!expanded).code_action(
                         Button::new(("output-expand", id))
                             .ghost()
                             .xsmall()

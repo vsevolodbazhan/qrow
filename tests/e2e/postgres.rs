@@ -633,3 +633,41 @@ fn imported_sql_file_runs_and_saves_as_a_query_tab(cx: &mut TestAppContext) {
         assert!(window.find("reveal-sql-file").visible());
     });
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn logged_query_actions_remain_inside_code_after_execution(cx: &mut TestAppContext) {
+    use crate::support::{bounds_of, elements};
+    let sql = format!(
+        "SELECT\n'{}' AS value\nFROM\n(\nSELECT 1\n) AS source",
+        "東京".repeat(300)
+    );
+    let (workspace, credentials) = workspace(&sql);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.click(cx, "output-panel-tab");
+    app.update(cx, |window, _| {
+        let block = bounds_of(window, "sql");
+        let text = bounds_of(window, "sql-text");
+        for name in ["output-copy-query", "output-expand"] {
+            let button = elements(window).into_iter().find(|element| {
+                element.path().iter().any(|id| matches!(id, gpui_kit::ElementId::NamedInteger(id, _) if id.as_ref() == name))
+            }).expect("query action").bounds();
+            assert!(button.top() >= block.top() && button.bottom() <= block.bottom());
+            assert!(button.right() <= block.right() && button.left() >= text.right());
+        }
+    });
+    app.click_labelled(cx, "Copy query");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(sql)
+    );
+    app.click_labelled(cx, "Expand query");
+    app.wait_until(
+        cx,
+        "expanded SQL",
+        std::time::Duration::from_secs(10),
+        |window, _| crate::support::labelled(window, "Collapse query").is_some(),
+    );
+}
