@@ -1,6 +1,6 @@
 /* Qrow landing page.
-   Colors: dark = Qrow "One Dark" theme (src/one-dark.json),
-   light = GPUI Kit "Default Light" theme. Fonts: the app defaults. */
+   Colors: Qrow "One Dark" theme (src/one-dark.json).
+   Fonts: the app defaults. */
 
 @font-face { font-family: "IBM Plex Sans"; src: url("fonts/IBMPlexSans-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "IBM Plex Sans"; src: url("fonts/IBMPlexSans-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
@@ -29,52 +29,6 @@
   --radius: 6px;
   --gutter: 24px;
 }
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    color-scheme: light;
-    --bg: #ffffff;
-    --surface: #fafafa;
-    --chrome: #f8f8f8;
-    --hover: #f0f0f0;
-    --border: #e5e5e5;
-    --fg: #262626;
-    --fg-strong: #0a0a0a;
-    --muted: #737373;
-    --primary: #171717;
-    --primary-fg: #fafafa;
-    --primary-hover: #262626;
-    --primary-active: #0a0a0a;
-    --shadow: 0 24px 60px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
-    --glow: rgba(37, 99, 235, 0.06);
-  }
-}
-:root[data-theme="light"] {
-  color-scheme: light;
-  --bg: #ffffff;
-  --surface: #fafafa;
-  --chrome: #f8f8f8;
-  --hover: #f0f0f0;
-  --border: #e5e5e5;
-  --fg: #262626;
-  --fg-strong: #0a0a0a;
-  --muted: #737373;
-  --primary: #171717;
-  --primary-fg: #fafafa;
-  --primary-hover: #262626;
-  --primary-active: #0a0a0a;
-  --shadow: 0 24px 60px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
-  --glow: rgba(37, 99, 235, 0.06);
-}
-
-/* Theme-dependent visibility (theme toggle icon). */
-.only-light { display: none !important; }
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) .only-light { display: block !important; }
-  :root:not([data-theme="dark"]) .only-dark { display: none !important; }
-}
-:root[data-theme="light"] .only-light { display: block !important; }
-:root[data-theme="light"] .only-dark { display: none !important; }
 
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -125,11 +79,6 @@ a { color: inherit; text-decoration: none; }
   z-index: 20;
 }
 [data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; transition-delay: 0.45s; }
-.statusbar [data-tip]::after { top: auto; bottom: calc(100% + 6px); }
-
-/* Title bar */
-.titlebar { height: 40px; background: var(--chrome); border-bottom: 1px solid var(--border); }
-.titlebar-title { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--fg); font-size: 14px; font-weight: 500; }
 
 /* Hero */
 .hero { position: relative; padding: 80px var(--gutter) 0; text-align: center; }
@@ -172,8 +121,6 @@ h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px
 .status-right { display: flex; align-items: center; gap: 2px; }
 .status-item { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: var(--radius); color: var(--muted); }
 a.status-item:hover { background: var(--hover); color: var(--fg-strong); }
-.theme-toggle { width: 28px; height: 28px; color: var(--muted); }
-.theme-toggle .icon { width: 14px; height: 14px; }
 
 @media (max-width: 600px) {
   :root { --gutter: 16px; }

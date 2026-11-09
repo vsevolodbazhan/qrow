@@ -17,15 +17,13 @@ some browsers do not load the fonts from `file://` URLs.
 
 The page uses the look of the app:
 
-- The dark colors come from the One Dark theme in
-  [src/one-dark.json](../src/one-dark.json). The light colors come from the
-  GPUI Kit Default Light theme. The page follows the system theme. The button
-  in the footer changes it, and the browser keeps that choice.
+- The colors come from the One Dark theme in
+  [src/one-dark.json](../src/one-dark.json). The page has no light theme.
 - The fonts are the app defaults: IBM Plex Sans for text and JetBrains Mono
   for code. `fonts/` has WOFF2 subsets of the files in
   [assets/fonts](../assets/fonts), with their licenses.
-- The header copies the title bar of the app, and the footer copies its status
-  bar. The icons are Lucide icons, the icon set of GPUI Kit.
+- The footer copies the status bar of the app. The icons are Lucide icons, the
+  icon set of GPUI Kit.
 
 ## Update the fonts
 
@@ -44,7 +42,7 @@ done
 ## Update the screenshot
 
 The page uses the first screenshot of the project README,
-[assets/screenshots/demo.png](../assets/screenshots/demo.png), in both themes.
+[assets/screenshots/demo.png](../assets/screenshots/demo.png).
 After a change of that file, make the web media again:
 
 ```sh

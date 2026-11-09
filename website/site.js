@@ -17,17 +17,4 @@
       });
     });
   });
-
-  // Theme toggle. The page follows the system theme until the visitor picks one.
-  var toggle = document.querySelector(".theme-toggle");
-  if (toggle) {
-    toggle.addEventListener("click", function () {
-      var root = document.documentElement;
-      var current = root.dataset.theme ||
-        (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
-      var next = current === "light" ? "dark" : "light";
-      root.dataset.theme = next;
-      try { localStorage.setItem("qrow-site-theme", next); } catch (e) {}
-    });
-  }
 })();
