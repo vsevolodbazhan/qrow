@@ -478,8 +478,15 @@ impl Qrow {
             .child(div().flex_1())
     }
 
-    fn toggle_results(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
+            return;
+        }
+        // Under the maximized assistant, the results are out of view: show them.
+        if self.assistant_covers_workspace(cx) {
+            self.settings.results_minimized = false;
+            self.set_assistant_maximized(false, window, cx);
+            self.changed(cx);
             return;
         }
         self.settings.results_minimized = !self.settings.results_minimized;
@@ -705,7 +712,10 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let shown = !(self.sidebar && self.sidebar_panel == panel);
+        // Under the maximized assistant, the sidebar is out of view: show it.
+        let shown =
+            !(self.sidebar && self.sidebar_panel == panel) || self.assistant_covers_workspace(cx);
+        self.uncover_workspace(window, cx);
         if self.sidebar_panel != panel {
             self.catalog
                 .state
@@ -1021,6 +1031,20 @@ impl Qrow {
             && self.assistant_state.maximized
     }
 
+    /// Whether the maximized assistant covers the workspace on screen.
+    /// Shortcuts of the workspace then act on what the pane shows.
+    pub(super) fn assistant_covers_workspace(&self, cx: &App) -> bool {
+        self.assistant_maximized() && !self.activity.read(cx).is_open()
+    }
+
+    /// Returns from the maximized assistant to the side pane, so that a
+    /// workspace command shows its result.
+    pub(super) fn uncover_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.assistant_covers_workspace(cx) {
+            self.set_assistant_maximized(false, window, cx);
+        }
+    }
+
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
         if self.assistant_state.maximized {
@@ -1103,13 +1127,21 @@ impl Qrow {
             .on_action(cx.listener(Self::import_sql_file))
             .on_action(cx.listener(Self::save_as_sql_file))
             .on_action(cx.listener(Self::select_tab))
-            .on_action(
-                cx.listener(|this, _: &CloseTab, window, cx| {
-                    this.close_tab(this.active, window, cx)
-                }),
-            )
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                // The pane covers the tab, so ⌘W closes the cover first, like
+                // it closes a dialog.
+                if this.assistant_covers_workspace(cx) {
+                    if !this.dialog_open() {
+                        this.set_assistant_maximized(false, window, cx);
+                    }
+                    return;
+                }
+                this.close_tab(this.active, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
-                this.set_sidebar(!this.sidebar, window, cx)
+                let shown = !this.sidebar || this.assistant_covers_workspace(cx);
+                this.uncover_workspace(window, cx);
+                this.set_sidebar(shown, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ShowConnections, window, cx| {
                 this.show_sidebar_panel(SidebarPanel::Connections, window, cx)

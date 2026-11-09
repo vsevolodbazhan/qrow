@@ -182,7 +182,9 @@ to the active connection and has its own session.
 Press **⌘1** through **⌘9** (**Ctrl+1** through **Ctrl+9** on Linux) to select
 a query tab by its position from the left under the active connection. If
 that position has no tab, the selection does not change. These shortcuts do
-not switch tabs while a dialog is open.
+not switch tabs while a dialog is open. When the assistant is maximized, these
+shortcuts and **⌘T** operate on conversations. See
+[Work with SQL](assistant.md#work-with-sql).
 
 A tab that is not selected is at most 240 points wide. A long name ends in an
 ellipsis. The selected tab grows to show its full name. Only a name that is

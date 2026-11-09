@@ -16,6 +16,8 @@ impl Qrow {
         if self.dialog_open() || window.has_active_dialog(cx) {
             return;
         }
+        // The new tab must show, so the maximized assistant steps aside.
+        self.uncover_workspace(window, cx);
         let Some(profile) = self.active_profile() else {
             window.push_notification(
                 toast::error(
@@ -121,6 +123,11 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.dialog_open() || window.has_active_dialog(cx) {
+            return;
+        }
+        // Show the tab whose SQL the file gets.
+        self.uncover_workspace(window, cx);
         self.save_sql_tab(self.tabs[self.active].saved.id, window, cx);
     }
 

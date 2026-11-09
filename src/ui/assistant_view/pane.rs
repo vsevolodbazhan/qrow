@@ -620,7 +620,14 @@ impl AssistantPane {
                             .flex_shrink_0()
                             .icon(IconName::Plus)
                             .accessibility_label("New conversation")
-                            .tooltip("New conversation")
+                            .map(|button| {
+                                // ⌘T makes a conversation only while the pane covers the tabs.
+                                if qrow.assistant_state.maximized {
+                                    button.tooltip_with_action("New conversation", &NewTab, None)
+                                } else {
+                                    button.tooltip("New conversation")
+                                }
+                            })
                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
                                 this.create_assistant_conversation(window, cx);
                             })),

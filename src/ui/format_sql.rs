@@ -7,7 +7,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.form.is_some() {
+        if self.form.is_some() || self.assistant_covers_workspace(cx) {
             return;
         }
         let Some(tab) = self.tabs.get(self.active) else {

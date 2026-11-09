@@ -2224,12 +2224,31 @@ impl Qrow {
         if self.dialog_open() {
             return;
         }
+        // The maximized assistant hides the tab strip but shows the
+        // conversation list, so the number selects a conversation.
+        if self.assistant_covers_workspace(cx) {
+            let thread = self
+                .assistant_pane
+                .read(cx)
+                .listed_conversations(self, cx)
+                .get(action.0)
+                .map(|(conversation, _)| conversation.thread_id.clone());
+            if let Some(thread) = thread {
+                self.select_assistant_thread(&thread, window, cx);
+            }
+            return;
+        }
         if let Some(index) = self.visible_tab_indices().get(action.0).copied() {
             self.activate(index, window, cx);
         }
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
+            return;
+        }
+        // The maximized assistant shows a conversation, not the tab strip.
+        if self.assistant_covers_workspace(cx) {
+            self.create_assistant_conversation(window, cx);
             return;
         }
         let profile = self.active_profile();
@@ -2348,6 +2367,10 @@ impl Qrow {
         self.select_catalog_connection(id, window, cx);
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
+        // Do not run SQL from an editor that the maximized assistant hides.
+        if self.assistant_covers_workspace(cx) {
+            return;
+        }
         self.run_selected_query(window, cx);
     }
     fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {

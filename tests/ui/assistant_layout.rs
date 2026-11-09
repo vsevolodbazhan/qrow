@@ -2,11 +2,11 @@
 //! off. Pixel checks, like text that reaches the edge of a reply, stay in the
 //! desktop suite.
 use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, composer_text, jump_to_latest};
-use crate::support::{MemoryCredentials, TestApp, bounds_of, labelled_starting};
+use crate::support::{MemoryCredentials, TestApp, bounds_of, labelled_starting, offline_profile};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Bounds, Pixels, ScrollDelta, TestAppContext, point, px, size};
-use qrow::model::Workspace;
-use qrow::ui::ToggleSidebar;
+use qrow::model::{AssistantConversation, SavedTab, Workspace};
+use qrow::ui::{FormatSql, RunQuery, ToggleSidebar};
 
 fn launch(cx: &mut TestAppContext) -> TestApp {
     let (directory, codex) = FakeCodex::new();
@@ -347,4 +347,99 @@ fn maximized_assistant_follows_the_window_width(cx: &mut TestAppContext) {
             assert_eq!(panel.size.width, window.viewport_size().width);
         });
     }
+}
+
+/// A workspace with one Alpha tab and two conversations whose tabs closed.
+fn launch_with_conversations(cx: &mut TestAppContext) -> TestApp {
+    let (directory, codex) = FakeCodex::new();
+    let profile = offline_profile("Alpha");
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 1".into();
+    let mut workspace = codex.workspace(Workspace {
+        profiles: vec![profile.clone()],
+        tabs: vec![tab],
+        ..Workspace::default()
+    });
+    workspace.settings.assistant.panel_width = 536.;
+    for (thread, title, last_activity) in [
+        ("synthetic-recent", "Recent conversation", 200),
+        ("synthetic-older", "Older conversation", 100),
+    ] {
+        let mut conversation = AssistantConversation::new(thread, Default::default());
+        conversation.title = title.into();
+        conversation.last_activity = last_activity;
+        conversation.detached_profile = Some(profile.id);
+        workspace.assistant.conversations.push(conversation);
+    }
+    TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default())
+}
+
+fn maximize(app: &TestApp, cx: &mut TestAppContext) {
+    app.click(cx, "assistant-maximize");
+    app.wait_label(cx, "Minimize");
+    app.wait_gone(cx, "add-connection");
+}
+
+#[gpui_kit::test]
+fn workspace_shortcuts_act_on_what_the_maximized_assistant_shows(cx: &mut TestAppContext) {
+    let app = launch_with_conversations(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    maximize(&app, cx);
+    app.wait_for(cx, "assistant-thread-list");
+    let status = app.update(cx, |_, cx| app.status(cx));
+
+    // ⌘1 to ⌘9 select a conversation by its position in the list.
+    app.press(cx, "secondary-2");
+    app.wait_label(cx, "Conversation title: Older conversation");
+    app.press(cx, "secondary-1");
+    app.wait_label(cx, "Conversation title: Recent conversation");
+    app.press(cx, "secondary-9");
+    app.wait_label(cx, "Conversation title: Recent conversation");
+
+    // The hidden editor does not run or format its SQL.
+    app.dispatch(cx, RunQuery);
+    app.dispatch(cx, FormatSql);
+    app.settle(cx);
+    app.update(cx, |_, cx| assert_eq!(app.status(cx), status));
+    assert_eq!(app.saved().tabs[0].sql, "SELECT 1");
+
+    // ⌘T starts a conversation in a new tab, and the pane stays maximized.
+    app.press(cx, "secondary-t");
+    app.wait_label(cx, "Conversation title: New conversation");
+    app.wait_saved(cx, "the conversation tab", |saved| saved.tabs.len() == 2);
+    app.wait_label(cx, "Minimize");
+    // The message field of the new conversation has the focus.
+    app.update(cx, |window, cx| window.input("Новый вопрос", cx));
+    app.wait_until(
+        cx,
+        "typing in the new conversation",
+        REPLY_TIMEOUT,
+        |window, _| composer_text(window).as_deref() == Some("Новый вопрос"),
+    );
+
+    // ⌘W returns to the side pane and does not close the hidden tab.
+    app.press(cx, "secondary-w");
+    app.wait_label(cx, "Maximize");
+    app.wait_for(cx, "add-connection");
+    app.settle(cx);
+    assert_eq!(app.saved().tabs.len(), 2);
+
+    // ⌘J shows collapsed results instead of toggling them out of view.
+    app.press(cx, "secondary-j");
+    app.wait_saved(cx, "collapsed results", |saved| {
+        saved.settings.results_minimized
+    });
+    maximize(&app, cx);
+    app.press(cx, "secondary-j");
+    app.wait_label(cx, "Maximize");
+    app.wait_saved(cx, "expanded results", |saved| {
+        !saved.settings.results_minimized
+    });
+
+    // ⌘B shows the Connections sidebar, which the maximized pane hid.
+    maximize(&app, cx);
+    app.press(cx, "secondary-b");
+    app.wait_label(cx, "Maximize");
+    app.wait_for(cx, "add-connection");
 }
