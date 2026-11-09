@@ -332,5 +332,6 @@ or cancellation.
 ## Website
 
 The landing page is in [website](../website). It is static HTML with no build
-step. See the [website README](../website/README.md) to preview the page and
-to update its screenshots and videos.
+step. A push to `main` that changes it deploys it to <https://qrow.dev>. See
+the [website README](../website/README.md) to preview the page, to update its
+screenshot, and for the deployment.

@@ -1,8 +1,8 @@
 # Website
 
-This directory contains the Qrow landing page: one static page that links to
-the GitHub repository. It has no build step and makes no requests to other
-sites.
+This directory contains the Qrow landing page at <https://qrow.dev>: one
+static page that links to the GitHub repository. It has no build step and
+makes no requests to other sites.
 
 ## Preview the page
 
@@ -56,8 +56,33 @@ The WebP image is lossless, so its colors stay exact. The page background
 (`--bg` in `styles.css`) uses the panel color of the screenshot, `#27292e`.
 Check it again after a new screenshot.
 
+## Deployment
+
+GitHub Pages hosts the page. The
+[website workflow](../.github/workflows/website.yml) starts when a change
+touches `website/` or the workflow:
+
+- A pull request builds the site. It does not deploy it.
+- A push to `main` builds the site and deploys it to <https://qrow.dev>.
+- You can also start the workflow manually on `main`.
+
+The site is a copy of `website/` without `README.md` and
+`optimize-media.sh`. The deployment takes approximately one minute after the
+push. The repository settings (**Settings** > **Pages**) set the source to
+**GitHub Actions** and the custom domain to `qrow.dev`.
+
+The domain uses these DNS records:
+
+| Name | Type | Value |
+| --- | --- | --- |
+| `qrow.dev` | `A` | `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153` |
+| `www.qrow.dev` | `CNAME` | `vsevolodbazhan.github.io` |
+| `_github-pages-challenge-vsevolodbazhan.qrow.dev` | `TXT` | The code from the GitHub account settings (**Pages** > **Verified domains**) |
+
+The TXT record verifies the domain for the GitHub account. Do not remove it:
+without it, other GitHub users can claim the domain.
+
 ## Limitations
 
-- The page is not published yet. It has no hosting or deploy workflow.
-- The social preview image (`og:image`) uses a relative URL. Social sites
-  need a full URL. Set the full HTTPS URL when the page gets its domain.
+- The page URLs in `og:url`, `og:image`, and the canonical link are
+  `https://qrow.dev/`. Change them if the domain changes.
