@@ -386,7 +386,10 @@ fn command_r_toggles_assistant_and_command_j_toggles_results(cx: &mut TestAppCon
     app.update(cx, |window, _| {
         assert!(window.find("assistant-composer").visible());
 
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Expand results")
+        );
     });
     app.update(cx, |window, cx| window.input("Focus stays here", cx));
     app.update(cx, |window, _| {
@@ -395,6 +398,9 @@ fn command_r_toggles_assistant_and_command_j_toggles_results(cx: &mut TestAppCon
     app.press(cx, "secondary-r");
     app.wait_gone(cx, "assistant-composer");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Expand results")
+        );
     });
 }

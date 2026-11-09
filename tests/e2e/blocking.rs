@@ -351,7 +351,10 @@ fn minimized_results_keep_completion_unread_until_restored(cx: &mut TestAppConte
     app.click(cx, "toggle-results");
     wait_tab(&app, cx, "Query 1, unread query result");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Expand results")
+        );
     });
     app.click(cx, "toggle-results");
     wait_tab(&app, cx, "Query 1");

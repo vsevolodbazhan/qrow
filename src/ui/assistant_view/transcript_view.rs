@@ -169,8 +169,8 @@ fn message_entry(
             .ghost()
             .small()
             .icon(IconName::Copy)
-            .accessibility_label("Copy")
-            .tooltip("Copy")
+            .accessibility_label("Copy code")
+            .tooltip("Copy code")
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));

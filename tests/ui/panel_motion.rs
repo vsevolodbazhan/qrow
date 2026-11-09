@@ -376,10 +376,10 @@ fn assistant_maximize_motion_reverses_and_preserves_the_draft(cx: &mut TestAppCo
     app.dispatch(cx, ToggleAssistant);
     app.wait_gone(cx, "assistant-panel");
     app.open_assistant(cx);
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     assert_eq!(panel(cx).size.width, px(900.));
     app.press(cx, "secondary-shift-r");
-    app.wait_label(cx, "Maximize");
+    app.wait_label(cx, "Maximize assistant");
     assert_eq!(panel(cx).size.width, original.size.width);
     cx.update(|cx| cx.set_reduce_motion(false));
     app.click(cx, "assistant-maximize");

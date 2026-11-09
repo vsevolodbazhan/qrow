@@ -31,10 +31,9 @@ error is unread. Yellow means that an assistant query needs approval.
 
 The priority is approval, error, running work, connecting, unread success,
 then connected and idle.
-The tooltip shows the connection name and a short status beside it. The status
-uses secondary text. The name and status share a vertical center. The status
-stays beside the first line when the name wraps.
-Host and User show on compact labeled rows below the name. **Unread error**
+The tooltip shows the connection name, with a short status below it. The status
+uses secondary text.
+Host and User show on compact labeled rows below the status. **Unread error**
 identifies an unread error. No dot means that no session, work, or
 unread outcome needs an indicator. A schema refresh uses its own temporary
 session. That session does not give the connection a dim blue dot.

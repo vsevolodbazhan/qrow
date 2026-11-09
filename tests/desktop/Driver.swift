@@ -1038,7 +1038,7 @@ final class Driver {
         key(15, flags: .maskCommand)
         _ = try wait("Model: Synthetic Model", timeout: 20)
         if find("Search conversations") != nil {
-            try press("Toggle conversation list")
+            try press("Hide conversations")
             try waitGone("Search conversations", timeout: 5)
         }
         try fill("Assistant Message", "Explain SELECT 1")
@@ -1046,7 +1046,7 @@ final class Driver {
         _ = try wait("I can help with this query", timeout: 20)
         for close in ["cancel", "escape", "delete"] {
             // The dropdown opens on pointer input around the button.
-            try press("Conversation Actions", pointer: true)
+            try press("Conversation actions", pointer: true)
             try click(try wait("Delete…"))
             _ = try waitExact("Delete", timeout: 10, role: kAXButtonRole)
             switch close {
@@ -1067,7 +1067,7 @@ final class Driver {
         key(15, flags: .maskCommand) // Cmd+R opens the docked assistant.
         _ = try wait("Model: Synthetic Model", timeout: 20)
         if find("Search conversations") != nil {
-            try press("Toggle conversation list")
+            try press("Hide conversations")
             try waitGone("Search conversations", timeout: 5)
         }
         try checkInlineCodeMessages()

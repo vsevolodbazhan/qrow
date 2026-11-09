@@ -210,7 +210,16 @@ pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &s
     use gpui_kit::component::ActiveTheme;
     use gpui_kit::{FontWeight, Styled, div};
 
-    let mut title = div().text_sm().font_weight(FontWeight::MEDIUM);
+    // The title is medium weight only above secondary lines.
+    let title_weight = if ["status", "detail", "metadata"]
+        .iter()
+        .any(|part| window.try_find(format!("status-tooltip-{part}")).is_some())
+    {
+        FontWeight::MEDIUM
+    } else {
+        FontWeight::NORMAL
+    };
+    let mut title = div().text_sm().font_weight(title_weight);
     let mut secondary_style = div().text_xs();
     let center = |id: &str, font_size, weight, window: &mut Window| {
         let mut style = window.text_style();
@@ -240,7 +249,7 @@ pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &s
     let title_center = center(
         "status-tooltip-title",
         title.style().text.font_size.unwrap(),
-        FontWeight::MEDIUM,
+        title_weight,
         window,
     );
     let secondary_center = center(
@@ -253,6 +262,18 @@ pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &s
         title_center, secondary_center,
         "{secondary} visual center differs from the title's first line"
     );
+}
+
+/// The status is a secondary line below the title, at the same left edge.
+pub fn assert_tooltip_status_below(window: &Window) {
+    let title = bounds_of(window, "status-tooltip-title");
+    let status = bounds_of(window, "status-tooltip-status");
+    assert_eq!(
+        title.left(),
+        status.left(),
+        "status starts at the title edge"
+    );
+    assert!(status.top() >= title.bottom(), "status is below the title");
 }
 
 /// Connection fields stack without an extra blank spacer between rows.

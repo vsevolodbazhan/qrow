@@ -52,7 +52,7 @@ the cursor is on a blank line or a comment between statements, there is no
 tint. When you select text, the selection shows the SQL to run, and there is
 no tint.
 
-After a query finishes, use **Export results…** in Results to save all rows.
+After a query finishes, use **Export results** in Results to save all rows.
 If the result cursor is unavailable, review the original SQL before an export
 rerun. See [Rerun for export](results.md#rerun-for-export) for session checks
 and cancellation limits.
