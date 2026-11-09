@@ -302,7 +302,8 @@ impl<T: 'static> Render for LiveStatusTooltip<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::StatusTooltip;
+    use gpui_kit::FontWeight;
 
     #[test]
     fn only_a_title_with_secondary_lines_is_medium_weight() {
