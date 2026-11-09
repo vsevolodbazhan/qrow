@@ -248,7 +248,7 @@ fn message_entry(
                                 .id(format!("assistant-entry-{}", entry.id))
                                 .test_support()
                                 .role(Role::Paragraph)
-                                .aria_label(entry.label().clone())
+                                .aria_label(entry.label())
                                 .whitespace_normal()
                                 .child(content),
                         ),
@@ -269,7 +269,7 @@ fn tool_entry(
 ) -> AnyElement {
     let muted = cx.theme().muted_foreground;
     let destructive = cx.theme().semantic_tokens().colors.destructive;
-    let accessible_label = entry.label().clone();
+    let accessible_label = entry.label();
     let summary = h_flex()
         .flex_1()
         .min_w_0()

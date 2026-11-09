@@ -7,6 +7,7 @@ use super::{
     flow::{self, Attempt, Discovery, SIGN_IN_TIMEOUT},
     jwt::{self, Expected, Jwks},
 };
+use crate::sync::LockExt as _;
 use crate::{
     connector::{Secret, TokenSource},
     model::{Authentication, Identity, Profile, SignIn},
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex, MutexGuard, PoisonError,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -104,10 +105,6 @@ impl Stored {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 fn seconds(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -141,11 +138,11 @@ impl Service {
 
     /// Calls `notify` after each change of a status.
     pub fn set_on_change(&self, notify: Arc<dyn Fn() + Send + Sync>) {
-        *lock(&self.on_change) = Some(notify);
+        *self.on_change.lock_unpoisoned() = Some(notify);
     }
 
     fn changed(&self) {
-        let notify = lock(&self.on_change).clone();
+        let notify = self.on_change.lock_unpoisoned().clone();
         if let Some(notify) = notify {
             notify();
         }
@@ -160,8 +157,8 @@ impl Service {
     /// `work`, which a refresh holds during network requests, because the
     /// interface thread calls it.
     pub fn configure(&self, sign_ins: &[SignIn], profiles: &[Profile]) {
-        *lock(&self.profiles) = profiles.to_vec();
-        let mut records = lock(&self.records);
+        *self.profiles.lock_unpoisoned() = profiles.to_vec();
+        let mut records = self.records.lock_unpoisoned();
         records.retain(|id, record| {
             let keep = sign_ins.iter().any(|sign_in| {
                 sign_in.id == *id && sign_in.provider == crate::model::SignInProvider::Oidc
@@ -177,7 +174,7 @@ impl Service {
         {
             match records.get(&sign_in.id) {
                 Some(record) => {
-                    let mut config = lock(&record.config);
+                    let mut config = record.config.lock_unpoisoned();
                     let identity = config.identity.take();
                     if !config.token_requirements_eq(sign_in) {
                         record.generation.fetch_add(1, Ordering::SeqCst);
@@ -203,7 +200,8 @@ impl Service {
     }
 
     fn record(&self, id: Uuid) -> Result<Arc<Record>> {
-        lock(&self.records)
+        self.records
+            .lock_unpoisoned()
             .get(&id)
             .cloned()
             .ok_or_else(|| required("The sign-in of this connection no longer exists"))
@@ -213,10 +211,10 @@ impl Service {
         let Ok(record) = self.record(id) else {
             return Status::SignedOut;
         };
-        let Some(identity) = lock(&record.config).identity.clone() else {
+        let Some(identity) = record.config.lock_unpoisoned().identity.clone() else {
             return Status::SignedOut;
         };
-        match lock(&record.problem).clone() {
+        match record.problem.lock_unpoisoned().clone() {
             Some((Failure::SignInRequired, message)) => Status::SignInRequired(identity, message),
             Some((Failure::Network, message)) => Status::NetworkFailure(identity, message),
             _ => Status::SignedIn(identity),
@@ -226,11 +224,11 @@ impl Service {
     pub fn identity(&self, id: Uuid) -> Option<Identity> {
         self.record(id)
             .ok()
-            .and_then(|record| lock(&record.config).identity.clone())
+            .and_then(|record| record.config.lock_unpoisoned().identity.clone())
     }
 
     fn set_problem(&self, record: &Record, problem: Option<(Failure, String)>) {
-        let mut current = lock(&record.problem);
+        let mut current = record.problem.lock_unpoisoned();
         if *current != problem {
             *current = problem;
             drop(current);
@@ -248,7 +246,7 @@ impl Service {
         open: &dyn Fn(&str) -> Result<()>,
     ) -> Result<Identity> {
         let record = self.record(id)?;
-        let config = lock(&record.config).clone();
+        let config = record.config.lock_unpoisoned().clone();
         config.validate()?;
         let generation = record.generation.load(Ordering::SeqCst);
         let discovery = flow::discover(&self.trust, &config.issuer)?;
@@ -296,13 +294,13 @@ impl Service {
                 .as_deref()
                 .map(|token| token.to_string()),
         };
-        let mut work = lock(&record.work);
+        let mut work = record.work.lock_unpoisoned();
         if cancel.load(Ordering::SeqCst) {
             return Err(SignInError::new(Failure::Cancelled, "Sign-in was cancelled").into());
         }
         anyhow::ensure!(
             record.generation.load(Ordering::SeqCst) == generation
-                && lock(&self.records).contains_key(&id),
+                && self.records.lock_unpoisoned().contains_key(&id),
             "The sign-in changed while the browser was open. Sign in again"
         );
         self.save(id, &stored)?;
@@ -312,9 +310,9 @@ impl Service {
             discovery: Some(discovery),
             keys: Some(keys),
         };
-        lock(&record.config).identity = Some(identity.clone());
+        record.config.lock_unpoisoned().identity = Some(identity.clone());
         drop(work);
-        *lock(&record.problem) = None;
+        *record.problem.lock_unpoisoned() = None;
         self.changed();
         Ok(identity)
     }
@@ -331,15 +329,15 @@ impl Service {
         record.generation.fetch_add(1, Ordering::SeqCst);
         // Wait for a running refresh. It sees the new generation and does
         // not save its result.
-        let mut work = lock(&record.work);
+        let mut work = record.work.lock_unpoisoned();
         self.store.delete_tokens(id)?;
         *work = Work {
             loaded: true,
             ..Work::default()
         };
-        lock(&record.config).identity = None;
+        record.config.lock_unpoisoned().identity = None;
         drop(work);
-        *lock(&record.problem) = None;
+        *record.problem.lock_unpoisoned() = None;
         self.changed();
         Ok(())
     }
@@ -350,7 +348,7 @@ impl Service {
     pub fn access_token(&self, id: Uuid, subject: &str, host: &str) -> Result<Zeroizing<String>> {
         let record = self.record(id)?;
         let (config, current) = {
-            let config = lock(&record.config);
+            let config = record.config.lock_unpoisoned();
             let current = config
                 .identity
                 .as_ref()
@@ -358,7 +356,7 @@ impl Service {
             (config.clone(), current)
         };
         anyhow::ensure!(
-            lock(&self.profiles).iter().any(|profile| {
+            self.profiles.lock_unpoisoned().iter().any(|profile| {
                 profile.authentication == Authentication::Oidc { sign_in: id }
                     && profile
                         .host
@@ -392,7 +390,7 @@ impl Service {
         subject: &str,
     ) -> Result<Zeroizing<String>> {
         let id = config.id;
-        let mut work = lock(&record.work);
+        let mut work = record.work.lock_unpoisoned();
         let generation = record.generation.load(Ordering::SeqCst);
         if !work.loaded {
             let loaded = self.store.load_tokens(id)?;
@@ -557,7 +555,7 @@ impl Service {
     /// Tries the refresh again after a network failure.
     pub fn retry(&self, id: Uuid) -> Result<()> {
         let record = self.record(id)?;
-        let config = lock(&record.config).clone();
+        let config = record.config.lock_unpoisoned().clone();
         let subject = config
             .identity
             .as_ref()
@@ -568,7 +566,8 @@ impl Service {
 
     fn authorize_connection(&self, profile: &Profile) -> Result<()> {
         anyhow::ensure!(
-            lock(&self.profiles)
+            self.profiles
+                .lock_unpoisoned()
                 .iter()
                 .any(|current| current.connection_identity_eq(profile)),
             "Connection settings changed; reconnect"

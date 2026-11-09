@@ -3,6 +3,7 @@
 //! sessions that use them.
 use super::environment::Browser;
 use super::*;
+use crate::sync::LockExt as _;
 use crate::{
     model::{
         Authentication, BASE_SCOPES, Identity, SignIn, SignInProvider, extra_scopes,
@@ -375,7 +376,7 @@ impl Qrow {
                     )
                     .into());
                 }
-                *authorization_url.lock().unwrap() = Some(url.to_owned());
+                *authorization_url.lock_unpoisoned() = Some(url.to_owned());
                 match &browser {
                     Some(browser) => browser(url),
                     None => {
@@ -409,7 +410,7 @@ impl Qrow {
         if pending.cancel.load(Ordering::SeqCst) {
             return;
         }
-        let Some(url) = pending.url.lock().unwrap().clone() else {
+        let Some(url) = pending.url.lock_unpoisoned().clone() else {
             return;
         };
         match &self.sign_in_ui.browser {

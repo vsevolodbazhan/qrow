@@ -558,6 +558,21 @@ fn is_numeric(data_type: &str) -> bool {
     )
 }
 
+/// The most characters of a value that a cell shows.
+const CELL_PREVIEW_CHARS: usize = 500;
+
+/// The start of `value` that a cell shows.
+fn cell_preview(value: &str) -> &str {
+    // A character has at least one byte.
+    if value.len() <= CELL_PREVIEW_CHARS {
+        return value;
+    }
+    match value.char_indices().nth(CELL_PREVIEW_CHARS) {
+        Some((end, _)) => &value[..end],
+        None => value,
+    }
+}
+
 /// The data type as the catalog tree shows it: drivers report some types in
 /// uppercase.
 fn display_type(data_type: &str) -> String {
@@ -682,14 +697,18 @@ impl TableDelegate for Results {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let r = self.pagination.range(self.rows.len()).start + r;
-        let number = (r + 1).to_string();
         let value = if c == 0 {
-            Some(number.as_str())
+            None
         } else {
             self.rows[r].get(c - 1).and_then(|value| value.as_deref())
         };
-        let null = value.is_none();
-        let display: String = value.unwrap_or("NULL").chars().take(500).collect();
+        let null = c > 0 && value.is_none();
+        // One shared copy of the preview serves the label and the text.
+        let display = if c == 0 {
+            SharedString::from((r + 1).to_string())
+        } else {
+            SharedString::new(cell_preview(value.unwrap_or("NULL")))
+        };
         let selection = self.selection.filter(|_| c > 0);
         let selected = selection.is_some_and(|s| s.contains(r, c - 1));
         // The focus cell shows a ring, also when it is the only selected cell.
@@ -1222,7 +1241,7 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
 
 #[cfg(test)]
 mod tests {
-    use super::{DataColumn, Event, Results};
+    use super::{CELL_PREVIEW_CHARS, DataColumn, Event, Results, cell_preview};
     use gpui_kit::{TestAppContext, px};
 
     fn column(name: &str, data_type: &str) -> DataColumn {
@@ -1261,6 +1280,15 @@ mod tests {
             assert!(results.empty_message.is_none());
             assert!(results.selection.is_none());
         });
+    }
+
+    #[test]
+    fn a_cell_shows_the_first_characters_of_a_long_value() {
+        assert_eq!(cell_preview("short"), "short");
+        let long = "日".repeat(CELL_PREVIEW_CHARS + 10);
+        assert_eq!(cell_preview(&long).chars().count(), CELL_PREVIEW_CHARS);
+        let exact = "é".repeat(CELL_PREVIEW_CHARS);
+        assert_eq!(cell_preview(&exact), exact);
     }
 
     #[test]

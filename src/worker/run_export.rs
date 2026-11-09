@@ -331,10 +331,10 @@ impl Runner {
         );
         let state = loop {
             export::check_cancelled(request.download.cancelled())?;
-            let state = self.session.as_mut().unwrap().poll()?;
+            let state = self.session_mut()?.poll()?;
             request
                 .download
-                .set_progress_percentage(self.session.as_ref().unwrap().progress_percentage());
+                .set_progress_percentage(self.session_ref()?.progress_percentage());
             if request.download.progress_percentage().is_some() {
                 self.emit(Event::DownloadProgress {
                     execution: request.execution,
@@ -355,12 +355,10 @@ impl Runner {
             QueryState::Finished { has_results: false }
             | QueryState::Streaming { has_results: false } => {
                 export::check_cancelled(request.download.cancelled())?;
-                if !finished
-                    && self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled
-                {
+                if !finished && self.session_mut()?.finish_execution()? == Completion::Cancelled {
                     return Err(export::Cancelled.into());
                 }
-                self.session.as_mut().unwrap().close_operation()?;
+                self.session_mut()?.close_operation()?;
                 request.download.finish_without_spool(
                     "The statement completed without a result set. No export file was written."
                         .into(),
@@ -377,8 +375,8 @@ impl Runner {
             QueryState::Running => anyhow::bail!("The query result is not ready"),
         }
         export::check_cancelled(request.download.cancelled())?;
-        let columns = self.session.as_mut().unwrap().columns()?;
-        let context = self.session.as_ref().unwrap().export_context();
+        let columns = self.session_mut()?.columns()?;
+        let context = self.session_ref()?.export_context();
         let (spool, mut producer) =
             Spool::new_prepared(&columns, &context, request.memory.clone())?;
         request.download.publish_spool(spool.clone())?;
@@ -396,22 +394,22 @@ impl Runner {
             loop {
                 export::check_cancelled(request.download.cancelled())?;
                 let _fetch_memory = producer.reserve_fetch()?;
-                let requested = self.session.as_ref().unwrap().export_fetch_rows();
+                let requested = self.session_ref()?.export_fetch_rows();
                 anyhow::ensure!(
                     (1..=crate::model::transfer::MAX_FETCH_ROWS).contains(&requested),
                     "Invalid export fetch count"
                 );
-                let mut batch = self.session.as_mut().unwrap().fetch(requested)?;
+                let mut batch = self.session_mut()?.fetch(requested)?;
                 request
                     .download
-                    .set_progress_percentage(self.session.as_ref().unwrap().progress_percentage());
+                    .set_progress_percentage(self.session_ref()?.progress_percentage());
                 export::check_cancelled(request.download.cancelled())?;
                 anyhow::ensure!(
                     batch.rows.len() <= requested,
                     "Connector returned more rows than requested"
                 );
                 if batch.rows.is_empty() {
-                    if self.session.as_mut().unwrap().commit_export_rows(0)? {
+                    if self.session_mut()?.commit_export_rows(0)? {
                         continue;
                     }
                     break;
@@ -438,14 +436,12 @@ impl Runner {
                     request.download.cancelled(),
                 )?;
             }
-            if !finished
-                && self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled
-            {
+            if !finished && self.session_mut()?.finish_execution()? == Completion::Cancelled {
                 return Err(export::Cancelled.into());
             }
             export::check_cancelled(request.download.cancelled())?;
             self.complete_execution(true);
-            if let Some(warning) = self.session.as_ref().unwrap().export_cleanup_warning() {
+            if let Some(warning) = self.session_ref()?.export_cleanup_warning() {
                 self.log(
                     Some(request.execution),
                     Severity::Info,
@@ -454,7 +450,7 @@ impl Runner {
                     None,
                 );
             }
-            self.session.as_mut().unwrap().close_operation()?;
+            self.session_mut()?.close_operation()?;
             Ok(())
         })();
         if let Err(error) = &result {

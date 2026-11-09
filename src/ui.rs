@@ -39,7 +39,10 @@ pub use workspace_view::WindowView;
 use crate::themes;
 use crate::{
     connector::DatabaseConnector,
-    logs::{ExecutionId, LogEntry, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
+    logs::{
+        ExecutionId, LogChange, LogEntry, LogEvent, LogHistory, LogKind, Panel, PanelState,
+        Severity,
+    },
     model::{
         AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
@@ -766,6 +769,13 @@ pub struct Qrow {
     assistant_state: assistant_view::AssistantState,
     /// The assistant pane view. Qrow renders it beside the workspace.
     assistant_pane: Entity<assistant_view::AssistantPane>,
+    /// The panel of the sidebar, in a view of its own.
+    sidebar_view: Entity<workspace_view::QrowPart>,
+    /// The SQL editor of the active tab, in a view of its own.
+    sql_editor_view: Entity<workspace_view::QrowPart>,
+    /// The result toolbar and the result table of the active tab, in a view
+    /// of its own.
+    results_view: Entity<workspace_view::QrowPart>,
     fonts: Vec<String>,
     settings_open: bool,
     /// The Settings window, while it is open. There is at most one.
@@ -955,6 +965,14 @@ impl Qrow {
             let qrow = cx.entity();
             cx.new(|cx| assistant_view::AssistantPane::new(&qrow, window, cx))
         };
+        let (sidebar_view, sql_editor_view, results_view) = {
+            let qrow = cx.entity();
+            (
+                cx.new(|cx| workspace_view::QrowPart::new(&qrow, Self::sidebar_content, cx)),
+                cx.new(|cx| workspace_view::QrowPart::new(&qrow, Self::sql_editor, cx)),
+                cx.new(|cx| workspace_view::QrowPart::new(&qrow, Self::results_content, cx)),
+            )
+        };
         let composer = assistant_pane.read(cx).composer().clone();
         let assistant_submit = cx.subscribe_in(
             &composer,
@@ -1041,6 +1059,9 @@ impl Qrow {
             assistant: workspace.assistant,
             assistant_state,
             assistant_pane,
+            sidebar_view,
+            sql_editor_view,
+            results_view,
             fonts,
             settings_open: false,
             settings_window: None,
@@ -1182,12 +1203,17 @@ impl Qrow {
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) {
-                    let current = tab.input.read(cx).value().to_string();
-                    if tab.pending_assistant_edit.take().as_deref() != Some(current.as_str()) {
+                    // Only an assistant edit needs the text: it does not
+                    // count as a change of the user.
+                    let assistant_edit = tab
+                        .pending_assistant_edit
+                        .take()
+                        .is_some_and(|edit| tab.input.read(cx).value() == edit.as_str());
+                    if !assistant_edit {
                         tab.revision = tab.revision.saturating_add(1);
                     }
                 }
-                this.changed(cx);
+                this.sql_changed(cx);
             }
         });
         let run_highlight = run_highlight::track(&input, cx);
@@ -1527,12 +1553,29 @@ impl Qrow {
         self.sync_output_typography();
         cx.notify();
     }
+    /// Notes an edit of the SQL of a tab, which the workspace saves after a
+    /// pause. The editor draws the edit itself. The workspace draws again
+    /// only when its save status changes.
+    fn sql_changed(&mut self, cx: &mut Context<Self>) {
+        let was_saved = self.dirty.is_none();
+        self.dirty = Some(Instant::now());
+        let _ = self.wake.try_send(());
+        if was_saved {
+            cx.notify();
+        }
+    }
     fn record_log(tab: &mut Tab, event: LogEvent) {
-        let before: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
-        tab.output.record(event);
-        // A new entry can also remove old groups, from any place in the log.
-        let after: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
-        output::splice_rows(&tab.output_list, &before, &after);
+        match tab.output.record(event) {
+            LogChange::Appended => {
+                let last = tab.output.entries().len() - 1;
+                tab.output_list.splice(last..last, 1);
+            }
+            // A new entry can also remove old groups, from any place in the log.
+            LogChange::Rewritten { before } => {
+                let after: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
+                output::splice_rows(&tab.output_list, &before, &after);
+            }
+        }
     }
     fn record_local_log(tab: &mut Tab, severity: Severity, kind: LogKind, text: impl Into<String>) {
         Self::record_log(

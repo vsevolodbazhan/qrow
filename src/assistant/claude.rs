@@ -16,8 +16,8 @@ use super::{
     MAX_MESSAGE_BYTES, Model, ReasoningEffort, TitleRequest, ToolCall, ToolDefinition, ToolResult,
     Turn, TurnRequest, WORKSPACE_CONTEXT_SEPARATOR, WebSearch, WebSearchStatus,
     codex::{
-        Input, LaunchChild, WriteCommand, clean_title, kill_process_tree, read_stderr_tail,
-        write_protocol_stream,
+        Input, LaunchChild, WriteCommand, WriteFailure, clean_title, kill_process_tree,
+        read_stderr_tail, send_line, write_protocol_stream,
     },
     inbox::{Inbox, Message, ProcessSender, SendError},
     service::ProcessIds,
@@ -34,7 +34,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, RecvTimeoutError, SyncSender, TrySendError},
+        mpsc::{self, SyncSender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -794,25 +794,16 @@ impl ClaudeHarness {
             bytes.len() <= MAX_LINE_BYTES,
             "Claude Code message exceeded the protocol size limit"
         );
-        let writer = process
-            .writer
-            .as_ref()
-            .context("Claude Code input is closed")?;
-        let (completed, completion) = mpsc::sync_channel(1);
-        writer
-            .try_send(WriteCommand { bytes, completed })
-            .map_err(|error| match error {
-                TrySendError::Full(_) => anyhow!("Claude Code input is busy"),
-                TrySendError::Disconnected(_) => anyhow!("Claude Code input is closed"),
-            })?;
-        match completion.recv_timeout(self.request_timeout) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => bail!("{error}{}", diagnostic_suffix(process)),
-            Err(RecvTimeoutError::Timeout) => bail!(
+        match send_line(process.writer.as_ref(), bytes, self.request_timeout) {
+            Ok(()) => Ok(()),
+            Err(WriteFailure::Busy) => bail!("Claude Code input is busy"),
+            Err(WriteFailure::Closed) => bail!("Claude Code input is closed"),
+            Err(WriteFailure::Failed(error)) => bail!("{error}{}", diagnostic_suffix(process)),
+            Err(WriteFailure::Timeout) => bail!(
                 "Claude Code did not accept a message within {} seconds",
                 self.request_timeout.as_secs_f32()
             ),
-            Err(RecvTimeoutError::Disconnected) => {
+            Err(WriteFailure::Stopped) => {
                 bail!("Claude Code input closed{}", diagnostic_suffix(process))
             }
         }

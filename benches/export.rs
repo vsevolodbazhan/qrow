@@ -8,17 +8,24 @@ use std::{process::Command, sync::atomic::AtomicBool, time::Instant};
 fn decode_sample(case: &str) {
     use qrow::connector::{
         hive::decode_columns,
-        t_c_l_i_service::{TColumn, TI64Column, TStringColumn},
+        t_c_l_i_service::{TColumn, TDoubleColumn, TI64Column, TStringColumn},
     };
     let (count, width): (usize, usize) = match case {
-        "narrow" => (10_000, 8),
+        "narrow" | "double" => (10_000, 8),
         "wide" => (1024, 8),
         "null_heavy" => (5000, 64),
         _ => unreachable!(),
     };
     let columns: Vec<_> = (0..width)
         .map(|column| {
-            if case == "narrow" {
+            if case == "double" {
+                TColumn::DoubleVal(TDoubleColumn::new(
+                    (0..count)
+                        .map(|row| (row as f64 * 1.0e-3 + column as f64 / 7.).into())
+                        .collect(),
+                    vec![],
+                ))
+            } else if case == "narrow" {
                 TColumn::I64Val(TI64Column::new(
                     (0..count)
                         .map(|row| i64::MIN + row as i64 + column as i64)
@@ -94,7 +101,7 @@ fn peak_rss(stderr: &[u8]) -> f64 {
 }
 
 fn decoder_probes(executable: &std::path::Path) {
-    for case in ["narrow", "wide", "null_heavy"] {
+    for case in ["narrow", "double", "wide", "null_heavy"] {
         let mut latency = Vec::new();
         let mut peak = Vec::new();
         for round in 0..4 {
@@ -126,7 +133,11 @@ fn decoder_probes(executable: &std::path::Path) {
             &format!("export.decode.{case}.ns_per_cell"),
             median(&mut latency),
             "ns/cell",
-            if case == "narrow" { 400. } else { 50. },
+            if matches!(case, "narrow" | "double") {
+                400.
+            } else {
+                50.
+            },
         );
         report(
             &format!("export.decode.{case}.peak_rss"),

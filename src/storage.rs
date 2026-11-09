@@ -1,3 +1,4 @@
+use crate::sync::LockExt as _;
 use crate::{
     catalog::{CATALOG_VERSION, Catalog},
     model::{WORKSPACE_VERSION, Workspace},
@@ -318,17 +319,16 @@ pub struct MemoryTokenStore(std::sync::Mutex<std::collections::HashMap<Uuid, Zer
 
 impl TokenStore for MemoryTokenStore {
     fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>> {
-        Ok(self.0.lock().unwrap().get(&id).cloned())
+        Ok(self.0.lock_unpoisoned().get(&id).cloned())
     }
     fn save_tokens(&self, id: Uuid, record: &str) -> Result<()> {
         self.0
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .insert(id, Zeroizing::new(record.to_owned()));
         Ok(())
     }
     fn delete_tokens(&self, id: Uuid) -> Result<()> {
-        self.0.lock().unwrap().remove(&id);
+        self.0.lock_unpoisoned().remove(&id);
         Ok(())
     }
 }

@@ -538,6 +538,10 @@ the workspace file. Only your user account can read it. A tool result in the
 copy can contain query rows. When a copy is larger than 8 MB, Qrow keeps its
 newest part. Delete a conversation to delete its copy.
 
+Qrow keeps each conversation that you open in memory until the window
+closes. A long session that opens many large conversations thus uses more
+memory.
+
 A Codex conversation from before this version has no copy. The first time that you
 open it, Qrow loads its latest messages from Codex and saves them. Tool call
 cards from before this version do not come back. The demo does not save

@@ -192,6 +192,22 @@ impl Qrow {
             .into_any_element()
     }
 
+    /// Add `events` to the Logs of the tab at `index`, like the events of its
+    /// worker. Performance probes fill Logs through this.
+    #[doc(hidden)]
+    pub fn record_tab_logs(
+        &mut self,
+        index: usize,
+        events: Vec<crate::logs::LogEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = &mut self.tabs[index];
+        for event in events {
+            Self::record_log(tab, event);
+        }
+        cx.notify();
+    }
+
     /// Expand or collapse the code block of the Logs entry `id` at `index`.
     fn toggle_output_entry(&mut self, id: u64, index: usize, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];

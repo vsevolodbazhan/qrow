@@ -1,5 +1,6 @@
 use super::{Event, LogEvent, LogKind, Runner, Severity, format_duration};
 use crate::connector::{Completion, wait_for_completion};
+use crate::sync::LockExt as _;
 use anyhow::Result;
 use std::{
     sync::atomic::Ordering,
@@ -17,8 +18,7 @@ impl Runner {
         }
         let active = self
             .idle_guard
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .as_ref()
             .and_then(|guard| guard());
         // Capture once at the idle deadline. A later refresh must not extend
@@ -98,20 +98,20 @@ impl Runner {
 
     fn keep_alive(&mut self, sql: &str) -> Result<()> {
         anyhow::ensure!(!self.stopped.load(Ordering::SeqCst), "Disconnect requested");
-        let previous_target = self.target.lock().unwrap().take();
+        let previous_target = self.target.lock_unpoisoned().take();
         let result = (|| -> Result<()> {
-            let cancellation = self.session.as_mut().unwrap().execute_keep_alive(sql)?;
-            *self.target.lock().unwrap() = Some(cancellation.clone());
+            let cancellation = self.session_mut()?.execute_keep_alive(sql)?;
+            *self.target.lock_unpoisoned() = Some(cancellation.clone());
             if self.cancelled.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {
                 cancellation.cancel()?;
             }
-            match wait_for_completion(self.session.as_mut().unwrap().as_mut(), None)? {
+            match wait_for_completion(self.session_mut()?, None)? {
                 Completion::Finished { .. } => Ok(()),
                 Completion::Cancelled => anyhow::bail!("Keep-alive was cancelled"),
             }
         })();
-        let closed = self.session.as_mut().unwrap().close_keep_alive();
-        *self.target.lock().unwrap() = previous_target;
+        let closed = self.session_mut()?.close_keep_alive();
+        *self.target.lock_unpoisoned() = previous_target;
         result.and(closed)
     }
 }

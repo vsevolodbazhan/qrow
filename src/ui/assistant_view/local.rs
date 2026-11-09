@@ -122,7 +122,7 @@ fn fingerprint(entries: &[TranscriptEntry], older_cursor: Option<&String>) -> u6
     for entry in entries {
         entry.id.hash(&mut hasher);
         (entry.speaker as u8).hash(&mut hasher);
-        entry.text().as_str().hash(&mut hasher);
+        entry.text().hash(&mut hasher);
         entry.turn_id.hash(&mut hasher);
         entry.detail.hash(&mut hasher);
         if let Some(tool) = &entry.tool {
@@ -288,6 +288,13 @@ impl Qrow {
                 this.save_transcripts(None);
             });
         }));
+    }
+
+    /// Save the changed transcripts now, like the save timer. Performance
+    /// probes measure the save through this.
+    #[doc(hidden)]
+    pub fn save_assistant_transcripts(&mut self) {
+        self.save_transcripts(None);
     }
 
     /// Saves the transcripts that changed since Qrow last saved them: all

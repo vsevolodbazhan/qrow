@@ -945,7 +945,20 @@ fn every_refresh_sends_its_entries() {
     let server = warehouse();
     let mut h = Harness::new(server, profile(), None);
     h.refresh(Scope::Connection);
-    let entries: Vec<_> = h.worker.logs.try_iter().map(|(_, event)| event).collect();
+    // The worker publishes the idle status before the finish entry, so wait
+    // for that entry.
+    let mut entries = Vec::new();
+    while entries
+        .last()
+        .is_none_or(|entry: &qrow::logs::LogEvent| entry.kind != LogKind::SchemaRefreshFinished)
+    {
+        let (_, event) = h
+            .worker
+            .logs
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the entries of the refresh");
+        entries.push(event);
+    }
     let texts: Vec<_> = entries.iter().map(|entry| entry.text.as_str()).collect();
     assert!(
         texts[0].starts_with("Started a schema refresh of the connection"),

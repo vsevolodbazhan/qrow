@@ -963,6 +963,14 @@ for line in sys.stdin:
                 finish_turn(thread, turn, f"End of {message}")
 
             threading.Thread(target=send_bursts, daemon=True).start()
+        elif message.startswith("Stream a large reply"):
+            # About 400 KB in 400 deltas of 1 KB, like a long generated
+            # script. Each delta has one paragraph.
+            for number in range(400):
+                delta = f"part{number:03} " + "synthetic text " * 67 + "\n\n"
+                send({"method": "item/agentMessage/delta",
+                      "params": {"threadId": thread_id, "turnId": turn_id, "delta": delta}})
+            finish_turn(thread_id, turn_id, f"End of {message}")
         elif message.startswith("Stream a long reply"):
             # About 16 KB in 800 deltas, like a long streamed answer. Qrow
             # buffers at most 1,024 events and drops the deltas after that.

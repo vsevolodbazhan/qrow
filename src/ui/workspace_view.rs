@@ -532,25 +532,12 @@ impl Qrow {
             return self.result_tabs(cx).into_any_element();
         }
         let content = if self.tabs[self.active].panel.selected == Panel::Output {
+            // Logs rows register their selectable text in each render, which
+            // notifies the view that renders them. Logs thus stays in Qrow,
+            // not in a view of its own.
             self.output_panel(cx)
         } else {
-            let table = &self.tabs[self.active].shown_result().table;
-            // Without a result set the toolbar has nothing to count, export,
-            // or pin.
-            let has_result = !table.read(cx).delegate().columns.is_empty();
-            results::selection_boundary(table)
-                .size_full()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .when(has_result, |el| el.child(self.result_toolbar(cx)))
-                .child(div().flex_1().min_h_0().min_w_0().child(results::view(
-                    table,
-                    self.dialog_open(),
-                    self.settings.ui_scale,
-                    cx,
-                )))
-                .into_any_element()
+            changed_view(self.results_view.clone().into(), window)
         };
         v_flex()
             .size_full()
@@ -584,6 +571,27 @@ impl Qrow {
                     )
                     .child(content),
             )
+            .into_any_element()
+    }
+
+    /// The result toolbar and the result table of the active tab.
+    pub(super) fn results_content(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let table = &self.tabs[self.active].shown_result().table;
+        // Without a result set the toolbar has nothing to count, export,
+        // or pin.
+        let has_result = !table.read(cx).delegate().columns.is_empty();
+        results::selection_boundary(table)
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .when(has_result, |el| el.child(self.result_toolbar(cx)))
+            .child(div().flex_1().min_h_0().min_w_0().child(results::view(
+                table,
+                self.dialog_open(),
+                self.settings.ui_scale,
+                cx,
+            )))
             .into_any_element()
     }
 
@@ -1284,7 +1292,7 @@ impl Qrow {
                                         .min_h_0()
                                         .overflow_hidden()
                                         .when(!self.assistant_maximized(), |el| {
-                                            el.child(changed_view(cx.entity().into(), window))
+                                            el.child(cx.entity().into_any_element())
                                         }),
                                 )
                                 .when(assistant_shown || animated_assistant_width > px(0.), |el| {
@@ -1404,20 +1412,6 @@ impl Render for Qrow {
             window,
             cx,
         );
-        let editor = Editor::new(&self.tabs[self.active].input)
-            .smooth_caret(self.settings.editor_smooth_caret)
-            .smooth_scrolling(self.settings.editor_smooth_scrolling)
-            .appearance(false)
-            .context_menu_with_capabilities(|_, capabilities, _, cx| {
-                gpui_kit::component::native_menu::NativeMenu::from(format_sql::editor_menu(
-                    capabilities,
-                    cx.read_from_clipboard().is_some(),
-                ))
-            })
-            .font_family(self.settings.editor_font_family.clone())
-            .text_size(self.ui_px(self.settings.editor_font_size))
-            .size_full()
-            .aria_label("SQL Editor");
         h_flex()
             .size_full()
             .items_stretch()
@@ -1433,14 +1427,7 @@ impl Render for Qrow {
                         .opacity(sidebar_content.opacity())
                         .track_focus(&self.sidebar_focus)
                         .size_full()
-                        .map(|el| match self.sidebar_panel {
-                            SidebarPanel::Connections => {
-                                el.child(self.connections(window, cx).into_any_element())
-                            }
-                            SidebarPanel::SignIns => {
-                                el.child(self.sign_ins_sidebar(cx).into_any_element())
-                            }
-                        })
+                        .child(changed_view(self.sidebar_view.clone().into(), window))
                         .into_any_element(),
                     cx,
                 ))
@@ -1477,10 +1464,9 @@ impl Render for Qrow {
                             .min_w_0()
                             .line_height(relative(self.settings.editor_line_height))
                             .child(
-                                div()
-                                    .opacity(editor_content.opacity())
-                                    .size_full()
-                                    .child(editor),
+                                div().opacity(editor_content.opacity()).size_full().child(
+                                    changed_view(self.sql_editor_view.clone().into(), window),
+                                ),
                             ),
                     )
                     .when(results_settled, |el| el.child(self.splitter(false, cx)))
@@ -1499,6 +1485,75 @@ impl Render for Qrow {
                             .child(self.query_panel(window, cx)),
                     ),
             )
+    }
+}
+
+/// A part of the workspace in a view of its own. Qrow itself renders in each
+/// frame of the window, but a part renders again only when Qrow notifies or
+/// when the state of one of its elements changes. Thus a keystroke in the
+/// editor does not render the sidebar again, and a keystroke in the message
+/// field does not render the editor again.
+pub(super) struct QrowPart {
+    qrow: WeakEntity<Qrow>,
+    render: fn(&Qrow, &mut Window, &mut Context<Qrow>) -> AnyElement,
+    _observe: Subscription,
+}
+
+impl QrowPart {
+    /// Qrow creates its parts while Qrow itself is not ready, so this does
+    /// not read Qrow.
+    pub(super) fn new(
+        qrow: &Entity<Qrow>,
+        render: fn(&Qrow, &mut Window, &mut Context<Qrow>) -> AnyElement,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            qrow: qrow.downgrade(),
+            render,
+            _observe: cx.observe(qrow, |_, _, cx| cx.notify()),
+        }
+    }
+}
+
+impl Render for QrowPart {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let render = self.render;
+        self.qrow
+            .update(cx, |qrow, cx| render(qrow, window, cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
+impl Qrow {
+    /// The panel of the sidebar: the connections or the sign-ins.
+    pub(super) fn sidebar_content(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match self.sidebar_panel {
+            SidebarPanel::Connections => self.connections(window, cx).into_any_element(),
+            SidebarPanel::SignIns => self.sign_ins_sidebar(cx).into_any_element(),
+        }
+    }
+
+    /// The SQL editor of the active tab.
+    pub(super) fn sql_editor(&self, _: &mut Window, _: &mut Context<Self>) -> AnyElement {
+        Editor::new(&self.tabs[self.active].input)
+            .smooth_caret(self.settings.editor_smooth_caret)
+            .smooth_scrolling(self.settings.editor_smooth_scrolling)
+            .appearance(false)
+            .context_menu_with_capabilities(|_, capabilities, _, cx| {
+                gpui_kit::component::native_menu::NativeMenu::from(format_sql::editor_menu(
+                    capabilities,
+                    cx.read_from_clipboard().is_some(),
+                ))
+            })
+            .font_family(self.settings.editor_font_family.clone())
+            .text_size(self.ui_px(self.settings.editor_font_size))
+            .size_full()
+            .aria_label("SQL Editor")
+            .into_any_element()
     }
 }
 

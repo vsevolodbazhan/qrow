@@ -1,5 +1,6 @@
 //! At most two owned helper handles, retained through actual thread exit.
 use super::{segment_download::Control, transport::Transport};
+use crate::sync::LockExt as _;
 use anyhow::{Result, ensure};
 use std::{
     sync::{Arc, Mutex},
@@ -23,7 +24,7 @@ impl Threads {
         task: impl FnOnce() + Send + 'static,
     ) -> Result<u64> {
         // Cancellation can observe idle only after this handle is published.
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         ensure!(
             state.handles.len() < 2,
             "Trino segment thread limit reached"
@@ -45,7 +46,7 @@ impl Threads {
         Ok(id)
     }
     fn take_finished(&self, id: Option<u64>) -> Option<thread::JoinHandle<()>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         let index = state
             .handles
             .iter()
@@ -54,8 +55,7 @@ impl Threads {
     }
     fn contains(&self, id: Option<u64>) -> bool {
         self.state
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .handles
             .iter()
             .any(|(key, _)| id.is_none_or(|id| *key == id))

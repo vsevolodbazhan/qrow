@@ -640,8 +640,8 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 
 | Suite | Probes |
 | --- | --- |
-| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding and CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
-| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
+| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding of narrow, double, wide, and null-heavy data. CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
+| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns. Opening and typing into a tab with 1 MB of SQL. A keystroke in the editor of the demo, and of a workspace with 20 connections and 60 tabs. A frame, a scroll step, and a search keystroke of a schema tree with 2,000 tables. A search keystroke in a catalog with 100,000 tables: the input frame, and all the work until the tree shows the result. A batch of 500 Logs entries in a tab that keeps 20,000 entries. An assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a reply of 400 KB, a transcript save without changes, and a keystroke in the message field. [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probes draw their frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
 | `perf-e2e` | The time from **Run** to the first result row and to the next page. |
 | `perf-kyuubi` | Kyuubi export throughput and peak memory for each preset. |
 | `perf-postgres` | Postgres export throughput and peak memory for each preset. Normal protocol and server CSV `COPY` comparison. |
@@ -693,10 +693,11 @@ the median of three measured samples after one warm-up. Latency is per MiB
 of cell payload. The memory probe uses the largest operating-system peak
 resident set size of the three samples. The CSV cases also report the
 spool-to-CSV size ratio. The decoder cases use the same narrow, wide, and
-null-heavy schemas and exclude input cloning from their timed interval.
+null-heavy schemas, and a double case of 8 columns of floating-point
+numbers. They exclude input cloning from their timed interval.
 
-Export budgets allow large regressions before failure. Integer decoding
-must stay below 400 ns per cell. Wide and null-heavy decoding must stay below
+Export budgets allow large regressions before failure. Integer and double
+decoding must stay below 400 ns per cell. Wide and null-heavy decoding must stay below
 50 ns per cell. Writer latency limits are 400 ms/MiB for narrow data and
 800 ms/MiB for null-heavy data. Wide CSV and Parquet limits are 20 and
 10 ms/MiB. Each process must stay below 384 MiB peak resident set size.

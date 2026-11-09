@@ -1,6 +1,7 @@
 //! Active export writers participate in application shutdown. Completion is
 //! signalled on the writing thread, so shutdown does not depend on UI callbacks.
 
+use crate::sync::LockExt as _;
 use std::{
     io,
     sync::{
@@ -66,10 +67,10 @@ impl Jobs {
         on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
         profile: Option<(uuid::Uuid, u8)>,
     ) -> io::Result<Writer> {
-        let mut registry = self.inner.lock().unwrap();
+        let mut registry = self.inner.lock_unpoisoned();
         registry
             .jobs
-            .retain(|job| *job.remaining.lock().unwrap() > 0);
+            .retain(|job| *job.remaining.lock_unpoisoned() > 0);
         // Admission can precede the captured producer callback. Stages with
         // the same cancellation flag share one connection permit.
         if on_cancel.is_none() || profile.is_some() {
@@ -78,10 +79,10 @@ impl Jobs {
                     if profile.is_some_and(|(id, _)| job.profile != Some(id)) {
                         return Err(io::Error::other("The export connection changed."));
                     }
-                    let mut remaining = job.remaining.lock().unwrap();
+                    let mut remaining = job.remaining.lock_unpoisoned();
                     if *remaining > 0 {
                         if let Some(callback) = &on_cancel {
-                            let mut existing = job.on_cancel.lock().unwrap();
+                            let mut existing = job.on_cancel.lock_unpoisoned();
                             if existing.is_some() {
                                 return Err(io::Error::other(
                                     "This export already owns a download.",
@@ -137,16 +138,16 @@ impl Jobs {
     }
 
     pub fn active_count(&self) -> usize {
-        let mut registry = self.inner.lock().unwrap();
+        let mut registry = self.inner.lock_unpoisoned();
         registry
             .jobs
-            .retain(|job| *job.remaining.lock().unwrap() > 0);
+            .retain(|job| *job.remaining.lock_unpoisoned() > 0);
         registry.jobs.len()
     }
 
     /// Cancel the current writers without preventing later work if quit fails.
     pub fn cancel(&self) {
-        let jobs = self.inner.lock().unwrap().jobs.clone();
+        let jobs = self.inner.lock_unpoisoned().jobs.clone();
         for job in &jobs {
             job.request_cancel();
         }
@@ -156,7 +157,7 @@ impl Jobs {
     /// Returns false when a destination remains blocked after the deadline.
     pub fn cancel_and_wait(&self, timeout: Duration) -> bool {
         let jobs = {
-            let mut registry = self.inner.lock().unwrap();
+            let mut registry = self.inner.lock_unpoisoned();
             registry.stopping = true;
             for job in &registry.jobs {
                 job.cancel.store(true, Ordering::Relaxed);
@@ -168,7 +169,7 @@ impl Jobs {
         }
         let deadline = Instant::now() + timeout;
         for job in jobs {
-            let mut remaining_tasks = job.remaining.lock().unwrap();
+            let mut remaining_tasks = job.remaining.lock_unpoisoned();
             while *remaining_tasks > 0 {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -188,7 +189,7 @@ impl Jobs {
 impl State {
     fn request_cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-        let callback = self.on_cancel.lock().unwrap().clone();
+        let callback = self.on_cancel.lock_unpoisoned().clone();
         if let Some(callback) = callback {
             callback();
         }
@@ -197,7 +198,7 @@ impl State {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        *self.state.remaining.lock().unwrap() -= 1;
+        *self.state.remaining.lock_unpoisoned() -= 1;
         self.state.changed.notify_all();
     }
 }
@@ -205,7 +206,7 @@ impl Drop for Writer {
 impl Writer {
     /// Register another stage of this job before the current stage ends.
     pub(crate) fn fork(&self) -> Self {
-        *self.state.remaining.lock().unwrap() += 1;
+        *self.state.remaining.lock_unpoisoned() += 1;
         Self {
             state: self.state.clone(),
         }

@@ -12,6 +12,7 @@ use super::{
     Catalog, CatalogConfig, CatalogIdentity, MetadataRows, Scope, Unfinished, now, parse_columns,
     parse_relations, parse_schemas,
 };
+use crate::sync::LockExt as _;
 use crate::{
     connector::{
         Cancellation, Connector, MetadataRequest, POLL_INTERVAL, QueryError, QueryState, Session,
@@ -258,8 +259,7 @@ impl CatalogWorker {
         let running = self.running.clone();
         Arc::new(move || {
             running
-                .lock()
-                .unwrap()
+                .lock_unpoisoned()
                 .filter(|(_, runner)| *runner == member)
                 .map(|(batch, _)| batch)
         })
@@ -294,7 +294,7 @@ impl CatalogWorker {
     /// Stop the refresh of `member`, if it runs, and remove its waiting
     /// refreshes. The refreshes of other members continue.
     pub fn stop(&self, member: Uuid) {
-        let running = *self.running.lock().unwrap();
+        let running = *self.running.lock_unpoisoned();
         if let Some((batch, runner)) = running
             && runner == member
         {
@@ -309,7 +309,7 @@ impl CatalogWorker {
     /// Cancel the request in progress, if it belongs to `batch` or `batch`
     /// is `None`.
     fn cancel_target(&self, batch: Option<u64>) {
-        let target = self.target.lock().unwrap().clone();
+        let target = self.target.lock_unpoisoned().clone();
         if let Some((current, cancellation)) = target
             && batch.is_none_or(|batch| batch == current)
         {
@@ -323,7 +323,7 @@ impl CatalogWorker {
     /// Apply edited settings or members. A private catalog of another
     /// server or user is cleared. A member that leaves stops its refreshes.
     pub fn configure(&self, config: CatalogConfig) {
-        let mut current = self.config.lock().unwrap();
+        let mut current = self.config.lock_unpoisoned();
         if current.identity() != config.identity() {
             self.cancel();
         } else {
@@ -495,7 +495,7 @@ fn watchdog(deadline: Instant, target: Target) -> mpsc::Sender<()> {
         }
         // Release the lock before the network call, so `cancel` and
         // `shutdown` on the window thread do not wait for it.
-        let cancellation = target.lock().unwrap().clone();
+        let cancellation = target.lock_unpoisoned().clone();
         if let Some((_, cancellation)) = cancellation {
             let _ = cancellation.cancel();
         }
@@ -538,7 +538,7 @@ impl Runner {
                 let scope = request.scope;
                 self.profile = profile;
                 self.batch = NEXT_BATCH.fetch_add(1, Ordering::Relaxed);
-                *self.running.lock().unwrap() = Some((self.batch, self.profile.id));
+                *self.running.lock_unpoisoned() = Some((self.batch, self.profile.id));
                 self.status = Status {
                     active: Some(scope.clone()),
                     runner: Some(self.profile.id),
@@ -568,7 +568,7 @@ impl Runner {
                 self.deadline = None;
                 self.automatic = false;
                 let cancelled_all = self.cancelled.load(Ordering::SeqCst) == CANCEL_ALL;
-                *self.running.lock().unwrap() = None;
+                *self.running.lock_unpoisoned() = None;
                 let _ = self.cancelled.compare_exchange(
                     self.batch,
                     0,
@@ -1147,7 +1147,7 @@ impl Runner {
         let started = Instant::now();
         let result = self.read_rows(request);
         let duration = started.elapsed();
-        *self.target.lock().unwrap() = None;
+        *self.target.lock_unpoisoned() = None;
         self.checkpoint()?;
         let label = describe_request(request);
         match result {
@@ -1195,8 +1195,7 @@ impl Runner {
                         let flag = cancelled.load(Ordering::SeqCst);
                         flag == CANCEL_ALL
                             || running
-                                .lock()
-                                .unwrap()
+                                .lock_unpoisoned()
                                 .is_some_and(|(batch, _)| flag == batch)
                     }),
                     Arc::new(|_| {}),
@@ -1217,7 +1216,7 @@ impl Runner {
         }
         let session = self.session();
         let cancellation = session.execute_metadata(request)?;
-        *self.target.lock().unwrap() = Some((self.batch, cancellation.clone()));
+        *self.target.lock_unpoisoned() = Some((self.batch, cancellation.clone()));
         if self.cancel_requested() {
             cancellation.cancel()?;
         }

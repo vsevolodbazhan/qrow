@@ -34,6 +34,43 @@ pub(in crate::assistant) struct WriteCommand {
     pub(in crate::assistant) completed: SyncSender<std::result::Result<(), String>>,
 }
 
+/// How a line for a harness failed to reach its input.
+pub(in crate::assistant) enum WriteFailure {
+    /// The writer thread has a line that it did not write yet.
+    Busy,
+    /// The input closed before the line reached the writer thread.
+    Closed,
+    /// The writer thread could not write the line.
+    Failed(String),
+    /// The harness did not read the line in time.
+    Timeout,
+    /// The writer thread stopped before it reported the line.
+    Stopped,
+}
+
+/// Gives one encoded line to the writer thread of a harness, and waits up
+/// to `timeout` until the harness reads it.
+pub(in crate::assistant) fn send_line(
+    writer: Option<&SyncSender<WriteCommand>>,
+    bytes: Vec<u8>,
+    timeout: Duration,
+) -> std::result::Result<(), WriteFailure> {
+    let writer = writer.ok_or(WriteFailure::Closed)?;
+    let (completed, completion) = mpsc::sync_channel(1);
+    writer
+        .try_send(WriteCommand { bytes, completed })
+        .map_err(|error| match error {
+            TrySendError::Full(_) => WriteFailure::Busy,
+            TrySendError::Disconnected(_) => WriteFailure::Closed,
+        })?;
+    match completion.recv_timeout(timeout) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(WriteFailure::Failed(error)),
+        Err(RecvTimeoutError::Timeout) => Err(WriteFailure::Timeout),
+        Err(RecvTimeoutError::Disconnected) => Err(WriteFailure::Stopped),
+    }
+}
+
 pub(in crate::assistant) fn write_protocol_stream(
     mut stdin: ChildStdin,
     commands: &Receiver<WriteCommand>,
