@@ -4,6 +4,7 @@ mod assistant_tools;
 mod assistant_view;
 mod button_pair;
 mod catalog_tree;
+mod comments;
 mod connection_form;
 mod dbt;
 mod dbt_details;
@@ -78,6 +79,7 @@ actions!(
     [
         RunQuery,
         FormatSql,
+        ToggleComment,
         RunAndExport,
         SendAssistantMessage,
         NewTab,
@@ -138,6 +140,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-enter", RunQuery, None),
         KeyBinding::new("alt-secondary-l", FormatSql, None),
+        KeyBinding::new("secondary-/", ToggleComment, Some("SqlEditor")),
         KeyBinding::new(
             "secondary-enter",
             SendAssistantMessage,

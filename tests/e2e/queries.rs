@@ -619,3 +619,20 @@ fn numbered_shortcuts_keep_query_results_with_their_tabs(cx: &mut TestAppContext
     app.press(cx, "secondary-9");
     app.wait_cell(cx, 0, 1, "222");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn toggle_comment_runs_uncommented_sql(cx: &mut TestAppContext) {
+    let sql = "-- SELECT\n-- '日本語😀' AS value";
+    let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-/");
+    app.wait_until(cx, "uncommented query", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == "SELECT\n'日本語😀' AS value"
+    });
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀");
+}

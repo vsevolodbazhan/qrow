@@ -254,6 +254,18 @@ SQL, Logs history, and downloaded rows remain available after a query or
 fetch failure. Reconnection requires an explicit Run and does not restore
 session settings from earlier SQL statements.
 
+## Comment SQL
+
+Select code and press **⌘/** on macOS or **Ctrl+/** on Linux to toggle line
+comments. You can also right-click in the editor and select **Toggle line comment**.
+With no selection, the command changes the current line.
+
+The command adds `-- ` after the indentation of each selected line that is not
+blank. If all these lines already start with `--`, it removes one comment
+prefix and one space after it, if present. A selection that ends at the start
+of a line does not change that line. Blank lines stay the same.
+Press **⌘Z** on macOS or **Ctrl+Z** on Linux once to undo the command.
+
 ## Format SQL
 
 Right-click in the SQL editor and choose **Format**, or press **⌥⌘L**.

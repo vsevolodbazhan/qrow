@@ -133,6 +133,7 @@ pub(super) fn editor_menu(
             MenuItem::action("Show Code Actions", ToggleCodeActions)
                 .disabled(!(editable && capabilities.has_code_actions())),
             MenuItem::action("Format", FormatSql).disabled(!editable),
+            MenuItem::action("Toggle line comment", ToggleComment).disabled(!editable),
             MenuItem::separator(),
             MenuItem::action("Cut", Cut).disabled(!(editable && capabilities.is_copyable())),
             MenuItem::action("Copy", Copy).disabled(!capabilities.is_copyable()),
@@ -190,6 +191,7 @@ mod tests {
                     "Go to Definition",
                     "Show Code Actions",
                     "Format",
+                    "Toggle line comment",
                     "---",
                     "Cut",
                     "Copy",
@@ -198,14 +200,19 @@ mod tests {
                     "Select All"
                 ]
             );
+            assert_eq!(entries[2].1, expected[0]);
             assert_eq!(
-                [entries[2].1, entries[4].1, entries[5].1, entries[6].1],
+                [entries[3].1, entries[5].1, entries[6].1, entries[7].1],
                 expected
             );
             let MenuItem::Action { action, .. } = &menu.items[2] else {
                 unreachable!()
             };
             assert!(action.as_any().is::<crate::ui::FormatSql>());
+            let MenuItem::Action { action, .. } = &menu.items[3] else {
+                unreachable!()
+            };
+            assert!(action.as_any().is::<crate::ui::ToggleComment>());
         }
     }
 }
