@@ -620,10 +620,14 @@ impl AssistantPane {
                             .flex_shrink_0()
                             .icon(IconName::Plus)
                             .accessibility_label("New conversation")
-                            .map(|button| {
+                            .map(|mut button| {
                                 // ⌘T makes a conversation only while the pane covers the tabs.
                                 if qrow.assistant_state.maximized {
-                                    button.tooltip_with_action("New conversation", &NewTab, None)
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("New conversation", "")
+                                            .for_action_in(&NewTab, qrow.focus.clone()),
+                                    );
+                                    button
                                 } else {
                                     button.tooltip("New conversation")
                                 }
@@ -664,12 +668,19 @@ impl AssistantPane {
                             } else {
                                 "Maximize"
                             })
-                            .map(|button| {
+                            .map(|mut button| {
                                 if qrow.assistant_state.maximized {
-                                    button.tooltip_with_action("Minimize", &MinimizeAssistant, None)
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("Minimize", "")
+                                            .for_action_in(&MinimizeAssistant, qrow.focus.clone()),
+                                    );
                                 } else {
-                                    button.tooltip_with_action("Maximize", &MaximizeAssistant, None)
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("Maximize", "")
+                                            .for_action_in(&MaximizeAssistant, qrow.focus.clone()),
+                                    );
                                 }
+                                button
                             })
                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
                                 this.set_assistant_maximized(!this.assistant_state.maximized, window, cx);

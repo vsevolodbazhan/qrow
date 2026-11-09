@@ -389,6 +389,48 @@ fn workspace_shortcuts_act_on_what_the_maximized_assistant_shows(cx: &mut TestAp
     app.wait_for(cx, "assistant-thread-list");
     let status = app.update(cx, |_, cx| app.status(cx));
 
+    // The New Conversation tooltip names ⌘T, which now starts a conversation.
+    app.hover(cx, "assistant-new");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            crate::support::label(window, "status-tooltip-title").as_deref(),
+            Some("New conversation")
+        );
+        assert_eq!(
+            crate::support::label(window, "status-tooltip-shortcut").as_deref(),
+            Some(if cfg!(target_os = "macos") {
+                "⌘T"
+            } else {
+                "Ctrl+T"
+            })
+        );
+        crate::support::assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+    });
+
+    // The New Conversation tooltip names ⌘T, which now starts a conversation.
+    app.hover(cx, "assistant-new");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            crate::support::label(window, "status-tooltip-title").as_deref(),
+            Some("New conversation")
+        );
+        assert_eq!(
+            crate::support::label(window, "status-tooltip-shortcut").as_deref(),
+            Some(if cfg!(target_os = "macos") {
+                "⌘T"
+            } else {
+                "Ctrl+T"
+            })
+        );
+        crate::support::assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+    });
+
     // ⌘1 to ⌘9 select a conversation by its position in the list.
     app.press(cx, "secondary-2");
     app.wait_label(cx, "Conversation title: Older conversation");
@@ -442,4 +484,34 @@ fn workspace_shortcuts_act_on_what_the_maximized_assistant_shows(cx: &mut TestAp
     app.press(cx, "secondary-b");
     app.wait_label(cx, "Maximize");
     app.wait_for(cx, "add-connection");
+}
+
+#[gpui_kit::test]
+fn assistant_size_tooltips_show_the_shortcut_in_both_states(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    for title in ["Maximize", "Minimize", "Maximize"] {
+        app.hover(cx, "assistant-maximize");
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, cx| {
+            assert_eq!(
+                crate::support::label(window, "status-tooltip-title").as_deref(),
+                Some(title)
+            );
+            assert_eq!(
+                crate::support::label(window, "status-tooltip-shortcut").as_deref(),
+                Some(if cfg!(target_os = "macos") {
+                    "⇧⌘R"
+                } else {
+                    "Ctrl+Shift+R"
+                })
+            );
+            crate::support::assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+        });
+        app.press(cx, "secondary-shift-r");
+        app.wait_gone(cx, "status-tooltip-shortcut");
+    }
 }
