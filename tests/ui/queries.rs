@@ -1,6 +1,7 @@
 use crate::support::{
     MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot,
-    assert_tooltip_header_center, bounds_of, connection_row, label, labelled,
+    assert_tooltip_header_center, assert_tooltip_status_below, bounds_of, connection_row, label,
+    labelled,
 };
 use gpui_kit::component::{ActiveTheme, input::EMPHASIS_OPACITY};
 use gpui_kit::test::TestWindowExt;
@@ -315,12 +316,12 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
         app.update(cx, |window, cx| window.hover(id, cx));
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
-        app.update(cx, |window, cx| {
+        app.update(cx, |window, _| {
             assert_eq!(
                 label(window, "status-tooltip-status").as_deref(),
                 Some("Connecting")
             );
-            assert_tooltip_header_center(window, cx, "status-tooltip-status");
+            assert_tooltip_status_below(window);
         });
     };
     hover(format!("query-status-{query}"), &app, cx);
@@ -360,8 +361,8 @@ fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_theme(cx: &mu
         app.hover_labelled(cx, &name);
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
-        app.update(cx, |window, cx| {
-            assert_tooltip_header_center(window, cx, "status-tooltip-status");
+        app.update(cx, |window, _| {
+            assert_tooltip_status_below(window);
             assert_eq!(
                 label(window, "status-tooltip-title").as_deref(),
                 Some(name.as_str())

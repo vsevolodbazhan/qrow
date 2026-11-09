@@ -35,6 +35,17 @@ Peer surfaces must look and behave the same.
 
 - **Toolbars.** The Logs, Result, and Activity toolbars have the same height.
   Counts are tags (chips). Actions are icon buttons with tooltips.
+- **Tooltips.** All tooltips have one look. The title has regular weight.
+  The title has medium weight only when secondary lines (status, detail, or
+  metadata) are below it. Status and details always go below the title. The
+  right side of the title is only for the keyboard shortcut. A command with a
+  shortcut shows it there. Use `StatusTooltip` for a shortcut or for
+  secondary lines, and the plain GPUI Kit tooltip for other tooltips.
+- **Tooltip names.** The tooltip of an icon-only button is equal to its
+  accessible name. An accessible name can add the item name when many
+  buttons are the same, for example "Close Query 1" for "Close tab". Use
+  sentence case. Name the action and its object, for example "Copy code" and
+  "Maximize assistant", not only "Copy". Do not put an ellipsis in a tooltip.
 - **Cut text.** Text cut with an ellipsis shows its full text in a tooltip on
   hover. Use the same tooltip, delay, and "only when cut" check everywhere, and
   measure in the font weight that is drawn. Tooltips that also show state (for

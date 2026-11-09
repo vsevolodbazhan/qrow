@@ -859,19 +859,28 @@ fn results_minimize_restores_height_and_applies_to_all_tabs(cx: &mut TestAppCont
     assert!(height < original);
     app.click(cx, "toggle-results");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Expand results")
+        );
         assert!(window.find("sql-editor").bounds().size.height > height);
         assert!(window.try_find("editor-splitter").is_none());
         assert!(window.find("results-panel-tab").visible());
     });
     app.press(cx, "secondary-t");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Expand results")
+        );
     });
     app.click(cx, "sql-editor");
     app.press(cx, "secondary-j");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Collapse results")
+        );
         assert_eq!(window.find("sql-editor").bounds().size.height, height);
         assert!(window.find("editor-splitter").visible());
     });
@@ -898,7 +907,10 @@ fn results_minimized_state_survives_restart(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let reopened = TestApp::launch(cx, app.saved());
     reopened.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Expand results")
+        );
         assert!(window.try_find("editor-splitter").is_none());
     });
     reopened.click(cx, "toggle-results");
@@ -917,7 +929,10 @@ fn results_toggle_does_not_change_layout_behind_settings(cx: &mut TestAppContext
     app.press(cx, "secondary-j");
     app.press(cx, "escape");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Collapse results")
+        );
     });
 }
 

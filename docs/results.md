@@ -46,10 +46,10 @@ visible when a query returns columns but no rows.
 
 ## Minimize the panel
 
-Press **⌘J**, select **View → Toggle results**, or use **Collapse**
+Press **⌘J**, select **View → Toggle results**, or use **Collapse results**
 at the right end of the result tabs. The editor fills the available height.
 The Logs tab and the result tabs remain visible. Selecting a tab restores the
-panel. Use **Expand** or **⌘J** to restore the previous panel height.
+panel. Use **Expand results** or **⌘J** to restore the previous panel height.
 
 The minimized state applies to all query tabs and is saved after restart.
 Running a query restores the panel. Minimizing the panel keeps its results
@@ -161,7 +161,7 @@ background. Text above 10 MiB must be saved to a file.
 
 ## Export results
 
-Click **Export results…** in the Results toolbar. The button is available
+Click **Export results** in the Results toolbar. The button is available
 when the result has columns. Choose a format, then **Save**. The export
 includes all rows and columns. Grid selection does not limit the export.
 Use the [copy commands](#browse-and-copy) to copy selected cells.

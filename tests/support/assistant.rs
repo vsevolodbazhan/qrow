@@ -532,7 +532,7 @@ pub fn assert_copyable_code_blocks(app: &TestApp, cx: &mut TestAppContext) {
             buttons.sort_by(|a, b| a.bounds().top().partial_cmp(&b.bounds().top()).unwrap());
             assert_eq!(buttons.len(), 2);
             for button in &buttons {
-                assert_eq!(button.label(), Some("Copy"));
+                assert_eq!(button.label(), Some("Copy code"));
                 let size = button.bounds().size;
                 assert!(
                     f32::from(size.width - size.height).abs() <= 1.,

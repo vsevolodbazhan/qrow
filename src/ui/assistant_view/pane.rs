@@ -571,6 +571,11 @@ impl AssistantPane {
                 |conversation| conversation.title.clone(),
             );
         let title_generating = qrow.assistant_title_generating(selected);
+        let threads_label = if show_threads {
+            "Hide conversations"
+        } else {
+            "Show conversations"
+        };
         h_flex()
             .id("assistant-panel")
             .test_support()
@@ -646,8 +651,8 @@ impl AssistantPane {
                             .w(action_size)
                             .h(action_size)
                             .icon(IconName::Ellipsis)
-                            .accessibility_label("Conversation Actions")
-                            .tooltip("More")
+                            .accessibility_label("Conversation actions")
+                            .tooltip("Conversation actions")
                             .disabled(displayed.is_none() || busy)
                             .dropdown_menu({
                                 let menu = qrow.conversation_menu(selected, &self.qrow);
@@ -667,19 +672,19 @@ impl AssistantPane {
                                 IconName::Maximize
                             })
                             .accessibility_label(if qrow.assistant_state.maximized {
-                                "Minimize"
+                                "Minimize assistant"
                             } else {
-                                "Maximize"
+                                "Maximize assistant"
                             })
                             .map(|mut button| {
                                 if qrow.assistant_state.maximized {
                                     button.interactivity().tooltip(
-                                        StatusTooltip::new("Minimize", "")
+                                        StatusTooltip::new("Minimize assistant", "")
                                             .for_action_in(&MinimizeAssistant, qrow.focus.clone()),
                                     );
                                 } else {
                                     button.interactivity().tooltip(
-                                        StatusTooltip::new("Maximize", "")
+                                        StatusTooltip::new("Maximize assistant", "")
                                             .for_action_in(&MaximizeAssistant, qrow.focus.clone()),
                                     );
                                 }
@@ -697,8 +702,8 @@ impl AssistantPane {
                             .h(action_size)
                             .flex_shrink_0()
                             .icon(AssetIconName::List)
-                            .accessibility_label("Toggle conversation list")
-                            .tooltip("Conversations")
+                            .accessibility_label(threads_label)
+                            .tooltip(threads_label)
                             .on_click(cx.listener(move |pane, _, window, cx| {
                                 pane.thread_list_override = Some(!show_threads);
                                 pane.read_visible_reply(window, cx);

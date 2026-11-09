@@ -3,7 +3,10 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::rc::Rc;
 
-/// The object name leads. Status and connection details use secondary text.
+/// The object name leads. The keyboard shortcut, if any, is on the right of
+/// the title. Status, detail, and connection metadata are secondary lines
+/// below the title. A tooltip without secondary lines, such as a command name
+/// with only its shortcut, looks like a plain GPUI Kit tooltip.
 #[derive(Clone, PartialEq)]
 pub(super) struct StatusTooltip {
     title: SharedString,
@@ -40,6 +43,19 @@ impl StatusTooltip {
     ) -> Self {
         self.metadata.push((label.into(), value.into()));
         self
+    }
+
+    fn has_secondary_lines(&self) -> bool {
+        !self.status.is_empty() || self.detail.is_some() || !self.metadata.is_empty()
+    }
+
+    /// Medium weight sets the title apart from the lines below it only.
+    fn title_weight(&self) -> FontWeight {
+        if self.has_secondary_lines() {
+            FontWeight::MEDIUM
+        } else {
+            FontWeight::NORMAL
+        }
     }
 
     /// Resolve the shortcut from the command's binding, including dialog
@@ -89,7 +105,8 @@ impl StatusTooltip {
                     .first()
                     .map(|key| key.as_keystroke().clone())
             });
-        let status_below = action.is_some();
+        let title_weight = self.title_weight();
+        let secondary_lines = self.has_secondary_lines();
         Tooltip::element(move |window, cx| {
             let secondary = |id, text: SharedString| {
                 div()
@@ -108,30 +125,21 @@ impl StatusTooltip {
                 .min_w_0()
                 .aria_label(content.title.clone())
                 .text_sm()
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(title_weight)
                 .child(content.title.clone());
-            let trailing = if status_below {
-                shortcut.clone().map(|shortcut| {
-                    let label: SharedString = Kbd::format(&shortcut).into();
-                    let element = div()
-                        .id("status-tooltip-shortcut")
-                        .test_support()
-                        .flex_shrink_0()
-                        .aria_label(label.clone())
-                        .text_xs()
-                        .font_weight(FontWeight::NORMAL)
-                        .text_color(cx.theme().secondary_foreground)
-                        .child(Kbd::new(shortcut).appearance(false));
-                    (label, element)
-                })
-            } else if !content.status.is_empty() {
-                Some((
-                    content.status.clone(),
-                    secondary("status-tooltip-status", content.status.clone()).flex_shrink_0(),
-                ))
-            } else {
-                None
-            };
+            let trailing = shortcut.clone().map(|shortcut| {
+                let label: SharedString = Kbd::format(&shortcut).into();
+                let element = div()
+                    .id("status-tooltip-shortcut")
+                    .test_support()
+                    .flex_shrink_0()
+                    .aria_label(label.clone())
+                    .text_xs()
+                    .font_weight(FontWeight::NORMAL)
+                    .text_color(cx.theme().secondary_foreground)
+                    .child(Kbd::new(shortcut).appearance(false));
+                (label, element)
+            });
             let (title, trailing) = match trailing {
                 Some((text, mut element)) => {
                     let title_center =
@@ -161,7 +169,7 @@ impl StatusTooltip {
                         .child(title)
                         .children(trailing),
                 )
-                .when(status_below && !content.status.is_empty(), |tooltip| {
+                .when(!content.status.is_empty(), |tooltip| {
                     tooltip.child(secondary("status-tooltip-status", content.status.clone()))
                 })
                 .when_some(content.detail.clone(), |tooltip, detail| {
@@ -194,7 +202,8 @@ impl StatusTooltip {
                     )
                 })
         })
-        .py_1()
+        // A single line keeps the padding of a plain tooltip.
+        .when(secondary_lines, |tooltip| tooltip.py_1())
         .build(window, cx)
     }
 
@@ -288,5 +297,35 @@ impl<T: 'static> Render for LiveStatusTooltip<T> {
                 div()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StatusTooltip;
+    use gpui_kit::FontWeight;
+
+    #[test]
+    fn only_a_title_with_secondary_lines_is_medium_weight() {
+        assert_eq!(
+            StatusTooltip::new("Maximize", "").title_weight(),
+            FontWeight::NORMAL
+        );
+        assert_eq!(
+            StatusTooltip::new("Pinned result", "Pinned").title_weight(),
+            FontWeight::MEDIUM
+        );
+        assert_eq!(
+            StatusTooltip::new("Result", "")
+                .detail("Detail")
+                .title_weight(),
+            FontWeight::MEDIUM
+        );
+        assert_eq!(
+            StatusTooltip::new("Connection", "")
+                .metadata("Host", "db")
+                .title_weight(),
+            FontWeight::MEDIUM
+        );
     }
 }

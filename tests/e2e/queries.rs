@@ -481,7 +481,7 @@ fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
     app.click(cx, "toggle-results");
     app.wait_until(cx, "results collapsing", QUERY_TIMEOUT, |window, _| {
         window.find("sql-editor").bounds().size.height > height
-            && window.find("toggle-results").label() == Some("Expand")
+            && window.find("toggle-results").label() == Some("Expand results")
     });
     app.click(cx, "run");
     app.wait_cell(cx, 0, 1, "233");
@@ -490,7 +490,7 @@ fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
         "results restored to their previous height",
         QUERY_TIMEOUT,
         |window, _| {
-            window.find("toggle-results").label() == Some("Collapse")
+            window.find("toggle-results").label() == Some("Collapse results")
                 && window.find("sql-editor").bounds().size.height == height
         },
     );

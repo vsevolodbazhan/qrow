@@ -75,8 +75,8 @@ Claude Code works as Codex does, with these differences:
 
 ## Work with SQL
 
-Click **Maximize** in the conversation header or press **⇧⌘R** to fill the work area,
-as Activity does. Click **Minimize** or press **⇧⌘R** again to return to the side pane at
+Click **Maximize assistant** in the conversation header or press **⇧⌘R** to fill the work area,
+as Activity does. Click **Minimize assistant** or press **⇧⌘R** again to return to the side pane at
 its previous width. The tooltip of each button shows its keyboard shortcut.
 With **Smooth Transitions**, maximizing and restoring
 animate the width. A second click reverses the motion. Reduced motion makes
@@ -144,9 +144,10 @@ value when it fits. In a narrow pane, the selectors that do not fit show only
 their icons, so the row stays one line. The tooltip of a selector names its
 value.
 
-The pane header has **New conversation**, **More**, and **Conversations**.
-**More** opens the menu of the conversation. **Conversations** shows or hides
-the conversation list.
+The pane header has **New conversation**, **Conversation actions**,
+**Maximize assistant**, and **Show conversations**. **Conversation actions** opens the
+menu of the conversation. **Show conversations** and **Hide conversations**
+show and hide the conversation list.
 
 A shimmering **Working…** line shows while the assistant waits to write a
 reply or uses tools. The first words of a reply replace this line in the same
@@ -160,7 +161,7 @@ Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables. Each line break that you
 type in a message shows as a line break.
 
-Select the **Copy** icon above a code block in an assistant reply to copy its
+Select the **Copy code** icon above a code block in an assistant reply to copy its
 contents. The copy keeps spaces and line breaks. It does not include the
 Markdown fences or the text around the block.
 
@@ -376,8 +377,8 @@ activity, and its [state](#conversation-state). The state dot shows at the end
 of the title line. The age shows at the end of the connection line. The
 connection and age use separate labels. **Tab closed** shows beside the connection when its tab is
 closed. Older saved conversations
-without an activity time show **Earlier**. On a narrow pane, select **Toggle
-Conversation List** to open the list. When you select a conversation there,
+without an activity time show **Earlier**. On a narrow pane, select **Show
+conversations** to open the list. When you select a conversation there,
 Qrow selects its tab and connection, and the pane shows that conversation. On a
 wide pane, the list stays open. Search the list by title or connection name.
 When you send the first message, Qrow sends it to Codex in a separate, unsaved
@@ -398,7 +399,7 @@ when it follows the conversation title. The shimmer stops when the request
 ends, including when it fails. If you reduce motion in macOS, the titles stay
 still.
 If you rename the tab, Qrow keeps your tab name when the conversation title changes.
-Open **Conversation Actions** in the pane header to rename the current
+Open **Conversation actions** in the pane header to rename the current
 conversation, make a new title, or delete it. To use these actions on a
 conversation in the thread list, right-click it. You cannot rename or delete a
 conversation while it works or waits for approval. Two conversations can have the same title.
@@ -598,8 +599,7 @@ The dots use this order of priority: approval, error, work, unread reply.
 A ready reply or an error stays until its transcript shows. The thread list
 and Activity do not read replies. Approval stays until you approve or cancel
 the request. Tooltips and accessible names give the state in words.
-Conversation tooltips show the title and a short status beside its first line.
-The title and status share a vertical center. The
+Conversation tooltips show the title, with a short status below it. The
 assistant toggle tooltip shows **Assistant** and its keyboard shortcut first.
 Its status appears below. The name and shortcut share a vertical center.
 Status text uses secondary styling.

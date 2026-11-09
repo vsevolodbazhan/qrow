@@ -1,8 +1,8 @@
 use crate::support::assistant::{FakeCodex, approval, editor_text};
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::{
-    TestApp, assert_tab_dot, assert_tooltip_header_center, assert_tooltip_metadata_rows, bounds_of,
-    label,
+    TestApp, assert_tab_dot, assert_tooltip_header_center, assert_tooltip_metadata_rows,
+    assert_tooltip_status_below, bounds_of, label,
 };
 use gpui_kit::TestAppContext;
 use gpui_kit::component::ActiveTheme;
@@ -55,7 +55,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
     app.hover_labelled(cx, "SQL only, connected, idle");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
-    app.update(cx, |window, cx| {
+    app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
             Some("SQL only")
@@ -64,12 +64,8 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
             label(window, "status-tooltip-status").as_deref(),
             Some("Idle")
         );
-        let title = bounds_of(window, "status-tooltip-title");
-        let status = bounds_of(window, "status-tooltip-status");
-        assert!(status.left() > title.right());
-        assert!(status.top() < title.bottom());
         assert!(window.try_find("status-tooltip-shortcut").is_none());
-        assert_tooltip_header_center(window, cx, "status-tooltip-status");
+        assert_tooltip_status_below(window);
     });
     app.hover_labelled(cx, "Toggle assistant, working");
     cx.executor().advance_clock(Duration::from_millis(800));
@@ -91,10 +87,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
                 "Ctrl+R"
             })
         );
-        let title = bounds_of(window, "status-tooltip-title");
-        let status = bounds_of(window, "status-tooltip-status");
-        assert_eq!(title.left(), status.left());
-        assert!(status.top() > title.bottom());
+        assert_tooltip_status_below(window);
         assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
     });
 
@@ -339,12 +332,12 @@ fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppCon
     app.press(cx, "secondary-r");
     app.wait_gone(cx, "assistant-composer");
     app.press(cx, "secondary-r");
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     gate.resume();
     app.wait_status(cx, "Complete");
     // ⌘T starts a conversation in a new tab, so Query 1 stays unseen.
     app.dispatch(cx, qrow::ui::NewTab);
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     app.press(cx, "secondary-shift-r");
     cx.executor().advance_clock(Duration::from_millis(250));
     app.update(cx, |window, cx| {
@@ -378,7 +371,7 @@ fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppCon
         window.simulate_next_frame(cx);
         window.render_frame(cx);
     });
-    app.wait_label(cx, "Maximize");
+    app.wait_label(cx, "Maximize assistant");
     app.wait_cell(cx, 0, 1, "42");
 }
 

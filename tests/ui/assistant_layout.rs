@@ -210,7 +210,7 @@ fn maximizing_the_assistant_replaces_the_workspace_and_restores_its_width(cx: &m
     app.type_message(cx, "Черновик запроса");
     let original = composer(&app, cx);
     app.click(cx, "assistant-maximize");
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     app.wait_gone(cx, "assistant-splitter");
     app.wait_gone(cx, "add-connection");
     let maximized = composer(&app, cx);
@@ -219,10 +219,10 @@ fn maximizing_the_assistant_replaces_the_workspace_and_restores_its_width(cx: &m
     app.wait_for(cx, "activity");
     app.wait_gone(cx, "assistant-composer");
     app.click(cx, "activity-close");
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     assert_eq!(composer(&app, cx), maximized);
     app.click(cx, "assistant-maximize");
-    app.wait_label(cx, "Maximize");
+    app.wait_label(cx, "Maximize assistant");
     app.wait_for(cx, "assistant-splitter");
     app.wait_for(cx, "add-connection");
     assert_eq!(composer(&app, cx), original);
@@ -234,10 +234,10 @@ fn maximizing_the_assistant_replaces_the_workspace_and_restores_its_width(cx: &m
     app.wait_gone(cx, "assistant-composer");
     app.open_assistant(cx);
     app.show_conversation(cx);
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     assert_eq!(composer(&app, cx), maximized);
     app.press(cx, "secondary-shift-r");
-    app.wait_label(cx, "Maximize");
+    app.wait_label(cx, "Maximize assistant");
     assert_eq!(composer(&app, cx), original);
 }
 
@@ -298,7 +298,7 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
         app.wait_until(cx, "restored maximized pane", REPLY_TIMEOUT, |window, _| {
             bounds_of(window, "assistant-motion").size.width == window.viewport_size().width
         });
-        app.wait_label(cx, "Minimize");
+        app.wait_label(cx, "Minimize assistant");
     }
     app.press(cx, "secondary-shift-r");
     app.wait_until(cx, "original side-pane width", REPLY_TIMEOUT, &restored);
@@ -319,7 +319,7 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
     app.press(cx, "secondary-shift-r");
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     app.press(cx, "secondary-r");
     app.wait_gone(cx, "assistant-composer");
     app.update(cx, |window, cx| window.input("SELECT 73", cx));
@@ -329,7 +329,7 @@ fn assistant_shortcuts_remember_size_and_mode_with_motion(cx: &mut TestAppContex
     app.dispatch(cx, qrow::ui::MinimizeAssistant);
     app.wait_gone(cx, "assistant-composer");
     app.press(cx, "secondary-shift-r");
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
 }
 
 #[gpui_kit::test]
@@ -376,7 +376,7 @@ fn launch_with_conversations(cx: &mut TestAppContext) -> TestApp {
 
 fn maximize(app: &TestApp, cx: &mut TestAppContext) {
     app.click(cx, "assistant-maximize");
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     app.wait_gone(cx, "add-connection");
 }
 
@@ -450,7 +450,7 @@ fn workspace_shortcuts_act_on_what_the_maximized_assistant_shows(cx: &mut TestAp
     app.press(cx, "secondary-t");
     app.wait_label(cx, "Conversation title: New conversation");
     app.wait_saved(cx, "the conversation tab", |saved| saved.tabs.len() == 2);
-    app.wait_label(cx, "Minimize");
+    app.wait_label(cx, "Minimize assistant");
     // The message field of the new conversation has the focus.
     app.update(cx, |window, cx| window.input("Новый вопрос", cx));
     app.wait_until(
@@ -462,7 +462,7 @@ fn workspace_shortcuts_act_on_what_the_maximized_assistant_shows(cx: &mut TestAp
 
     // ⌘W returns to the side pane and does not close the hidden tab.
     app.press(cx, "secondary-w");
-    app.wait_label(cx, "Maximize");
+    app.wait_label(cx, "Maximize assistant");
     app.wait_for(cx, "add-connection");
     app.settle(cx);
     assert_eq!(app.saved().tabs.len(), 2);
@@ -474,7 +474,7 @@ fn workspace_shortcuts_act_on_what_the_maximized_assistant_shows(cx: &mut TestAp
     });
     maximize(&app, cx);
     app.press(cx, "secondary-j");
-    app.wait_label(cx, "Maximize");
+    app.wait_label(cx, "Maximize assistant");
     app.wait_saved(cx, "expanded results", |saved| {
         !saved.settings.results_minimized
     });
@@ -482,7 +482,7 @@ fn workspace_shortcuts_act_on_what_the_maximized_assistant_shows(cx: &mut TestAp
     // ⌘B shows the Connections sidebar, which the maximized pane hid.
     maximize(&app, cx);
     app.press(cx, "secondary-b");
-    app.wait_label(cx, "Maximize");
+    app.wait_label(cx, "Maximize assistant");
     app.wait_for(cx, "add-connection");
 }
 
@@ -491,7 +491,11 @@ fn assistant_size_tooltips_show_the_shortcut_in_both_states(cx: &mut TestAppCont
     let app = launch(cx);
     app.open_assistant(cx);
     app.show_conversation(cx);
-    for title in ["Maximize", "Minimize", "Maximize"] {
+    for title in [
+        "Maximize assistant",
+        "Minimize assistant",
+        "Maximize assistant",
+    ] {
         app.hover(cx, "assistant-maximize");
         cx.executor()
             .advance_clock(std::time::Duration::from_millis(800));

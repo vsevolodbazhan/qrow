@@ -268,8 +268,8 @@ impl Qrow {
                                     .small()
                                     .ghost()
                                     .icon(gpui_kit::assets::IconName::Download)
-                                    .tooltip("Export results…")
-                                    .accessibility_label("Export results…")
+                                    .tooltip("Export results")
+                                    .accessibility_label("Export results")
                                     .disabled(export_disabled || draining)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_export(window, cx)

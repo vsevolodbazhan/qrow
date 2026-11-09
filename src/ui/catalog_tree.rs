@@ -1797,7 +1797,7 @@ impl Qrow {
                         .flex_shrink_0()
                         .icon(IconName::Plus)
                         .accessibility_label("New connection")
-                        .tooltip("New connection…")
+                        .tooltip("New connection")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.edit_profile(Profile::default(), true, window, cx)
                         })),

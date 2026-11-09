@@ -81,7 +81,7 @@ impl Qrow {
                                     .small()
                                     .icon(Icon::new(gpui_kit::assets::IconName::Trash))
                                     .tooltip("Clear logs")
-                                    .accessibility_label("Clear logs history")
+                                    .accessibility_label("Clear logs")
                                     .on_click(cx.listener(|this, _, _, cx| this.clear_output(cx))),
                             ),
                     ),

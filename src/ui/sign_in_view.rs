@@ -961,7 +961,7 @@ impl Qrow {
                                     .icon(AssetIconName::ClipboardPaste)
                                     .disabled(self.demo)
                                     .accessibility_label("Paste sign-in")
-                                    .tooltip("Paste sign-in…")
+                                    .tooltip("Paste sign-in")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.paste_sign_in(window, cx)
                                     })),
@@ -975,7 +975,7 @@ impl Qrow {
                                     .icon(IconName::Plus)
                                     .disabled(self.demo)
                                     .accessibility_label("New sign-in")
-                                    .tooltip("New sign-in…")
+                                    .tooltip("New sign-in")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_sign_in_editor(None, false, window, cx)
                                     })),
