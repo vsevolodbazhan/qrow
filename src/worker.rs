@@ -615,18 +615,18 @@ impl Runner {
                 generation: uuid::Uuid::new_v4(),
                 profile: profile.clone(),
             });
-            self.profile = Some(profile);
             self.log(
                 Some(execution_id),
                 Severity::Info,
                 LogKind::Connected,
                 format!(
                     "Connected to {} ({})",
-                    self.profile.as_ref().unwrap().name,
+                    profile.name,
                     format_duration(connect_started.elapsed())
                 ),
                 Some(connect_started.elapsed()),
             );
+            self.profile = Some(profile);
             self.emit(Event::Connected);
         } else {
             if let Some(session) = self.session_identity.lock_unpoisoned().as_mut() {
@@ -636,11 +636,23 @@ impl Runner {
         }
         if let Some(control) = control {
             control.check()?;
-            if let Some(transport) = self.session.as_ref().unwrap().transport_cancellation() {
+            if let Some(transport) = self.session_ref()?.transport_cancellation() {
                 control.register(transport)?;
             }
         }
         Ok(())
+    }
+
+    /// The open session of the tab. `prepare_session` opens it before a
+    /// statement uses it.
+    fn session_mut(&mut self) -> Result<&mut (dyn Session + 'static)> {
+        self.session
+            .as_deref_mut()
+            .context("Session is disconnected")
+    }
+
+    fn session_ref(&self) -> Result<&(dyn Session + 'static)> {
+        self.session.as_deref().context("Session is disconnected")
     }
 
     fn run(&mut self, profile: Profile, sql: String, execution_id: ExecutionId) -> Result<()> {
@@ -671,7 +683,7 @@ impl Runner {
             execution_completed: false,
         });
         *self.target.lock_unpoisoned() = None;
-        let cancellation = self.session.as_mut().unwrap().execute(&sql)?;
+        let cancellation = self.session_mut()?.execute(&sql)?;
         *self.target.lock_unpoisoned() = Some(cancellation.clone());
         self.emit_session(execution_id);
         self.log(
@@ -685,11 +697,11 @@ impl Runner {
         if self.cancelled.load(Ordering::SeqCst) {
             cancellation.cancel()?;
         }
-        let state = wait_for_result(self.session.as_mut().unwrap().as_mut(), None)?;
+        let state = wait_for_result(self.session_mut()?, None)?;
         let finished = matches!(state, QueryState::Finished { .. });
         match state {
             QueryState::Cancelled => {
-                self.session.as_mut().unwrap().close_operation()?;
+                self.session_mut()?.close_operation()?;
                 *self.target.lock_unpoisoned() = None;
                 self.log(
                     Some(execution_id),
@@ -703,7 +715,7 @@ impl Runner {
             }
             QueryState::Streaming { has_results } | QueryState::Finished { has_results } => {
                 if self.cancelled.load(Ordering::SeqCst) {
-                    self.session.as_mut().unwrap().close_operation()?;
+                    self.session_mut()?.close_operation()?;
                     *self.target.lock_unpoisoned() = None;
                     self.log(
                         Some(execution_id),
@@ -722,7 +734,7 @@ impl Runner {
                     if !finished && self.finish_preview_execution()? {
                         return Ok(());
                     }
-                    self.session.as_mut().unwrap().close_operation()?;
+                    self.session_mut()?.close_operation()?;
                     *self.target.lock_unpoisoned() = None;
                     self.complete_execution(false);
                     self.emit(Event::Ready {
@@ -731,14 +743,12 @@ impl Runner {
                     });
                     return Ok(());
                 }
-                let columns = self.session.as_mut().unwrap().columns()?;
+                let columns = self.session_mut()?.columns()?;
                 if finished {
                     self.complete_execution(true);
                 }
                 self.emit(Event::Columns(columns));
-                self.emit(Event::ExportContext(
-                    self.session.as_ref().unwrap().export_context(),
-                ));
+                self.emit(Event::ExportContext(self.session_ref()?.export_context()));
                 self.fetch_preview()
             }
             QueryState::Running => anyhow::bail!("The query result is not ready"),
@@ -751,11 +761,7 @@ impl Runner {
             .as_ref()
             .is_some_and(|execution| !execution.execution_completed)
         {
-            let completion = self
-                .session
-                .as_mut()
-                .context("Session is disconnected")?
-                .finish_execution()?;
+            let completion = self.session_mut()?.finish_execution()?;
             if completion == Completion::Cancelled {
                 self.cancelled.store(true, Ordering::SeqCst);
             }
@@ -808,11 +814,7 @@ impl Runner {
             let fetch_memory = live_cursor
                 .then(|| crate::export::budget::GLOBAL.acquire(128 * crate::export::budget::MIB))
                 .transpose()?;
-            let batch = self
-                .session
-                .as_mut()
-                .context("Session is disconnected")?
-                .fetch(PREVIEW_ROWS - fetched)?;
+            let batch = self.session_mut()?.fetch(PREVIEW_ROWS - fetched)?;
             // A blocked fetch may return after Cancel was requested.
             if self.finish_cancelled_fetch()? {
                 return Ok(());
@@ -830,25 +832,21 @@ impl Runner {
                         + row.iter().flatten().map(String::capacity).sum::<usize>()
                 })
                 .sum();
-            let limited = self.session.as_ref().unwrap().result_limited()
+            let limited = self.session_ref()?.result_limited()
                 || self.rows + count > MAX_RESULT_ROWS
                 || self.bytes.saturating_add(bytes) > MAX_RESULT_BYTES;
             if limited || count == 0 {
                 if self.finish_preview_execution()? {
                     return Ok(());
                 }
-                if limited
-                    && count > 0
-                    && live_cursor
-                    && !self.session.as_ref().unwrap().result_limited()
-                {
+                if limited && count > 0 && live_cursor && !self.session_ref()?.result_limited() {
                     self.pending = Some(Pending {
                         rows: batch.rows,
                         _memory: fetch_memory.unwrap(),
                     });
                     self.set_cursor(Cursor::Available);
                 } else {
-                    self.session.as_mut().unwrap().close_operation()?;
+                    self.session_mut()?.close_operation()?;
                     *self.target.lock_unpoisoned() = None;
                     self.set_cursor(if limited {
                         Cursor::Unavailable
@@ -996,7 +994,7 @@ impl Runner {
                 .context("Session is disconnected")?
                 .clone();
             profile.transfer = transfer;
-            let session = self.session.as_mut().context("Session is disconnected")?;
+            let session = self.session_mut()?;
             session.configure_export(&profile.transfer)?;
             session.start_export_fetch()?;
             for batch in source.batches() {
@@ -1013,16 +1011,12 @@ impl Runner {
             loop {
                 crate::export::check_cancelled(download.cancelled())?;
                 let _fetch_memory = producer.reserve_fetch()?;
-                let requested = self.session.as_ref().unwrap().export_fetch_rows();
+                let requested = self.session_ref()?.export_fetch_rows();
                 anyhow::ensure!(
                     (1..=crate::model::transfer::MAX_FETCH_ROWS).contains(&requested),
                     "Invalid export fetch count"
                 );
-                let mut batch = self
-                    .session
-                    .as_mut()
-                    .context("Session is disconnected")?
-                    .fetch(requested)?;
+                let mut batch = self.session_mut()?.fetch(requested)?;
                 crate::export::check_cancelled(download.cancelled())?;
                 anyhow::ensure!(
                     batch.rows.len() <= requested,
@@ -1056,7 +1050,7 @@ impl Runner {
                     download.cancelled(),
                 )?;
             }
-            self.session.as_mut().unwrap().close_operation()?;
+            self.session_mut()?.close_operation()?;
             download.complete(producer)?;
             Ok(())
         })();
@@ -1159,10 +1153,7 @@ impl Runner {
             return Ok(false);
         }
         // The operation owns cancellation cleanup. Closing does not roll back SQL.
-        self.session
-            .as_mut()
-            .context("Session is disconnected")?
-            .close_operation()?;
+        self.session_mut()?.close_operation()?;
         *self.target.lock_unpoisoned() = None;
         self.pending = None;
         self.cursor = Cursor::Consumed;
