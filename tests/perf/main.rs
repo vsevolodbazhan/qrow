@@ -469,3 +469,239 @@ fn activity(cx: &mut TestAppContext) {
         50.,
     );
 }
+
+/// A cached catalog of 100 schemas with 1,000 tables each, without columns,
+/// like a large warehouse.
+fn wide_catalog(cx: &mut TestAppContext) -> TestApp {
+    use qrow::catalog::{Catalog, RelationEntry, RelationKind};
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    let mut catalog = Catalog::new(&profile);
+    let schemas: Vec<String> = (0..100).map(|n| format!("schema_{n:03}")).collect();
+    catalog.apply_schemas(schemas.clone(), &Default::default(), 1);
+    for schema in &schemas {
+        let relations = (0..1000)
+            .map(|n| RelationEntry {
+                name: format!("{schema}_table_{n:04}"),
+                kind: RelationKind::Table,
+                comment: None,
+            })
+            .collect();
+        catalog.apply_relations(schema, None, relations, 1);
+    }
+    let path = qrow::storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    qrow::storage::save_catalog(&path, &catalog).unwrap();
+    let workspace = Workspace {
+        tabs: vec![SavedTab::new(1, Some(profile.id))],
+        profiles: vec![profile.clone()],
+        ..Workspace::default()
+    };
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the cached schemas",
+        std::time::Duration::from_secs(10),
+        |window, _| support::labelled(window, "schema_000").is_some(),
+    );
+    app
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn catalog_search_100k(cx: &mut TestAppContext) {
+    // Each sample types one character and draws the frame, then lets the
+    // pending search work finish and draws the result. The first part is
+    // the input latency; the sum is all the work of one keystroke.
+    let app = wide_catalog(cx);
+    app.click_labelled(cx, "Search connections and relations");
+    app.update(cx, |window, cx| {
+        for key in ["t", "a", "b", "l", "e"] {
+            window.press(key, cx);
+        }
+        window.render_frame(cx);
+    });
+    let mut keystroke = Vec::new();
+    let mut total = Vec::new();
+    for round in 0..23 {
+        let key = if round % 2 == 0 { "7" } else { "backspace" };
+        let started = Instant::now();
+        app.update(cx, |window, cx| {
+            window.press(key, cx);
+            window.render_frame(cx);
+        });
+        let typed = started.elapsed();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(500));
+        cx.run_until_parked();
+        app.update(cx, |window, cx| window.render_frame(cx));
+        if round >= 3 {
+            keystroke.push(typed);
+            total.push(started.elapsed());
+        }
+    }
+    report(
+        "ui.catalog.search_keystroke_100k",
+        median_ms(&keystroke),
+        "ms",
+        1000.,
+    );
+    report(
+        "ui.catalog.search_apply_100k",
+        median_ms(&total),
+        "ms",
+        1000.,
+    );
+}
+
+/// Types one character into the focused field and draws the next frame like
+/// the window does: only the views that changed render again.
+fn keystroke_frames(app: &TestApp, cx: &mut TestAppContext) -> f64 {
+    let samples = app.update(cx, |window, cx| {
+        window.draw(cx).clear(cx);
+        sample(5, 40, || {
+            let mut key = Keystroke::parse("x").expect("x is a keystroke");
+            key.key_char = Some("x".into());
+            window.dispatch_keystroke(key, cx);
+            window.draw(cx).clear(cx);
+        })
+    });
+    median_ms(&samples)
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn editor_keystroke_frame(cx: &mut TestAppContext) {
+    // The demo shows the catalog and 1,000 rows of 141 columns.
+    let app = demo(cx);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-down");
+    report(
+        "ui.editor.keystroke_frame_demo",
+        keystroke_frames(&app, cx),
+        "ms",
+        50.,
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn editor_keystroke_frame_busy_workspace(cx: &mut TestAppContext) {
+    // 20 connections with three tabs of 10 KB of SQL each.
+    let line = "SELECT route, COUNT(*) FROM flights GROUP BY route;\n";
+    let sql = line.repeat(10_000 / line.len() + 1);
+    let profiles: Vec<_> = (0..20)
+        .map(|n| offline_profile(&format!("Warehouse {n:02}")))
+        .collect();
+    let tabs = profiles
+        .iter()
+        .enumerate()
+        .flat_map(|(n, profile)| {
+            let sql = sql.clone();
+            (0..3).map(move |t| SavedTab {
+                sql: sql.clone(),
+                ..SavedTab::new(n * 3 + t + 1, Some(profile.id))
+            })
+        })
+        .collect();
+    let workspace = Workspace {
+        profiles,
+        tabs,
+        ..Workspace::default()
+    };
+    let app = TestApp::launch_with(cx, workspace, MemoryCredentials::default());
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-down");
+    report(
+        "ui.editor.keystroke_frame_busy",
+        keystroke_frames(&app, cx),
+        "ms",
+        50.,
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn logs_record(cx: &mut TestAppContext) {
+    use qrow::logs::{ExecutionId, LogEvent, LogKind, Severity};
+    // Logs with 20,000 entries in 100 runs, the most runs that a tab keeps.
+    // Each sample adds a new run of 500 entries in one batch, like a busy
+    // worker between two frames. The new run also removes the oldest one.
+    let profile = offline_profile("Warehouse");
+    let workspace = Workspace {
+        tabs: vec![SavedTab::new(1, Some(profile.id))],
+        profiles: vec![profile],
+        ..Workspace::default()
+    };
+    let app = TestApp::launch_with(cx, workspace, MemoryCredentials::default());
+    let qrow = app.qrow.upgrade().expect("The window is open");
+    let run = |execution: u64, count: usize| -> Vec<LogEvent> {
+        (0..count)
+            .map(|n| {
+                LogEvent::new(
+                    Some(ExecutionId(execution)),
+                    Severity::Info,
+                    LogKind::FetchCompleted,
+                    format!("Run {execution}: fetched batch {n} of 1,000 rows (12 ms)"),
+                )
+            })
+            .collect()
+    };
+    for execution in 0..100 {
+        qrow.update(cx, |qrow, cx| {
+            qrow.record_tab_logs(0, run(execution, 200), cx)
+        });
+    }
+    app.settle(cx);
+    let mut next = 100;
+    let samples = app.update(cx, |window, cx| {
+        sample(3, 20, || {
+            qrow.update(cx, |qrow, cx| qrow.record_tab_logs(0, run(next, 500), cx));
+            next += 1;
+            window.render_frame(cx);
+        })
+    });
+    report("ui.logs.record_500", median_ms(&samples), "ms", 2000.);
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn assistant_large_reply(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let workspace = codex.workspace(Workspace::default());
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    // Each reply streams about 400 KB in 400 deltas.
+    let samples: Vec<_> = (1..=3)
+        .map(|reply| {
+            let message = format!("Stream a large reply {reply}");
+            app.type_message(cx, &message);
+            let started = Instant::now();
+            app.click(cx, "assistant-send");
+            app.wait_reply(cx, &format!("End of {message}"));
+            started.elapsed()
+        })
+        .collect();
+    report(
+        "ui.assistant.stream_large_reply",
+        median_ms(&samples),
+        "ms",
+        20000.,
+    );
+    app.wait_idle(cx);
+    // The save timer runs each second while a reply streams. Without a
+    // change it must not do the work of a save.
+    let qrow = app.qrow.upgrade().expect("The window is open");
+    qrow.update(cx, |qrow, _| qrow.save_assistant_transcripts());
+    let samples = app.update(cx, |_, cx| {
+        sample(3, 20, || {
+            qrow.update(cx, |qrow, _| qrow.save_assistant_transcripts())
+        })
+    });
+    report(
+        "ui.assistant.transcript_save_unchanged",
+        median_ms(&samples),
+        "ms",
+        50.,
+    );
+}

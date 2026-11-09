@@ -290,6 +290,13 @@ impl Qrow {
         }));
     }
 
+    /// Save the changed transcripts now, like the save timer. Performance
+    /// probes measure the save through this.
+    #[doc(hidden)]
+    pub fn save_assistant_transcripts(&mut self) {
+        self.save_transcripts(None);
+    }
+
     /// Saves the transcripts that changed since Qrow last saved them: all
     /// conversations, or only `thread_id`.
     pub(in crate::ui) fn save_transcripts(&mut self, thread_id: Option<&str>) {
