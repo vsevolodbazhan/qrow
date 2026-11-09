@@ -9,7 +9,7 @@
 
 :root {
   color-scheme: dark;
-  --bg: #26292f;
+  --bg: #27292e; /* the panel color as stored in the screenshot, so both render the same */
   --surface: #30343c;
   --chrome: #30343c;
   --hover: #3b414c;

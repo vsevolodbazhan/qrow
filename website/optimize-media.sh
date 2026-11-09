@@ -1,7 +1,8 @@
 #!/bin/sh
 # Make the web media in website/media/ from the README screenshot
 # assets/screenshots/demo.png: crop it to the window and remove the macOS
-# shadow, then write a WebP image and a JPEG social preview.
+# shadow, then write a lossless WebP image and a JPEG social preview. Lossless
+# keeps the exact colors, so the page background (--bg) matches the app panels.
 # Needs uv, cwebp, and ffmpeg.
 set -eu
 
@@ -35,12 +36,12 @@ partial = a.point(lambda v: 255 if v < 255 else 0)
 window.putalpha(ImageChops.subtract(a, ImageChops.multiply(dark, partial)))
 window.save(f"{work}/hero.png")
 # The social preview has no transparency: put the corners on the page color.
-background = Image.new("RGBA", window.size, (38, 41, 47, 255))
+background = Image.new("RGBA", window.size, (39, 41, 46, 255))
 Image.alpha_composite(background, window).convert("RGB").save(f"{work}/og.png")
 print(f"Window: {window.size[0]}x{window.size[1]} px")
 PY
 
-cwebp -quiet -q 82 -m 6 -exact "$work/hero.png" -o "$out/hero.webp"
+cwebp -quiet -lossless -z 9 -exact "$work/hero.png" -o "$out/hero.webp"
 echo "$out/hero.webp"
 ffmpeg -loglevel error -y -i "$work/og.png" -vf "scale=1600:-2" -q:v 3 "$out/og.jpg"
 echo "$out/og.jpg"

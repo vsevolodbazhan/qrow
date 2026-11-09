@@ -52,6 +52,9 @@ sh website/optimize-media.sh
 
 The script crops the screenshot to the window, removes the macOS shadow,
 and writes `hero.webp` and the social preview `og.jpg` to `website/media/`.
+The WebP image is lossless, so its colors stay exact. The page background
+(`--bg` in `styles.css`) uses the panel color of the screenshot, `#27292e`.
+Check it again after a new screenshot.
 
 ## Limitations
 
