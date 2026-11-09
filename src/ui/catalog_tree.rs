@@ -365,11 +365,28 @@ fn child_id(parent: &SharedString, suffix: &str) -> SharedString {
     format!("{parent}{SEPARATOR}{suffix}").into()
 }
 
+/// Whether `name` contains `needle`, which is in lowercase, ignoring case
+/// like `str::to_lowercase`. ASCII text needs no allocation.
+fn contains_lowercase(name: &str, needle: &str) -> bool {
+    if !(name.is_ascii() && needle.is_ascii()) {
+        return name.to_lowercase().contains(needle);
+    }
+    let (name, needle) = (name.as_bytes(), needle.as_bytes());
+    let Some(&first) = needle.first() else {
+        return true;
+    };
+    name.len() >= needle.len()
+        && (0..=name.len() - needle.len()).any(|start| {
+            name[start].to_ascii_lowercase() == first
+                && name[start..start + needle.len()].eq_ignore_ascii_case(needle)
+        })
+}
+
 /// Builds the tree items and their nodes.
 struct Builder<'a> {
     tree: &'a CatalogTree,
     /// The dbt resources of the tables of each connection.
-    dbt: &'a HashMap<Uuid, super::dbt::DbtLookup>,
+    dbt: &'a HashMap<Uuid, Rc<super::dbt::DbtLookup>>,
     search: String,
     /// The connection of the active tab, for the Current connection scope.
     current: Option<Uuid>,
@@ -446,13 +463,20 @@ impl Builder<'_> {
     }
 
     fn matches(&self, name: &str) -> bool {
-        name.to_lowercase().contains(&self.search)
+        contains_lowercase(name, &self.search)
     }
 
-    fn matches_relation(&self, schema: &str, name: &str) -> bool {
-        self.matches(name)
-            || self.matches(&format!("{schema}.{name}"))
-            || self.matches(&qualified_name(schema, name))
+    /// Whether the relation `name` in `schema` matches, also by its
+    /// qualified names. `schema_matches` tells whether `schema` matches.
+    fn matches_relation(&self, schema: &str, schema_matches: bool, name: &str) -> bool {
+        if schema_matches || self.matches(name) {
+            return true;
+        }
+        // A search without a dot or a backtick matches a qualified name only
+        // in its schema or its relation name.
+        self.search.contains(['.', '`'])
+            && (self.matches(&format!("{schema}.{name}"))
+                || self.matches(&qualified_name(schema, name)))
     }
 
     /// The row of a connection, or `None` when a search hides it: the
@@ -472,7 +496,9 @@ impl Builder<'_> {
                     catalog.schemas.iter().any(|(name, schema)| {
                         self.matches(name)
                             || schema.relations.as_ref().is_some_and(|relations| {
-                                relations.keys().any(|r| self.matches_relation(name, r))
+                                relations
+                                    .keys()
+                                    .any(|r| self.matches_relation(name, false, r))
                             })
                     })
                 }))
@@ -542,9 +568,11 @@ impl Builder<'_> {
                 break;
             }
             let schema_matches = !filtered || self.matches(name);
-            let relation_matches = filtered
+            let relation_matches = !schema_matches
                 && schema.relations.as_ref().is_some_and(|relations| {
-                    relations.keys().any(|r| self.matches_relation(name, r))
+                    relations
+                        .keys()
+                        .any(|r| self.matches_relation(name, false, r))
                 });
             if !schema_matches && !relation_matches {
                 continue;
@@ -611,7 +639,7 @@ impl Builder<'_> {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
                 for (name, relation) in relations {
-                    if filtered && !self.matches_relation(schema, name) {
+                    if filtered && !self.matches_relation(schema, false, name) {
                         continue;
                     }
                     if filtered {
@@ -3031,6 +3059,19 @@ mod tests {
         let long = "x".repeat(ERROR_SUMMARY_CHARS + 1);
         let summary = error_summary(&long);
         assert_eq!(summary, format!("{}…", "x".repeat(ERROR_SUMMARY_CHARS)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn search_text_matches_names_in_any_case_without_allocation_for_ascii() {
+        assert!(contains_lowercase("Sales_Orders", "orders"));
+        assert!(contains_lowercase("SALES_ORDERS", "s_o"));
+        assert!(contains_lowercase("orders", ""));
+        assert!(!contains_lowercase("ord", "orders"));
+        assert!(!contains_lowercase("sales", "x"));
+        // Other scripts use the full lowercase conversion.
+        assert!(contains_lowercase("Заказы_2024", "заказы"));
+        assert!(contains_lowercase("ÉVÉNEMENTS", "événements"));
+        assert!(!contains_lowercase("Заказы", "orders"));
     }
 
     #[::core::prelude::v1::test]

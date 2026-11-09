@@ -539,14 +539,9 @@ fn catalog_search_100k(cx: &mut TestAppContext) {
         "ui.catalog.search_keystroke_100k",
         median_ms(&keystroke),
         "ms",
-        1000.,
+        50.,
     );
-    report(
-        "ui.catalog.search_apply_100k",
-        median_ms(&total),
-        "ms",
-        1000.,
-    );
+    report("ui.catalog.search_apply_100k", median_ms(&total), "ms", 50.);
 }
 
 /// Types one character into the focused field and draws the next frame like

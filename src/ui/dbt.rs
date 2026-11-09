@@ -37,6 +37,9 @@ use uuid::Uuid;
 const AUTOMATIC: &str = "Automatic";
 const MANUAL: &str = "Manual";
 
+/// A dbt lookup with the project and the match mode that made it.
+type CachedLookup = (DbtProject, bool, Rc<DbtLookup>);
+
 /// The dbt worker and the state of each manifest.
 pub(super) struct DbtProjects {
     worker: DbtWorker,
@@ -48,6 +51,10 @@ pub(super) struct DbtProjects {
     configured: Vec<(Uuid, String, bool)>,
     /// The schema tree shows dbt data of projects that changed.
     tree_stale: bool,
+    /// The last lookup of each connection, with the project and the match
+    /// mode that made it. A tree rebuild uses it again while its index,
+    /// project, and mode stay the same.
+    lookups: std::cell::RefCell<HashMap<Uuid, CachedLookup>>,
 }
 
 impl DbtProjects {
@@ -72,6 +79,7 @@ impl DbtProjects {
             keys: HashMap::new(),
             configured: Vec::new(),
             tree_stale: false,
+            lookups: Default::default(),
         }
     }
 
@@ -213,39 +221,31 @@ impl Qrow {
     }
 
     /// The dbt resources of the tables of each connection with a dbt index.
-    pub(super) fn dbt_lookups(&self) -> HashMap<Uuid, DbtLookup> {
-        self.profiles
+    /// A lookup is made again only when its index, project, or match mode
+    /// changes.
+    pub(super) fn dbt_lookups(&self) -> HashMap<Uuid, Rc<DbtLookup>> {
+        let mut cache = self.dbt.lookups.borrow_mut();
+        let lookups: HashMap<Uuid, Rc<DbtLookup>> = self
+            .profiles
             .iter()
             .filter_map(|profile| {
                 let project = profile.dbt.as_ref()?;
                 let index = self.dbt.state(profile.id)?.index.clone()?;
-                let mut relations = matching::relations(&index, project);
                 let exact = profile.database_type == crate::model::DatabaseType::Postgres;
-                if exact {
-                    relations = relations
-                        .into_values()
-                        .map(|position| {
-                            let entry = index.entry(position);
-                            (
-                                (
-                                    matching::mapped_schema(&index, entry, project),
-                                    entry.identifier.to_string(),
-                                ),
-                                position,
-                            )
-                        })
-                        .collect();
+                if let Some((cached_project, cached_exact, lookup)) = cache.get(&profile.id)
+                    && cached_project == project
+                    && *cached_exact == exact
+                    && Arc::ptr_eq(&lookup.index, &index)
+                {
+                    return Some((profile.id, lookup.clone()));
                 }
-                Some((
-                    profile.id,
-                    DbtLookup {
-                        index,
-                        relations,
-                        exact,
-                    },
-                ))
+                let lookup = Rc::new(DbtLookup::new(index, project, exact));
+                cache.insert(profile.id, (project.clone(), exact, lookup.clone()));
+                Some((profile.id, lookup))
             })
-            .collect()
+            .collect();
+        cache.retain(|id, _| lookups.contains_key(id));
+        lookups
     }
 
     /// Whether Qrow parses the manifest of `profile` now.
@@ -626,6 +626,30 @@ pub(super) struct DbtLookup {
 }
 
 impl DbtLookup {
+    fn new(index: Arc<Index>, project: &DbtProject, exact: bool) -> Self {
+        let mut relations = matching::relations(&index, project);
+        if exact {
+            relations = relations
+                .into_values()
+                .map(|position| {
+                    let entry = index.entry(position);
+                    (
+                        (
+                            matching::mapped_schema(&index, entry, project),
+                            entry.identifier.to_string(),
+                        ),
+                        position,
+                    )
+                })
+                .collect();
+        }
+        Self {
+            index,
+            relations,
+            exact,
+        }
+    }
+
     /// The badge of the table `relation` in `schema`, which has the catalog
     /// comment `comment`.
     pub(super) fn badge(
