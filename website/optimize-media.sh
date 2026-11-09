@@ -29,7 +29,7 @@ box = image.getchannel("A").point(lambda a: 255 if a >= 250 else 0).getbbox()
 window = image.crop(box)
 window.save(f"{work}/hero.png")
 # The social preview has no transparency: put the corners on the page color.
-background = Image.new("RGBA", window.size, (30, 32, 36, 255))
+background = Image.new("RGBA", window.size, (38, 41, 47, 255))
 Image.alpha_composite(background, window).convert("RGB").save(f"{work}/og.png")
 print(f"Window: {window.size[0]}x{window.size[1]} px")
 PY
