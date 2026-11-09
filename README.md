@@ -64,6 +64,24 @@ connection: schema refreshes, keep-alives, sessions, and queries. See
 [queries](docs/queries.md), [results](docs/results.md), and
 [activity](docs/activity.md).
 
+### Data Export
+
+Export a result to CSV, TSV, Markdown, JSON, or Parquet. Save it to a file, or
+copy it to the clipboard. The export includes all rows, also when the preview
+shows only some of them.
+
+- Qrow reads the remaining rows from the open cursor, or uses a download that
+  it kept. It runs the query again only when neither is available.
+- CSV presets include Excel, with a byte-order mark and formula escaping.
+- Parquet keeps booleans, numbers, exact decimals, dates, timestamps, and
+  binary values in their types.
+- Large exports write the file in the background and show a progress
+  notification.
+
+![Qrow demo with data export window](assets/screenshots/demo-export.png)
+
+See [export results](docs/results.md#export-results).
+
 ### Schema Catalog
 
 The Connections sidebar is a tree of schemas, tables, views, and columns.
