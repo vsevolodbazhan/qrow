@@ -22,7 +22,7 @@ The page uses the look of the app:
 - The fonts are the app defaults: IBM Plex Sans for text and JetBrains Mono
   for code. `fonts/` has WOFF2 subsets of the files in
   [assets/fonts](../assets/fonts), with their licenses.
-- The screenshot has a soft shadow over a blue and violet glow.
+- The screenshot has a soft shadow and no frame.
 - The footer copies the status bar of the app. The icons are Lucide icons, the
   icon set of GPUI Kit.
 
