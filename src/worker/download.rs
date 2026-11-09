@@ -1,4 +1,5 @@
 //! Cancellation stays bound to the operation that owns this download.
+use crate::sync::LockExt as _;
 use crate::{
     connector::Cancellation,
     export::{
@@ -88,23 +89,23 @@ impl Download {
     }
 
     pub fn spool(&self) -> Option<Arc<Spool>> {
-        match &self.state.lock().unwrap().source {
+        match &self.state.lock_unpoisoned().source {
             Source::Ready(spool) => Some(spool.clone()),
             _ => None,
         }
     }
 
     pub fn progress_percentage(&self) -> Option<f64> {
-        self.state.lock().unwrap().percentage
+        self.state.lock_unpoisoned().percentage
     }
 
     pub(super) fn set_progress_percentage(&self, percentage: Option<f64>) {
-        self.state.lock().unwrap().percentage =
+        self.state.lock_unpoisoned().percentage =
             percentage.filter(|value| value.is_finite() && (0.0..=100.0).contains(value));
     }
 
     pub fn wait_spool(&self) -> io::Result<Arc<Spool>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         loop {
             match &state.source {
                 Source::Ready(spool) => return Ok(spool.clone()),
@@ -117,7 +118,7 @@ impl Download {
     }
 
     pub(super) fn publish_spool(&self, spool: Arc<Spool>) -> io::Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         export::check_cancelled(&self.cancel)?;
         if !matches!(state.source, Source::Pending) {
             return Err(io::Error::other(
@@ -130,7 +131,7 @@ impl Download {
     }
 
     pub(super) fn register_transport(&self, target: Arc<dyn Cancellation>) -> io::Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         if export::check_cancelled(&self.cancel).is_err()
             || state.aborted
             || !matches!(state.route, Route::Pending | Route::Transport(_))
@@ -144,7 +145,7 @@ impl Download {
 
     fn terminal_source(&self, failed: Option<String>) {
         let spool = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_unpoisoned();
             let spool = match &state.source {
                 Source::Ready(spool) => Some(spool.clone()),
                 Source::Pending => {
@@ -173,14 +174,14 @@ impl Download {
     }
 
     pub(super) fn release_transport(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         if matches!(state.route, Route::Transport(_)) && !state.aborted {
             state.route = Route::Pending;
         }
     }
 
     pub(super) fn finish_without_spool(&self, message: String) -> io::Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         export::check_cancelled(&self.cancel)?;
         if !matches!(state.route, Route::Downloading(_)) || !matches!(state.source, Source::Pending)
         {
@@ -198,7 +199,7 @@ impl Download {
         target: Arc<dyn Cancellation>,
         guard: export::Writer,
     ) -> io::Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         if export::check_cancelled(&self.cancel).is_err() || state.aborted {
             target.abort_transport();
             return Err(io::Error::other(export::Cancelled));
@@ -214,7 +215,7 @@ impl Download {
     /// The terminal spool record and cancellation routing have one handoff.
     pub(super) fn complete(&self, producer: Producer) -> io::Result<()> {
         producer.finish_with(&self.cancel, || {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_unpoisoned();
             export::check_cancelled(&self.cancel)?;
             if !matches!(state.route, Route::Downloading(_)) || state.aborted {
                 return Err(io::Error::other("The download stopped before completion."));
@@ -254,7 +255,7 @@ impl Download {
 
     pub(super) fn session_changed(self: &Arc<Self>) {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_unpoisoned();
             if matches!(state.source, Source::Pending) {
                 state.source = Source::SessionChanged;
                 self.changed.notify_all();
@@ -273,7 +274,7 @@ impl Download {
     }
 
     fn abort_operation(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         if let Route::Downloading(target) | Route::Transport(target) = &state.route {
             target.abort_transport();
             state.aborted = true;
@@ -297,7 +298,7 @@ impl Download {
         spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> io::Result<std::thread::JoinHandle<()>>,
     ) {
         let (target, guard) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock_unpoisoned();
             if let Route::Transport(target) = &state.route {
                 target.abort_transport();
                 state.aborted = true;
@@ -324,7 +325,7 @@ impl Download {
             if std::thread::Builder::new()
                 .name("qrow-export-deadline".into())
                 .spawn(move || {
-                    let mut state = watchdog.state.lock().unwrap();
+                    let mut state = watchdog.state.lock_unpoisoned();
                     while matches!(state.route, Route::Downloading(_)) {
                         let remaining = deadline.saturating_duration_since(Instant::now());
                         if remaining.is_zero() {
@@ -344,7 +345,7 @@ impl Download {
             let failed = target.cancel_with_deadline(deadline).is_err();
             drop(target);
             drop(guard);
-            let mut state = download.state.lock().unwrap();
+            let mut state = download.state.lock_unpoisoned();
             state.cancellation_done = true;
             state.cancellation_failed = failed;
             download.changed.notify_all();
@@ -359,7 +360,7 @@ impl Download {
     /// False requires discarding the session, including its transport.
     pub(super) fn stopped(&self) -> bool {
         let deadline = Instant::now() + CLEANUP_TIMEOUT;
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         while state.cancellation_started && !state.cancellation_done && !state.aborted {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {

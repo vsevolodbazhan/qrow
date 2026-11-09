@@ -1,4 +1,5 @@
 //! Owned raw sockets and request futures for a Trino session.
+use crate::sync::LockExt as _;
 use anyhow::Result;
 use futures_util::future::{AbortHandle, Abortable};
 use std::{
@@ -39,7 +40,7 @@ struct Activity {
 pub(super) struct ActivityGuard(Arc<Activity>);
 impl Drop for ActivityGuard {
     fn drop(&mut self) {
-        let mut state = self.0.state.lock().unwrap();
+        let mut state = self.0.state.lock_unpoisoned();
         state.1 -= 1;
         self.0.changed.notify_all();
     }
@@ -72,12 +73,12 @@ impl Transport {
     }
 
     pub fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::SeqCst) || self.group.state.lock().unwrap().closed
+        self.closed.load(Ordering::SeqCst) || self.group.state.lock_unpoisoned().closed
     }
 
     /// Covers authentication, response headers, body and decoding as one read.
     pub fn activity(&self) -> Result<ActivityGuard> {
-        let mut state = self.activity.state.lock().unwrap();
+        let mut state = self.activity.state.lock_unpoisoned();
         anyhow::ensure!(!state.0 && !self.is_closed(), crate::export::Cancelled);
         anyhow::ensure!(state.1 < MAX_REQUESTS, "Trino activity limit reached");
         state.1 += 1;
@@ -85,12 +86,12 @@ impl Transport {
     }
 
     pub fn seal(&self) {
-        self.activity.state.lock().unwrap().0 = true;
+        self.activity.state.lock_unpoisoned().0 = true;
     }
 
     /// A successful DELETE does not prove an earlier response read has stopped.
     pub fn wait_idle(&self, deadline: Instant) -> Result<()> {
-        let mut state = self.activity.state.lock().unwrap();
+        let mut state = self.activity.state.lock_unpoisoned();
         while state.1 != 0 {
             let remaining = deadline.saturating_duration_since(Instant::now());
             anyhow::ensure!(
@@ -110,7 +111,7 @@ impl Transport {
     /// The lease remains in reqwest's connecting future and pooled connection.
     pub fn register(&self, stream: &tokio::net::TcpStream) -> io::Result<Arc<dyn Send + Sync>> {
         let socket = TcpStream::from(stream.as_fd().try_clone_to_owned()?);
-        let mut state = self.group.state.lock().unwrap();
+        let mut state = self.group.state.lock_unpoisoned();
         state
             .sockets
             .retain(|(_, socket)| socket.strong_count() != 0);
@@ -131,7 +132,7 @@ impl Transport {
         let (abort, registration) = AbortHandle::new_pair();
         let lease = Arc::new(RequestLease(abort));
         {
-            let mut state = self.group.state.lock().unwrap();
+            let mut state = self.group.state.lock_unpoisoned();
             state
                 .requests
                 .retain(|(_, request)| request.strong_count() != 0);
@@ -159,7 +160,7 @@ impl Transport {
     }
 
     fn shutdown(&self, all: bool) {
-        let mut state = self.group.state.lock().unwrap();
+        let mut state = self.group.state.lock_unpoisoned();
         self.closed.store(true, Ordering::SeqCst);
         state.closed |= all;
         for (id, socket) in &state.sockets {

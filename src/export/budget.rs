@@ -1,4 +1,5 @@
 //! One counter for shared sources and live export allocations.
+use crate::sync::LockExt as _;
 use std::{
     collections::BTreeMap,
     io,
@@ -50,7 +51,7 @@ impl Budget {
     }
 
     pub(crate) fn allowance(self: &Arc<Self>, limit: usize) -> io::Result<Arc<Allowance>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         if limit > self.limit.saturating_sub(state.used) {
             return Err(full());
         }
@@ -65,7 +66,7 @@ impl Budget {
     }
 
     pub(crate) fn acquire(self: &Arc<Self>, bytes: usize) -> io::Result<Allocation> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         if bytes > self.limit.saturating_sub(state.used) {
             return Err(full());
         }
@@ -79,7 +80,7 @@ impl Budget {
 
     /// The owner must retain each allocation's Arc until this guard drops.
     pub(crate) fn share(self: &Arc<Self>, batches: &[(usize, usize)]) -> io::Result<Shared> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         let overhead = batches
             .len()
             .checked_mul(std::mem::size_of::<(usize, usize)>())
@@ -131,7 +132,7 @@ impl Allowance {
         self.limit
     }
     pub(crate) fn acquire(self: &Arc<Self>, bytes: usize) -> io::Result<Allocation> {
-        let mut used = self.used.lock().unwrap();
+        let mut used = self.used.lock_unpoisoned();
         if bytes > self.limit.saturating_sub(*used) {
             return Err(io::Error::other(
                 "This export exceeds its working memory limit.",
@@ -149,9 +150,9 @@ impl Allowance {
 impl Drop for Allocation {
     fn drop(&mut self) {
         if let Some(allowance) = &self.allowance {
-            *allowance.used.lock().unwrap() -= self.bytes;
+            *allowance.used.lock_unpoisoned() -= self.bytes;
         } else {
-            self.global.state.lock().unwrap().used -= self.bytes;
+            self.global.state.lock_unpoisoned().used -= self.bytes;
         }
     }
 }
@@ -164,13 +165,13 @@ impl Allocation {
 
 impl Drop for Allowance {
     fn drop(&mut self) {
-        self.global.state.lock().unwrap().used -= self.limit;
+        self.global.state.lock_unpoisoned().used -= self.limit;
     }
 }
 
 impl Drop for Shared {
     fn drop(&mut self) {
-        let mut state = self.global.state.lock().unwrap();
+        let mut state = self.global.state.lock_unpoisoned();
         for (id, _) in &self.batches {
             let entry = state.shared.get_mut(id).unwrap();
             entry.1 -= 1;

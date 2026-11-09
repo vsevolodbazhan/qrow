@@ -13,6 +13,7 @@ use super::{
     Cancellation, ConnectionControl, Connector, MetadataRequest, QueryError, QueryState, Secret,
     Session,
 };
+use crate::sync::LockExt as _;
 use crate::{
     model::{
         Authentication, Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PostgresSslMode, Profile,
@@ -75,8 +76,7 @@ impl Cancel {
         }
         let timeout = self
             .deadline
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .map_or(self.timeout, |deadline| {
                 deadline.saturating_duration_since(Instant::now())
             });
@@ -88,7 +88,7 @@ impl Cancel {
                 &self.endpoint,
                 self.tls.clone(),
                 |socket| {
-                    *self.secondary.lock().unwrap() = Some(socket.clone());
+                    *self.secondary.lock_unpoisoned() = Some(socket.clone());
                     if self.closed.load(Ordering::SeqCst) {
                         socket.abort_transport();
                     }
@@ -109,7 +109,7 @@ impl Cancel {
             // A partially sent packet can still arrive. Do not reuse its backend.
             self.abort_transport();
         }
-        self.secondary.lock().unwrap().take();
+        self.secondary.lock_unpoisoned().take();
         result
     }
 
@@ -138,7 +138,7 @@ impl Cancel {
 
     fn finish(&self) {
         self.finished.store(true, Ordering::SeqCst);
-        *self.completion.0.lock().unwrap() = true;
+        *self.completion.0.lock_unpoisoned() = true;
         self.completion.1.notify_all();
     }
 }
@@ -158,11 +158,11 @@ impl Cancellation for Cancel {
             return Ok(());
         }
         {
-            let mut current = self.deadline.lock().unwrap();
+            let mut current = self.deadline.lock_unpoisoned();
             *current = Some(current.map_or(deadline, |old| old.min(deadline)));
         }
         self.cancel()?;
-        let mut finished = self.completion.0.lock().unwrap();
+        let mut finished = self.completion.0.lock_unpoisoned();
         while !*finished {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -180,7 +180,7 @@ impl Cancellation for Cancel {
     }
     fn abort_transport(&self) {
         self.transport.abort_transport();
-        if let Some(socket) = self.secondary.lock().unwrap().as_ref() {
+        if let Some(socket) = self.secondary.lock_unpoisoned().as_ref() {
             socket.abort_transport();
         }
     }

@@ -2,6 +2,7 @@ use super::{
     Cancellation, Completion, Connector, MetadataRequest, QueryError, QueryState, Secret, Session,
     sasl, t_c_l_i_service::*, wait_for_completion,
 };
+use crate::sync::LockExt as _;
 use crate::{
     model::{Authentication, Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row},
     tls::Trust,
@@ -143,7 +144,7 @@ impl Credentials {
         sasl::connect_registered(&endpoint, &profile.username, &secret, |socket| {
             control.register(socket)
         }).inspect(|_| {
-            *self.authenticated_secret.lock().unwrap() = Some(Arc::new(secret.clone()));
+            *self.authenticated_secret.lock_unpoisoned() = Some(Arc::new(secret.clone()));
         }).map_err(|error| {
             if error.downcast_ref::<sasl::Rejected>().is_none() {
                 return error;
@@ -178,7 +179,7 @@ struct CancelTransport {
 impl Cancellation for Cancel {
     fn abort_transport(&self) {
         self.abort.shutdown();
-        let mut transport = self.transport.lock().unwrap();
+        let mut transport = self.transport.lock_unpoisoned();
         transport.aborted = true;
         if let Some(socket) = &transport.socket {
             socket.shutdown();
@@ -202,7 +203,7 @@ impl Cancellation for Cancel {
             self.abort.peer()?,
             deadline,
             |socket| {
-                let mut transport = self.transport.lock().unwrap();
+                let mut transport = self.transport.lock_unpoisoned();
                 ensure!(!transport.aborted, "Cancellation cleanup deadline passed");
                 transport.socket = Some(socket);
                 Ok(())
@@ -829,8 +830,7 @@ impl HiveSession {
             secret: self
                 .credentials
                 .authenticated_secret
-                .lock()
-                .unwrap()
+                .lock_unpoisoned()
                 .as_ref()
                 .context("No authenticated session credential")?
                 .clone(),

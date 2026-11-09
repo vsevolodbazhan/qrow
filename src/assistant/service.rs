@@ -14,11 +14,12 @@ use super::{
     inbox::{CommandSender, Inbox, SendError},
 };
 use crate::model::AssistantHarness;
+use crate::sync::LockExt as _;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -216,7 +217,7 @@ pub(crate) struct ProcessIds(Arc<Mutex<BTreeSet<u32>>>);
 
 impl ProcessIds {
     fn ids(&self) -> std::sync::MutexGuard<'_, BTreeSet<u32>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.0.lock_unpoisoned()
     }
 
     pub(crate) fn add(&self, pid: u32) {
@@ -518,9 +519,7 @@ impl Service {
             pids.kill_all();
             return;
         }
-        let mut stops = BACKGROUND_STOPS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut stops = BACKGROUND_STOPS.lock_unpoisoned();
         stops.retain(|stop| matches!(stop.try_recv(), Err(mpsc::TryRecvError::Empty)));
         stops.push(stop);
     }
@@ -528,11 +527,7 @@ impl Service {
     /// Waits until the background stops end, at most until `deadline`. Quit
     /// calls this, so that no Codex process outlives Qrow.
     pub fn wait_for_background_stops(deadline: Instant) {
-        let stops = std::mem::take(
-            &mut *BACKGROUND_STOPS
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
+        let stops = std::mem::take(&mut *BACKGROUND_STOPS.lock_unpoisoned());
         for stop in stops {
             let _ = stop.recv_timeout(deadline.saturating_duration_since(Instant::now()));
         }

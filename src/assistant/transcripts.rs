@@ -6,12 +6,13 @@
 //! for each entry, oldest first. A writer thread replaces the whole file
 //! atomically, so a crash leaves the old or the new file.
 
+use crate::sync::LockExt as _;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::{BTreeSet, VecDeque},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, PoisonError, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -253,7 +254,7 @@ impl TranscriptStore {
     /// The conversations whose last save failed since the previous call.
     /// Save them again.
     pub fn take_failed(&self) -> Vec<String> {
-        std::mem::take(&mut *self.failed.lock().unwrap_or_else(PoisonError::into_inner))
+        std::mem::take(&mut *self.failed.lock_unpoisoned())
             .into_iter()
             .collect()
     }
@@ -310,7 +311,7 @@ fn write_jobs(directory: &Path, receiver: &mpsc::Receiver<Job>, failed: &Failed)
                     _ => Ok(()),
                 },
             };
-            let mut failed = failed.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut failed = failed.lock_unpoisoned();
             match result {
                 Ok(()) => {
                     failed.remove(&thread);

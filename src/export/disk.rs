@@ -1,4 +1,5 @@
 //! Spools and final outputs share reservations on each filesystem.
+use crate::sync::LockExt as _;
 use std::{
     collections::HashMap,
     fs::File,
@@ -29,7 +30,7 @@ impl Reservations {
         available: impl FnOnce() -> io::Result<u64>,
         floor: u64,
     ) -> io::Result<Reservation> {
-        let mut counts = self.0.lock().unwrap();
+        let mut counts = self.0.lock_unpoisoned();
         let reserved = counts.get(&volume).copied().unwrap_or(0);
         let total = reserved
             .checked_add(bytes)
@@ -52,7 +53,7 @@ impl Reservations {
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        let mut counts = self.owner.0.lock().unwrap();
+        let mut counts = self.owner.0.lock_unpoisoned();
         let count = counts.get_mut(&self.volume).unwrap();
         *count -= self.bytes;
         if *count == 0 {

@@ -1,6 +1,7 @@
 //! A growing preview prefix or a capacity-one direct-export channel.
 use super::*;
 use crate::export::budget;
+use crate::sync::LockExt as _;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Mode {
@@ -46,25 +47,25 @@ pub(super) struct Progress {
 
 impl Progress {
     pub(super) fn fail(&self, error: &anyhow::Error) {
-        self.state.lock().unwrap().outcome = Some(Err(Failure::of(error)));
+        self.state.lock_unpoisoned().outcome = Some(Err(Failure::of(error)));
         self.changed.notify_all();
     }
     pub(super) fn finish(&self, result: &Result<()>) {
-        self.state.lock().unwrap().outcome = Some(result.as_ref().copied().map_err(Failure::of));
+        self.state.lock_unpoisoned().outcome = Some(result.as_ref().copied().map_err(Failure::of));
         self.changed.notify_all();
     }
     pub(super) fn completed(&self) -> Result<bool> {
-        match self.state.lock().unwrap().outcome.clone() {
+        match self.state.lock_unpoisoned().outcome.clone() {
             None => Ok(false),
             Some(Ok(())) => Ok(true),
             Some(Err(error)) => Err(error.error()),
         }
     }
     pub(super) fn limited(&self) -> bool {
-        self.state.lock().unwrap().limited
+        self.state.lock_unpoisoned().limited
     }
     pub(super) fn wait(&self) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         loop {
             if let Some(outcome) = &state.outcome {
                 return outcome.clone().map_err(Failure::error);
@@ -73,7 +74,7 @@ impl Progress {
         }
     }
     fn row(&self, consumed: usize) -> Result<Option<u64>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         loop {
             if let Some(Err(error)) = &state.outcome {
                 return Err(error.clone().error());
@@ -174,7 +175,7 @@ impl Prefix {
         if self.rows >= MAX_RESULT_ROWS || self.owned_bytes.saturating_add(bytes) > MAX_RESULT_BYTES
         {
             self.limited = true;
-            progress.state.lock().unwrap().limited = true;
+            progress.state.lock_unpoisoned().limited = true;
         }
         if self.limited {
             return Ok(());
@@ -205,7 +206,7 @@ impl Prefix {
     pub(super) fn commit(&mut self, progress: &Progress) -> Result<()> {
         self.writer.flush()?;
         self.published = self.encoded;
-        let mut state = progress.state.lock().unwrap();
+        let mut state = progress.state.lock_unpoisoned();
         state.rows = self.rows;
         state.bytes = self.encoded;
         state.limited = self.limited;

@@ -14,6 +14,7 @@ pub mod oidc;
 pub mod pagination;
 pub mod sql;
 pub mod storage;
+mod sync;
 #[cfg(feature = "ui")]
 mod themes;
 pub mod tls;

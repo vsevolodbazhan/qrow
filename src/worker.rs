@@ -1,3 +1,4 @@
+use crate::sync::LockExt as _;
 use crate::{
     connector::{
         Cancellation, Completion, Connector, QueryError, QueryState, Secret, Session,
@@ -238,7 +239,7 @@ impl Worker {
                 if let Err(error) = result {
                     if error.is::<crate::external_auth::Cancelled>() {
                         runner.disconnect();
-                        *runner.target.lock().unwrap() = None;
+                        *runner.target.lock_unpoisoned() = None;
                         runner.emit(Event::Disconnected);
                         runner.emit(Event::Cancelled);
                         idle_started = Instant::now();
@@ -260,7 +261,7 @@ impl Worker {
                     if disconnected {
                         runner.disconnect();
                     }
-                    *runner.target.lock().unwrap() = None;
+                    *runner.target.lock_unpoisoned() = None;
                     runner.log(
                         runner.execution_id(),
                         Severity::Error,
@@ -352,8 +353,7 @@ impl Worker {
     ) -> std::io::Result<Arc<Download>> {
         let profile = self
             .session_identity
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .as_ref()
             .map(|session| session.profile.clone())
             .ok_or_else(|| std::io::Error::other("The result session ended."))?;
@@ -391,7 +391,7 @@ impl Worker {
     pub fn update_profile(&self, profile: Profile) -> Result<()> {
         profile.lifecycle.validate()?;
         profile.transfer.validate()?;
-        if let Some(session) = self.session_identity.lock().unwrap().as_mut()
+        if let Some(session) = self.session_identity.lock_unpoisoned().as_mut()
             && session.profile.connection_identity_eq(&profile)
         {
             session.profile = profile.clone();
@@ -402,7 +402,7 @@ impl Worker {
     /// Change idle protection without restarting the idle timer.
     /// Explicit disconnection and keep-alive queries do not use this guard.
     pub fn set_idle_guard(&self, guard: Option<IdleGuard>) {
-        *self.idle_guard.lock().unwrap() = guard;
+        *self.idle_guard.lock_unpoisoned() = guard;
     }
     pub fn disconnect(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -418,12 +418,12 @@ impl Worker {
         let _ = self.done.recv_timeout(timeout);
     }
     pub fn cancel(&self) {
-        if let Some(download) = self.download.lock().unwrap().clone() {
+        if let Some(download) = self.download.lock_unpoisoned().clone() {
             download.cancel();
             return;
         }
         self.cancelled.store(true, Ordering::SeqCst);
-        let cancellation = self.target.lock().unwrap().clone();
+        let cancellation = self.target.lock_unpoisoned().clone();
         if let Some(cancellation) = cancellation {
             let tx = self.event_tx.clone();
             let wake = self.wake.clone();
@@ -546,10 +546,10 @@ impl Runner {
         );
     }
     fn disconnect(&mut self) {
-        *self.session_identity.lock().unwrap() = None;
+        *self.session_identity.lock_unpoisoned() = None;
         self.cursor = Cursor::Unavailable;
         self.pending = None;
-        *self.target.lock().unwrap() = None;
+        *self.target.lock_unpoisoned() = None;
         if let Some(mut session) = self.session.take() {
             let _ = session.close();
         }
@@ -611,7 +611,7 @@ impl Runner {
                     .connect_controlled(&profile, secret, control)?,
                 None => self.connector.connect(&profile, secret)?,
             });
-            *self.session_identity.lock().unwrap() = Some(SessionIdentity {
+            *self.session_identity.lock_unpoisoned() = Some(SessionIdentity {
                 generation: uuid::Uuid::new_v4(),
                 profile: profile.clone(),
             });
@@ -629,7 +629,7 @@ impl Runner {
             );
             self.emit(Event::Connected);
         } else {
-            if let Some(session) = self.session_identity.lock().unwrap().as_mut() {
+            if let Some(session) = self.session_identity.lock_unpoisoned().as_mut() {
                 session.profile = profile.clone();
             }
             self.profile = Some(profile);
@@ -670,9 +670,9 @@ impl Runner {
             fetch_page: 0,
             execution_completed: false,
         });
-        *self.target.lock().unwrap() = None;
+        *self.target.lock_unpoisoned() = None;
         let cancellation = self.session.as_mut().unwrap().execute(&sql)?;
-        *self.target.lock().unwrap() = Some(cancellation.clone());
+        *self.target.lock_unpoisoned() = Some(cancellation.clone());
         self.emit_session(execution_id);
         self.log(
             Some(execution_id),
@@ -690,7 +690,7 @@ impl Runner {
         match state {
             QueryState::Cancelled => {
                 self.session.as_mut().unwrap().close_operation()?;
-                *self.target.lock().unwrap() = None;
+                *self.target.lock_unpoisoned() = None;
                 self.log(
                     Some(execution_id),
                     Severity::Info,
@@ -704,7 +704,7 @@ impl Runner {
             QueryState::Streaming { has_results } | QueryState::Finished { has_results } => {
                 if self.cancelled.load(Ordering::SeqCst) {
                     self.session.as_mut().unwrap().close_operation()?;
-                    *self.target.lock().unwrap() = None;
+                    *self.target.lock_unpoisoned() = None;
                     self.log(
                         Some(execution_id),
                         Severity::Info,
@@ -723,7 +723,7 @@ impl Runner {
                         return Ok(());
                     }
                     self.session.as_mut().unwrap().close_operation()?;
-                    *self.target.lock().unwrap() = None;
+                    *self.target.lock_unpoisoned() = None;
                     self.complete_execution(false);
                     self.emit(Event::Ready {
                         more: false,
@@ -849,7 +849,7 @@ impl Runner {
                     self.set_cursor(Cursor::Available);
                 } else {
                     self.session.as_mut().unwrap().close_operation()?;
-                    *self.target.lock().unwrap() = None;
+                    *self.target.lock_unpoisoned() = None;
                     self.set_cursor(if limited {
                         Cursor::Unavailable
                     } else {
@@ -947,7 +947,7 @@ impl Runner {
             });
             return;
         }
-        let target = self.target.lock().unwrap().clone();
+        let target = self.target.lock_unpoisoned().clone();
         let Some(target) = target else {
             let message = "The result cursor is no longer available.".to_owned();
             download
@@ -983,7 +983,7 @@ impl Runner {
             });
             return;
         }
-        *self.download.lock().unwrap() = Some(download.clone());
+        *self.download.lock_unpoisoned() = Some(download.clone());
         self.set_cursor(Cursor::Draining);
         let started = Instant::now();
         let mut count = 0usize;
@@ -1070,8 +1070,8 @@ impl Runner {
         }
         let event = match result {
             Ok(()) => {
-                *self.target.lock().unwrap() = None;
-                *self.download.lock().unwrap() = None;
+                *self.target.lock_unpoisoned() = None;
+                *self.download.lock_unpoisoned() = None;
                 self.set_cursor(Cursor::Downloaded);
                 Event::Downloaded {
                     execution,
@@ -1086,8 +1086,8 @@ impl Runner {
                     .as_mut()
                     .is_none_or(|session| session.close_operation().is_err());
                 let disconnected = !download.stopped() || close;
-                *self.target.lock().unwrap() = None;
-                *self.download.lock().unwrap() = None;
+                *self.target.lock_unpoisoned() = None;
+                *self.download.lock_unpoisoned() = None;
                 if disconnected {
                     self.disconnect();
                 }
@@ -1163,7 +1163,7 @@ impl Runner {
             .as_mut()
             .context("Session is disconnected")?
             .close_operation()?;
-        *self.target.lock().unwrap() = None;
+        *self.target.lock_unpoisoned() = None;
         self.pending = None;
         self.cursor = Cursor::Consumed;
         self.log(
