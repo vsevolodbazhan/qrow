@@ -95,7 +95,8 @@ Settings to change the times and the SQL. The default font is JetBrains Mono,
 and the default line-height multiplier is 1.2.
 
 A code block of more than 5 lines shows its first 5 lines, which fade out at
-the bottom. Click **Expand query** at the right of the entry to show all lines,
+the bottom. Query buttons are inside the top-right corner of the code block.
+A separate lane keeps SQL clear of the buttons. Click **Expand query** to show all lines,
 and **Collapse query** to show 5 lines again. **Copy query** on a submitted
 query copies all of its SQL, also the lines that a collapsed block does not
 show.

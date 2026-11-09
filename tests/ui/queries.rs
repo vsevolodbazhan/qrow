@@ -1043,7 +1043,7 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
     let sql_blocks = |window: &gpui_kit::Window| {
         crate::support::elements(window)
             .into_iter()
-            .filter(|element| element.path().last() == Some(&"sql".into()))
+            .filter(|element| element.path().last() == Some(&"sql-text".into()))
             .collect::<Vec<_>>()
     };
     // A frame lays out and paints the rows on screen and a band around
@@ -1058,8 +1058,9 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
         (blocks.len(), visible)
     });
     assert!(drawn < 30, "The Logs drew {drawn} of 30 queries");
-    let start = point(sql.left() + px(12.), sql.top() + px(8.));
-    let end = point(sql.right() - px(12.), sql.bottom() - px(8.));
+    // Select within the text lane; the SQL block also contains buttons.
+    let start = point(sql.left() + px(4.), sql.top() + px(4.));
+    let end = point(sql.right() - px(4.), sql.bottom() - px(4.));
     app.update(cx, |window, cx| {
         window.activate_window();
         window.dispatch_event(
@@ -1230,6 +1231,71 @@ fn a_long_logged_query_shows_five_lines_until_it_expands(cx: &mut TestAppContext
             && copied.trim_end().ends_with("ORDER BY departures DESC;"),
         "Copy query must copy the full SQL: {copied:?}"
     );
+}
+
+#[gpui_kit::test]
+fn logged_query_buttons_stay_inside_code_and_clear_of_long_sql(cx: &mut TestAppContext) {
+    use qrow::logs::{LogEvent, LogKind};
+
+    let app = TestApp::launch(cx, Workspace::default());
+    let sql = format!(
+        "SELECT '{}' AS value\n-- two\n-- three\n-- four\n-- five\n-- six",
+        "長い列名".repeat(80)
+    );
+    app.qrow
+        .update(cx, |qrow, cx| {
+            qrow.record_tab_logs(
+                0,
+                vec![LogEvent::new(
+                    None,
+                    Severity::Info,
+                    LogKind::Submitted,
+                    format!("Submitted query:\n{sql}"),
+                )],
+                cx,
+            );
+        })
+        .unwrap();
+    app.click(cx, "output-panel-tab");
+    let check = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| {
+            let block = bounds_of(window, "sql");
+            let text = bounds_of(window, "sql-text");
+            let copy = crate::support::elements(window)
+                .into_iter()
+                .find(|element| element.path().last() == Some(&("output-copy-query", 0_u64).into()))
+                .unwrap()
+                .bounds();
+            let expand = crate::support::elements(window)
+                .into_iter()
+                .find(|element| element.path().last() == Some(&("output-expand", 0_u64).into()))
+                .unwrap()
+                .bounds();
+            assert!(copy.left() >= block.left() && expand.right() <= block.right());
+            assert!(copy.top() >= block.top() && copy.bottom() <= block.bottom());
+            assert!(expand.top() >= block.top() && expand.bottom() <= block.bottom());
+            assert!(
+                text.right() <= copy.left(),
+                "SQL must leave a separate button lane"
+            );
+            assert!(block.right() <= window.viewport_size().width);
+        });
+    };
+    for width in [1280., 900.] {
+        cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(820.)));
+        app.settle(cx);
+        check(&app, cx);
+        app.click(cx, ("output-copy-query", 0_u64));
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(sql.clone())
+        );
+        app.click(cx, ("output-expand", 0_u64));
+        app.settle(cx);
+        check(&app, cx);
+        app.click(cx, ("output-expand", 0_u64));
+        app.settle(cx);
+    }
 }
 
 #[gpui_kit::test]

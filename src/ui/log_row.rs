@@ -87,6 +87,7 @@ pub(super) struct LogRow {
     font_size: Pixels,
     line_height: f32,
     actions: Vec<AnyElement>,
+    code_actions: Vec<AnyElement>,
     collapsed: bool,
 }
 
@@ -109,6 +110,7 @@ impl LogRow {
             font_size: px(13.),
             line_height: 1.2,
             actions: Vec::new(),
+            code_actions: Vec::new(),
             collapsed: false,
         }
     }
@@ -139,6 +141,12 @@ impl LogRow {
     /// Show only the first lines of a long code block, which fade out.
     pub(super) fn collapsed(mut self, collapsed: bool) -> Self {
         self.collapsed = collapsed;
+        self
+    }
+
+    /// Keep query actions beside the code, in a lane that text cannot cover.
+    pub(super) fn code_action(mut self, action: impl IntoElement) -> Self {
+        self.code_actions.push(action.into_any_element());
         self
     }
 
@@ -262,40 +270,59 @@ impl RenderOnce for LogRow {
                     .child(div().min_h_5().flex().items_center().child(header))
                     .when_some(body, |el, body| {
                         el.child(
-                            div()
+                            h_flex()
                                 .id("sql")
                                 .test_support()
                                 .mt_1()
                                 .mb_1()
                                 .px_2()
                                 .py_1()
-                                .relative()
+                                .items_start()
+                                .gap_2()
+                                .min_w_0()
                                 .rounded(theme.radius)
                                 .bg(theme.muted)
                                 .font_family(self.font_family.clone())
                                 .text_color(theme.foreground)
-                                .child(body)
-                                .when(faded, |el| {
-                                    el.child(
-                                        div()
-                                            .id("sql-fade")
-                                            .test_support()
-                                            .absolute()
-                                            .left_0()
-                                            .right_0()
-                                            .bottom_0()
-                                            .h(self.font_size * self.line_height * 2.)
-                                            .rounded_b(theme.radius)
-                                            .bg(linear_gradient(
-                                                180.,
-                                                linear_color_stop(theme.muted.opacity(0.), 0.),
-                                                linear_color_stop(theme.muted, 1.),
-                                            )),
-                                    )
+                                .child(
+                                    div()
+                                        .id("sql-text")
+                                        .test_support()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .relative()
+                                        .child(body)
+                                        .when(faded, |el| {
+                                            el.child(
+                                                div()
+                                                    .id("sql-fade")
+                                                    .test_support()
+                                                    .absolute()
+                                                    .left_0()
+                                                    .right_0()
+                                                    .bottom_0()
+                                                    .h(self.font_size * self.line_height * 2.)
+                                                    .rounded_b(theme.radius)
+                                                    .bg(linear_gradient(
+                                                        180.,
+                                                        linear_color_stop(
+                                                            theme.muted.opacity(0.),
+                                                            0.,
+                                                        ),
+                                                        linear_color_stop(theme.muted, 1.),
+                                                    )),
+                                            )
+                                        }),
+                                )
+                                .when(!self.code_actions.is_empty(), |el| {
+                                    el.child(lane().gap_1().children(self.code_actions))
                                 }),
                         )
                     }),
             )
-            .child(lane().gap_1().children(self.actions))
+            .when(!self.actions.is_empty(), |el| {
+                el.child(lane().gap_1().children(self.actions))
+            })
     }
 }
