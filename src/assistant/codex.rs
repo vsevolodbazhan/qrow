@@ -37,7 +37,8 @@ pub(crate) use process::terminate_process_group;
 #[cfg(windows)]
 pub(crate) use process::terminate_process_tree;
 pub(super) use process::{
-    LaunchChild, WriteCommand, kill_process_tree, read_stderr_tail, write_protocol_stream,
+    LaunchChild, WriteCommand, WriteFailure, kill_process_tree, read_stderr_tail, send_line,
+    write_protocol_stream,
 };
 use protocol::{
     AccountResponse, CodexRequestError, CodexTurn, DynamicToolCall, ErrorResponse,
@@ -697,26 +698,17 @@ impl CodexHarness {
             bytes.len() <= MAX_PROTOCOL_LINE_BYTES,
             "Codex request exceeded the protocol size limit"
         );
-        let writer = self
-            .writer
-            .as_ref()
-            .context("Codex app-server input is closed")?;
-        let (completed, completion) = mpsc::sync_channel(1);
-        writer
-            .try_send(WriteCommand { bytes, completed })
-            .map_err(|error| match error {
-                TrySendError::Full(_) => anyhow!("Codex app-server input is busy"),
-                TrySendError::Disconnected(_) => anyhow!("Codex app-server input is closed"),
-            })?;
-        match completion.recv_timeout(self.request_timeout) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => bail!("{error}{}", self.diagnostic_suffix()),
-            Err(RecvTimeoutError::Timeout) => bail!(
+        match send_line(self.writer.as_ref(), bytes, self.request_timeout) {
+            Ok(()) => Ok(()),
+            Err(WriteFailure::Busy) => bail!("Codex app-server input is busy"),
+            Err(WriteFailure::Closed) => bail!("Codex app-server input is closed"),
+            Err(WriteFailure::Failed(error)) => bail!("{error}{}", self.diagnostic_suffix()),
+            Err(WriteFailure::Timeout) => bail!(
                 "Codex app-server did not accept a request within {} seconds{}",
                 self.request_timeout.as_secs_f32(),
                 self.diagnostic_suffix()
             ),
-            Err(RecvTimeoutError::Disconnected) => {
+            Err(WriteFailure::Stopped) => {
                 bail!("Codex app-server input closed{}", self.diagnostic_suffix())
             }
         }
