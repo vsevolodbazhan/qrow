@@ -1042,7 +1042,7 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
     let sql_blocks = |window: &gpui_kit::Window| {
         crate::support::elements(window)
             .into_iter()
-            .filter(|element| element.path().last() == Some(&"sql".into()))
+            .filter(|element| element.path().last() == Some(&"sql-text".into()))
             .collect::<Vec<_>>()
     };
     // A frame lays out and paints the rows on screen and a band around
@@ -1057,8 +1057,9 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
         (blocks.len(), visible)
     });
     assert!(drawn < 30, "The Logs drew {drawn} of 30 queries");
-    let start = point(sql.left() + px(12.), sql.top() + px(8.));
-    let end = point(sql.right() - px(12.), sql.bottom() - px(8.));
+    // Select within the text lane; the SQL block also contains buttons.
+    let start = point(sql.left() + px(4.), sql.top() + px(4.));
+    let end = point(sql.right() - px(4.), sql.bottom() - px(4.));
     app.update(cx, |window, cx| {
         window.activate_window();
         window.dispatch_event(
