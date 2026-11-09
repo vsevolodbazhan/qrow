@@ -60,3 +60,5 @@ The screenshot shows `qrow --demo`, so it contains only synthetic data.
 ## Limitations
 
 - The page is not published yet. It has no hosting or deploy workflow.
+- The social preview image (`og:image`) uses a relative URL. Social sites
+  need a full URL. Set the full HTTPS URL when the page gets its domain.
