@@ -425,7 +425,6 @@ impl Qrow {
                 let button = Button::new("run")
                     .primary()
                     .small()
-                    .icon(IconName::ArrowRight)
                     .label("Run")
                     .map(|mut button| {
                         button.interactivity().tooltip(

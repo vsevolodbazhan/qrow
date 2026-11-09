@@ -17,6 +17,19 @@ use std::{
 };
 
 #[gpui_kit::test]
+fn run_is_a_compact_text_button(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    app.update(cx, |window, _| {
+        let button = bounds_of(window, "run");
+        assert_eq!(label(window, "run").as_deref(), Some("Run"));
+        assert!(
+            button.size.width <= button.size.height * 2.,
+            "Run should fit its text without space for a leading icon: {button:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.type_sql(cx, "SELECT '日本語😀;';\nSELECT 2;\n-- trailing ;\n");
