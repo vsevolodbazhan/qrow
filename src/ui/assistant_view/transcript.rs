@@ -208,6 +208,10 @@ pub(in crate::ui) struct TranscriptEntry {
     /// Shared strings, so that each frame passes the text and the label
     /// without a copy. A change replaces them.
     text: SharedString,
+    /// The text of a reply while its parts arrive. It grows in place, so a
+    /// long reply does not copy all its text for each part. The text moves
+    /// to `text` when the reply is complete.
+    growing: Option<String>,
     label: SharedString,
     /// The part of `text` that shows. A streamed reply shows its text step
     /// by step. See [`Reveal`].
@@ -228,6 +232,7 @@ impl TranscriptEntry {
             id: Uuid::new_v4(),
             speaker,
             text: SharedString::default(),
+            growing: None,
             label: SharedString::default(),
             shown: SharedString::default(),
             reveal: None,
@@ -257,8 +262,9 @@ impl TranscriptEntry {
         entry
     }
 
-    pub fn text(&self) -> &SharedString {
-        &self.text
+    /// All received text, also the text that does not show yet.
+    pub fn text(&self) -> &str {
+        self.growing.as_deref().unwrap_or(&self.text)
     }
 
     /// The text that the transcript shows.
@@ -289,6 +295,7 @@ impl TranscriptEntry {
     /// new text continues shows the rest step by step.
     pub fn set_text(&mut self, text: impl Into<SharedString>) {
         let text = text.into();
+        self.growing = None;
         match &mut self.reveal {
             Some(reveal) if text.starts_with(self.shown.as_str()) => reveal.complete(),
             _ => self.reveal = None,
@@ -319,26 +326,37 @@ impl TranscriptEntry {
         self.label = format!("{speaker}: {}", self.shown).into();
     }
 
-    /// Appends a streamed part. This copies the text once for each part.
+    /// Appends a streamed part. While the text reveals step by step, the
+    /// part only grows the received text. Else it shows at once.
     pub fn push_text(&mut self, part: &str) {
-        let mut text = String::with_capacity(self.text.len() + part.len());
-        text.push_str(&self.text);
-        text.push_str(part);
-        if let Some(reveal) = &mut self.reveal {
-            reveal.received();
+        let growing = self.growing.get_or_insert_with(|| self.text.to_string());
+        growing.push_str(part);
+        match &mut self.reveal {
+            Some(reveal) => reveal.received(),
+            None => {
+                let text = self.growing.take().unwrap_or_default();
+                self.replace_text(text.into());
+            }
         }
-        self.replace_text(text.into());
+    }
+
+    /// Move the received text of a complete reply to the shared text.
+    fn settle(&mut self) {
+        if let Some(text) = self.growing.take() {
+            self.text = text.into();
+        }
     }
 
     /// Whether the entry has streamed text that does not show yet.
     pub fn revealing(&self) -> bool {
-        self.reveal.is_some() && self.shown.len() < self.text.len()
+        self.reveal.is_some() && self.shown.len() < self.text().len()
     }
 
     pub fn finish_reply(&mut self) {
         if let Some(reveal) = &mut self.reveal {
             reveal.complete();
         }
+        self.settle();
     }
 
     pub fn reply_complete(&self) -> bool {
@@ -370,13 +388,14 @@ impl TranscriptEntry {
         let Some(reveal) = &mut self.reveal else {
             return false;
         };
-        if !reveal.advance(&self.text, elapsed) {
+        let text = self.growing.as_deref().unwrap_or(&self.text);
+        if !reveal.advance(text, elapsed) {
             return false;
         }
-        self.shown = if reveal.shown() == self.text.len() {
+        self.shown = if self.growing.is_none() && reveal.shown() == self.text.len() {
             self.text.clone()
         } else {
-            self.text[..reveal.shown()].to_owned().into()
+            text[..reveal.shown()].to_owned().into()
         };
         self.shown_changed();
         true
@@ -384,6 +403,10 @@ impl TranscriptEntry {
 
     /// Shows all streamed text at once. Returns whether the shown text changed.
     pub fn show_all(&mut self) -> bool {
+        if self.reveal.is_none() {
+            return false;
+        }
+        self.settle();
         let Some(reveal) = &mut self.reveal else {
             return false;
         };
@@ -757,6 +780,25 @@ mod tests {
         // The last page removes the button.
         assert_eq!(row_change(&rows, &rows[1..]), change(0..1, 0, &[]));
         assert_eq!(row_change(&[], &rows), change(0..0, 3, &[]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn streamed_parts_grow_the_text_until_the_reply_shows() {
+        let mut entry = TranscriptEntry::streamed(Speaker::Assistant, "Hello", None);
+        entry.push_text(", world");
+        assert_eq!(entry.text(), "Hello, world");
+        assert_eq!(entry.shown_text().as_str(), "");
+        assert!(entry.revealing());
+        entry.finish_reply();
+        assert_eq!(entry.text(), "Hello, world");
+        assert!(entry.show_all());
+        assert_eq!(entry.shown_text().as_str(), "Hello, world");
+        assert_eq!(entry.label().as_str(), "Assistant: Hello, world");
+        // A part after the reply showed continues the text.
+        entry.push_text("!");
+        assert_eq!(entry.text(), "Hello, world!");
+        assert!(entry.show_all());
+        assert_eq!(entry.shown_text().as_str(), "Hello, world!");
     }
 
     #[::core::prelude::v1::test]

@@ -122,7 +122,7 @@ fn fingerprint(entries: &[TranscriptEntry], older_cursor: Option<&String>) -> u6
     for entry in entries {
         entry.id.hash(&mut hasher);
         (entry.speaker as u8).hash(&mut hasher);
-        entry.text().as_str().hash(&mut hasher);
+        entry.text().hash(&mut hasher);
         entry.turn_id.hash(&mut hasher);
         entry.detail.hash(&mut hasher);
         if let Some(tool) = &entry.tool {
