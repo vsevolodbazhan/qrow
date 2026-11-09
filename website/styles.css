@@ -105,10 +105,12 @@ h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px
 /* Status bar footer */
 .statusbar { margin-top: 96px; background: var(--chrome); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
 .statusbar-inner {
-  max-width: 1360px; min-height: 36px; margin: 0 auto; padding: 0 var(--gutter);
+  /* Same width as the screenshot, so the text lines up with its edges. */
+  max-width: calc(1200px + 2 * var(--gutter)); min-height: 36px; margin: 0 auto; padding: 0 var(--gutter);
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
-.status-right { display: flex; align-items: center; gap: 2px; }
+.status-right { display: flex; align-items: center; gap: 2px; margin-right: -8px; }
+.statusbar-inner > .status-item { padding-left: 0; }
 .status-item { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: var(--radius); color: var(--muted); }
 a.status-item:hover { background: var(--hover); color: var(--fg-strong); }
 
