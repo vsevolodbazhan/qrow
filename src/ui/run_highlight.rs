@@ -34,8 +34,9 @@ impl Indexed {
 /// tint on that statement while the cursor moves and the SQL changes.
 pub(super) fn track<T: 'static>(input: &Entity<EditorState>, cx: &mut Context<T>) -> Subscription {
     let index: Rc<RefCell<Option<Indexed>>> = Rc::default();
-    // The background index of large SQL. A newer edit replaces it.
-    let pending: RefCell<Option<Task<()>>> = RefCell::default();
+    // The background index of large SQL, with its text. An edit replaces
+    // it; a cursor move or a caret blink waits for it.
+    let pending: RefCell<Option<(Rope, Task<()>)>> = RefCell::default();
     let subscription = cx.observe(input, move |_, input, cx| {
         let (text, selection) = {
             let state = input.read(cx);
@@ -51,13 +52,22 @@ pub(super) fn track<T: 'static>(input: &Entity<EditorState>, cx: &mut Context<T>
             if !current && text.len() > BACKGROUND_INDEX_BYTES {
                 // The tint stays until the index of this text is ready. The
                 // editor then notifies, and this observer runs again.
+                let mut pending = pending.borrow_mut();
+                if pending
+                    .as_ref()
+                    .is_some_and(|(indexing, _)| *indexing == text)
+                {
+                    return;
+                }
                 let index = index.clone();
                 let input = input.downgrade();
-                *pending.borrow_mut() = Some(cx.spawn(async move |_, cx| {
+                let indexing = text.clone();
+                let task = cx.spawn(async move |_, cx| {
                     let indexed = cx.background_spawn(async move { Indexed::new(text) }).await;
                     *index.borrow_mut() = Some(indexed);
                     let _ = input.update(cx, |_, cx| cx.notify());
-                }));
+                });
+                *pending = Some((indexing, task));
                 return;
             }
             if !current {
