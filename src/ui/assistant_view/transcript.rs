@@ -205,14 +205,13 @@ impl ToolActivity {
 pub(in crate::ui) struct TranscriptEntry {
     pub(super) id: Uuid,
     pub speaker: Speaker,
-    /// Shared strings, so that each frame passes the text and the label
-    /// without a copy. A change replaces them.
+    /// Shared strings, so that each frame passes the text without a copy.
+    /// A change replaces them.
     text: SharedString,
     /// The text of a reply while its parts arrive. It grows in place, so a
     /// long reply does not copy all its text for each part. The text moves
     /// to `text` when the reply is complete.
     growing: Option<String>,
-    label: SharedString,
     /// The part of `text` that shows. A streamed reply shows its text step
     /// by step. See [`Reveal`].
     shown: SharedString,
@@ -233,7 +232,6 @@ impl TranscriptEntry {
             speaker,
             text: SharedString::default(),
             growing: None,
-            label: SharedString::default(),
             shown: SharedString::default(),
             reveal: None,
             appearance_started: None,
@@ -272,9 +270,20 @@ impl TranscriptEntry {
         &self.shown
     }
 
-    /// The accessible label: the speaker and the shown text.
-    pub fn label(&self) -> &SharedString {
-        &self.label
+    /// The accessible label: the speaker and the shown text. A row makes it
+    /// when it renders, so an entry keeps no second copy of its text.
+    pub fn label(&self) -> SharedString {
+        let speaker = if self.tool.is_some() {
+            "Tool Call"
+        } else {
+            match self.speaker {
+                Speaker::User => "You",
+                Speaker::Assistant => "Assistant",
+                Speaker::Activity => "Assistant Activity",
+                Speaker::Error => "Assistant Error",
+            }
+        };
+        format!("{speaker}: {}", self.shown).into()
     }
 
     pub fn expanded(&self) -> bool {
@@ -313,17 +322,6 @@ impl TranscriptEntry {
 
     fn shown_changed(&mut self) {
         self.revision += 1;
-        let speaker = if self.tool.is_some() {
-            "Tool Call"
-        } else {
-            match self.speaker {
-                Speaker::User => "You",
-                Speaker::Assistant => "Assistant",
-                Speaker::Activity => "Assistant Activity",
-                Speaker::Error => "Assistant Error",
-            }
-        };
-        self.label = format!("{speaker}: {}", self.shown).into();
     }
 
     /// Appends a streamed part. While the text reveals step by step, the
