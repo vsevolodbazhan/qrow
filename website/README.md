@@ -51,8 +51,7 @@ sh website/optimize-media.sh
 ```
 
 The script crops the screenshot to the window, removes the macOS shadow,
-and writes `hero.webp` and the
-social preview `og.jpg` to `website/media/`.
+and writes `hero.webp` and the social preview `og.jpg` to `website/media/`.
 
 ## Limitations
 
