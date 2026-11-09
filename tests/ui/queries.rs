@@ -195,7 +195,7 @@ fn the_tint_follows_large_sql_after_its_background_index(cx: &mut TestAppContext
         "SELECT 'filler';\n".repeat(5_000)
     );
     let mut tab = SavedTab::new(1, None);
-    tab.sql = sql;
+    tab.sql = sql.clone();
     let app = TestApp::launch(
         cx,
         Workspace {
@@ -225,6 +225,23 @@ fn the_tint_follows_large_sql_after_its_background_index(cx: &mut TestAppContext
     assert_eq!(edited.len(), 1, "{edited:?}");
     assert_eq!(edited[0].top(), second[0].top());
     assert!(edited[0].left() > second[0].left(), "{edited:?} {second:?}");
+
+    // Small SQL indexes at once. Then large SQL that indexed on a
+    // background thread before comes back, and the tint follows it again.
+    let paste = |app: &TestApp, cx: &mut TestAppContext, text: &str| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_owned()));
+        app.press(cx, "secondary-a");
+        app.press(cx, "secondary-v");
+        app.settle(cx);
+    };
+    paste(&app, cx, &sql);
+    paste(&app, cx, "SELECT 5;");
+    paste(&app, cx, &sql);
+    app.press(cx, "secondary-up");
+    app.settle(cx);
+    let restored = run_tint(&app, cx);
+    assert_eq!(restored.len(), 1, "{restored:?}");
+    assert_eq!(restored[0].top(), first[0].top());
 }
 
 /// The rows that the run tint paints in the SQL editor, top to bottom.
