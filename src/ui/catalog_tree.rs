@@ -382,6 +382,23 @@ fn contains_lowercase(name: &str, needle: &str) -> bool {
         })
 }
 
+/// Whether the relation `name` in `schema` contains `search`, which is in
+/// lowercase, also in its qualified names. `schema_matches` tells whether
+/// `schema` contains it.
+fn relation_matches(search: &str, schema: &str, schema_matches: bool, name: &str) -> bool {
+    if schema_matches || contains_lowercase(name, search) {
+        return true;
+    }
+    // In ASCII names, a search without a dot or a backtick matches a
+    // qualified name only in its schema or its relation name. Other scripts
+    // can lowercase differently in the qualified name, like the final sigma.
+    if !search.contains(['.', '`']) && schema.is_ascii() && name.is_ascii() {
+        return false;
+    }
+    contains_lowercase(&format!("{schema}.{name}"), search)
+        || contains_lowercase(&qualified_name(schema, name), search)
+}
+
 /// Builds the tree items and their nodes.
 struct Builder<'a> {
     tree: &'a CatalogTree,
@@ -469,14 +486,7 @@ impl Builder<'_> {
     /// Whether the relation `name` in `schema` matches, also by its
     /// qualified names. `schema_matches` tells whether `schema` matches.
     fn matches_relation(&self, schema: &str, schema_matches: bool, name: &str) -> bool {
-        if schema_matches || self.matches(name) {
-            return true;
-        }
-        // A search without a dot or a backtick matches a qualified name only
-        // in its schema or its relation name.
-        self.search.contains(['.', '`'])
-            && (self.matches(&format!("{schema}.{name}"))
-                || self.matches(&qualified_name(schema, name)))
+        relation_matches(&self.search, schema, schema_matches, name)
     }
 
     /// The row of a connection, or `None` when a search hides it: the
@@ -3072,6 +3082,17 @@ mod tests {
         assert!(contains_lowercase("Заказы_2024", "заказы"));
         assert!(contains_lowercase("ÉVÉNEMENTS", "événements"));
         assert!(!contains_lowercase("Заказы", "orders"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn relations_match_by_name_and_by_qualified_name() {
+        assert!(relation_matches("orders", "sales", false, "Orders"));
+        assert!(relation_matches("anything", "sales", true, "orders"));
+        assert!(relation_matches("sales.ord", "Sales", false, "Orders"));
+        assert!(relation_matches("`sales`.`o", "sales", false, "orders"));
+        assert!(!relation_matches("events", "sales", false, "orders"));
+        // The schema alone lowercases to `ος`, the qualified name to `οσ.`.
+        assert!(relation_matches("σ", "ΟΣ", false, "orders"));
     }
 
     #[::core::prelude::v1::test]
