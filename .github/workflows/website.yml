@@ -18,9 +18,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: website-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  # Only runs that deploy share the deploy group. A run of another ref cannot
+  # replace a pending deployment.
+  group: website-${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'deploy' || github.ref }}
   # Do not stop a deployment that has started.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' || github.event_name == 'pull_request' }}
 
 jobs:
   build:

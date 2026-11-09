@@ -351,7 +351,12 @@ class WebsiteWorkflowTests(unittest.TestCase):
         # Pull requests build the site without the rights to publish it.
         self.assertNotIn("pages: write", build)
         self.assertIn("--exclude README.md --exclude optimize-media.sh website/ _site/", build)
-        self.assertIn("if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'", deploy)
+        deploys = "github.ref == 'refs/heads/main' && github.event_name != 'pull_request'"
+        self.assertIn(f"if: {deploys}", deploy)
+        # A run that cannot deploy must not share the deploy group: it would replace a pending deployment.
+        self.assertIn(f"group: website-${{{{ {deploys} && 'deploy' || github.ref }}}}", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/main' || github.event_name == 'pull_request' }}",
+                      workflow)
         self.assertEqual(needs(deploy), ["build"])
         self.assertIn("pages: write", deploy)
         self.assertIn("name: github-pages", deploy)
