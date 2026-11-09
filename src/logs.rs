@@ -204,6 +204,16 @@ impl LogGroup {
 /// The group ID of the retention line. It belongs to no group.
 const NO_GROUP: u64 = u64::MAX;
 
+/// How [`LogHistory::record`] changed the entries.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LogChange {
+    /// The new entry is the last entry. The other entries did not change.
+    Appended,
+    /// Retention removed entries. `before` has the entry IDs from before
+    /// the record, in order.
+    Rewritten { before: Vec<u64> },
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LogHistory {
     /// Groups in creation order.
@@ -220,7 +230,7 @@ pub struct LogHistory {
 }
 
 impl LogHistory {
-    pub fn record(&mut self, event: LogEvent) {
+    pub fn record(&mut self, event: LogEvent) -> LogChange {
         let mut entry: LogEntry = event.into();
         entry.entry_id = self.next_entry_id;
         self.next_entry_id += 1;
@@ -249,7 +259,10 @@ impl LogHistory {
             self.latest_error = Some(self.entries.len());
         }
         self.entries.push(entry);
-        self.retain();
+        match self.retain() {
+            Some(before) => LogChange::Rewritten { before },
+            None => LogChange::Appended,
+        }
     }
 
     pub fn clear(&mut self) {
@@ -308,9 +321,11 @@ impl LogHistory {
             || self.text_bytes > MAX_TEXT_BYTES
     }
 
-    fn retain(&mut self) {
+    /// Remove old groups over the limits. Returns the entry IDs before the
+    /// last record when it removes entries.
+    fn retain(&mut self) -> Option<Vec<u64>> {
         if !self.over_limit(self.groups.len()) {
-            return;
+            return None;
         }
         let latest_execution_group = self
             .groups
@@ -351,8 +366,12 @@ impl LogHistory {
             self.text_bytes = self.text_bytes.saturating_sub(group.text_bytes);
         }
         if removed.is_empty() {
-            return;
+            return None;
         }
+        let before = self.entries[..self.entries.len() - 1]
+            .iter()
+            .map(LogEntry::id)
+            .collect();
         self.groups.retain(|group| !removed.contains(&group.id));
         self.entries
             .retain(|entry| !removed.contains(&entry.group_id));
@@ -375,6 +394,7 @@ impl LogHistory {
             .entries
             .iter()
             .rposition(|entry| entry.severity == Severity::Error);
+        Some(before)
     }
 }
 
@@ -492,6 +512,24 @@ mod tests {
                 .map(|entry| entry.text.as_str())
                 .collect::<Vec<_>>(),
             ["select 1", "connected", "complete",]
+        );
+    }
+
+    #[test]
+    fn record_reports_an_append_or_the_entries_before_a_removal() {
+        let mut log = LogHistory::default();
+        for id in 0..MAX_EXECUTION_GROUPS as u64 {
+            assert_eq!(
+                log.record(event(Some(id), LogKind::Submitted, "start")),
+                LogChange::Appended
+            );
+        }
+        let before: Vec<u64> = log.entries().map(LogEntry::id).collect();
+        let change = log.record(event(Some(1_000), LogKind::Submitted, "start"));
+        assert_eq!(change, LogChange::Rewritten { before });
+        assert_eq!(
+            log.record(event(Some(1_000), LogKind::ExecutionCompleted, "complete")),
+            LogChange::Appended
         );
     }
 

@@ -661,7 +661,7 @@ fn logs_record(cx: &mut TestAppContext) {
             window.render_frame(cx);
         })
     });
-    report("ui.logs.record_500", median_ms(&samples), "ms", 2000.);
+    report("ui.logs.record_500", median_ms(&samples), "ms", 25.);
 }
 
 #[gpui_kit::test]

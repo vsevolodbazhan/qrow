@@ -39,7 +39,10 @@ pub use workspace_view::WindowView;
 use crate::themes;
 use crate::{
     connector::DatabaseConnector,
-    logs::{ExecutionId, LogEntry, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
+    logs::{
+        ExecutionId, LogChange, LogEntry, LogEvent, LogHistory, LogKind, Panel, PanelState,
+        Severity,
+    },
     model::{
         AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
@@ -1528,11 +1531,17 @@ impl Qrow {
         cx.notify();
     }
     fn record_log(tab: &mut Tab, event: LogEvent) {
-        let before: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
-        tab.output.record(event);
-        // A new entry can also remove old groups, from any place in the log.
-        let after: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
-        output::splice_rows(&tab.output_list, &before, &after);
+        match tab.output.record(event) {
+            LogChange::Appended => {
+                let last = tab.output.entries().len() - 1;
+                tab.output_list.splice(last..last, 1);
+            }
+            // A new entry can also remove old groups, from any place in the log.
+            LogChange::Rewritten { before } => {
+                let after: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
+                output::splice_rows(&tab.output_list, &before, &after);
+            }
+        }
     }
     fn record_local_log(tab: &mut Tab, severity: Severity, kind: LogKind, text: impl Into<String>) {
         Self::record_log(
