@@ -21,8 +21,6 @@
   --primary-fg: #1e2024;
   --primary-hover: #78baf2;
   --primary-active: #528bcc;
-  --shadow: 0 24px 70px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
-  --glow: rgba(97, 175, 239, 0.10);
 
   --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -42,7 +40,7 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
-main { flex: 1; }
+main { flex: 1; overflow-x: clip; }
 img { display: block; max-width: 100%; height: auto; }
 a { color: inherit; text-decoration: none; }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
@@ -82,12 +80,6 @@ a { color: inherit; text-decoration: none; }
 
 /* Hero */
 .hero { position: relative; padding: 80px var(--gutter) 0; text-align: center; }
-.hero::before {
-  content: ""; position: absolute; left: 50%; top: 320px; width: min(1400px, 100%); height: 900px;
-  transform: translateX(-50%);
-  background: radial-gradient(closest-side, var(--glow), transparent);
-  pointer-events: none; z-index: -1;
-}
 .app-icon { margin: 0 auto; border-radius: 22px; }
 h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px); font-weight: 600; line-height: 1.05; letter-spacing: -0.025em; }
 .lede { margin: 12px 0 0; font-size: 18px; }
@@ -102,15 +94,34 @@ h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px
 .cmd-prompt { color: var(--muted); }
 .cmd .copy { width: 30px; height: 30px; }
 
-/* Screenshot in a window frame */
-.window {
-  position: relative;
-  max-width: 1200px; margin: 56px auto 0; margin-inline: max(var(--gutter), calc((100% - 1200px) / 2));
-  border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
-  background: var(--surface);
-  box-shadow: var(--shadow);
+/* Screenshot on a frosted glass plate. The glow behind the plate gives
+   the blur something to show. Colors: One Dark blue and violet. */
+.stage {
+  position: relative; isolation: isolate;
+  max-width: 1232px; margin: 56px auto 0;
+  margin-inline: max(var(--gutter), calc((100% - 1232px) / 2));
 }
-.window img { width: 100%; }
+.stage::before {
+  content: ""; position: absolute; inset: -4% 6% 25% 6%; z-index: -1;
+  background:
+    radial-gradient(45% 55% at 22% 35%, rgba(97, 175, 239, 0.42), transparent 70%),
+    radial-gradient(45% 55% at 78% 30%, rgba(198, 120, 221, 0.32), transparent 70%);
+  filter: blur(48px);
+  pointer-events: none;
+}
+.glass {
+  margin: 0; padding: 14px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.04));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+    0 30px 80px rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+}
+.glass img { width: 100%; filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.4)); }
 
 /* Status bar footer */
 .statusbar { margin-top: 96px; background: var(--chrome); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
@@ -129,6 +140,7 @@ a.status-item:hover { background: var(--hover); color: var(--fg-strong); }
   .lede { font-size: 16.5px; }
   .cta { flex-direction: column; align-items: stretch; }
   .cmd { width: 100%; }
-  .window { margin-top: 40px; border-radius: 8px; }
+  .stage { margin-top: 40px; }
+  .glass { padding: 6px; border-radius: 14px; }
   .statusbar { margin-top: 64px; }
 }

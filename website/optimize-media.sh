@@ -1,7 +1,7 @@
 #!/bin/sh
 # Make the web media in website/media/ from the README screenshot
-# assets/screenshots/demo.png: crop it to the window (remove the transparent
-# shadow), then write a WebP image and a JPEG social preview.
+# assets/screenshots/demo.png: crop it to the window and remove the macOS
+# shadow, then write a WebP image and a JPEG social preview.
 # Needs uv, cwebp, and ffmpeg.
 set -eu
 
@@ -20,13 +20,19 @@ trap 'rm -rf "$work"' EXIT
 
 uv run --quiet --with pillow python -I - "$src" "$work" <<'PY'
 import sys
-from PIL import Image
+from PIL import Image, ImageChops
 
 src, work = sys.argv[1], sys.argv[2]
 image = Image.open(src).convert("RGBA")
 # The window is opaque. The shadow around it is partly transparent.
 box = image.getchannel("A").point(lambda a: 255 if a >= 250 else 0).getbbox()
 window = image.crop(box)
+# Remove what is left of the shadow: black pixels that are not fully opaque.
+# The antialiased window edge is gray, so it stays.
+r, g, b, a = window.split()
+dark = ImageChops.lighter(ImageChops.lighter(r, g), b).point(lambda v: 255 if v < 24 else 0)
+partial = a.point(lambda v: 255 if v < 255 else 0)
+window.putalpha(ImageChops.subtract(a, ImageChops.multiply(dark, partial)))
 window.save(f"{work}/hero.png")
 # The social preview has no transparency: put the corners on the page color.
 background = Image.new("RGBA", window.size, (38, 41, 47, 255))

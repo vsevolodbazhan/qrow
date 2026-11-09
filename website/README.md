@@ -22,6 +22,7 @@ The page uses the look of the app:
 - The fonts are the app defaults: IBM Plex Sans for text and JetBrains Mono
   for code. `fonts/` has WOFF2 subsets of the files in
   [assets/fonts](../assets/fonts), with their licenses.
+- The screenshot sits on a frosted glass plate over a blue and violet glow.
 - The footer copies the status bar of the app. The icons are Lucide icons, the
   icon set of GPUI Kit.
 
@@ -49,7 +50,8 @@ After a change of that file, make the web media again:
 sh website/optimize-media.sh
 ```
 
-The script crops the screenshot to the window, and writes `hero.webp` and the
+The script crops the screenshot to the window, removes the macOS shadow,
+and writes `hero.webp` and the
 social preview `og.jpg` to `website/media/`.
 
 ## Limitations
