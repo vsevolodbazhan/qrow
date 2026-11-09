@@ -300,7 +300,8 @@ Native selection ranges use UTF-16 offsets. Rust string offsets use bytes.
 Using the input handler preserves selections that contain emoji or non-Latin
 text. The [SQL validator](../src/sql.rs) checks statement boundaries locally.
 The tint and **Run** use the same statement search, so the tint shows the SQL
-that **Run** sends.
+that **Run** sends. In SQL larger than 64 KB, the search for the tint runs on a
+background thread after each edit. The tint moves when the search ends.
 
 The [worker](../src/worker.rs) runs connection, execution, and fetch work outside
 the UI thread. The [connector](../src/connector/hive.rs) sends cancellation over

@@ -187,6 +187,46 @@ fn the_editor_tints_the_statement_that_run_uses(cx: &mut TestAppContext) {
     assert_eq!(last[0].top(), first[0].top() + first[0].size.height);
 }
 
+#[gpui_kit::test]
+fn the_tint_follows_large_sql_after_its_background_index(cx: &mut TestAppContext) {
+    // More than 64 KB, so the statements index on a background thread.
+    let sql = format!(
+        "SELECT 1; SELECT 2;\n{}",
+        "SELECT 'filler';\n".repeat(5_000)
+    );
+    let mut tab = SavedTab::new(1, None);
+    tab.sql = sql;
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-up");
+    app.settle(cx);
+    let first = run_tint(&app, cx);
+    assert_eq!(first.len(), 1, "{first:?}");
+
+    for _ in 0.."SELECT 1; ".len() {
+        app.press(cx, "right");
+    }
+    app.settle(cx);
+    let second = run_tint(&app, cx);
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert!(second[0].left() > first[0].right());
+
+    // An edit indexes the new text, and the tint follows it to the
+    // statement after the inserted one.
+    app.update(cx, |window, cx| window.input("SELECT 9; ", cx));
+    app.settle(cx);
+    let edited = run_tint(&app, cx);
+    assert_eq!(edited.len(), 1, "{edited:?}");
+    assert_eq!(edited[0].top(), second[0].top());
+    assert!(edited[0].left() > second[0].left(), "{edited:?} {second:?}");
+}
+
 /// The rows that the run tint paints in the SQL editor, top to bottom.
 fn run_tint(app: &TestApp, cx: &mut TestAppContext) -> Vec<Bounds<ScaledPixels>> {
     app.update(cx, |window, cx| {
