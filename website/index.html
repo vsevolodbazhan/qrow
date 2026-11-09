@@ -3,19 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Qrow — a native SQL workbench</title>
-  <meta name="description" content="Qrow is a native SQL workbench for macOS and Linux. No JVM, no Electron. Connects to Kyuubi (Spark), Postgres, and Trino, reads your dbt project, and opens in half a second.">
+  <title>Qrow</title>
+  <meta name="description" content="A native SQL workbench for macOS and Linux.">
   <meta name="color-scheme" content="dark light">
   <meta name="theme-color" content="#30343c" media="(prefers-color-scheme: dark)">
   <meta name="theme-color" content="#f8f8f8" media="(prefers-color-scheme: light)">
-  <meta property="og:title" content="Qrow — a native SQL workbench">
-  <meta property="og:description" content="No JVM, no Electron. Kyuubi (Spark), Postgres, and Trino on macOS and Linux.">
+  <meta property="og:title" content="Qrow">
+  <meta property="og:description" content="A native SQL workbench for macOS and Linux.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="media/og.jpg">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" type="image/png" href="icons/favicon-64.png">
   <link rel="apple-touch-icon" href="icons/qrow-256.png">
-  <link rel="preload" href="fonts/IBMPlexSans-Regular.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/IBMPlexSans-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
   <script>
@@ -31,432 +30,49 @@
     <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
-    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></symbol>
     <symbol id="i-github" viewBox="0 0 24 24"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></symbol>
-    <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></symbol>
-    <symbol id="i-table" viewBox="0 0 24 24"><path d="M12 3v18"/><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/></symbol>
-    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
-    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
-    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
-    <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></symbol>
-    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
-    <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></symbol>
-    <symbol id="i-file-down" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 18v-6"/><path d="m9 15 3 3 3-3"/></symbol>
-    <symbol id="i-workflow" viewBox="0 0 24 24"><rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/></symbol>
-    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
-    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
-    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
-    <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></symbol>
-    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
   </svg>
 
-  <a class="skip" href="#main">Skip to content</a>
-
   <header class="titlebar">
-    <div class="titlebar-inner">
-      <a class="brand" href="#top" aria-label="Qrow home">
-        <img src="icons/qrow-256.png" alt="" width="24" height="24">
-        <span>Qrow</span>
-      </a>
-      <nav class="tabs nav-tabs" aria-label="Sections">
-        <a class="tab" href="#features">Features</a>
-        <a class="tab" href="#performance">Performance</a>
-        <a class="tab" href="#install">Install</a>
-        <a class="tab" href="https://github.com/vsevolodbazhan/qrow/tree/main/docs">Docs</a>
-      </nav>
-      <div class="titlebar-actions">
-        <a class="btn btn-ghost btn-icon" href="https://github.com/vsevolodbazhan/qrow" aria-label="Qrow on GitHub" data-tip="GitHub">
-          <svg class="icon"><use href="#i-github"/></svg>
-        </a>
-        <a class="btn btn-primary" href="#install">
-          <svg class="icon"><use href="#i-arrow-right"/></svg>
-          <span>Download</span>
-        </a>
-      </div>
-    </div>
+    <span class="titlebar-title">Qrow</span>
   </header>
 
-  <main id="main">
-    <!-- Hero -->
-    <section class="hero" id="top">
-      <div class="wrap hero-copy">
-        <div class="chips" aria-label="Release facts">
-          <span class="chip"><span class="dot dot-ok" aria-hidden="true"></span>v0.4</span>
-          <span class="chip">macOS and Linux</span>
-          <span class="chip">MIT License</span>
-        </div>
-        <h1>A native SQL workbench.<br><span class="muted-h">No JVM. No Electron.</span></h1>
-        <p class="lede">
-          Qrow opens in half a second, idles at about 150&nbsp;MB, and connects
-          to Kyuubi (Spark), Postgres, and Trino without a driver install.
-          It reads your dbt project and can bring your own AI assistant.
-        </p>
-        <div class="cta">
-          <a class="btn btn-primary btn-lg" href="https://github.com/vsevolodbazhan/qrow/releases">
-            <svg class="icon"><use href="#i-arrow-right"/></svg>
-            <span>Download for macOS</span>
-          </a>
-          <div class="cmd" data-copy="brew tap vsevolodbazhan/qrow &amp;&amp; brew install --cask vsevolodbazhan/qrow/qrow">
-            <span class="cmd-prompt" aria-hidden="true">$</span>
-            <code>brew install --cask vsevolodbazhan/qrow/qrow</code>
-            <button class="btn btn-ghost btn-icon copy" type="button" aria-label="Copy install commands" data-tip="Copy">
-              <svg class="icon"><use href="#i-copy"/></svg>
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">Free and open source. Apple Silicon and Intel, x86-64 and ARM64 Linux.</p>
-      </div>
-
-      <div class="wrap-wide">
-        <figure class="window hero-shot">
-          <img class="only-dark" src="media/hero.webp" width="2880" height="1800"
-               alt="Qrow with the schema catalog, a SQL query, its results, and the assistant panel">
-          <img class="only-light" src="media/hero-light.webp" width="2880" height="1800" loading="lazy"
-               alt="Qrow in the light theme with the schema catalog, a SQL query, its results, and the assistant panel">
-        </figure>
-      </div>
-
-      <div class="wrap engines" aria-label="Supported databases">
-        <span class="engines-label">Connects to</span>
-        <span class="engine"><img src="icons/apache-spark.svg" alt="" width="18" height="18">Kyuubi (Spark)</span>
-        <span class="engine"><img src="icons/postgres.svg" alt="" width="18" height="18">Postgres</span>
-        <span class="engine"><img src="icons/trino.svg" alt="" width="18" height="18">Trino</span>
-        <span class="engine engine-planned"><svg class="icon"><use href="#i-database"/></svg>DuckDB <span class="tag">planned</span></span>
-      </div>
-    </section>
-
-    <!-- Features: sidebar tree + content, like the Connections sidebar -->
-    <section class="workspace" id="features" aria-labelledby="features-title">
-      <div class="wrap-wide workspace-grid">
-        <aside class="sidebar" aria-label="Features">
-          <div class="sidebar-head">
-            <h2 id="features-title">Features</h2>
-          </div>
-          <ul class="tree" role="list">
-            <li>
-              <span class="tree-row tree-root"><svg class="icon chevron"><use href="#i-chevron-down"/></svg><img src="icons/qrow-256.png" alt="" width="16" height="16">qrow</span>
-              <ul role="list">
-                <li><a class="tree-row" href="#queries"><svg class="icon"><use href="#i-terminal"/></svg>Queries and results<span class="kind">⌘↵</span></a></li>
-                <li><a class="tree-row" href="#catalog"><svg class="icon"><use href="#i-table"/></svg>Schema catalog<span class="kind">tree</span></a></li>
-                <li><a class="tree-row" href="#dbt"><svg class="icon"><use href="#i-workflow"/></svg>dbt projects<span class="kind">manifest</span></a></li>
-                <li><a class="tree-row" href="#assistant"><svg class="icon"><use href="#i-bot"/></svg>Assistant<span class="kind">⌘R</span></a></li>
-                <li><a class="tree-row" href="#export"><svg class="icon"><use href="#i-file-down"/></svg>Data export<span class="kind">5 formats</span></a></li>
-                <li><a class="tree-row" href="#connections"><svg class="icon"><use href="#i-plug"/></svg>Connections<span class="kind">3 engines</span></a></li>
-              </ul>
-            </li>
-          </ul>
-        </aside>
-
-        <div class="features">
-          <article class="feature" id="queries">
-            <header class="feature-tabbar">
-              <span class="ftab ftab-active">Queries and results<svg class="icon"><use href="#i-x"/></svg></span>
-            </header>
-            <div class="feature-body">
-              <div class="feature-text">
-                <div class="feature-intro">
-                <p class="sql-comment">-- run what is under the cursor</p>
-                <h3>Run a statement with <kbd>⌘</kbd><kbd>↵</kbd></h3>
-                <p>Press <kbd>⌘</kbd><kbd>↵</kbd> to run the statement at the cursor or the selected SQL. A light tint shows the statement that runs.</p>
-                </div>
-                <ul class="points">
-                  <li>Each connection has its own query tabs. Each tab has its own session.</li>
-                  <li>Tabs run queries at the same time, also when you select another connection.</li>
-                  <li>Results arrive in pages of 1,000 rows. Copy a cell or a row with its full value.</li>
-                  <li>The Logs panel shows the SQL, the session events, and the errors.</li>
-                </ul>
-              </div>
-              <figure class="window feature-media">
-                <video src="media/run-query.mp4" poster="media/run-query-poster.jpg" muted loop playsinline preload="none" width="1600" height="1000"
-                       aria-label="A query runs with Command Enter and its results fill the grid"></video>
-              </figure>
-            </div>
-          </article>
-
-          <article class="feature" id="catalog">
-            <header class="feature-tabbar">
-              <span class="ftab ftab-active">Schema catalog<svg class="icon"><use href="#i-x"/></svg></span>
-            </header>
-            <div class="feature-body">
-              <div class="feature-text">
-                <div class="feature-intro">
-                <p class="sql-comment">-- schemas, tables, views, columns</p>
-                <h3>The catalog is there before the session is</h3>
-                <p>Qrow keeps a copy of the catalog on your computer. The tree shows it also when the connection has no session.</p>
-                </div>
-                <ul class="points">
-                  <li>Refresh a connection, a schema, or a table. A refresh that stops continues next time.</li>
-                  <li>Share one catalog between connections that read the same database.</li>
-                  <li>Show or hide schemas with glob patterns, for example <code>sales_*</code>.</li>
-                  <li>Search tables in all connections and insert their quoted names into the editor.</li>
-                </ul>
-              </div>
-              <figure class="window feature-media">
-                <video src="media/catalog.mp4" poster="media/catalog-poster.jpg" muted loop playsinline preload="none" width="1600" height="1000"
-                       aria-label="The schema tree expands to columns, then Search finds a table"></video>
-              </figure>
-            </div>
-          </article>
-
-          <article class="feature" id="dbt">
-            <header class="feature-tabbar">
-              <span class="ftab ftab-active">dbt projects<svg class="icon"><use href="#i-x"/></svg></span>
-            </header>
-            <div class="feature-body">
-              <div class="feature-text">
-                <div class="feature-intro">
-                <p class="sql-comment">-- reads manifest.json, never runs dbt</p>
-                <h3>Your dbt docs, next to your tables</h3>
-                <p>Attach a dbt project to a connection. Qrow reads the <code>manifest.json</code> that dbt writes, and reads it again when it changes.</p>
-                </div>
-                <ul class="points">
-                  <li>Tables that dbt builds show their kind in the tree, and their description in a tooltip.</li>
-                  <li><strong>Show dbt details</strong> opens columns, tests, lineage, and the compiled and raw SQL.</li>
-                  <li>Click a parent or a child to follow the lineage.</li>
-                  <li>Map development schemas to catalog schemas, for example <code>dbt_dev_* = *</code>.</li>
-                </ul>
-              </div>
-              <figure class="window feature-media">
-                <video src="media/dbt.mp4" poster="media/dbt-poster.jpg" muted loop playsinline preload="none" width="1600" height="1000"
-                       aria-label="dbt details for a table, then a click on its lineage"></video>
-              </figure>
-            </div>
-          </article>
-
-          <article class="feature" id="assistant">
-            <header class="feature-tabbar">
-              <span class="ftab ftab-active">Assistant<svg class="icon"><use href="#i-x"/></svg></span>
-            </header>
-            <div class="feature-body">
-              <div class="feature-text">
-                <div class="feature-intro">
-                <p class="sql-comment">-- off by default, your subscription</p>
-                <h3>An assistant that knows your catalog</h3>
-                <p>Open an AI assistant beside your query tab with <kbd>⌘</kbd><kbd>R</kbd>. It runs on your own Codex or Claude Code install and sign-in.</p>
-                </div>
-                <ul class="points">
-                  <li>Each conversation writes SQL in its own query tab, so you can edit it together.</li>
-                  <li>It looks up tables and columns in the catalog, and reads dbt descriptions, tests, and lineage.</li>
-                  <li>Write Assistant Notes to give it facts about the data of a connection.</li>
-                  <li>Qrow asks before an assistant query runs, or runs it automatically. You choose.</li>
-                </ul>
-              </div>
-              <figure class="window feature-media">
-                <img src="media/assistant.webp" width="2880" height="1800" loading="lazy"
-                     alt="The assistant panel explains a query next to the editor">
-              </figure>
-            </div>
-          </article>
-
-          <article class="feature" id="export">
-            <header class="feature-tabbar">
-              <span class="ftab ftab-active">Data export<svg class="icon"><use href="#i-x"/></svg></span>
-            </header>
-            <div class="feature-body">
-              <div class="feature-text">
-                <div class="feature-intro">
-                <p class="sql-comment">-- all rows, not only the preview</p>
-                <h3>Export the whole result</h3>
-                <p>Save a result as CSV, TSV, Markdown, JSON, or Parquet, or copy it to the clipboard. The export includes all rows.</p>
-                </div>
-                <ul class="points">
-                  <li>Qrow reads the remaining rows from the open cursor. It runs the query again only when it must.</li>
-                  <li>The Excel CSV preset adds a byte-order mark and escapes formulas.</li>
-                  <li>Parquet keeps numbers, exact decimals, dates, timestamps, and binary values in their types.</li>
-                  <li>Large exports write in the background and show their progress.</li>
-                </ul>
-              </div>
-              <figure class="window feature-media">
-                <img src="media/export.webp" width="2880" height="1800" loading="lazy"
-                     alt="The export window with format, destination, and CSV options">
-              </figure>
-            </div>
-          </article>
-
-          <article class="feature" id="connections">
-            <header class="feature-tabbar">
-              <span class="ftab ftab-active">Connections<svg class="icon"><use href="#i-x"/></svg></span>
-            </header>
-            <div class="feature-body">
-              <div class="feature-text">
-                <div class="feature-intro">
-                <p class="sql-comment">-- no JVM, no ODBC, no separate driver</p>
-                <h3>Connect directly</h3>
-                <p>Qrow speaks the protocols of Kyuubi, Postgres, and Trino itself.</p>
-                </div>
-                <ul class="points">
-                  <li><strong>Kyuubi</strong>: HiveServer2 over SASL PLAIN, with a password or an OpenID Connect token.</li>
-                  <li><strong>Postgres</strong>: password authentication over TLS, with optional certificate checks.</li>
-                  <li><strong>Trino</strong>: HTTP or HTTPS with a password or the browser sign-in of the coordinator.</li>
-                  <li>Passwords stay in macOS Keychain or the Linux secret store. One sign-in can serve several connections.</li>
-                </ul>
-              </div>
-              <figure class="window feature-media">
-                <img src="media/connections.webp" width="2880" height="1800" loading="lazy"
-                     alt="The new connection menu with Kyuubi, Postgres, and Trino">
-              </figure>
-            </div>
-          </article>
+  <main>
+    <section class="hero">
+      <img class="app-icon" src="icons/qrow-256.png" alt="" width="96" height="96">
+      <h1>Qrow</h1>
+      <p class="lede">A native SQL workbench for macOS and Linux.</p>
+      <div class="cta">
+        <a class="btn btn-primary btn-lg" href="https://github.com/vsevolodbazhan/qrow">
+          <svg class="icon"><use href="#i-arrow-right"/></svg>
+          <span>View on GitHub</span>
+        </a>
+        <div class="cmd" data-copy="brew tap vsevolodbazhan/qrow &amp;&amp; brew install --cask vsevolodbazhan/qrow/qrow">
+          <span class="cmd-prompt" aria-hidden="true">$</span>
+          <code>brew install --cask vsevolodbazhan/qrow/qrow</code>
+          <button class="btn btn-ghost btn-icon copy" type="button" aria-label="Copy install commands" data-tip="Copy">
+            <svg class="icon"><use href="#i-copy"/></svg>
+          </button>
         </div>
       </div>
     </section>
 
-    <!-- Performance: an editor and a result grid -->
-    <section class="section" id="performance" aria-labelledby="perf-title">
-      <div class="wrap">
-        <div class="section-head">
-          <p class="sql-comment">-- measured on a MacBook Air M3, macOS 15.7.7</p>
-          <h2 id="perf-title">Fast because it is native</h2>
-          <p class="section-sub">Qrow is written in Rust on GPUI, the GPU-rendered UI framework from the makers of Zed. It draws with Metal on macOS and Vulkan on Linux.</p>
-        </div>
-
-        <div class="panel query-panel" data-run-demo>
-          <div class="panel-tabs">
-            <span class="qtab qtab-active"><span class="dot dot-ok" aria-hidden="true"></span>benchmark.sql<svg class="icon"><use href="#i-x"/></svg></span>
-            <span class="panel-tabs-spacer"></span>
-            <svg class="icon icon-muted" aria-hidden="true"><use href="#i-plus"/></svg>
-          </div>
-          <div class="panel-toolbar">
-            <button class="btn btn-primary btn-sm" type="button" data-run>
-              <svg class="icon"><use href="#i-arrow-right"/></svg><span>Run</span>
-            </button>
-          </div>
-          <div class="editor" role="group" aria-label="SQL query">
-            <div class="line"><span class="ln">1</span><code><span class="tok-comment">-- Qrow vs DataGrip 2026.2.5</span></code></div>
-            <div class="line stmt"><span class="ln">2</span><code><span class="tok-kw">SELECT</span> metric, qrow, datagrip, <span class="tok-fn">ratio</span>(datagrip, qrow) <span class="tok-kw">AS</span> ratio</code></div>
-            <div class="line stmt"><span class="ln">3</span><code><span class="tok-kw">FROM</span> benchmarks.macbook_air_m3;</code></div>
-          </div>
-          <div class="result">
-            <div class="panel-tabs result-tabs">
-              <span class="rtab">Logs</span>
-              <span class="rtab rtab-active">Result 1</span>
-            </div>
-            <div class="result-toolbar">
-              <span class="chip">Rows 1–3</span>
-              <span class="chip">4 columns</span>
-              <span class="chip" data-elapsed>0.52 s</span>
-            </div>
-            <div class="grid-scroll" tabindex="0" role="region" aria-label="Benchmark results">
-              <table class="grid">
-                <thead>
-                  <tr><th class="rownum">#</th><th>metric <span class="type">string</span></th><th>qrow <span class="type">string</span></th><th>datagrip <span class="type">string</span></th><th>ratio <span class="type">double</span></th></tr>
-                </thead>
-                <tbody>
-                  <tr><td class="rownum">1</td><td>Time to first window</td><td>0.52 s</td><td>1.84 s</td><td class="num hl">3.5</td></tr>
-                  <tr><td class="rownum">2</td><td>Idle memory usage</td><td>152 MB</td><td>1,302 MB</td><td class="num hl">8.6</td></tr>
-                  <tr><td class="rownum">3</td><td>App size on disk</td><td>27 MB</td><td>2.6 GB</td><td class="num hl">96.3</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <figure class="window startup">
-          <video src="media/startup.mp4" poster="media/startup-poster.jpg" muted loop playsinline preload="none" width="1600" height="1000"
-                 aria-label="Qrow starts and shows its first window, recorded in real time"></video>
-          <figcaption>Cold start of the release build, recorded in real time.</figcaption>
-        </figure>
-      </div>
-    </section>
-
-    <!-- Why -->
-    <section class="section" id="why" aria-labelledby="why-title">
-      <div class="wrap why">
-        <div class="section-head">
-          <p class="sql-comment">-- why it exists</p>
-          <h2 id="why-title">Made by a data engineer, for daily SQL</h2>
-        </div>
-        <div class="bubble-thread">
-          <p class="bubble bubble-user">Why another SQL client?</p>
-          <div class="bubble-answer">
-            <p>I run SQL every day, and for years I used DataGrip. Then came the slow starts, the memory use, and the freezes that come with the JVM. I did not find an alternative that suited me, so I made one.</p>
-            <p>Qrow takes its ideas from DataGrip and <a href="https://zed.dev/">Zed</a>. It is a personal tool first: it supports the engines and the workflow I use, and it gets better each week.</p>
-            <p class="signature">— Vsevolod Bazhan, author</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Install -->
-    <section class="section" id="install" aria-labelledby="install-title">
-      <div class="wrap">
-        <div class="section-head">
-          <p class="sql-comment">-- install</p>
-          <h2 id="install-title">Get Qrow</h2>
-          <p class="section-sub">Qrow needs macOS 12 or later, or a Linux desktop with Wayland or X11 and Vulkan.</p>
-        </div>
-
-        <div class="panel install-panel">
-          <div class="panel-tabs" role="tablist" aria-label="Install methods">
-            <button class="qtab qtab-active" role="tab" aria-selected="true" aria-controls="inst-brew" id="tab-brew" type="button">Homebrew</button>
-            <button class="qtab" role="tab" aria-selected="false" aria-controls="inst-dmg" id="tab-dmg" type="button" tabindex="-1">DMG</button>
-            <button class="qtab" role="tab" aria-selected="false" aria-controls="inst-linux" id="tab-linux" type="button" tabindex="-1">Linux</button>
-            <button class="qtab" role="tab" aria-selected="false" aria-controls="inst-src" id="tab-src" type="button" tabindex="-1">Source</button>
-          </div>
-
-          <div class="install-body" role="tabpanel" id="inst-brew" aria-labelledby="tab-brew">
-            <p>Install from the Homebrew tap. For the nightly build, use the <code>qrow@nightly</code> cask.</p>
-            <div class="codeblock" data-copy="brew tap vsevolodbazhan/qrow&#10;brew install --cask vsevolodbazhan/qrow/qrow">
-              <pre><code><span class="tok-fn">brew</span> tap vsevolodbazhan/qrow
-<span class="tok-fn">brew</span> install --cask vsevolodbazhan/qrow/qrow</code></pre>
-              <button class="btn btn-ghost btn-icon copy" type="button" aria-label="Copy commands" data-tip="Copy"><svg class="icon"><use href="#i-copy"/></svg></button>
-            </div>
-          </div>
-
-          <div class="install-body" role="tabpanel" id="inst-dmg" aria-labelledby="tab-dmg" hidden>
-            <p>Download the DMG for your Mac from GitHub Releases and drag Qrow to Applications: <code>arm64</code> for Apple Silicon, <code>x86_64</code> for Intel.</p>
-            <a class="btn btn-primary" href="https://github.com/vsevolodbazhan/qrow/releases">
-              <svg class="icon"><use href="#i-download"/></svg><span>GitHub Releases</span>
-            </a>
-          </div>
-
-          <div class="install-body" role="tabpanel" id="inst-linux" aria-labelledby="tab-linux" hidden>
-            <p>Download the archive for your architecture from GitHub Releases and extract it into <code>~/.local</code>. It includes a desktop launcher. Qrow needs a Vulkan driver and a Secret Service, such as GNOME Keyring.</p>
-            <div class="codeblock" data-copy="mkdir -p ~/.local&#10;tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local">
-              <pre><code><span class="tok-fn">mkdir</span> -p ~/.local
-<span class="tok-fn">tar</span> -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local</code></pre>
-              <button class="btn btn-ghost btn-icon copy" type="button" aria-label="Copy commands" data-tip="Copy"><svg class="icon"><use href="#i-copy"/></svg></button>
-            </div>
-          </div>
-
-          <div class="install-body" role="tabpanel" id="inst-src" aria-labelledby="tab-src" hidden>
-            <p>Build with Rust from rustup and uv. Java, ODBC drivers, and Thrift are not necessary.</p>
-            <div class="codeblock" data-copy="git clone https://github.com/vsevolodbazhan/qrow&#10;cd qrow&#10;cargo run --locked --release --bin qrow -- --demo">
-              <pre><code><span class="tok-fn">git</span> clone https://github.com/vsevolodbazhan/qrow
-<span class="tok-fn">cd</span> qrow
-<span class="tok-fn">cargo</span> run --locked --release --bin qrow -- --demo</code></pre>
-              <button class="btn btn-ghost btn-icon copy" type="button" aria-label="Copy commands" data-tip="Copy"><svg class="icon"><use href="#i-copy"/></svg></button>
-            </div>
-          </div>
-
-          <div class="notice">
-            <span class="notice-icon" aria-hidden="true">!</span>
-            <p><strong>Not notarized yet.</strong> macOS can show a Gatekeeper warning on first launch. <a href="https://github.com/vsevolodbazhan/qrow#gatekeeper">How to open Qrow</a></p>
-          </div>
-        </div>
-
-        <ul class="limits" aria-label="Known limits">
-          <li><span class="tag">Engines</span>Kyuubi (Spark), Postgres, and Trino only. Kerberos and SSH tunnels are not supported.</li>
-          <li><span class="tag">Assistant</span>Needs your own Codex or Claude Code install and subscription or API key.</li>
-          <li><span class="tag">Try it</span>Run <code>qrow --demo</code> to explore with synthetic data. It does not connect to a server.</li>
-        </ul>
-      </div>
-    </section>
+    <figure class="window">
+      <img class="only-dark" src="media/hero.webp" width="2720" height="1700"
+           alt="Qrow with the schema catalog, a SQL query, and its results">
+      <img class="only-light" src="media/hero-light.webp" width="2720" height="1700" loading="lazy"
+           alt="Qrow in the light theme with the schema catalog, a SQL query, and its results">
+    </figure>
   </main>
 
   <footer class="statusbar">
     <div class="statusbar-inner">
-      <div class="status-left">
-        <span class="status-item"><svg class="icon"><use href="#i-plug"/></svg>qrow</span>
-        <span class="status-sep" aria-hidden="true"></span>
-        <span class="status-item">MIT License</span>
-      </div>
-      <nav class="status-right" aria-label="Footer">
-        <a class="status-item" href="https://github.com/vsevolodbazhan/qrow"><svg class="icon"><use href="#i-github"/></svg>GitHub</a>
-        <a class="status-item" href="https://github.com/vsevolodbazhan/qrow/tree/main/docs"><svg class="icon"><use href="#i-book"/></svg>Docs</a>
-        <a class="status-item" href="https://github.com/vsevolodbazhan/qrow/releases"><svg class="icon"><use href="#i-activity"/></svg>Releases</a>
+      <span class="status-item">MIT License</span>
+      <nav class="status-right" aria-label="Links">
+        <a class="status-item" href="https://github.com/vsevolodbazhan/qrow/releases">Releases</a>
+        <a class="status-item" href="https://github.com/vsevolodbazhan/qrow/tree/main/docs">Docs</a>
         <button class="btn btn-ghost btn-icon theme-toggle" type="button" aria-label="Switch theme" data-tip="Switch theme">
           <svg class="icon only-dark"><use href="#i-sun"/></svg>
           <svg class="icon only-light"><use href="#i-moon"/></svg>

@@ -1,22 +1,21 @@
 # Website
 
-This directory contains the Qrow landing page. The page is static HTML, CSS,
-and a small script. It has no build step and makes no requests to other sites.
+This directory contains the Qrow landing page: one static page that links to
+the GitHub repository. It has no build step and makes no requests to other
+sites.
 
 ## Preview the page
-
-Serve the directory and open it in a browser:
 
 ```sh
 python3 -m http.server 8765 --directory website
 ```
 
 Then open <http://localhost:8765/>. Do not open `index.html` as a file:
-some browsers do not load the fonts and the videos from `file://` URLs.
+some browsers do not load the fonts from `file://` URLs.
 
 ## Design
 
-The page uses the look of the app, so that the site and the app agree:
+The page uses the look of the app:
 
 - The dark colors come from the One Dark theme in
   [src/one-dark.json](../src/one-dark.json). The light colors come from the
@@ -25,16 +24,12 @@ The page uses the look of the app, so that the site and the app agree:
 - The fonts are the app defaults: IBM Plex Sans for text and JetBrains Mono
   for code. `fonts/` has WOFF2 subsets of the files in
   [assets/fonts](../assets/fonts), with their licenses.
-- The parts of the page copy parts of the app: the title bar, the
-  Connections tree, query tabs, the editor, the result grid, and the status
-  bar. The result grid follows the app rules: headers align left, and only
-  numbers align right.
-- The icons are Lucide icons, the icon set of GPUI Kit.
+- The header copies the title bar of the app, and the footer copies its status
+  bar. The icons are Lucide icons, the icon set of GPUI Kit.
 
 ## Update the fonts
 
-Make the subsets again after a font update in `assets/fonts`. The page uses
-IBM Plex Sans Regular, Medium, and SemiBold, and JetBrains Mono Regular:
+Make the subsets again after a font update in `assets/fonts`:
 
 ```sh
 for f in ibm-plex-sans/IBMPlexSans-Regular ibm-plex-sans/IBMPlexSans-Medium \
@@ -46,26 +41,22 @@ for f in ibm-plex-sans/IBMPlexSans-Regular ibm-plex-sans/IBMPlexSans-Medium \
 done
 ```
 
-## Update the screenshots and videos
+## Update the screenshot
 
-The media show `qrow --demo`, so they contain only synthetic data.
+The screenshot shows `qrow --demo`, so it contains only synthetic data.
 
-1. Capture stills as PNG and videos as MP4 into `website/capture/`. Use a
-   window of 1440 × 900 points and the One Dark theme. Git ignores this
-   directory.
+1. Capture the Qrow window without its shadow as `website/capture/hero.png`
+   (One Dark theme) and `website/capture/hero-light.png` (light theme). Use a
+   window of 1360 × 850 points. Git ignores this directory.
 2. Convert the captures:
 
    ```sh
    sh website/optimize-media.sh
    ```
 
-   The script writes WebP stills, a JPEG social preview (`og.jpg`), MP4
-   videos, and a JPEG poster for each video to `website/media/`.
-3. Keep the file names that `index.html` uses. Update the captions and the
-   `alt` texts when the content of a capture changes.
+   The script writes `hero.webp`, `hero-light.webp`, and the social preview
+   `og.jpg` to `website/media/`.
 
 ## Limitations
 
 - The page is not published yet. It has no hosting or deploy workflow.
-- The product name can change. The name shows in the page title, the
-  headings, the copy, and the alt texts.

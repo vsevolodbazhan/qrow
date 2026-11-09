@@ -258,8 +258,7 @@ DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
-The landing page in website/ uses copies of the icons in
-assets/connection-type-icons/ and WOFF2 subsets of the fonts in assets/fonts/,
+The landing page in website/ uses WOFF2 subsets of the fonts in assets/fonts/,
 under the licenses above. Its interface icons are inline copies of Lucide icons:
 https://lucide.dev
 
