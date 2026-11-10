@@ -1,0 +1,126 @@
+/* Qrow landing page.
+   Colors: Qrow "One Dark" theme (src/one-dark.json).
+   Fonts: the app defaults. */
+
+@font-face { font-family: "IBM Plex Sans"; src: url("fonts/IBMPlexSans-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "IBM Plex Sans"; src: url("fonts/IBMPlexSans-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "IBM Plex Sans"; src: url("fonts/IBMPlexSans-SemiBold.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+
+:root {
+  color-scheme: dark;
+  --bg: #27292e; /* the panel color as stored in the screenshot, so both render the same */
+  --surface: #30343c;
+  --chrome: #30343c;
+  --hover: #3b414c;
+  --border: #3b414c;
+  --fg: #abb2bf;
+  --fg-strong: #d7dae0;
+  --muted: #969eae;
+  --primary: #61afef;
+  --primary-fg: #1e2024;
+  --primary-hover: #78baf2;
+  --primary-active: #528bcc;
+
+  --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 6px;
+  --gutter: 24px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex; flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+main { flex: 1; }
+img { display: block; max-width: 100%; height: auto; }
+a { color: inherit; text-decoration: none; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Buttons (GPUI Kit Button: 6 px radius, medium label, 16 px icon) */
+.btn {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  border: 0; border-radius: var(--radius);
+  font: 500 14px/1 var(--sans);
+  color: var(--fg); background: transparent;
+  cursor: pointer; white-space: nowrap;
+  transition: background-color 0.12s, color 0.12s;
+}
+.btn-primary { background: var(--primary); color: var(--primary-fg); }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-primary:active { background: var(--primary-active); }
+.btn-ghost:hover { background: var(--hover); color: var(--fg-strong); }
+.btn-icon { width: 32px; padding: 0; }
+.btn-lg { height: 40px; padding: 0 16px; font-size: 15px; }
+
+/* Tooltips: show after a short delay, hide on mouse-out. */
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute; right: 0; top: calc(100% + 6px);
+  padding: 3px 8px;
+  background: var(--surface); color: var(--fg-strong);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  font: 400 12px/1.4 var(--sans); white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  opacity: 0; pointer-events: none; transition: opacity 0.1s;
+  z-index: 20;
+}
+[data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; transition-delay: 0.45s; }
+
+/* Hero */
+.hero { position: relative; padding: 80px var(--gutter) 0; text-align: center; }
+.app-icon { margin: 0 auto; border-radius: 22px; }
+h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px); font-weight: 600; line-height: 1.05; letter-spacing: -0.025em; }
+.lede { margin: 12px 0 0; font-size: 18px; }
+.cta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px; margin-top: 32px; }
+.cmd {
+  display: inline-flex; align-items: center; gap: 10px;
+  height: 40px; max-width: 100%; padding: 0 4px 0 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  font-family: var(--mono); font-size: 13.5px;
+}
+.cmd code { color: var(--fg-strong); font: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cmd-prompt { color: var(--muted); }
+.cmd .copy { width: 30px; height: 30px; }
+
+/* Screenshot with a soft shadow. */
+.stage {
+  max-width: 1200px; margin: 56px auto 0;
+  margin-inline: max(var(--gutter), calc((100% - 1200px) / 2));
+}
+.shot { margin: 0; }
+.shot img { width: 100%; filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.5)); }
+
+/* Status bar footer */
+.statusbar { margin-top: 96px; background: var(--chrome); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+.statusbar-inner {
+  /* Same width as the screenshot, so the text lines up with its edges. */
+  max-width: calc(1200px + 2 * var(--gutter)); min-height: 36px; margin: 0 auto; padding: 0 var(--gutter);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.status-right { display: flex; align-items: center; gap: 2px; margin-right: -8px; }
+.statusbar-inner > .status-item { padding-left: 0; }
+.status-item { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: var(--radius); color: var(--muted); }
+a.status-item:hover { background: var(--hover); color: var(--fg-strong); }
+
+@media (max-width: 600px) {
+  :root { --gutter: 16px; }
+  .hero { padding-top: 48px; }
+  .app-icon { width: 80px; height: 80px; border-radius: 18px; }
+  .lede { font-size: 16.5px; }
+  .cta { flex-direction: column; align-items: stretch; }
+  .cmd { width: 100%; }
+  .stage { margin-top: 40px; }
+  .statusbar { margin-top: 64px; }
+}

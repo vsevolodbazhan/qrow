@@ -39,7 +39,7 @@ TEST_JOB = "test-{}"
 # complete level. Vendored crates can embed their README, so only these
 # Markdown files qualify.
 STATIC_ONLY = re.compile(r"(docs/.+|[^/]+\.md|scripts/README\.md|scripts/tests/.+|scripts/ci/rust_caches\.py"
-                         r"|\.agents/.+|\.claude|\.plans/.+|\.github/workflows/(maintenance|release)\.yml)")
+                         r"|\.agents/.+|\.claude|\.plans/.+|\.github/workflows/(maintenance|release|website)\.yml|website/.+)")
 # The levels that each event can select. Other combinations fail the gate.
 EVENT_TIERS = {"pull_request": ("static", "pr", "full"), "merge_group": ("merge", "full")}
 

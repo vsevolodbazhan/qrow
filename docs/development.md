@@ -288,6 +288,7 @@ lists of Settings. Both fonts use the SIL Open Font License. Each font folder
 has the license text, and [NOTICE](../NOTICE) has the copyright and license
 texts. When you update a font, replace all its files from one release, and
 update the version and the license text in NOTICE.
+Also make the WOFF2 subsets of the [website](../website/README.md) again.
 
 ## Generated icon asset
 
@@ -327,3 +328,10 @@ cargo run --locked --bin qrow-probe -- "your profile name"
 The [probe](../src/bin/qrow-probe.rs) initializes a session, runs `SELECT 1`,
 checks the result, and closes the session. It does not verify engine sharing
 or cancellation.
+
+## Website
+
+The landing page is in [website](../website). It is static HTML with no build
+step. A push to `main` that changes it deploys it to <https://qrow.dev>. See
+the [website README](../website/README.md) to preview the page, to update its
+screenshot, and for the deployment.

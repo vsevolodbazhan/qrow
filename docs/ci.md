@@ -16,7 +16,8 @@ CI has three levels:
 Static paths cannot change a Rust build, a test binary, a server fixture, or
 the validation graph. They are the documentation, root Markdown files,
 `scripts/README.md`, the automation tests in `scripts/tests/`, agent
-instructions, and the release and maintenance workflows and their scripts.
+instructions, the release and maintenance workflows and their scripts, and
+the [website](../website/README.md) and its workflow.
 The [CI policy](../scripts/ci/platforms.py) lists them. One other changed
 path selects the complete pull request level. Markdown files of vendored
 crates are not static paths, because a crate can embed its README.
