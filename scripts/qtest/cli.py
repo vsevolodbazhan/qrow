@@ -213,7 +213,7 @@ def install_archive(tool, archive):
     import shutil
     import tempfile
     import urllib.request
-    from pathlib import Path
+    from pathlib import Path, PurePosixPath
     bin_dir = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
     print(f"[qtest] Downloading {archive.url}", file=sys.stderr)
     with tempfile.TemporaryDirectory() as directory:
@@ -229,8 +229,9 @@ def install_archive(tool, archive):
         with tarfile.open(bundle_path) as bundle:
             bundle.extract(bundle.getmember(archive.member), unpacked, filter="data")
         bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(unpacked / archive.member, bin_dir / tool.name)
-        (bin_dir / tool.name).chmod(0o755)
+        installed = bin_dir / PurePosixPath(archive.member).name
+        shutil.move(unpacked / archive.member, installed)
+        installed.chmod(0o755)
     return True
 
 

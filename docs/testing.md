@@ -412,7 +412,7 @@ cargo-deny, cargo-machete, and cargo-llvm-cov with its LLVM component. Give
 tool names to install only those tools. The [catalog](../scripts/qtest/catalog.py)
 holds the pinned versions and the prebuilt release archives of each tool.
 On Apple silicon Macs and on x86_64 Linux, each tool comes from its archive,
-which takes seconds. qtest checks the archive against the SHA-256 digest in
+which takes seconds. On Windows, only cargo-nextest comes from an archive. qtest checks the archive against the SHA-256 digest in
 the catalog. When the download or the check fails, qtest builds the tool from
 source. On other computers, the tools that have no archive for the computer
 build from source.

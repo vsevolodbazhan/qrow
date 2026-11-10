@@ -16,7 +16,7 @@ PLATFORM_NAMES = {"macos": "macOS", "linux": "Linux", "windows": "Windows"}
 
 def host_platform():
     """The platform of the prebuilt tool archives for this computer, like `macos-aarch64`, or None."""
-    system = {"Darwin": "macos", "Linux": "linux"}.get(platform.system())
+    system = {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}.get(platform.system())
     machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(), platform.machine().lower())
     return f"{system}-{machine}" if system else None
 
@@ -27,7 +27,7 @@ class Archive:
     platform: str
     url: str
     sha256: str
-    # The path of the executable in the archive.
+    # The path of the executable in the archive. Its file name is the installed name.
     member: str
 
 
@@ -55,7 +55,7 @@ def github_archives(repository, tag, member, platforms):
 
 
 # The digests are the SHA-256 digests of the release assets, calculated from
-# the downloaded files. Native validation uses Linux and macOS on both architectures.
+# the downloaded files. Native validation uses Linux, macOS, and Windows on both architectures.
 NEXTEST_MACOS = ("cargo-nextest-0.9.146-universal-apple-darwin.tar.gz",
                  "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8")
 LLVM_COV_MACOS = ("cargo-llvm-cov-universal-apple-darwin.tar.gz",
@@ -72,6 +72,11 @@ TOOLS = {
                                   "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428"),
                  "linux-aarch64": ("cargo-nextest-0.9.146-aarch64-unknown-linux-gnu.tar.gz",
                                    "b2e33d7c72de7ade0ff7b3a948ac37516b24f8a836b7a8870c1f634a94be9de9"),
+             }) + github_archives("nextest-rs/nextest", "cargo-nextest-0.9.146", "cargo-nextest.exe", {
+                 "windows-x86_64": ("cargo-nextest-0.9.146-x86_64-pc-windows-msvc.tar.gz",
+                                    "809b01f2c94d031ab6cf5f4d4a4f477c8f51b69c96ab3cb2fe4db7ecb222d0d3"),
+                 "windows-aarch64": ("cargo-nextest-0.9.146-aarch64-pc-windows-msvc.tar.gz",
+                                     "c94029615d05072af35429d9d66e0f83ba59886bb4e13163a191134e5f0ad47c"),
              })),
         Tool("cargo-deny", "0.20.2", ("cargo", "deny", "--version"), "cargo-deny 0.20.2",
              (("cargo", "install", "--locked", "cargo-deny", "--version", "0.20.2"),),
