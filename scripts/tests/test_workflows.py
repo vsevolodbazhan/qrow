@@ -308,6 +308,22 @@ class ValidationGraphTests(unittest.TestCase):
         # A skipped draft run must not cancel the run of the ready pull request.
         self.assertIn("${{ github.event.pull_request.draft && '-draft' || '' }}", read(TEST))
 
+    def test_debug_cache_targets_remove_release_dependencies_before_the_cache_saves(self):
+        step = "run: rm -rf target/release target/*/release"
+        for target in platforms.TARGETS.values():
+            if not target.supported:
+                continue
+            build = job("build-" + target.name.replace("_", "-"))
+            with self.subTest(target=target.name):
+                self.assertEqual(step in build, target.name in platforms.DEBUG_CACHE_TARGETS)
+                if step in build:
+                    # After the uploads, and only in the runs that save the cache.
+                    self.assertGreater(build.index(step), build.rindex("upload-artifact@"))
+                    self.assertIn("if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}",
+                                  build[build.rindex("upload-artifact@"):])
+        self.assertNotIn("macos-arm64", platforms.DEBUG_CACHE_TARGETS)
+        self.assertNotIn(platforms.PR_TARGETS[0], platforms.DEBUG_CACHE_TARGETS)
+
     def test_caches_have_single_saving_owners_and_tests_only_download_artifacts(self):
         validation = read(VALIDATION)
         keys = re.findall(r"shared-key: (.+)", validation)

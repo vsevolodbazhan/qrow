@@ -179,7 +179,11 @@ and has no cache. A separate
 `main` push run completes, including failed runs. Its `cache-cleanup` job removes replaced caches
 and the caches of shared keys that the workflow no longer uses. The repository
 cache limit is 10 GB. When the caches use more, GitHub removes the least
-recently used caches, and builds compile from the start.
+recently used caches, and builds compile from the start. To keep all caches
+in this limit, the caches of Linux ARM64 and of both Windows targets keep
+only debug dependencies. Their release builds compile all dependencies, but
+these jobs still end before the macOS ARM64 jobs. The other targets keep
+complete caches, because pull requests and the slowest `main` jobs use them.
 Validation keeps read-only permissions. Cleanup uses trusted default-branch
 code and has permission to delete caches.
 
