@@ -116,7 +116,8 @@ class ValidationGraphTests(unittest.TestCase):
     def test_pull_requests_that_cannot_change_a_build_run_only_static_checks(self):
         light = ["docs/ci.md", "README.md", "AGENTS.md", "scripts/README.md", "scripts/tests/test_workflows.py",
                  ".github/workflows/maintenance.yml", ".github/workflows/release.yml", "scripts/ci/rust_caches.py",
-                 ".agents/skills/x/SKILL.md", ".claude"]
+                 ".agents/skills/x/SKILL.md", ".claude", "website/index.html", "website/media/hero.webp",
+                 ".github/workflows/website.yml"]
         self.assertTrue(platforms.static_only(light))
         self.assertEqual(platforms.tier("pull_request", paths=light), "static")
         outputs = platforms.outputs("pull_request", paths=light)
@@ -338,6 +339,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"', dmg)
         self.assertIn("merge-multiple: true", job("publish", RELEASE))
         self.assertIn("Select the workflow branch at the candidate commit", job("resolve-target", RELEASE))
+
+
+
+class WebsiteWorkflowTests(unittest.TestCase):
+    def test_only_main_deploys_the_website(self):
+        path = ".github/workflows/website.yml"
+        workflow = read(path)
+        self.assertIn("permissions:\n  contents: read\n", workflow)
+        build, deploy = job("build", path), job("deploy", path)
+        # Pull requests build the site without the rights to publish it.
+        self.assertNotIn("pages: write", build)
+        self.assertIn("--exclude README.md --exclude '*.sh' website/ _site/", build)
+        deploys = "github.ref == 'refs/heads/main' && github.event_name != 'pull_request'"
+        self.assertIn(f"if: {deploys}", deploy)
+        # A run that cannot deploy must not share the deploy group: it would replace a pending deployment.
+        self.assertIn(f"group: website-${{{{ {deploys} && 'deploy' || github.ref }}}}", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/main' || github.event_name == 'pull_request' }}",
+                      workflow)
+        self.assertEqual(needs(deploy), ["build"])
+        self.assertIn("pages: write", deploy)
+        self.assertIn("name: github-pages", deploy)
+        for page in ("og:url", "og:image", "canonical"):
+            self.assertRegex(read("website/index.html"), rf'"{page}"[^>]*"https://qrow\.dev/')
 
 
 if __name__ == "__main__":
