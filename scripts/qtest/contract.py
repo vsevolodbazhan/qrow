@@ -150,7 +150,7 @@ def validate_plan(value, root, build=False):
         raise ValueError("CARGO_BUILD_TARGET conflicts with the native plan target")
     if not configured:
         for path in cargo_config_paths(root).values():
-            configured = tomllib.loads(Path(path).read_text()).get("build", {}).get("target")
+            configured = tomllib.loads(Path(path).read_text(encoding="utf-8")).get("build", {}).get("target")
             if configured and configured != target.triple:
                 raise ValueError(f"Cargo build.target conflicts with the native plan target: {path}")
 

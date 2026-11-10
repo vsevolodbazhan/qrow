@@ -6,13 +6,17 @@ use std::{
     future::Future,
     io,
     net::{Shutdown, TcpStream},
-    os::fd::AsFd,
     sync::{
         Arc, Condvar, Mutex, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
+
+#[cfg(unix)]
+use std::os::fd::AsFd;
+#[cfg(windows)]
+use std::os::windows::io::AsSocket;
 
 const MAX_SOCKETS: usize = 8;
 const MAX_REQUESTS: usize = 8;
@@ -110,7 +114,10 @@ impl Transport {
 
     /// The lease remains in reqwest's connecting future and pooled connection.
     pub fn register(&self, stream: &tokio::net::TcpStream) -> io::Result<Arc<dyn Send + Sync>> {
+        #[cfg(unix)]
         let socket = TcpStream::from(stream.as_fd().try_clone_to_owned()?);
+        #[cfg(windows)]
+        let socket = TcpStream::from(stream.as_socket().try_clone_to_owned()?);
         let mut state = self.group.state.lock_unpoisoned();
         state
             .sockets

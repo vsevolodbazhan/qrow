@@ -570,6 +570,17 @@ pub struct SchemaRule {
     pub to: String,
 }
 
+impl SchemaRule {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.from.trim().is_empty()
+                && (self.kind == SchemaRuleKind::Prefix || !self.to.trim().is_empty()),
+            "Each schema mapping rule needs a dbt schema and a catalog schema."
+        );
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SchemaRuleKind {
@@ -590,11 +601,7 @@ impl DbtProject {
             "Schema mapping can have {MAX_SCHEMA_RULES} rules or fewer."
         );
         for rule in &self.schema_mapping {
-            anyhow::ensure!(
-                !rule.from.trim().is_empty()
-                    && (rule.kind == SchemaRuleKind::Prefix || !rule.to.trim().is_empty()),
-                "Each schema mapping rule needs a dbt schema and a catalog schema."
-            );
+            rule.validate()?;
         }
         Ok(())
     }
@@ -1127,15 +1134,7 @@ impl Profile {
     /// limit lose their end, and the schema mapping loses its invalid rules.
     fn sanitize(&mut self) {
         if let Some(dbt) = &mut self.dbt {
-            dbt.schema_mapping.retain(|rule| {
-                DbtProject {
-                    manifest: "/".into(),
-                    refresh: DbtRefresh::Manual,
-                    schema_mapping: vec![rule.clone()],
-                }
-                .validate()
-                .is_ok()
-            });
+            dbt.schema_mapping.retain(|rule| rule.validate().is_ok());
             dbt.schema_mapping.truncate(MAX_SCHEMA_RULES);
         }
         if self.assistant_notes.len() > MAX_ASSISTANT_NOTES_BYTES {

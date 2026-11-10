@@ -20,6 +20,11 @@ name = "qrow"
 path = "src/main.rs"
 required-features = ["ui"]
 
+# Embeds the icon and version resources of the Windows executable. Build
+# scripts compile for the host, so this is not limited to Windows hosts.
+[build-dependencies]
+embed-resource = "=3.0.11"
+
 [dependencies]
 anyhow = "1"
 async-channel = { version = "2", optional = true }
@@ -57,6 +62,11 @@ parquet = { version = "=60.0.0", default-features = false, features = ["snap", "
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] }
 
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
+open = { version = "=5.4.4", features = ["shellexecute-on-windows"] }
+rustls-platform-verifier = "=0.7.0"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 
@@ -70,7 +80,7 @@ proptest = "=1.11.0"
 
 # Headless UI integration tests of the real Qrow window. Keep the version and
 # source equal to the normal dependency.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
+[target.'cfg(any(target_os = "macos", windows))'.dev-dependencies]
 gpui-kit = { version = "=0.6.6", features = ["tree-sitter", "test-support"] }
 
 [[test]]

@@ -67,7 +67,7 @@ impl Render for SettingsWindow {
             .font_family(cx.theme().font_family.clone())
             .text_sm()
             .when(
-                cfg!(target_os = "linux")
+                cfg!(not(target_os = "macos"))
                     && matches!(window.window_decorations(), Decorations::Client { .. }),
                 |view| {
                     view.child(
@@ -102,7 +102,7 @@ pub(super) fn open(qrow: WeakEntity<Qrow>, cx: &mut App) {
         }),
         window_min_size: Some(gpui_kit::size(px(MIN_WIDTH), px(MIN_HEIGHT))),
         app_id: cfg!(target_os = "linux").then(|| "qrow".into()),
-        window_decorations: cfg!(target_os = "linux").then_some(WindowDecorations::Client),
+        window_decorations: cfg!(not(target_os = "macos")).then_some(WindowDecorations::Client),
         // Like other macOS Settings windows: it can be minimized, but it has
         // a fixed size, so the zoom button and full screen are off.
         is_minimizable: true,

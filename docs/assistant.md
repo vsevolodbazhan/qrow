@@ -21,11 +21,12 @@ Open **Qrow → Settings… → Assistant**. In **General**, turn on **Enabled**
 read the data sharing notice. When the notice changes, for example when the
 assistant gets access to schema names, Qrow turns the assistant off until you
 read the new notice and turn it on again. Select **Codex** or **Claude Code**
-in **General → Harness**. Qrow looks for `codex` or `claude` on your `PATH`
-and in the usual Homebrew folders. For Claude Code, it also looks in
-`~/.local/bin` and `~/.claude/local`. If Qrow cannot find the program, enter
-its full path in **Codex → Executable** or **Claude Code → Executable**. The
-assistant is off by default. Qrow does not start the harness until you open
+in **General → Harness**. Qrow looks for `codex` or `claude` on your `PATH`,
+in the usual Homebrew folders, and in `~/.local/bin`. For Claude Code, it also
+looks in `~/.claude/local`. On Windows, Qrow looks in other folders. See
+[Windows harnesses](#windows-harnesses). If Qrow cannot find the program,
+enter its full path in **Codex → Executable** or **Claude Code → Executable**.
+The assistant is off by default. Qrow does not start the harness until you open
 the assistant pane.
 
 Select the default query mode in **General → Query Execution**. A new
@@ -679,3 +680,18 @@ The demo uses synthetic query data and an in-memory workspace. Qrow asks Codex
 to delete demo conversations on normal exit. It reads the deletion replies
 after stopping the assistant worker. A conversation can remain if Codex does
 not confirm deletion before exit or if Qrow crashes.
+
+## Windows harnesses
+
+Executable discovery checks `PATH`, then `%APPDATA%\npm` (npm global
+packages), then `%USERPROFILE%\.local\bin` (the Claude Code installer). For
+Claude Code, it also checks `%USERPROFILE%\.claude\local`. It does not check
+Homebrew folders. In each folder, it accepts a `.exe` file first and then an
+npm `.cmd` shim. You can also
+select a path in Settings. Rust starts batch shims through its Windows command
+adapter. Qrow does not build a command-interpreter string from the arguments.
+
+CLI children run without a console window. Stopping a live run uses
+`taskkill /T /F` to stop its process tree. This does not give the lifetime
+guarantees of a Windows Job Object. Detached children, or children whose parent
+has already exited, can need separate cleanup.

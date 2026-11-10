@@ -1030,6 +1030,7 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
     let app = TestApp::launch_demo(cx);
     app.click(cx, "output-panel-tab");
     app.wait_for(cx, "output-count");
+    app.wait_status(cx, "Complete");
     for _ in 0..30 {
         let before = app.update(cx, |window, _| label(window, "output-count"));
         app.click(cx, "sql-editor");
@@ -1037,6 +1038,9 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
         app.wait_until(cx, "a new entry", Duration::from_secs(20), |window, _| {
             label(window, "output-count") != before
         });
+        // A submission adds a log entry before its outcome. Wait for both,
+        // so the final outcome cannot scroll the row during the drag.
+        app.wait_status(cx, "Complete");
         app.click(cx, "output-panel-tab");
     }
     app.settle(cx);
@@ -1050,9 +1054,17 @@ fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut Tes
     // them, not all 30 queries, so a drag stays fast in a long log.
     let (drawn, sql) = app.update(cx, |window, _| {
         let blocks = sql_blocks(window);
+        // A visible snapshot can be partly clipped. Both drag endpoints
+        // must stay inside the Logs viewport.
+        let viewport = window.find("output-scroll").bounds();
         let visible = blocks
             .iter()
-            .rfind(|block| block.visible())
+            .rfind(|block| {
+                let bounds = block.bounds();
+                block.visible()
+                    && bounds.top() >= viewport.top()
+                    && bounds.bottom() <= viewport.bottom()
+            })
             .unwrap()
             .bounds();
         (blocks.len(), visible)

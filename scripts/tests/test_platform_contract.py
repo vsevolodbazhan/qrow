@@ -1,4 +1,4 @@
-"""Reject incomplete four-target validation and unsafe package contents."""
+"""Reject incomplete native-target validation and unsafe package contents."""
 import copy
 import importlib.util
 import io
@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,10 +24,10 @@ spec.loader.exec_module(qualify)
 
 
 class MatrixGateTests(unittest.TestCase):
-    def test_matrix_has_all_supported_native_targets_and_no_windows_claim(self):
+    def test_matrix_has_all_supported_native_targets_including_windows(self):
         matrix = platforms.matrix()['include']
         self.assertEqual({item['target'] for item in matrix},
-                         {'linux-x86_64', 'linux-arm64', 'macos-arm64', 'macos-x86_64'})
+                         {'linux-x86_64', 'linux-arm64', 'macos-arm64', 'macos-x86_64', 'windows-x86_64', 'windows-arm64'})
         self.assertTrue(all(item['runner'] and 'package-smoke' in item['suites'] for item in matrix))
         self.assertEqual(platforms.matrix(), platforms.matrix(True))
 
@@ -77,13 +78,13 @@ class MatrixGateTests(unittest.TestCase):
             # Evidence of other targets is unexpected in a pull request run.
             with self.assertRaisesRegex(ValueError, 'unexpected'):
                 platforms.verify(root, sha, targets=['linux-x86_64'])
-            for name in ('linux-arm64', 'macos-arm64', 'macos-x86_64'):
+            for name in ('linux-arm64', 'macos-arm64', 'macos-x86_64', 'windows-x86_64', 'windows-arm64'):
                 for path in (root / name).iterdir():
                     path.unlink()
             platforms.verify(root, sha, targets=['linux-x86_64'])
             with self.assertRaisesRegex(ValueError, 'Missing'):
                 platforms.verify(root, sha)
-            for targets in (['macos-arm64'], ['linux-x86_64', 'windows-x86_64']):
+            for targets in (['macos-arm64'], ['linux-x86_64', 'unknown-target']):
                 with self.subTest(targets=targets), self.assertRaisesRegex(ValueError, 'selection'):
                     platforms.verify(root, sha, targets=targets)
 
@@ -168,6 +169,8 @@ class PublicationTests(unittest.TestCase):
                 (dist / f'Qrow-1.2.3{suffix}.dmg').write_bytes(b'synthetic dmg')
             for arch in ['x86_64', 'aarch64']:
                 (dist / f'Qrow-1.2.3-linux-{arch}.tar.gz').write_bytes(b'synthetic archive')
+            (dist / 'Qrow-1.2.3-windows-aarch64.zip').write_bytes(b'synthetic Windows ARM archive')
+            (dist / 'Qrow-1.2.3-windows-x86_64.zip').write_bytes(b'synthetic Windows archive')
             (root / 'release-notes.md').write_text('Synthetic release')
             tools = root / 'tools'
             tools.mkdir()
@@ -318,3 +321,31 @@ class CommonGateTests(unittest.TestCase):
             contract.atomic_json(ui / 'stress-result.json', result)
             with self.assertRaisesRegex(ValueError, 'stress contract'):
                 platforms.verify_common(root, sha, full=True)
+
+
+class WindowsArchiveTests(unittest.TestCase):
+    def archive(self, root, machine=0x8664, extra=None):
+        archive = root / 'candidate.zip'
+        data = bytearray(128)
+        data[:2] = b'MZ'
+        data[60:64] = (64).to_bytes(4, 'little')
+        data[64:68] = b'PE\0\0'
+        data[68:70] = machine.to_bytes(2, 'little')
+        with zipfile.ZipFile(archive, 'w') as bundle:
+            bundle.writestr('qrow.exe', data)
+            for name in ('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.txt'):
+                bundle.writestr(name, 'synthetic')
+            if extra:
+                bundle.writestr(extra, 'synthetic')
+        return archive
+
+    def test_windows_pe_architecture_and_closed_archive_contents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(qualify.windows_archive(self.archive(root), root / 'valid').name, 'qrow.exe')
+            self.assertEqual(qualify.windows_archive(self.archive(root, machine=0xaa64), root / 'arm', 'aarch64').name, 'qrow.exe')
+            with self.assertRaisesRegex(ValueError, 'architecture'):
+                qualify.windows_archive(self.archive(root, machine=0xaa64), root / 'wrong')
+            with self.assertRaisesRegex(ValueError, 'Unexpected'):
+                qualify.windows_archive(self.archive(root, extra='../escape'), root / 'unsafe')
+            self.assertFalse((root / 'escape').exists())

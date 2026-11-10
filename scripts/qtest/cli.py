@@ -42,7 +42,7 @@ def guide_sections():
     """Level-two sections of docs/testing.md, keyed by slug."""
     sections = {}
     current = None
-    for line in GUIDE.read_text().splitlines():
+    for line in GUIDE.read_text(encoding="utf-8").splitlines():
         if line.startswith("## "):
             current = slug(line[3:])
             sections[current] = [line]
@@ -319,15 +319,15 @@ def command_new(args):
     path = directory / f"{args.suite}.rs"
     if args.suite in ("main", "support"):
         raise runner.UsageError(f"{args.suite} is reserved.")
-    if path.exists() and re.search(rf"\bfn {args.name}\(", path.read_text()):
+    if path.exists() and re.search(rf"\bfn {args.name}\(", path.read_text(encoding="utf-8")):
         raise runner.UsageError(f"{path.relative_to(ROOT)} already has {args.name}.")
     header, template = TEMPLATES[args.layer]
-    text = path.read_text() if path.exists() else header
-    path.write_text(text + template.format(name=args.name))
-    lines = main.read_text().splitlines()
+    text = path.read_text(encoding="utf-8") if path.exists() else header
+    path.write_text(text + template.format(name=args.name), encoding="utf-8")
+    lines = main.read_text(encoding="utf-8").splitlines()
     module = f"mod {args.suite};"
     if module not in lines:
-        main.write_text("\n".join(insert_module(lines, args.suite)) + "\n")
+        main.write_text("\n".join(insert_module(lines, args.suite)) + "\n", encoding="utf-8")
     print(f"Added {args.name} to {path.relative_to(ROOT)}. It fails until you write it.")
     print(f"Run it with: ./qtest run {args.layer}/{args.name}")
     return EXIT_PASSED
@@ -378,12 +378,12 @@ def command_fixture(args):
 
 def command_artifacts(args):
     pointer = runner.runs_dir() / "latest.json"
-    latest = runner.runs_dir() / (json.loads(pointer.read_text())["run"] if pointer.exists() else "latest")
+    latest = runner.runs_dir() / (json.loads(pointer.read_text(encoding="utf-8"))["run"] if pointer.exists() else "latest")
     summary = latest / "summary.json"
     if not summary.exists():
         print("No qtest run has finished yet.", file=sys.stderr)
         return EXIT_FAILED
-    data = json.loads(summary.read_text())
+    data = json.loads(summary.read_text(encoding="utf-8"))
     if args.json:
         print(json.dumps(data, indent=2))
     else:
@@ -405,7 +405,7 @@ def command_plan(args):
 
 def command_prepare(args):
     import builds
-    value = json.loads(args.plan.read_text())
+    value = json.loads(args.plan.read_text(encoding="utf-8"))
     contract.validate_plan(value, ROOT, build=True)
     if args.install and install_tools(["cargo-nextest"]):
         return EXIT_FAILED
@@ -414,7 +414,7 @@ def command_prepare(args):
 
 
 def command_execute(args):
-    value = json.loads(args.plan.read_text())
+    value = json.loads(args.plan.read_text(encoding="utf-8"))
     if args.install:
         names = {name for item in value["suites"] for name in item["definition"]["requires"] if name in catalog.TOOLS}
         # Validate source and commands before installing anything from a plan.
@@ -429,7 +429,7 @@ def command_execute(args):
 
 
 def command_verify(args):
-    contract.verify(json.loads(args.plan.read_text()), json.loads(args.result.read_text()))
+    contract.verify(json.loads(args.plan.read_text(encoding="utf-8")), json.loads(args.result.read_text(encoding="utf-8")))
     print("Required execution evidence passed.")
     return EXIT_PASSED
 

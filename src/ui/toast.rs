@@ -75,7 +75,16 @@ pub(super) struct SavedFileIds {
     pub reveal: &'static str,
 }
 
-/// A success toast for a written file, with **Reveal in Finder**.
+/// The label of the action that shows a file in the system file manager.
+pub(super) const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else if cfg!(windows) {
+    "Reveal in File Explorer"
+} else {
+    "Open Containing Folder"
+};
+
+/// A success toast for a written file, with a [`REVEAL_LABEL`] action.
 pub(super) fn saved_file(ids: SavedFileIds, title: String, path: PathBuf) -> Notification {
     let filename = path
         .file_name()
@@ -95,7 +104,7 @@ pub(super) fn saved_file(ids: SavedFileIds, title: String, path: PathBuf) -> Not
         .action(move |_, _, _| {
             let path = path.clone();
             Button::new(ids.reveal)
-                .label("Reveal in Finder")
+                .label(REVEAL_LABEL)
                 .on_click(move |_, _, cx| cx.reveal_path(&path))
         })
 }

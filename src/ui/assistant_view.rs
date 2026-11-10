@@ -73,6 +73,7 @@ mod transcript;
 mod transcript_view;
 
 use conversations::*;
+pub(crate) use harness::executable_help;
 use harness::*;
 use local::*;
 use pane::*;

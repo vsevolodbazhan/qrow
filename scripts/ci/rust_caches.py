@@ -27,7 +27,7 @@ RUST_KEY = re.compile(r"(?P<group>v0-rust-(?P<shared>.+)-(?:Linux|Darwin|Windows
 # scripts/tests/test_workflows.py keeps this list equal to the workflow.
 CURRENT_KEYS = frozenset({
     "common-core", "common-backend", "common-headless-ui", "common-performance",
-    "native-macos-arm64", "native-macos-x86_64", "native-linux-x86_64", "native-linux-arm64",
+    "native-macos-arm64", "native-macos-x86_64", "native-linux-x86_64", "native-linux-arm64", "native-windows-x86_64", "native-windows-arm64",
 })
 
 

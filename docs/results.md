@@ -189,8 +189,10 @@ the limit, the clipboard does not change. You can save the downloaded result
 to a file. Parquet is available only as a file. **Save** opens the native save
 panel. Tab separators use the `.tsv` extension. Other separators
 use `.csv`. After a save, a notification shows the row count and the file
-name. Use **Reveal in Finder** to locate the file. The notification stays open
-until you close it, because an export can finish while you do other work.
+name. Use **Reveal in Finder** to locate the file. On Windows, the action is
+**Reveal in File Explorer**. On Linux, it is **Open Containing Folder**. The
+notification stays open until you close it, because an export can finish
+while you do other work.
 A successful copy or save stores the options for the next export. A save
 also stores the last output directory.
 
@@ -509,3 +511,6 @@ Changing these handlers requires pointer checks. Verify dragging, release, the
 next click, both scroll axes, and modal overlays. Earlier automation could not
 establish horizontal trackpad behavior or column resizing. A passing native
 build does not close those verification gaps.
+
+On Windows, export disk reservations conservatively share one counter across
+all volumes. Free-space checks use the volume of each output directory.

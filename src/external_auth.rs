@@ -5,6 +5,8 @@ use crate::{
     connector::Secret,
     model::{Authentication, DatabaseType, Profile},
 };
+#[cfg(windows)]
+use anyhow::Context as _;
 use anyhow::{Result, anyhow};
 use std::{
     sync::{
@@ -435,6 +437,13 @@ impl Drop for Waiter {
         self.shared.changed();
     }
 }
+#[cfg(windows)]
+fn open_browser(url: &str) -> Result<()> {
+    // ShellExecuteExW opens the URL as data, without a command interpreter.
+    open::that_detached(url).context("Cannot open the browser")
+}
+
+#[cfg(not(windows))]
 fn open_browser(url: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     let command = "open";

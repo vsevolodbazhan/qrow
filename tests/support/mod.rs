@@ -74,6 +74,15 @@ impl Credentials for MemoryCredentials {
     }
 }
 
+/// The label of the saved-file action that shows a file in the file manager.
+pub const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else if cfg!(windows) {
+    "Reveal in File Explorer"
+} else {
+    "Open Containing Folder"
+};
+
 /// The observed element `id` inside the scope `scope`, when both exist in the
 /// last frame. `TestWindowExt::within` panics when its scope is absent.
 pub fn find_in(
@@ -1365,10 +1374,13 @@ impl TestApp {
     /// Replaces the SQL of the active tab by typing into the editor, and waits
     /// until Qrow saves it.
     pub fn type_sql(&self, cx: &mut TestAppContext, sql: &str) {
+        self.click(cx, "sql-editor");
         self.update(cx, |window, cx| {
-            window.click("sql-editor", cx);
-            window.press("secondary-a", cx);
-            window.input(sql, cx);
+            // Finish the click's update before typing. Scoped input also
+            // verifies that the editor, rather than the result, owns focus.
+            let mut editor = window.within("sql-editor");
+            editor.press("secondary-a", cx);
+            editor.input(sql, cx);
         });
         self.wait_until(
             cx,

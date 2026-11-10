@@ -105,12 +105,14 @@ def gate(results, targets, selected_tier, event):
 
 # Production Clippy runs on one architecture of each OS. Other architectures
 # add little lint coverage and a complete check build.
-LINT_TARGETS = ("macos-arm64", "linux-x86_64")
+LINT_TARGETS = ("macos-arm64", "linux-x86_64", "windows-x86_64")
 
 
 def suites(target, full=False):
     # Native contracts contain only OS assertions and the production candidate.
     # Full mode adds measurements elsewhere, not another functional test set.
+    if target.system == "windows":
+        return ["windows-unit", "windows-storage", "package-smoke"]
     return ["native-storage", "package-smoke", *(["native-font", "native-ui", "native-assistant", "desktop"]
                                                  if target.system == "macos" else [])]
 

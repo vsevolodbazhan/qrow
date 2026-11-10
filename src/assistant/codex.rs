@@ -218,6 +218,11 @@ impl CodexHarness {
     ) -> Result<Self> {
         anyhow::ensure!(cwd.is_dir(), "Codex working directory does not exist");
         let mut command = Command::new(executable);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000 | 0x00000200);
+        }
         command
             .arg("app-server")
             // Keep the Qrow session limited to its client-defined tools. The

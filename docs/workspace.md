@@ -268,3 +268,10 @@ identifiers must remain compatible.
 Native focus, window dragging, double-click behavior, appearance changes, and
 workspace restoration need direct UI verification when changed. The existing
 end-to-end suite does not establish every layout and window interaction.
+
+## Windows workspace
+
+Windows stores the workspace in `%APPDATA%\Qrow\workspace.json`.
+If `APPDATA` is absent, Qrow uses `AppData/Roaming/Qrow/workspace.json` in
+the home directory. `QROW_DATA_DIR` overrides this location on all platforms.
+Home directory lookups use `HOME`, then `USERPROFILE` if `HOME` is empty or absent.

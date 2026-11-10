@@ -1256,7 +1256,7 @@ fn assistant_page(
         )
         .group(SettingGroup::new().title("Codex").item(setting_item(
             "Executable",
-            "Empty searches your PATH and Homebrew folders.",
+            super::assistant_view::executable_help(),
             &["assistant", "codex", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&executable)
@@ -1267,7 +1267,7 @@ fn assistant_page(
         )))
         .group(SettingGroup::new().title("Claude Code").item(setting_item(
             "Executable",
-            "Empty searches PATH, Homebrew, and ~/.local/bin.",
+            super::assistant_view::executable_help(),
             &["assistant", "claude", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&claude_executable)

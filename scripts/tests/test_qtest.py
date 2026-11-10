@@ -29,6 +29,22 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("/tmp/evidence", output.getvalue())
 
 
+class ExecuteTests(unittest.TestCase):
+    def test_a_failed_output_write_does_not_stop_reading_the_step(self):
+        # A Windows console without UTF-8 rejects some test output. The step
+        # must still finish: an unread pipe would block it until its time limit.
+        class Rejecting:
+            def stream(self, line):
+                raise UnicodeEncodeError("charmap", line, 0, 1, "synthetic")
+
+        script = "import sys\nfor _ in range(4000): sys.stdout.write('\u2500' * 40 + '\\n')\n"
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "step.log"
+            code = runner.execute([sys.executable, "-c", script], os.environ.copy(), 60, log, Rejecting())
+            self.assertEqual(code, 0)
+            self.assertIn("\u2500" * 40, log.read_text(encoding="utf-8"))
+
+
 class CatalogTests(unittest.TestCase):
     def test_groups_name_existing_suites_without_server_suites(self):
         for name, (_, members) in catalog.GROUPS.items():

@@ -1461,7 +1461,7 @@ impl Qrow {
 
     /// Whether keyboard focus is within the catalog tree. The Linux
     /// application menu uses it to pick the Copy action.
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     pub(super) fn catalog_has_focus(&self, window: &Window, cx: &App) -> bool {
         self.catalog.focus.contains_focused(window, cx)
     }

@@ -5,8 +5,9 @@ use super::{TestApp, elements, label, labels, present};
 use gpui_kit::{TestAppContext, Window};
 use qrow::model::{AssistantHarness, AssistantTitleSource, Settings, Workspace};
 use qrow::ui::ToggleAssistant;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -118,6 +119,7 @@ impl FakeCodex {
             ),
         )
         .unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         let state = directory.path().join("fake-codex");
         std::fs::create_dir_all(&state).unwrap();
@@ -207,6 +209,7 @@ impl FakeClaude {
             ),
         )
         .unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         let state = directory.path().join("fake-claude");
         std::fs::create_dir_all(&state).unwrap();

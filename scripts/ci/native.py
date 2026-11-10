@@ -37,8 +37,8 @@ def checked(args):
 
 def asset_paths(target):
     package = ROOT / "target/package"
-    if target.system == "linux":
-        return sorted(package.glob("*.tar.gz"))
+    if target.system in ("linux", "windows"):
+        return sorted(package.glob("*.zip" if target.system == "windows" else "*.tar.gz"))
     return [package / "Qrow-macos.zip", *(ROOT / "target/native-tools").glob("*"),
             ROOT / "target/e2e-tools/native-driver"]
 
@@ -77,7 +77,7 @@ def build(full, target_name=None):
     if cli.install_tools(["cargo-nextest"]):
         raise ValueError("Cannot install nextest")
     builds.prepare(preparation, ROOT, PREPARED, runner.Output(False))
-    package = "linux-package" if target.system == "linux" else "package"
+    package = {"linux": "linux-package", "windows": "windows-package"}.get(target.system, "package")
     with cargo_target(target, cross):
         checked(["run", *(["clippy-native"] if target.name in platforms.LINT_TARGETS else []), package, "--fail-fast"])
     if target.system == "macos":
@@ -103,7 +103,7 @@ def build(full, target_name=None):
     assets = asset_paths(target)
     if not assets:
         raise ValueError("Missing native candidate")
-    manifest["assets"] = {str(path.relative_to(ROOT)): builds.sha256(path) for path in assets}
+    manifest["assets"] = {path.relative_to(ROOT).as_posix(): builds.sha256(path) for path in assets}
     contract.validate_plan(value, ROOT, build=True)
     contract.atomic_json(manifest_path, manifest)
     # One tar fixes the transfer layout and preserves executable permissions.
@@ -129,7 +129,7 @@ def verify_assets():
     contract.validate_plan(value, ROOT)
     manifest = json.loads((PREPARED / "manifest.json").read_text())
     target = host_target()
-    expected = {str(path.relative_to(ROOT)) for path in asset_paths(target)}
+    expected = {path.relative_to(ROOT).as_posix() for path in asset_paths(target)}
     if set(manifest.get("assets", {})) != expected or not expected:
         raise ValueError("Missing or unexpected native build assets")
     for name, digest in manifest["assets"].items():

@@ -527,8 +527,8 @@ the issuer, client ID, scopes, or resource. Sign out first.
 
 ### Tokens and sessions
 
-Qrow keeps the access token and the refresh token in macOS Keychain or the
-Linux desktop secret store. Tokens
+Qrow keeps the access token and the refresh token in macOS Keychain, the
+Linux desktop secret store, or Windows Credential Manager. Tokens
 are not in the workspace file, Logs, error messages, or assistant context.
 Before Qrow opens a transport, it gets an access token that stays valid for
 at least 60 seconds. If necessary, it uses the refresh token. When the provider
@@ -1208,11 +1208,14 @@ transport. Turn on **TLS** to encrypt it, or use a trusted network or VPN.
 Qrow verifies the server
 certificate and the host name against the system trust store. On macOS, add a
 company certificate authority to Keychain and trust it. On Linux, add it to
-the system certificate store. Kerberos, HTTP
+the system certificate store. On Windows, add it to the Trusted Root
+Certification Authorities store. Windows verifies the certificate chain
+itself, so it can also get a trusted public root that the computer does not
+have yet. Kerberos, HTTP
 transport, and SSH tunneling are not implemented.
 
-Passwords are stored in macOS Keychain, or in the desktop secret store on
-Linux. Linux needs an available Secret Service. Passwords are not part of the
+Passwords are stored in macOS Keychain, the desktop secret store on
+Linux, or Windows Credential Manager. Linux needs an available Secret Service. Passwords are not part of the
 [workspace file](workspace.md#saved-state). If Qrow cannot read a password,
 edit the connection to save a password again.
 
@@ -1291,3 +1294,16 @@ The [external authentication service](../src/external_auth.rs) shares in-memory
 tokens and authentication work for Trino connections. The
 [Trino challenge adapter](../src/connector/trino/external.rs) follows the
 [upstream Trino client protocol](https://github.com/trinodb/trino/tree/483/client/trino-client/src/main/java/io/trino/client/auth/external).
+
+## Windows credentials
+
+Windows stores passwords and sign-in tokens in Windows Credential Manager.
+Each generic credential has a target with the service name and profile UUID.
+Passwords and tokens use separate services. Workspace files do not contain
+these secrets. The Windows backend has a synthetic round-trip test in native CI.
+
+A Windows generic credential holds at most 2560 bytes. A sign-in record with
+large tokens can be larger. Thus Qrow divides a large secret into parts of
+2048 bytes and saves each part as a different credential. The credential with
+the profile target holds the first part and the number of parts. Qrow writes
+this credential last, so a save that stops halfway keeps the previous secret.

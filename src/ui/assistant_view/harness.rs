@@ -21,6 +21,18 @@ pub(super) fn reasoning_effort_label(id: &str) -> String {
     }
 }
 
+/// The help text of the harness executable settings. It names the folders
+/// that [`discover_harness`] searches on this platform.
+pub(crate) fn executable_help() -> &'static str {
+    if cfg!(windows) {
+        "Empty searches PATH, %APPDATA%\\npm, and ~\\.local\\bin."
+    } else if cfg!(target_os = "macos") {
+        "Empty searches PATH, Homebrew, and ~/.local/bin."
+    } else {
+        "Empty searches PATH, /usr/local/bin, and ~/.local/bin."
+    }
+}
+
 /// Finds the executable of `harness`: the configured path, or the first
 /// match on `PATH` and in the usual install folders.
 pub(super) fn discover_harness(
@@ -36,31 +48,63 @@ pub(super) fn discover_harness(
             )
         });
     }
+    harness_candidates(
+        harness,
+        std::env::var_os("PATH"),
+        crate::storage::home_dir(),
+        std::env::var_os("APPDATA"),
+    )
+    .into_iter()
+    .find(|path| path.is_file())
+    .ok_or_else(|| {
+        format!("{name} was not found. Install {name}, or select its executable in Settings.")
+    })
+}
+
+/// The paths that [`discover_harness`] checks, in order. On Windows, each
+/// folder gives an `.exe` and then a `.cmd` file, because npm installs a
+/// `.cmd` launcher.
+fn harness_candidates(
+    harness: AssistantHarness,
+    path: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+    appdata: Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
     let program = match harness {
         AssistantHarness::Codex => "codex",
         AssistantHarness::Claude => "claude",
     };
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join(program)));
+    let mut directories = Vec::new();
+    if let Some(path) = path {
+        directories.extend(std::env::split_paths(&path));
     }
-    candidates.extend(
-        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
-            .map(|dir| PathBuf::from(dir).join(program)),
-    );
-    if harness == AssistantHarness::Claude
-        && let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
-    {
-        // The native installer of Claude Code uses these folders.
-        candidates.push(home.join(".local/bin/claude"));
-        candidates.push(home.join(".claude/local/claude"));
+    #[cfg(not(windows))]
+    directories.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from));
+    #[cfg(windows)]
+    if let Some(appdata) = appdata {
+        directories.push(PathBuf::from(appdata).join("npm"));
     }
-    candidates
+    #[cfg(not(windows))]
+    let _ = appdata;
+    if let Some(home) = home {
+        directories.push(home.join(".local").join("bin"));
+        if harness == AssistantHarness::Claude {
+            directories.push(home.join(".claude").join("local"));
+        }
+    }
+    #[cfg(windows)]
+    let names = [format!("{program}.exe"), format!("{program}.cmd")];
+    #[cfg(not(windows))]
+    let names = [program.to_owned()];
+    directories
         .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            format!("{name} was not found. Install {name}, or select its executable in Settings.")
+        .flat_map(|directory| {
+            names
+                .iter()
+                .map(move |name| directory.join(name))
+                .collect::<Vec<_>>()
         })
+        .collect()
 }
 
 impl Qrow {
@@ -572,5 +616,65 @@ mod tests {
         assert_eq!(reasoning_effort_label("high"), "High");
         assert_eq!(reasoning_effort_label("xhigh"), "Extra high");
         assert_eq!(reasoning_effort_label("max"), "Max");
+    }
+
+    #[::core::prelude::v1::test]
+    fn harness_search_follows_path_then_the_install_folders() {
+        let home = PathBuf::from("home");
+        let path = std::env::join_paths([PathBuf::from("first")]).unwrap();
+        let candidates = harness_candidates(
+            AssistantHarness::Claude,
+            Some(path),
+            Some(home.clone()),
+            Some("appdata".into()),
+        );
+        let position = |path: PathBuf| candidates.iter().position(|item| *item == path).unwrap();
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                candidates[..2],
+                [
+                    PathBuf::from(r"first\claude.exe"),
+                    PathBuf::from(r"first\claude.cmd")
+                ]
+            );
+            let npm = position(PathBuf::from(r"appdata\npm\claude.cmd"));
+            let local = position(home.join(r".local\bin\claude.exe"));
+            assert!(npm < local);
+            assert!(
+                !candidates
+                    .iter()
+                    .any(|path| path.starts_with("/opt/homebrew"))
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(candidates[0], PathBuf::from("first/claude"));
+            let homebrew = position(PathBuf::from("/opt/homebrew/bin/claude"));
+            let local = position(home.join(".local/bin/claude"));
+            assert!(homebrew < local);
+            assert!(!candidates.iter().any(|path| path.starts_with("appdata")));
+        }
+        assert!(
+            candidates.contains(&home.join(".claude").join("local").join(if cfg!(windows) {
+                "claude.exe"
+            } else {
+                "claude"
+            }))
+        );
+        let codex = harness_candidates(AssistantHarness::Codex, None, Some(home.clone()), None);
+        assert!(
+            !codex
+                .iter()
+                .any(|path| path.starts_with(home.join(".claude")))
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn executable_help_names_the_folders_of_this_platform() {
+        let help = executable_help();
+        assert!(help.starts_with("Empty searches PATH"));
+        assert_eq!(help.contains("Homebrew"), cfg!(target_os = "macos"));
+        assert_eq!(help.contains("%APPDATA%"), cfg!(windows));
     }
 }

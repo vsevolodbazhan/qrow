@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qtest"))
 from contract import atomic_json, source_sha  # noqa: E402
@@ -44,6 +45,47 @@ def linux_archive(archive, destination, machine):
     return executable
 
 
+def windows_archive(archive, destination, machine="x86_64"):
+    required = {"qrow.exe", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"}
+    with zipfile.ZipFile(archive) as bundle:
+        if set(bundle.namelist()) != required:
+            raise ValueError("Unexpected Windows package files")
+        bundle.extractall(destination)
+    executable = destination / "qrow.exe"
+    data = executable.read_bytes()
+    offset = int.from_bytes(data[60:64], "little")
+    expected = {"x86_64": 0x8664, "aarch64": 0xaa64}[machine]
+    if (data[:2] != b"MZ" or data[offset:offset + 4] != b"PE\0\0"
+            or int.from_bytes(data[offset + 4:offset + 6], "little") != expected):
+        raise ValueError("Package PE architecture mismatch")
+    return executable
+
+
+def windows_has_visible_window(pid):
+    """Whether a process has a visible top-level window. Win32 answers at once;
+    PowerShell can need more than 10 seconds to start on ARM64 runners."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    found = []
+
+    def visit(window, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(window, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(window):
+            found.append(window)
+            return False
+        return True
+
+    user32.EnumWindows(callback_type(visit), 0)
+    return bool(found)
+
+
 def smoke(executable, system, evidence):
     """Wait for a native window, without a blocking read on application output."""
     with tempfile.TemporaryDirectory(prefix="qrow-package-smoke-") as workspace:
@@ -69,6 +111,8 @@ def smoke(executable, system, evidence):
                         window = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(process.pid)],
                                                 capture_output=True, timeout=5)
                         ready = window.returncode == 0 and bool(window.stdout.strip())
+                    elif system == "windows":
+                        ready = windows_has_visible_window(process.pid)
                     else:
                         window = subprocess.run([observer, str(process.pid)], capture_output=True, timeout=5)
                         ready = window.returncode == 0
@@ -136,6 +180,8 @@ def main():
         destination = Path(directory)
         if target.system == "linux":
             executable = linux_archive(archive, destination, target.machine)
+        elif target.system == "windows":
+            executable = windows_archive(archive, destination, target.machine)
         else:
             subprocess.run(["ditto", "-x", "-k", archive, destination], check=True)
             app = destination / "Qrow.app"

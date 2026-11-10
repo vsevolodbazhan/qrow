@@ -15,10 +15,11 @@ an error and does not add a tab.
 Right-click a tab and select **Save as SQL file…** to save its full SQL text.
 Press **⇧⌘S** to save the active tab.
 Choose a path in the save panel. The suggested name has a `.sql` extension.
-On Linux, use Ctrl in place of ⌘.
+On Linux and Windows, use Ctrl in place of ⌘.
 
 After a save, a notification shows the file name. Use **Reveal in Finder**
-to locate the file. The notification closes after 5 seconds. Point to it to
+to locate the file. On Windows, the action is **Reveal in File Explorer**. On
+Linux, it is **Open Containing Folder**. The notification closes after 5 seconds. Point to it to
 keep it open.
 
 Tabs and files are separate copies. Workspace autosave does not change an
@@ -180,10 +181,10 @@ appears in the entry count and **Copy all** output.
 Press **⌘T** or click **+** in the tab strip to create a tab. The new tab belongs
 to the active connection and has its own session.
 
-Press **⌘1** through **⌘9** (**Ctrl+1** through **Ctrl+9** on Linux) to select
-a query tab by its position from the left under the active connection. If
-that position has no tab, the selection does not change. These shortcuts do
-not switch tabs while a dialog is open. When the assistant is maximized, these
+Press **⌘1** through **⌘9** (**Ctrl+1** through **Ctrl+9** on Linux and
+Windows) to select a query tab by its position from the left under the active
+connection. If that position has no tab, the selection does not change. These
+shortcuts do not switch tabs while a dialog is open. When the assistant is maximized, these
 shortcuts and **⌘T** operate on conversations. See
 [Work with SQL](assistant.md#work-with-sql).
 
@@ -259,15 +260,15 @@ session settings from earlier SQL statements.
 
 ## Comment SQL
 
-Select code and press **⌘/** on macOS or **Ctrl+/** on Linux to toggle line
-comments. You can also right-click in the editor and select **Toggle line comment**.
+Select code and press **⌘/** on macOS or **Ctrl+/** on Linux and Windows to
+toggle line comments. You can also right-click in the editor and select **Toggle line comment**.
 With no selection, the command changes the current line.
 
 The command adds `-- ` after the indentation of each selected line that is not
 blank. If all these lines already start with `--`, it removes one comment
 prefix and one space after it, if present. A selection that ends at the start
 of a line does not change that line. Blank lines stay the same.
-Press **⌘Z** on macOS or **Ctrl+Z** on Linux once to undo the command.
+Press **⌘Z** on macOS or **Ctrl+Z** on Linux and Windows once to undo the command.
 
 ## Format SQL
 

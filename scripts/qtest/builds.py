@@ -141,7 +141,7 @@ class Prepared:
     def __init__(self, path, value, root, directory, output):
         import runner
         self.path = Path(path).resolve()
-        self.value = json.loads(self.path.read_text())
+        self.value = json.loads(self.path.read_text(encoding="utf-8"))
         if self.value.get("schema") != 1 or self.value.get("identity") != identity(value):
             raise ValueError("Prepared binaries differ from source, target, or compiler configuration")
         if self.value.get("toolchain") != toolchain(root):
@@ -196,7 +196,7 @@ def run(command, env=None):
     """Fixture adapter entry point. Keep its runtime/filter, use qtest's prepared build."""
     env = dict(os.environ if env is None else env)
     if env.get("QROW_NEXTEST_RUNTIME"):
-        command = reuse(command, json.loads(Path(env["QROW_NEXTEST_RUNTIME"]).read_text()))
+        command = reuse(command, json.loads(Path(env["QROW_NEXTEST_RUNTIME"]).read_text(encoding="utf-8")))
     evidence = env.get("QROW_NEXTEST_EVIDENCE")
     report = None
     if evidence:
@@ -204,7 +204,7 @@ def run(command, env=None):
         store.mkdir(parents=True)
         config = store / "config.toml"
         root = Path(__file__).resolve().parents[2]
-        config.write_text('[store]\ndir = ' + json.dumps(str(store)) + '\n' + (root / ".config/nextest.toml").read_text())
+        config.write_text('[store]\ndir = ' + json.dumps(str(store)) + '\n' + (root / ".config/nextest.toml").read_text(encoding="utf-8"))
         command = [*command, "--config-file", str(config)]
         report = store / nextest_profile(command, env) / "junit.xml"
     subprocess.run(command, env=env, check=True)
