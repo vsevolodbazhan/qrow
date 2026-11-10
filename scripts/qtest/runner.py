@@ -228,7 +228,7 @@ def junit_report():
 
 def execute(command, env, timeout, log, output):
     """Run one command in its own process group. Returns the exit code, or None on timeout."""
-    with log.open("a") as sink:
+    with log.open("a", encoding="utf-8") as sink:
         sink.write(f"$ {subprocess.list2cmdline(command)}\n")
         sink.flush()
         process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
@@ -236,10 +236,15 @@ def execute(command, env, timeout, log, output):
                                    bufsize=1, **spawn_options())
 
         def forward():
+            # Keep reading after a failed write. Otherwise the pipe fills and
+            # the step blocks until its time limit.
             for line in iter(process.stdout.readline, ""):
-                sink.write(line)
-                sink.flush()
-                output.stream(line)
+                try:
+                    sink.write(line)
+                    sink.flush()
+                    output.stream(line)
+                except (OSError, UnicodeError):
+                    pass
 
         reader = threading.Thread(target=forward, daemon=True)
         reader.start()
@@ -332,7 +337,7 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
             store.mkdir(parents=True)
             config = store / "config.toml"
             config.write_text('[store]\ndir = ' + json.dumps(str(store)) + '\n' +
-                              (ROOT / ".config/nextest.toml").read_text())
+                              (ROOT / ".config/nextest.toml").read_text(encoding="utf-8"))
             command += ["--config-file", str(config)]
             report = store / nextest_profile() / "junit.xml"
         adapter_env = {"QROW_PYTHON": sys.executable}
@@ -345,7 +350,7 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
             adapter_env["QROW_NEXTEST_EVIDENCE"] = str(evidence)
         code = execute(command, dict(os.environ, **options.get("env", {}), **env, **step_env, **adapter_env), step.timeout, log, output)
         if evidence:
-            reports = [json.loads(path.read_text()) for path in sorted(evidence.rglob("evidence.json"))]
+            reports = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(evidence.rglob("evidence.json"))]
             options.setdefault("test_evidence", []).extend(reports)
             if len(reports) != suite.test_runs:
                 code = 1
@@ -385,7 +390,7 @@ def metrics_in(log):
     if not log.exists():
         return []
     found = []
-    for line in log.read_text().splitlines():
+    for line in log.read_text(encoding="utf-8").splitlines():
         if METRIC_PREFIX in line:
             try:
                 found.append(json.loads(line.split(METRIC_PREFIX, 1)[1]))
@@ -642,5 +647,5 @@ def _run(selected, options, extra, output, fail_fast=False, report_only=(), requ
     event("finished", status=status, exit_code=code)
     measured = [metric for result in results for metric in result.metrics]
     if measured:
-        (run_dir / "perf.json").write_text(json.dumps(measured, indent=2) + "\n")
+        (run_dir / "perf.json").write_text(json.dumps(measured, indent=2) + "\n", encoding="utf-8")
     return summary
