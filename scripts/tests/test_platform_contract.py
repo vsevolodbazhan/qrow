@@ -102,11 +102,15 @@ class MatrixGateTests(unittest.TestCase):
 
 
 class PackageInspectionTests(unittest.TestCase):
-    def archive(self, root, machine=62, extra=None):
+    def archive(self, root, machine=62, extra=None, root_mode=0o755):
         archive = root / 'candidate.tar.gz'
         files = ['bin/qrow', 'share/applications/qrow.desktop', 'share/icons/hicolor/256x256/apps/qrow.png',
                  'share/licenses/qrow/LICENSE', 'share/licenses/qrow/NOTICE', 'share/licenses/qrow/THIRD_PARTY_NOTICES.txt']
         with tarfile.open(archive, 'w:gz') as bundle:
+            directory = tarfile.TarInfo('./')
+            directory.type = tarfile.DIRTYPE
+            directory.mode = root_mode
+            bundle.addfile(directory)
             for name in files + ([extra] if extra else []):
                 contents = bytearray(32) if name == 'bin/qrow' else bytearray(b'synthetic')
                 if name == 'bin/qrow':
@@ -136,6 +140,14 @@ class PackageInspectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Unsafe'):
                 qualify.linux_archive(self.archive(root, extra='../outside'), root / 'unsafe', 'x86_64')
             self.assertFalse((root / 'outside').exists())
+
+    def test_private_or_writable_archive_root_fails(self):
+        # Extraction applies the root mode to the target folder, such as ~/.local.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for mode in (0o700, 0o777):
+                with self.assertRaisesRegex(ValueError, 'Unsafe archive mode'):
+                    qualify.linux_archive(self.archive(root, root_mode=mode), root / f'mode-{mode:o}', 'x86_64')
 
 
 class PublicationTests(unittest.TestCase):

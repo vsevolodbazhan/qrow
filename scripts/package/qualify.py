@@ -25,6 +25,9 @@ def linux_archive(archive, destination, machine):
             path = Path(member.name)
             if path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir()):
                 raise ValueError(f"Unsafe archive member: {member.name}")
+            # Extraction applies directory modes to existing folders, such as ~/.local.
+            if member.mode & 0o022 or (member.isdir() and member.mode & 0o755 != 0o755):
+                raise ValueError(f"Unsafe archive mode {member.mode:o}: {member.name}")
         if not required <= {member.name.removeprefix("./") for member in members}:
             raise ValueError("Missing package files")
         bundle.extractall(destination, filter="data")
