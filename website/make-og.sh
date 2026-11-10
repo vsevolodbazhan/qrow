@@ -21,7 +21,7 @@ fonts = f"{repository}/assets/fonts/ibm-plex-sans"
 scale = 2
 width, height = 1200 * scale, 630 * scale
 background, title_color, text_color = (39, 41, 46), (215, 218, 224), (171, 178, 191)  # --bg, --fg-strong, --fg
-title, description = "Qrow", "A SQL workbench for macOS and Linux, written in Rust."
+title, description = "Qrow", "Desktop SQL workbench, written in Rust."
 
 image = Image.new("RGB", (width, height), background)
 draw = ImageDraw.Draw(image)

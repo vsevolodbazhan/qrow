@@ -19,24 +19,22 @@ The page uses the look of the app:
 
 - The colors come from the One Dark theme in
   [src/one-dark.json](../src/one-dark.json). The page has no light theme.
-- The fonts are the app defaults: IBM Plex Sans for text and JetBrains Mono
-  for code. `fonts/` has WOFF2 subsets of the files in
-  [assets/fonts](../assets/fonts), with their licenses.
+- The font is IBM Plex Sans, the default text font of the app. `fonts/` has
+  WOFF2 subsets of the files in [assets/fonts](../assets/fonts), with the
+  license.
 - The screenshot has a soft shadow and no frame.
-- The footer copies the status bar of the app. The icons are Lucide icons, the
-  icon set of GPUI Kit.
+- The footer copies the status bar of the app.
 
 ## Update the fonts
 
 Make the subsets again after a font update in `assets/fonts`:
 
 ```sh
-for f in ibm-plex-sans/IBMPlexSans-Regular ibm-plex-sans/IBMPlexSans-Medium \
-         ibm-plex-sans/IBMPlexSans-SemiBold jetbrains-mono/JetBrainsMono-Regular; do
-    uv run --with fonttools --with brotli pyftsubset "assets/fonts/$f.ttf" \
+for f in IBMPlexSans-Regular IBMPlexSans-Medium IBMPlexSans-SemiBold; do
+    uv run --with fonttools --with brotli pyftsubset "assets/fonts/ibm-plex-sans/$f.ttf" \
         --unicodes="U+0000-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2190-21FF,U+2212,U+2215,U+2264-2265,U+2303,U+2318,U+2325,U+232B" \
         --layout-features='*' --flavor=woff2 \
-        --output-file="website/fonts/$(basename "$f").woff2"
+        --output-file="website/fonts/$f.woff2"
 done
 ```
 
