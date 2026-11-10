@@ -51,10 +51,27 @@ sh website/optimize-media.sh
 ```
 
 The script crops the screenshot to the window, removes the macOS shadow,
-and writes `hero.webp` and the social preview `og.jpg` to `website/media/`.
-The WebP image is lossless, so its colors stay exact. The page background
+and writes `website/media/hero.webp`. The WebP image is lossless, so its
+colors stay exact. The page background
 (`--bg` in `styles.css`) uses the panel color of the screenshot, `#27292e`.
 Check it again after a new screenshot.
+
+## Update the social preview
+
+Messaging apps and social sites show `media/og.jpg` for links to the page.
+The image shows the top of the page: the app icon, the name, and the
+one-line description. Make it again after a change of the icon, the
+description, or the page colors:
+
+```sh
+sh website/make-og.sh
+```
+
+The script draws the image from
+[assets/app-icons/macos/qrow.png](../assets/app-icons/macos/qrow.png) and the
+IBM Plex Sans fonts in [assets/fonts](../assets/fonts). The description and
+the colors are in the script. Keep them the same as in `index.html` and
+`styles.css`.
 
 ## Deployment
 
@@ -66,8 +83,7 @@ touches `website/` or the workflow:
 - A push to `main` builds the site and deploys it to <https://qrow.dev>.
 - You can also start the workflow manually on `main`.
 
-The site is a copy of `website/` without `README.md` and
-`optimize-media.sh`. The deployment takes approximately one minute after the
+The site is a copy of `website/` without `README.md` and the scripts. The deployment takes approximately one minute after the
 push. The repository settings (**Settings** > **Pages**) set the source to
 **GitHub Actions** and the custom domain to `qrow.dev`.
 

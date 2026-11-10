@@ -300,6 +300,8 @@ for the About dialog. The Linux archive installs it as the launcher icon. After 
 uv run --locked python scripts/generate/app_icon.py
 ```
 
+Also make the social preview of the [website](../website/README.md#update-the-social-preview) again.
+
 ## Generated bindings
 
 Building Qrow does not require the Thrift compiler. To regenerate the checked-in
