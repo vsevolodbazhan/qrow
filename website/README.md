@@ -19,24 +19,22 @@ The page uses the look of the app:
 
 - The colors come from the One Dark theme in
   [src/one-dark.json](../src/one-dark.json). The page has no light theme.
-- The fonts are the app defaults: IBM Plex Sans for text and JetBrains Mono
-  for code. `fonts/` has WOFF2 subsets of the files in
-  [assets/fonts](../assets/fonts), with their licenses.
+- The font is IBM Plex Sans, the default text font of the app. `fonts/` has
+  WOFF2 subsets of the files in [assets/fonts](../assets/fonts), with the
+  license.
 - The screenshot has a soft shadow and no frame.
-- The footer copies the status bar of the app. The icons are Lucide icons, the
-  icon set of GPUI Kit.
+- The footer copies the status bar of the app.
 
 ## Update the fonts
 
 Make the subsets again after a font update in `assets/fonts`:
 
 ```sh
-for f in ibm-plex-sans/IBMPlexSans-Regular ibm-plex-sans/IBMPlexSans-Medium \
-         ibm-plex-sans/IBMPlexSans-SemiBold jetbrains-mono/JetBrainsMono-Regular; do
-    uv run --with fonttools --with brotli pyftsubset "assets/fonts/$f.ttf" \
+for f in IBMPlexSans-Regular IBMPlexSans-Medium IBMPlexSans-SemiBold; do
+    uv run --with fonttools --with brotli pyftsubset "assets/fonts/ibm-plex-sans/$f.ttf" \
         --unicodes="U+0000-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2190-21FF,U+2212,U+2215,U+2264-2265,U+2303,U+2318,U+2325,U+232B" \
         --layout-features='*' --flavor=woff2 \
-        --output-file="website/fonts/$(basename "$f").woff2"
+        --output-file="website/fonts/$f.woff2"
 done
 ```
 
@@ -51,10 +49,27 @@ sh website/optimize-media.sh
 ```
 
 The script crops the screenshot to the window, removes the macOS shadow,
-and writes `hero.webp` and the social preview `og.jpg` to `website/media/`.
-The WebP image is lossless, so its colors stay exact. The page background
+and writes `website/media/hero.webp`. The WebP image is lossless, so its
+colors stay exact. The page background
 (`--bg` in `styles.css`) uses the panel color of the screenshot, `#27292e`.
 Check it again after a new screenshot.
+
+## Update the social preview
+
+Messaging apps and social sites show `media/og.jpg` for links to the page.
+The image shows the top of the page: the app icon, the name, and the
+one-line description. Make it again after a change of the icon, the
+description, or the page colors:
+
+```sh
+sh website/make-og.sh
+```
+
+The script draws the image from
+[assets/app-icons/macos/qrow.png](../assets/app-icons/macos/qrow.png) and the
+IBM Plex Sans fonts in [assets/fonts](../assets/fonts). The description and
+the colors are in the script. Keep them the same as in `index.html` and
+`styles.css`.
 
 ## Deployment
 
@@ -66,8 +81,7 @@ touches `website/` or the workflow:
 - A push to `main` builds the site and deploys it to <https://qrow.dev>.
 - You can also start the workflow manually on `main`.
 
-The site is a copy of `website/` without `README.md` and
-`optimize-media.sh`. The deployment takes approximately one minute after the
+The site is a copy of `website/` without `README.md` and the scripts. The deployment takes approximately one minute after the
 push. The repository settings (**Settings** > **Pages**) set the source to
 **GitHub Actions** and the custom domain to `qrow.dev`.
 
