@@ -1,8 +1,20 @@
 # Website
 
-This directory contains the Qrow landing page at <https://qrow.dev>: one
-static page that links to the GitHub repository. It has no build step and
-makes no requests to other sites.
+This directory contains the Qrow landing page at <https://qrow.dev>. It is
+one static page with no build step and no requests to other sites. It has
+these sections:
+
+- The hero: the name, the one-line description, and the app screenshot.
+- **Why**: the reasons for the project and its inspiration.
+- **Features**: one block for each main feature, with a screenshot and a
+  link to its page in [docs](../docs).
+- **Install** (`#install`): the install steps for macOS, Linux, and Windows,
+  and the Gatekeeper steps for the first launch on macOS (`#gatekeeper`).
+
+The page is the only place for the feature overview and the install steps.
+The [project README](../README.md) links to it, and keeps the requirements,
+the limitations, and the build steps. Update the page in the same change as
+a feature, a release asset name, or an install step.
 
 ## Preview the page
 
@@ -38,19 +50,24 @@ for f in IBMPlexSans-Regular IBMPlexSans-Medium IBMPlexSans-SemiBold; do
 done
 ```
 
-## Update the screenshot
+## Update the screenshots
 
-The page uses the first screenshot of the project README,
-[assets/screenshots/demo.png](../assets/screenshots/demo.png).
-After a change of that file, make the web media again:
+The page uses the screenshots in [assets/screenshots](../assets/screenshots):
+`demo.png` for the hero, the `demo-*.png` files for the features, and the
+files in `gatekeeper/` for the first launch on macOS. After a change of one
+of these files, make the web media again:
 
 ```sh
 sh website/optimize-media.sh
 ```
 
-The script crops the screenshot to the window, removes the macOS shadow,
-and writes `website/media/hero.webp`. The WebP image is lossless, so its
-colors stay exact. The page background
+The script crops each screenshot to its window, removes the macOS shadow,
+and writes a WebP image to `website/media/`. It scales the feature
+screenshots to 1800 pixels wide, which is two times their largest width on
+the page. The WebP images are lossless, so their colors stay exact. To add a
+screenshot, add it to the list in the script, and set the `width` and
+`height` of its `img` element to the size that the script prints.
+Images below the hero load lazily. The page background
 (`--bg` in `styles.css`) uses the panel color of the screenshot, `#27292e`.
 Check it again after a new screenshot.
 
@@ -98,5 +115,11 @@ without it, other GitHub users can claim the domain.
 
 ## Limitations
 
+- The install section and the project README say that Linux and Windows
+  archives are only in the nightly releases. Remove these statements after
+  the first stable release with these archives.
+- The Homebrew cask installs the DMG without an architecture suffix, which
+  is the Apple Silicon build. The install section tells Intel users to
+  download the `x86_64` DMG. Change it if the cask gets an Intel build.
 - The page URLs in `og:url`, `og:image`, and the canonical link are
   `https://qrow.dev/`. Change them if the domain changes.

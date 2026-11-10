@@ -247,7 +247,7 @@ For isolated development, see [Development](development.md#check-the-native-ui).
 `QROW_DATA_DIR` changes the workspace directory, but does not isolate the secret store.
 Passwords and sign-in tokens are keyed by profile and sign-in identifiers, so
 a copy of a workspace shares them with the original.
-The [demo](../README.md#preview) uses an in-memory workspace and does not access
+The [demo](../README.md#demo) uses an in-memory workspace and does not access
 databases or the secret store. The demo writes its synthetic dbt manifest to a temporary
 file. It removes this file when the window closes.
 

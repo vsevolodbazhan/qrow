@@ -29,9 +29,8 @@
       <h1>Qrow</h1>
       <p class="lede">Desktop SQL workbench, written in Rust.</p>
       <div class="cta">
-        <a class="btn btn-primary btn-lg" href="https://github.com/vsevolodbazhan/qrow">
-          <span>View on GitHub</span>
-        </a>
+        <a class="btn btn-primary btn-lg" href="#install">Install</a>
+        <a class="btn btn-secondary btn-lg" href="https://github.com/vsevolodbazhan/qrow">View on GitHub</a>
       </div>
     </section>
 
@@ -41,12 +40,212 @@
              alt="Qrow with the schema catalog, a SQL query, its results, and the assistant panel">
       </figure>
     </div>
+
+    <section class="section prose" id="why" aria-labelledby="why-title">
+      <h2 id="why-title">Why</h2>
+      <p>
+        I'm a data engineer. I run SQL every day, and for years my tool of choice was
+        <a href="https://www.jetbrains.com/datagrip/">DataGrip</a>. It worked well until it didn't:
+        slow startup times, a heavy memory footprint, regular freezing, and all the usual quirks
+        that come from running on the JVM. I went looking for an alternative and found none suited to me.
+      </p>
+      <p>
+        Building a whole new SQL client from scratch on top of a full-time job wasn't realistic
+        for me — until AI models got good enough, that is. I'm not a Rust developer, so practically
+        every line of code here is written by one model or the other. I bring in my direction,
+        general coding expertise, and product sense.
+      </p>
+      <p>
+        Qrow is heavily inspired by DataGrip and <a href="https://zed.dev/">Zed</a>. It's built with
+        <a href="https://gpui.rs/">GPUI</a>, the UI framework by Zed's creators, and
+        <a href="https://github.com/longbridge/gpui-kit">GPUI Kit</a>.
+      </p>
+    </section>
+
+    <section class="section" id="features" aria-labelledby="features-title">
+      <div class="section-head prose">
+        <h2 id="features-title">Features</h2>
+        <p class="muted">Shortcuts use macOS symbols. On Linux and Windows, use Ctrl in place of ⌘.</p>
+      </div>
+
+      <article class="feature">
+        <div class="feature-text">
+          <h3>Connections</h3>
+          <p>Connect directly to Kyuubi (Spark), Postgres, and Trino. No JVM, ODBC driver, or separately installed database driver.</p>
+          <ul>
+            <li><strong>Kyuubi</strong>: HiveServer2 over SASL PLAIN, with a password or an OpenID Connect access token.</li>
+            <li><strong>Postgres</strong>: password authentication, TLS, and optional certificate verification.</li>
+            <li><strong>Trino</strong>: HTTP or HTTPS with a username, a password, or the browser sign-in of the coordinator.</li>
+            <li>Passwords stay in macOS Keychain, the Linux Secret Service, or Windows Credential Manager.</li>
+            <li>One OpenID Connect sign-in can authenticate several connections. Copy its settings to share them with a colleague.</li>
+          </ul>
+          <a class="more" href="https://github.com/vsevolodbazhan/qrow/blob/main/docs/connections.md">Connections docs →</a>
+        </div>
+        <figure class="shot feature-shot">
+          <img src="media/connections.webp" width="1800" height="1155" loading="lazy" decoding="async"
+               alt="Qrow with the menu to create a connection open">
+        </figure>
+      </article>
+
+      <article class="feature">
+        <div class="feature-text">
+          <h3>Queries and results</h3>
+          <p>Each connection has its own query tabs, and each tab has its own session. Tabs run queries at the same time, also when you select another connection.</p>
+          <ul>
+            <li>Press <kbd>⌘</kbd><kbd>Enter</kbd> to run the statement at the cursor or the selected SQL.</li>
+            <li>A status dot on each tab and connection shows work, unread results, and errors.</li>
+            <li>Results show in pages of 1,000 rows as they arrive. Copy a cell or a row with its full value.</li>
+            <li>The Logs panel shows the SQL, the session events, and the errors of each tab.</li>
+            <li><strong>Activity</strong> (<kbd>⇧</kbd><kbd>⌘</kbd><kbd>U</kbd>) shows schema refreshes, keep-alives, sessions, and queries.</li>
+          </ul>
+          <a class="more" href="https://github.com/vsevolodbazhan/qrow/blob/main/docs/queries.md">Queries docs →</a>
+        </div>
+        <figure class="shot feature-shot">
+          <img src="media/results.webp" width="1800" height="1155" loading="lazy" decoding="async"
+               alt="Qrow with a SQL query and a page of its results">
+        </figure>
+      </article>
+
+      <article class="feature">
+        <div class="feature-text">
+          <h3>Data export</h3>
+          <p>Export a result to CSV, TSV, Markdown, JSON, or Parquet. Save it to a file, or copy it to the clipboard. The export includes all rows, also when the preview shows only some of them.</p>
+          <ul>
+            <li>Qrow reads the remaining rows from the open cursor or from a download that it kept. It runs the query again only when neither is available.</li>
+            <li>CSV presets include Excel, with a byte-order mark and formula escaping.</li>
+            <li>Parquet keeps booleans, numbers, exact decimals, dates, timestamps, and binary values in their types.</li>
+            <li>Large exports run in the background with a progress notification.</li>
+          </ul>
+          <a class="more" href="https://github.com/vsevolodbazhan/qrow/blob/main/docs/results.md#export-results">Export docs →</a>
+        </div>
+        <figure class="shot feature-shot">
+          <img src="media/export.webp" width="1800" height="1155" loading="lazy" decoding="async"
+               alt="Qrow with the data export window open">
+        </figure>
+      </article>
+
+      <article class="feature">
+        <div class="feature-text">
+          <h3>Schema catalog</h3>
+          <p>The Connections sidebar is a tree of schemas, tables, views, and columns. Qrow keeps a copy of the catalog on your computer, so the tree shows it also when the connection has no session.</p>
+          <ul>
+            <li><strong>Refresh</strong> a connection, a schema, or a table manually, or automatically while the connection is connected. A refresh that stopped continues next time.</li>
+            <li><strong>Share</strong> one catalog between connections that read the same database.</li>
+            <li><strong>Show or hide</strong> schemas with glob patterns, for example <code>sales_*</code>.</li>
+            <li><strong>Search</strong> tables and views in all connections, and copy or insert their quoted names.</li>
+          </ul>
+          <a class="more" href="https://github.com/vsevolodbazhan/qrow/blob/main/docs/connections.md#browse-schemas">Schema docs →</a>
+        </div>
+        <figure class="shot feature-shot">
+          <img src="media/catalog.webp" width="1800" height="1155" loading="lazy" decoding="async"
+               alt="Qrow with the schema catalog tree expanded">
+        </figure>
+      </article>
+
+      <article class="feature">
+        <div class="feature-text">
+          <h3>dbt integration</h3>
+          <p>Attach a dbt project to a connection. Qrow reads the <code>manifest.json</code> that dbt writes, and can read it again each time dbt changes it. Qrow does not run dbt.</p>
+          <ul>
+            <li>Tables that dbt builds show their dbt kind in the schema tree and their description in a tooltip.</li>
+            <li><strong>Show dbt details</strong> opens the description, columns, tests, lineage, and the compiled and raw SQL of a model.</li>
+            <li>Click a parent or a child to follow the lineage.</li>
+            <li>A schema mapping, for example <code>dbt_dev_* = *</code>, matches development schemas with catalog schemas.</li>
+          </ul>
+          <a class="more" href="https://github.com/vsevolodbazhan/qrow/blob/main/docs/connections.md#attach-a-dbt-project">dbt docs →</a>
+        </div>
+        <figure class="shot feature-shot">
+          <img src="media/dbt.webp" width="1800" height="1155" loading="lazy" decoding="async"
+               alt="Qrow with the dbt details of a model">
+        </figure>
+      </article>
+
+      <article class="feature">
+        <div class="feature-text">
+          <h3>Assistant</h3>
+          <p>Open an AI assistant beside your query tab. It runs on a separately installed Codex or Claude Code executable with your own sign-in, so you can use your OpenAI or Claude subscription. The assistant is off by default.</p>
+          <ul>
+            <li>Each conversation writes SQL in its own query tab, so you can work on it together. Several conversations can work at the same time.</li>
+            <li>The assistant looks up tables and columns in the schema catalog, and reads descriptions, tests, lineage, and model SQL from the dbt project.</li>
+            <li>Write <strong>Assistant Notes</strong> for a connection to give the assistant facts about its data.</li>
+            <li>Qrow asks before an assistant query runs, or runs assistant queries automatically. You select the mode for each conversation.</li>
+          </ul>
+          <a class="more" href="https://github.com/vsevolodbazhan/qrow/blob/main/docs/assistant.md">Assistant docs →</a>
+        </div>
+        <figure class="shot feature-shot">
+          <img src="media/assistant.webp" width="1800" height="1155" loading="lazy" decoding="async"
+               alt="Qrow with an assistant conversation beside a query tab">
+        </figure>
+      </article>
+    </section>
+
+    <section class="section" id="install" aria-labelledby="install-title">
+      <div class="section-head prose">
+        <h2 id="install-title">Install</h2>
+        <p class="muted">
+          Builds are on the <a href="https://github.com/vsevolodbazhan/qrow/releases">releases page</a>.
+          Linux and Windows archives are in the nightly releases for now.
+          See the full <a href="https://github.com/vsevolodbazhan/qrow#requirements-and-limitations">requirements and limitations</a>.
+        </p>
+      </div>
+
+      <div class="platforms">
+        <article class="platform" id="install-macos">
+          <h3>macOS</h3>
+          <p class="muted">macOS 12 or later. Apple Silicon or Intel with a Metal-capable GPU.</p>
+          <p>On Apple Silicon, install with the <a href="https://github.com/vsevolodbazhan/homebrew-qrow">Homebrew tap</a>:</p>
+          <pre><code>brew tap vsevolodbazhan/qrow
+brew install --cask vsevolodbazhan/qrow/qrow</code></pre>
+          <p>For the latest nightly build, install <code>vsevolodbazhan/qrow/qrow@nightly</code> instead.</p>
+          <p>The cask has only the Apple Silicon build. On an Intel Mac, or without Homebrew, download the DMG from the releases page: <code>Qrow-VERSION-arm64.dmg</code> for Apple Silicon or <code>Qrow-VERSION-x86_64.dmg</code> for Intel. Open it and drag Qrow to Applications.</p>
+        </article>
+
+        <article class="platform" id="install-linux">
+          <h3>Linux</h3>
+          <p class="muted">x86-64 or ARM64. A Wayland or X11 desktop, a Vulkan driver, and a Secret Service, such as GNOME Keyring.</p>
+          <p>Download <code>Qrow-VERSION-linux-x86_64.tar.gz</code> or <code>Qrow-VERSION-linux-aarch64.tar.gz</code>. Extract it into <code>~/.local</code>, and make sure that <code>~/.local/bin</code> is in your <code>PATH</code>:</p>
+          <pre><code>mkdir -p ~/.local
+tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local</code></pre>
+          <p>The archive includes a desktop launcher. It uses the system libraries and is built on Ubuntu 24.04, so it needs a compatible distribution.</p>
+        </article>
+
+        <article class="platform" id="install-windows">
+          <h3>Windows</h3>
+          <p class="muted">x86-64 or ARM64. There is no installer yet.</p>
+          <p>Download <code>Qrow-VERSION-windows-x86_64.zip</code> for Intel and AMD, or <code>Qrow-VERSION-windows-aarch64.zip</code> for ARM64. Extract the archive and run <code>qrow.exe</code>.</p>
+          <p>The binary is not signed, so SmartScreen can show a warning.</p>
+        </article>
+      </div>
+
+      <article class="gatekeeper prose" id="gatekeeper" aria-labelledby="gatekeeper-title">
+        <h3 id="gatekeeper-title">First launch on macOS</h3>
+        <p>
+          Qrow is not notarized: notarization needs a paid Apple Developer ID, and Qrow is a personal
+          tool early in development. The app has an ad hoc signature, so Gatekeeper blocks the first launch.
+        </p>
+        <ol>
+          <li>Open Qrow. macOS shows a warning. Click <strong>Done</strong>.</li>
+          <li>Open <strong>System Settings → Privacy &amp; Security</strong>, and click <strong>Open Anyway</strong> next to the Qrow message.</li>
+        </ol>
+        <div class="gatekeeper-shots">
+          <figure class="shot">
+            <img src="media/gatekeeper-warning.webp" width="520" height="465" loading="lazy" decoding="async"
+                 alt="The macOS warning that Qrow was not opened">
+          </figure>
+          <figure class="shot">
+            <img src="media/gatekeeper-settings.webp" width="1430" height="941" loading="lazy" decoding="async"
+                 alt="Privacy and Security settings with the Open Anyway button for Qrow">
+          </figure>
+        </div>
+      </article>
+    </section>
   </main>
 
   <footer class="statusbar">
     <div class="statusbar-inner">
       <span class="status-item">MIT License</span>
       <nav class="status-right" aria-label="Links">
+        <a class="status-item" href="https://github.com/vsevolodbazhan/qrow">GitHub</a>
         <a class="status-item" href="https://github.com/vsevolodbazhan/qrow/releases">Releases</a>
         <a class="status-item" href="https://github.com/vsevolodbazhan/qrow/tree/main/docs">Docs</a>
       </nav>
