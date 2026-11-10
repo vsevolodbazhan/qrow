@@ -527,8 +527,8 @@ the issuer, client ID, scopes, or resource. Sign out first.
 
 ### Tokens and sessions
 
-Qrow keeps the access token and the refresh token in macOS Keychain or the
-Linux desktop secret store. Tokens
+Qrow keeps the access token and the refresh token in macOS Keychain, the
+Linux desktop secret store, or Windows Credential Manager. Tokens
 are not in the workspace file, Logs, error messages, or assistant context.
 Before Qrow opens a transport, it gets an access token that stays valid for
 at least 60 seconds. If necessary, it uses the refresh token. When the provider
@@ -1211,8 +1211,8 @@ company certificate authority to Keychain and trust it. On Linux, add it to
 the system certificate store. Kerberos, HTTP
 transport, and SSH tunneling are not implemented.
 
-Passwords are stored in macOS Keychain, or in the desktop secret store on
-Linux. Linux needs an available Secret Service. Passwords are not part of the
+Passwords are stored in macOS Keychain, the desktop secret store on
+Linux, or Windows Credential Manager. Linux needs an available Secret Service. Passwords are not part of the
 [workspace file](workspace.md#saved-state). If Qrow cannot read a password,
 edit the connection to save a password again.
 
