@@ -1,7 +1,10 @@
 //! TLS for database connections and sign-in providers.
 //!
-//! The application trusts the certificate authorities of the macOS trust
-//! store. Tests trust a synthetic authority only.
+//! The application trusts the certificate authorities of the operating
+//! system. On macOS and Linux, Qrow reads the system trust store. On Windows,
+//! Windows verifies the chain: it installs a missing trusted root when it
+//! needs one, which a copy of the root store cannot do. Tests trust a
+//! synthetic authority only.
 use anyhow::{Context, Result};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use rustls_pki_types::{CertificateDer, ServerName, pem::PemObject};
@@ -72,6 +75,19 @@ impl Trust {
     }
 
     fn build(&self) -> Result<Arc<ClientConfig>> {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let builder =
+            ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions()?;
+        #[cfg(windows)]
+        if matches!(self.authorities, Authorities::System) {
+            use rustls_platform_verifier::BuilderVerifierExt;
+            return Ok(Arc::new(
+                builder
+                    .with_platform_verifier()
+                    .context("Could not use the Windows certificate verifier")?
+                    .with_no_client_auth(),
+            ));
+        }
         let mut roots = RootCertStore::empty();
         match &self.authorities {
             Authorities::System => {
@@ -90,11 +106,7 @@ impl Trust {
                 }
             }
         }
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let config = ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+        let config = builder.with_root_certificates(roots).with_no_client_auth();
         Ok(Arc::new(config))
     }
 
@@ -110,5 +122,16 @@ impl Trust {
                 .with_context(|| format!("TLS handshake with {host} failed"))?;
         }
         Ok(StreamOwned::new(connection, stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_system_trust_builds_a_client_configuration() {
+        // On Windows this is the platform verifier, elsewhere the root store.
+        Trust::system().client_config().unwrap();
     }
 }

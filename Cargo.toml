@@ -56,6 +56,7 @@ chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
 open = { version = "=5.4.4", features = ["shellexecute-on-windows"] }
+rustls-platform-verifier = "=0.7.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

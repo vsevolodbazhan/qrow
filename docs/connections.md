@@ -1208,7 +1208,10 @@ transport. Turn on **TLS** to encrypt it, or use a trusted network or VPN.
 Qrow verifies the server
 certificate and the host name against the system trust store. On macOS, add a
 company certificate authority to Keychain and trust it. On Linux, add it to
-the system certificate store. Kerberos, HTTP
+the system certificate store. On Windows, add it to the Trusted Root
+Certification Authorities store. Windows verifies the certificate chain
+itself, so it can also get a trusted public root that the computer does not
+have yet. Kerberos, HTTP
 transport, and SSH tunneling are not implemented.
 
 Passwords are stored in macOS Keychain, the desktop secret store on

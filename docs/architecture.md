@@ -26,7 +26,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [External authentication](../src/external_auth.rs) | Share in-memory tokens and cancellable browser work; let each connector implement its challenge protocol. |
 | [Trino connector](../src/connector/trino.rs) | Implement HTTP statements, session headers, cancellation, metadata, and bounded temporary results. |
 | [SASL transport](../src/connector/sasl.rs) | Open plain or TLS transports and send the SASL PLAIN password or access token. |
-| [TLS](../src/tls.rs) | Verify servers against the macOS trust store, or a synthetic authority in tests. |
+| [TLS](../src/tls.rs) | Verify servers against the system trust store, with the Windows certificate verifier on Windows, or a synthetic authority in tests. |
 | [Sign-ins](../src/oidc/) | Run the OpenID Connect browser sign-in, validate ID tokens, and give access tokens to connections. |
 | [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
 | [Storage](../src/storage.rs) | Lock and save the workspace. Define the password and token stores and their macOS Keychain implementation. |
