@@ -2,6 +2,7 @@
 use super::cancellation::Endpoint;
 use crate::connector::Cancellation;
 use anyhow::Result;
+use futures_util::task::AtomicWaker;
 use std::{
     future::Future,
     io,
@@ -29,6 +30,7 @@ enum Socket {
 
 pub(super) struct Abort {
     socket: Socket,
+    wakers: Arc<Wakers>,
     pub(super) closed: Arc<AtomicBool>,
     pub(super) limit: Arc<AtomicUsize>,
     pub(super) boundary: Arc<AtomicBool>,
@@ -39,6 +41,7 @@ impl Abort {
     pub(super) fn synthetic() -> Arc<Self> {
         Arc::new(Self {
             socket: Socket::Synthetic,
+            wakers: Arc::default(),
             closed: Arc::new(AtomicBool::new(false)),
             limit: Arc::new(AtomicUsize::new(PREVIEW_FRAME_BYTES)),
             boundary: Arc::new(AtomicBool::new(true)),
@@ -47,31 +50,43 @@ impl Abort {
     pub(super) async fn tcp(
         address: std::net::SocketAddr,
         limit: usize,
-    ) -> Result<(tokio::net::TcpStream, Arc<Self>)> {
+    ) -> Result<(Interruptible<tokio::net::TcpStream>, Arc<Self>)> {
         let socket = tokio::net::TcpStream::connect(address).await?.into_std()?;
         socket.set_nodelay(true)?;
         let abort = Arc::new(Self {
             socket: Socket::Tcp(socket.try_clone()?),
+            wakers: Arc::default(),
             closed: Arc::new(AtomicBool::new(false)),
             limit: Arc::new(AtomicUsize::new(limit)),
             boundary: Arc::new(AtomicBool::new(true)),
         });
-        Ok((tokio::net::TcpStream::from_std(socket)?, abort))
+        let socket = abort.interruptible(tokio::net::TcpStream::from_std(socket)?);
+        Ok((socket, abort))
     }
 
     #[cfg(unix)]
     pub(super) async fn unix(
         path: &std::path::Path,
         limit: usize,
-    ) -> Result<(tokio::net::UnixStream, Arc<Self>)> {
+    ) -> Result<(Interruptible<tokio::net::UnixStream>, Arc<Self>)> {
         let socket = tokio::net::UnixStream::connect(path).await?.into_std()?;
         let abort = Arc::new(Self {
             socket: Socket::Unix(socket.try_clone()?),
+            wakers: Arc::default(),
             closed: Arc::new(AtomicBool::new(false)),
             limit: Arc::new(AtomicUsize::new(limit)),
             boundary: Arc::new(AtomicBool::new(true)),
         });
-        Ok((tokio::net::UnixStream::from_std(socket)?, abort))
+        let socket = abort.interruptible(tokio::net::UnixStream::from_std(socket)?);
+        Ok((socket, abort))
+    }
+
+    fn interruptible<S>(&self, stream: S) -> Interruptible<S> {
+        Interruptible {
+            stream,
+            closed: self.closed.clone(),
+            wakers: self.wakers.clone(),
+        }
     }
 
     pub(super) fn endpoint(&self) -> Result<Endpoint> {
@@ -109,6 +124,74 @@ impl Cancellation for Abort {
             #[cfg(test)]
             Socket::Synthetic => {}
         }
+        // Linux wakes a pending read after a shutdown, but Windows does not.
+        // Wake the readers and writers so that they see the abort.
+        self.wakers.read.wake();
+        self.wakers.write.wake();
+    }
+}
+
+#[derive(Default)]
+struct Wakers {
+    read: AtomicWaker,
+    write: AtomicWaker,
+}
+
+/// A socket that fails its pending and later reads and writes after
+/// `Abort::abort_transport`, also on systems where a shutdown does not wake
+/// a pending read.
+pub(super) struct Interruptible<S> {
+    stream: S,
+    closed: Arc<AtomicBool>,
+    wakers: Arc<Wakers>,
+}
+
+fn aborted() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::ConnectionAborted,
+        "Postgres transport was closed",
+    )
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Interruptible<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        output: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        // Register before the check, so that an abort between them wakes us.
+        this.wakers.read.register(cx.waker());
+        if this.closed.load(Ordering::SeqCst) {
+            return Poll::Ready(Err(aborted()));
+        }
+        Pin::new(&mut this.stream).poll_read(cx, output)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Interruptible<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        this.wakers.write.register(cx.waker());
+        if this.closed.load(Ordering::SeqCst) {
+            return Poll::Ready(Err(aborted()));
+        }
+        Pin::new(&mut this.stream).poll_write(cx, bytes)
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        this.wakers.write.register(cx.waker());
+        if this.closed.load(Ordering::SeqCst) {
+            return Poll::Ready(Err(aborted()));
+        }
+        Pin::new(&mut this.stream).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
 
@@ -288,6 +371,34 @@ mod tests {
             .enable_all()
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn an_abort_wakes_a_pending_read_and_write_without_a_socket_shutdown() {
+        // A synthetic abort has no socket to shut down, like Windows, where a
+        // shutdown does not wake a pending read.
+        runtime().block_on(async {
+            let abort = Abort::synthetic();
+            let (client, _server) = tokio::io::duplex(1);
+            let (reader, writer) = tokio::io::split(abort.interruptible(client));
+            let read = tokio::spawn(async move {
+                let mut reader = reader;
+                reader.read(&mut [0; 1]).await
+            });
+            let write = tokio::spawn(async move {
+                let mut writer = writer;
+                // The duplex holds one byte, so the second write waits.
+                writer.write_all(b"ab").await
+            });
+            tokio::task::yield_now().await;
+            assert!(!read.is_finished() && !write.is_finished());
+            abort.abort_transport();
+            let timeout = std::time::Duration::from_secs(5);
+            let read = tokio::time::timeout(timeout, read).await.unwrap().unwrap();
+            let write = tokio::time::timeout(timeout, write).await.unwrap().unwrap();
+            assert_eq!(read.unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+            assert_eq!(write.unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+        });
     }
 
     #[test]
