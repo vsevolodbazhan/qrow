@@ -1241,16 +1241,21 @@ impl Qrow {
                     )
                     .when(cfg!(not(target_os = "macos")), |bar| {
                         #[cfg(not(target_os = "macos"))]
+                        // The title bar is a window drag area. Without
+                        // occlusion, Windows sees the drag area under the
+                        // button and handles a click as a caption drag.
                         let bar = bar.pl(rems(APPLICATION_MENU_INSET_REMS)).child(
-                            Button::new("application-menu")
-                                .ghost()
-                                .small()
-                                .icon(Icon::new(AssetIconName::Menu).small())
-                                .accessibility_label("Application menu")
-                                .tooltip("Application menu")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_application_menu(window, cx)
-                                })),
+                            div().id("application-menu-area").occlude().child(
+                                Button::new("application-menu")
+                                    .ghost()
+                                    .small()
+                                    .icon(Icon::new(AssetIconName::Menu).small())
+                                    .accessibility_label("Application menu")
+                                    .tooltip("Application menu")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_application_menu(window, cx)
+                                    })),
+                            ),
                         );
                         bar
                     })
