@@ -1,6 +1,6 @@
 use crate::support::{
-    TestApp, assert_workspace_divider_alignment, assert_workspace_header_alignment, bounds_of,
-    labelled, offline_profile, value,
+    REVEAL_LABEL, TestApp, assert_workspace_divider_alignment, assert_workspace_header_alignment,
+    bounds_of, labelled, offline_profile, value,
 };
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{InputEvent as _, TestAppContext, px};
@@ -1125,7 +1125,7 @@ fn sql_file_import_and_save_round_trip(cx: &mut TestAppContext) {
         assert_eq!(detail.label(), Some("SQL file saved"));
         assert!(heading.bounds().top() >= detail.bounds().bottom());
         let reveal = window.find("reveal-sql-file");
-        assert_eq!(reveal.label(), Some("Reveal in Finder"));
+        assert_eq!(reveal.label(), Some(REVEAL_LABEL));
         assert!(reveal.visible());
         // The action shares the row with the text instead of adding a row.
         assert!(reveal.bounds().left() >= notice.bounds().right());

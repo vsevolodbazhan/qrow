@@ -18,7 +18,8 @@ Choose a path in the save panel. The suggested name has a `.sql` extension.
 On Linux and Windows, use Ctrl in place of ⌘.
 
 After a save, a notification shows the file name. Use **Reveal in Finder**
-to locate the file. The notification closes after 5 seconds. Point to it to
+to locate the file. On Windows, the action is **Reveal in File Explorer**. On
+Linux, it is **Open Containing Folder**. The notification closes after 5 seconds. Point to it to
 keep it open.
 
 Tabs and files are separate copies. Workspace autosave does not change an
