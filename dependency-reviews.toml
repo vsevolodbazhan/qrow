@@ -12,6 +12,6 @@ reason = "MIT OR Apache-2.0. Windows-only safe Credential Manager adapter. Nativ
 
 [[dependency]]
 name = "open"
-version = "=5.3.2"
+version = "=5.4.4"
 review_by = "2026-12-11"
 reason = "MIT. Windows-only ShellExecuteExW adapter with shellexecute-on-windows enabled; URLs do not pass through cmd.exe."

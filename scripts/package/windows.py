@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import subprocess
 import sys
@@ -10,7 +11,8 @@ import zipfile
 
 
 def main():
-    if sys.platform != "win32" or os.environ.get("CARGO_BUILD_TARGET"):
+    if (sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64")
+            or os.environ.get("CARGO_BUILD_TARGET")):
         raise ValueError("A native Windows build is required; unset CARGO_BUILD_TARGET")
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], text=True))

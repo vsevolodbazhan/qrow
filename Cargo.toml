@@ -55,7 +55,7 @@ chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] 
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
-open = { version = "=5.3.2", features = ["shellexecute-on-windows"] }
+open = { version = "=5.4.4", features = ["shellexecute-on-windows"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
