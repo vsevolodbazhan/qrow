@@ -11,7 +11,7 @@ CI has three levels:
 | --- | --- | --- | --- |
 | Ready pull request that changes only static paths | `common-static` | None | No |
 | Other ready pull request | All six | Linux x86-64 | No |
-| Push to `main`, weekly scheduled run, manual run, release candidate | All six | All four | Yes |
+| Push to `main`, weekly scheduled run, manual run, release candidate | All six | All five | Yes |
 
 Static paths cannot change a Rust build, a test binary, a server fixture, or
 the validation graph. They are the documentation, root Markdown files,
@@ -25,12 +25,12 @@ crates are not static paths, because a crate can embed its README.
 A pull request gets fast feedback from the common jobs and one native target.
 It does not wait for macOS builds. After the merge, the `main` run tests all
 four native targets. If a target fails on `main`, fix the change or revert it.
-A release candidate always passes all four native targets before publication,
+A release candidate always passes all five native targets before publication,
 because the release workflow runs its own full validation. Full mode adds
 timing stress and measurements; see [Full runs and releases](#full-runs-and-releases).
 
 The workflow also accepts merge queue runs (`merge_group`). Such a run tests
-all four native targets before the merge, without full mode. GitHub offers a
+all five native targets before the merge, without full mode. GitHub offers a
 merge queue only to repositories that an organization owns. This repository
 belongs to a personal account, so it does not use a merge queue.
 
@@ -212,18 +212,31 @@ macOS or Linux ARM64 shows. Check the `main` run after each merge. Fix or
 revert a failed native target before the next release.
 
 After a change to this graph, check the first `main` run. It must contain the six common jobs
-and all four native build/test pairs, including Intel macOS. Check a full run
+and all five native build/test pairs, including Intel macOS. Check a full run
 for the timing stress evidence. A release still needs a successful manual
 release run before its new publication path has live release evidence.
 
 ## Known gaps
 
-Windows has a target definition and launcher, but no native application or
-fixture adapter yet. Add those adapters, job pairs, and evidence requirements
-before marking Windows supported. Linux native package checks do not qualify
+Linux native package checks do not qualify
 Wayland or hardware GPU behavior. The headless UI suite does not prove native
 rendering. Linux has native window and credential checks, but no native input,
 clipboard, or persistence driver yet. Common GPUI tests cover those portable
 behaviors. macOS desktop tests require an unlocked desktop and automation
 permissions. Local tests cannot verify GitHub runner allocation, artifact
 transfer, cancellation events, ruleset settings, or actual release publication.
+
+## Windows validation
+
+`windows-x86_64` uses `windows-latest` and `x86_64-pc-windows-msvc`.
+The build job prepares core tests and the native release candidate. The test
+job consumes those artifacts, runs core tests and synthetic Credential Manager
+tests, then checks the archive and waits for the demo window. The qualification
+receipt binds the source commit to the archive digest. Release publication
+checks the receipt before it publishes `Qrow-VERSION-windows-x86_64.zip` and
+includes the zip in `SHA256SUMS`.
+
+Pull requests keep the Linux fast path. Full workflow runs also validate
+Windows. Windows does not run Docker server fixtures or headless UI tests.
+Windows ARM64, an installer, signing, and embedded icon/version resources are
+not supplied. Real Windows desktop interaction still needs manual checks.

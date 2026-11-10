@@ -234,7 +234,7 @@ class ValidationGraphTests(unittest.TestCase):
                 continue
             suites = platforms.suites(target)
             self.assertEqual(suites, platforms.suites(target, True))
-            self.assertTrue({"native-storage", "package-smoke"} <= set(suites))
+            self.assertTrue(({"windows-unit", "windows-storage", "package-smoke"} if target.system == "windows" else {"native-storage", "package-smoke"}) <= set(suites))
             self.assertFalse(set(suites) & {"unit", "ui", "backend", "postgres", "trino", "e2e"})
             if target.system == "macos":
                 self.assertTrue({"desktop", "native-font", "native-ui", "native-assistant"} <= set(suites))
@@ -249,7 +249,7 @@ class ValidationGraphTests(unittest.TestCase):
         # Production lint/package builds run in the build phase. Measurements
         # run once per baseline host in full mode. Local convenience suites
         # partition into CI suites instead of running again.
-        owned.update({"clippy-native", "package", "linux-package", "perf-ui", "perf-e2e", "perf-package",
+        owned.update({"clippy-native", "package", "linux-package", "windows-package", "perf-ui", "perf-e2e", "perf-package",
                       "perf-kyuubi", "perf-postgres", "perf-trino"})
         equivalents = {"unit": {"coverage", "app-unit"}, "postgres": {"postgres-core", "postgres-ui"},
                        "trino": {"trino-core", "trino-ui"}, "perf-app": {"perf-package"}}
@@ -269,7 +269,7 @@ class ValidationGraphTests(unittest.TestCase):
         validation = read(VALIDATION)
         self.assertEqual(validation.count("            target/qtest/runs/\n"),
                          validation.count("            !target/qtest/runs/**/prepared/*/target/**\n"))
-        self.assertEqual(validation.count("name: candidate-"), 8)
+        self.assertEqual(validation.count("name: candidate-"), 2 * sum(t.supported for t in platforms.TARGETS.values()))
         for target in platforms.TARGETS.values():
             if target.supported:
                 body = job("build-" + target.name.replace("_", "-"))

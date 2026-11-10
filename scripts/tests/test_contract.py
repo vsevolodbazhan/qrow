@@ -35,8 +35,7 @@ class ContractTests(unittest.TestCase):
         for target in targets.TARGETS.values():
             if target.supported:
                 self.assertEqual(self.plan(target=target.name)['target'], target.name)
-        with self.assertRaisesRegex(ValueError, 'planned'):
-            self.plan(target='windows-x86_64')
+        self.assertEqual(self.plan(target='windows-x86_64')['target'], 'windows-x86_64')
 
     def test_plan_roundtrip_and_source_change(self):
         value = json.loads(json.dumps(self.plan()))

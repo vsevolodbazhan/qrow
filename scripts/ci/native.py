@@ -37,8 +37,8 @@ def checked(args):
 
 def asset_paths(target):
     package = ROOT / "target/package"
-    if target.system == "linux":
-        return sorted(package.glob("*.tar.gz"))
+    if target.system in ("linux", "windows"):
+        return sorted(package.glob("*.zip" if target.system == "windows" else "*.tar.gz"))
     return [package / "Qrow-macos.zip", *(ROOT / "target/native-tools").glob("*"),
             ROOT / "target/e2e-tools/native-driver"]
 
@@ -77,7 +77,7 @@ def build(full, target_name=None):
     if cli.install_tools(["cargo-nextest"]):
         raise ValueError("Cannot install nextest")
     builds.prepare(preparation, ROOT, PREPARED, runner.Output(False))
-    package = "linux-package" if target.system == "linux" else "package"
+    package = {"linux": "linux-package", "windows": "windows-package"}.get(target.system, "package")
     with cargo_target(target, cross):
         checked(["run", *(["clippy-native"] if target.name in platforms.LINT_TARGETS else []), package, "--fail-fast"])
     if target.system == "macos":

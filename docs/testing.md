@@ -38,7 +38,7 @@ Store plans under `target/`, or outside the source directory. A plan records
 the source files, target, suite definitions, runtime, repeat count, and build
 settings. Execution stops if these inputs change. A plan for another target
 can be made on any host. Execute it on that target's native architecture.
-Windows is a planned target and cannot execute application suites yet.
+Windows supports the native package and core-test suites listed below.
 
 Use `--runtime docker` for disposable servers. Use `--repeat N` on `plan` to
 repeat suites. Each attempt keeps a separate nextest report. A failed attempt
@@ -56,8 +56,7 @@ stress-test iteration. Exported snapshots without Git keep the supplied build
 identity, if any.
 
 The portable entry point is `uv run --locked python scripts/qtest`. On Windows,
-`qtest.cmd` calls this entry point. Application and native fixture support on
-Windows still require platform adapters. Local `run`, hook, fixture, and
+`qtest.cmd` calls this entry point. Windows server fixtures and headless UI suites are not enabled. Local `run`, hook, fixture, and
 comparison commands remain available. The legacy `ci` scheduler was removed;
 see [Continuous integration](ci.md) for job ownership.
 
@@ -121,6 +120,9 @@ accept a test filter.
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
 | `e2e` * | The real Qrow window, headless, against the real servers. | Docker and, on Linux, the desktop libraries; on macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
+| `windows-unit` * | Core unit tests without UI or database servers. | Windows, cargo-nextest |
+| `windows-storage` * | Synthetic Credential Manager round trip. | Windows, cargo-nextest |
+| `windows-package` | Build the unsigned native zip archive. | Windows, MSVC, Windows SDK |
 | `linux-package` | Build the native archive in `target/package`. | Linux desktop build libraries |
 | `package-smoke` | Inspect and launch the extracted package. | A built package; on Linux, Xvfb and xdotool |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
@@ -1000,3 +1002,9 @@ jobs and the `qtest ci` scheduler have been removed.
 - The pixel checks of `desktop` depend on the main display and its scale.
 - In CI, only `perf` has enforced budgets. The other probes are report-only,
   so a slower probe does not fail CI. Compare their history on `main`.
+
+Windows CI runs core unit tests, a synthetic Credential Manager round trip,
+and the packaged demo window check. Server-backed E2E tests run in Linux
+Docker jobs. Windows headless UI tests are not enabled. Native CI builds the
+release on Windows to compile GPUI shaders with the SDK. A Linux cross check
+verifies types only; it does not verify Windows rendering or interaction.

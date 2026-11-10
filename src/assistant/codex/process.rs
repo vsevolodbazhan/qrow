@@ -388,3 +388,28 @@ pub(in crate::assistant) fn kill_process_tree(child: &mut Child) -> std::io::Res
         }
     })
 }
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::os::windows::process::CommandExt;
+
+    #[test]
+    fn npm_cmd_shim_accepts_arguments() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("synthetic.cmd");
+        std::fs::write(&script, "@echo off\r\n@echo %~1\r\n").unwrap();
+        // Rust's Windows Command implementation explicitly routes .cmd files
+        // through cmd.exe and escapes arguments. Never construct a /c string.
+        let output = Command::new(script)
+            .arg("synthetic argument")
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "synthetic argument"
+        );
+    }
+}

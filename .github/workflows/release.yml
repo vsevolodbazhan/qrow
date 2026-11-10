@@ -240,12 +240,57 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  windows:
+    name: windows-${{ matrix.arch }}
+    needs: [resolve-target, validation]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: windows-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: candidate-${{ matrix.target }}
+          path: candidate
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: platform-evidence-${{ matrix.target }}
+          path: evidence
+      - name: Verify qualified archive
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+          PACKAGE_ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+          SOURCE_SHA: ${{ needs.resolve-target.outputs.target_sha }}
+        run: |
+          python3 - <<'PYVERIFY'
+          import hashlib, json, os
+          from pathlib import Path
+          receipt = json.loads(Path("evidence/platform/receipt.json").read_text())
+          archive = Path("candidate") / f"Qrow-{os.environ['RELEASE_VERSION']}-windows-{os.environ['PACKAGE_ARCH']}.zip"
+          assert receipt["target"] == os.environ["TARGET"]
+          assert receipt["source_sha"] == os.environ["SOURCE_SHA"]
+          assert receipt["archive"] == archive.name
+          assert receipt["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+          PYVERIFY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-windows-${{ matrix.arch }}
+          path: candidate/*.zip
+          retention-days: 14
+          if-no-files-found: error
+
   publish:
     name: publish
     needs:
       - resolve-target
       - dmg
       - linux
+      - windows
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -267,6 +312,12 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: release-linux-*
+          merge-multiple: true
+          path: dist
+      - name: download-windows
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: release-windows-*
           merge-multiple: true
           path: dist
       - name: resolve-previous-release
@@ -384,6 +435,7 @@ jobs:
             "dist/Qrow-${RELEASE_VERSION}-x86_64.dmg"
             "dist/Qrow-${RELEASE_VERSION}-linux-x86_64.tar.gz"
             "dist/Qrow-${RELEASE_VERSION}-linux-aarch64.tar.gz"
+            "dist/Qrow-${RELEASE_VERSION}-windows-x86_64.zip"
             --repo "$GITHUB_REPOSITORY"
             --target "$TARGET_SHA"
             --title "$RELEASE_TITLE"
@@ -395,7 +447,7 @@ jobs:
           if [ "$PRERELEASE" = true ]; then
             release_args+=(--prerelease)
           fi
-          (cd dist && sha256sum -- ./*.dmg ./*.tar.gz > SHA256SUMS)
+          (cd dist && sha256sum -- ./*.dmg ./*.tar.gz ./*.zip > SHA256SUMS)
           release_args+=(dist/SHA256SUMS)
           gh "${release_args[@]}"
           verification_dir="$(mktemp -d)"

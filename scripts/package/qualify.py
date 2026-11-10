@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qtest"))
 from contract import atomic_json, source_sha  # noqa: E402
@@ -41,6 +42,20 @@ def linux_archive(archive, destination, machine):
     return executable
 
 
+def windows_archive(archive, destination):
+    required = {"qrow.exe", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"}
+    with zipfile.ZipFile(archive) as bundle:
+        if set(bundle.namelist()) != required:
+            raise ValueError("Unexpected Windows package files")
+        bundle.extractall(destination)
+    executable = destination / "qrow.exe"
+    data = executable.read_bytes()
+    offset = int.from_bytes(data[60:64], "little")
+    if data[:2] != b"MZ" or data[offset:offset + 6] != b"PE\0\0\x64\x86":
+        raise ValueError("Package PE architecture mismatch")
+    return executable
+
+
 def smoke(executable, system, evidence):
     """Wait for a native window, without a blocking read on application output."""
     with tempfile.TemporaryDirectory(prefix="qrow-package-smoke-") as workspace:
@@ -66,6 +81,12 @@ def smoke(executable, system, evidence):
                         window = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(process.pid)],
                                                 capture_output=True, timeout=5)
                         ready = window.returncode == 0 and bool(window.stdout.strip())
+                    elif system == "windows":
+                        window = subprocess.run(
+                            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                             f"(Get-Process -Id {process.pid}).MainWindowHandle"],
+                            capture_output=True, text=True, timeout=10)
+                        ready = window.returncode == 0 and window.stdout.strip() not in ("", "0")
                     else:
                         window = subprocess.run([observer, str(process.pid)], capture_output=True, timeout=5)
                         ready = window.returncode == 0
@@ -133,6 +154,8 @@ def main():
         destination = Path(directory)
         if target.system == "linux":
             executable = linux_archive(archive, destination, target.machine)
+        elif target.system == "windows":
+            executable = windows_archive(archive, destination)
         else:
             subprocess.run(["ditto", "-x", "-k", archive, destination], check=True)
             app = destination / "Qrow.app"

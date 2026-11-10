@@ -5,6 +5,8 @@ use crate::{
     connector::Secret,
     model::{Authentication, DatabaseType, Profile},
 };
+#[cfg(windows)]
+use anyhow::Context as _;
 use anyhow::{Result, anyhow};
 use std::{
     sync::{

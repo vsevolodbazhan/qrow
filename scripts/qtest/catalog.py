@@ -10,8 +10,8 @@ import re
 MACOS = platform.system() == "Darwin"
 LINUX_HOST = platform.system() == "Linux"
 # The operating system of this computer, as the `platforms` of a suite name it.
-HOST = "macos" if MACOS else "linux" if LINUX_HOST else None
-PLATFORM_NAMES = {"macos": "macOS", "linux": "Linux"}
+HOST = "macos" if MACOS else "linux" if LINUX_HOST else "windows" if platform.system() == "Windows" else None
+PLATFORM_NAMES = {"macos": "macOS", "linux": "Linux", "windows": "Windows"}
 
 
 def host_platform():
@@ -167,8 +167,20 @@ def suites_for_platform(system):
     return {
         suite.name: suite
         for suite in [
+            Suite("windows-unit", "Portable core tests on Windows; server E2E needs Linux Docker.",
+                  ("cargo", "cargo-nextest"),
+                  (nextest("kind(lib)", "--no-default-features", "--lib"),),
+                  platforms=("windows",), explicit_only=True),
+            Suite("windows-storage", "Synthetic Windows Credential Manager round trip.",
+                  ("cargo", "cargo-nextest"),
+                  (nextest("test(credential_round_trip)", "--no-default-features", "--lib", "--run-ignored", "only"),),
+                  platforms=("windows",), explicit_only=True),
+            Suite("windows-package", "Build a native unsigned Windows zip archive.",
+                  ("cargo", "uv"),
+                  (Step((PYTHON, "scripts/package/windows.py"), timeout=60 * 60),),
+                  platforms=("windows",), explicit_only=True),
             Suite("fmt", "Rust formatting.", ("cargo",),
-                  (Step(("cargo", "fmt", "--all", "--", "--check")),)),
+                  (Step(("cargo", "fmt", "--all", "--", "--check")),), platforms=("macos", "linux", "windows")),
             # The static job lints the core library. The ui CI jobs lint the
             # application on each platform.
             Suite("clippy", "Clippy for the core library.", ("cargo",), (CLIPPY_CORE,)),
@@ -181,7 +193,7 @@ def suites_for_platform(system):
                   (nextest("kind(lib) & test(/^(ui|assets|themes)::/)", *ui_feature, "--lib"),
                    Step(("cargo", "test", "--locked", *ui_feature, "--doc")))),
             Suite("clippy-native", "Clippy for the production application on this target.", APP,
-                  (Step(("cargo", "clippy", "--locked", *(("--bin", "qrow", "--lib") if linux else ("--all-targets",)), "--", "-D", "warnings")),)),
+                  (Step(("cargo", "clippy", "--locked", *(("--bin", "qrow", "--lib") if system in ("linux", "windows") else ("--all-targets",)), "--", "-D", "warnings")),), platforms=("macos", "linux", "windows")),
             Suite("unit", "Rust unit and integration tests that need no UI and no servers.",
                   (*APP, "cargo-nextest"),
                   (nextest("not binary(ui)", *ui_feature), Step(("cargo", "test", "--locked", *ui_feature, "--doc")))),
@@ -306,7 +318,7 @@ def suites_for_platform(system):
             Suite("package-smoke", "Inspect and launch the extracted native package.",
                   ("uv", *(("xvfb-run", "xdotool") if linux else ())),
                   (Step((PYTHON, "scripts/package/qualify.py", "{target}/package", "--receipt", "{target}/platform/receipt.json")),),
-                  explicit_only=True),
+                  platforms=("macos", "linux", "windows"), explicit_only=True),
             Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
                   ("uv", "cargo", "xcode", "desktop", "fixture-runtime"),
                   (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
