@@ -435,6 +435,13 @@ impl Drop for Waiter {
         self.shared.changed();
     }
 }
+#[cfg(windows)]
+fn open_browser(url: &str) -> Result<()> {
+    // ShellExecuteExW opens the URL as data, without a command interpreter.
+    open::that_detached(url).context("Cannot open the browser")
+}
+
+#[cfg(not(windows))]
 fn open_browser(url: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     let command = "open";

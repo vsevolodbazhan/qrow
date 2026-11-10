@@ -353,7 +353,7 @@ pub(crate) fn terminate_process_group(pid: u32) -> std::io::Result<()> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(in crate::assistant) fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
     child.kill()
 }
@@ -363,7 +363,9 @@ pub(crate) fn terminate_process_tree(pid: u32) -> std::io::Result<()> {
     if pid == 0 {
         return Err(std::io::Error::other("invalid Codex process identifier"));
     }
+    use std::os::windows::process::CommandExt;
     let status = Command::new("taskkill")
+        .creation_flags(0x08000000)
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -374,4 +376,15 @@ pub(crate) fn terminate_process_tree(pid: u32) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::other("could not stop Codex process tree"))
     }
+}
+
+#[cfg(windows)]
+pub(in crate::assistant) fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
+    terminate_process_tree(child.id()).or_else(|error| {
+        if child.try_wait()?.is_some() {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })
 }

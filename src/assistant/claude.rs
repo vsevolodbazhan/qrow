@@ -204,6 +204,11 @@ impl ClaudeHarness {
 
     fn spawn(&mut self, arguments: Vec<OsString>) -> Result<Process> {
         let mut command = Command::new(&self.executable);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000 | 0x00000200);
+        }
         command
             .args(arguments)
             .current_dir(&self.cwd)
@@ -1569,7 +1574,13 @@ fn title_description(messages: &[(&'static str, String)]) -> Option<String> {
 
 /// Reads `claude --version` and checks it against `MIN_VERSION`.
 fn check_version(executable: &Path) -> Result<()> {
-    let output = Command::new(executable)
+    let mut command = Command::new(executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command
         .arg("--version")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -1638,7 +1649,7 @@ pub fn delete_saved_session(id: &str) -> Result<()> {
 fn default_config_dir() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
+        .or_else(|| crate::storage::home_dir().map(|home| home.join(".claude")))
 }
 
 fn unix_now() -> i64 {

@@ -23,9 +23,68 @@ pub fn workspace_path() -> PathBuf {
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
         linux_workspace_path(&home, std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
     }
-    #[cfg(not(target_os = "linux"))]
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+    #[cfg(target_os = "windows")]
+    {
+        windows_workspace_path(
+            std::env::var_os("APPDATA").map(PathBuf::from),
+            home_dir().unwrap_or_default(),
+        )
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    home_dir()
+        .unwrap_or_default()
         .join("Library/Application Support/Qrow/workspace.json")
+}
+
+/// Resolve the home directory for CLI configuration and user paths.
+pub fn home_dir() -> Option<PathBuf> {
+    resolve_home(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+}
+
+fn resolve_home(
+    home: Option<std::ffi::OsString>,
+    profile: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    home.filter(|value| !value.is_empty())
+        .or_else(|| profile.filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+}
+
+#[cfg(any(windows, test))]
+fn windows_workspace_path(appdata: Option<PathBuf>, home: PathBuf) -> PathBuf {
+    appdata
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join("AppData/Roaming"))
+        .join("Qrow/workspace.json")
+}
+
+#[cfg(test)]
+#[test]
+fn home_directory_fallback() {
+    assert_eq!(
+        resolve_home(Some("".into()), Some("profile".into())),
+        Some(PathBuf::from("profile"))
+    );
+    assert_eq!(
+        resolve_home(Some("home".into()), Some("profile".into())),
+        Some(PathBuf::from("home"))
+    );
+    assert_eq!(resolve_home(None, None), None);
+}
+
+#[cfg(test)]
+#[test]
+fn roaming_workspace_fallback() {
+    let home = std::env::temp_dir().join("synthetic-home");
+    let data = std::env::temp_dir().join("synthetic-roaming");
+    assert_eq!(
+        windows_workspace_path(Some(data.clone()), home.clone()),
+        data.join("Qrow/workspace.json")
+    );
+    assert_eq!(
+        windows_workspace_path(None, home.clone()),
+        home.join("AppData/Roaming/Qrow/workspace.json")
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -418,7 +477,7 @@ fn delete_keychain_tokens(
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 impl TokenStore for Keychain {
     fn load_tokens(&self, _: Uuid) -> Result<Option<Zeroizing<String>>> {
         anyhow::bail!("Keychain requires macOS")
@@ -454,7 +513,7 @@ impl Credentials for Keychain {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 impl Credentials for Keychain {
     fn password(&self, _: Uuid) -> Result<Zeroizing<String>> {
         anyhow::bail!("Keychain requires macOS")
@@ -685,4 +744,100 @@ mod keychain_tests {
             ITEM_NOT_FOUND
         );
     }
+}
+
+#[cfg(windows)]
+mod windows_secrets {
+    use super::*;
+
+    fn entry(service: &str, id: Uuid) -> Result<keyring::Entry> {
+        Ok(keyring::Entry::new_with_target(
+            &credential_target(service, id),
+            service,
+            &id.to_string(),
+        )?)
+    }
+
+    fn load(service: &str, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+        match entry(service, id)?.get_password() {
+            Ok(secret) => Ok(Some(Zeroizing::new(secret))),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error).context("Could not read Windows Credential Manager"),
+        }
+    }
+
+    fn save(service: &str, id: Uuid, secret: &str) -> Result<()> {
+        entry(service, id)?
+            .set_password(secret)
+            .context("Could not write Windows Credential Manager")
+    }
+
+    fn delete(service: &str, id: Uuid) -> Result<()> {
+        match entry(service, id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error).context("Could not delete Windows credential"),
+        }
+    }
+
+    impl Credentials for Keychain {
+        fn password(&self, id: Uuid) -> Result<Zeroizing<String>> {
+            load(PASSWORD_SERVICE, id)?
+                .context("No saved password. Edit the connection to save a password")
+        }
+        fn set_password(&self, id: Uuid, password: &str) -> Result<()> {
+            save(PASSWORD_SERVICE, id, password)
+        }
+        fn delete_password(&self, id: Uuid) -> Result<()> {
+            delete(PASSWORD_SERVICE, id)
+        }
+    }
+
+    impl TokenStore for Keychain {
+        fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+            load(TOKEN_SERVICE, id)
+        }
+        fn save_tokens(&self, id: Uuid, record: &str) -> Result<()> {
+            save(TOKEN_SERVICE, id, record)
+        }
+        fn delete_tokens(&self, id: Uuid) -> Result<()> {
+            delete(TOKEN_SERVICE, id)
+        }
+    }
+
+    #[test]
+    #[ignore = "uses synthetic Windows Credential Manager entries"]
+    fn credential_round_trip() {
+        let id = Uuid::new_v4();
+        let store = Keychain;
+        store.delete_password(id).unwrap();
+        assert!(store.load_tokens(id).unwrap().is_none());
+        store.set_password(id, "synthetic-密碼").unwrap();
+        store.save_tokens(id, "synthetic-token").unwrap();
+        assert_eq!(store.password(id).unwrap().as_str(), "synthetic-密碼");
+        store.delete_password(id).unwrap();
+        assert_eq!(
+            store.load_tokens(id).unwrap().unwrap().as_str(),
+            "synthetic-token"
+        );
+        store.delete_tokens(id).unwrap();
+        store.delete_tokens(id).unwrap();
+    }
+}
+
+#[cfg(any(windows, test))]
+fn credential_target(service: &str, id: Uuid) -> String {
+    format!("{service}/{id}")
+}
+
+#[test]
+fn credential_targets_separate_services() {
+    let id = Uuid::nil();
+    assert_eq!(
+        credential_target(PASSWORD_SERVICE, id),
+        "io.qrow.connection/00000000-0000-0000-0000-000000000000"
+    );
+    assert_ne!(
+        credential_target(PASSWORD_SERVICE, id),
+        credential_target(TOKEN_SERVICE, id)
+    );
 }

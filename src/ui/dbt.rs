@@ -931,7 +931,7 @@ fn show_path_end(input: &Entity<InputState>, cx: &mut App) {
 
 /// Replace a leading `~/` with the home folder.
 fn expand_home(path: &str) -> String {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+    match (path.strip_prefix("~/"), crate::storage::home_dir()) {
         (Some(rest), Some(home)) => Path::new(&home).join(rest).to_string_lossy().into_owned(),
         _ => path.to_owned(),
     }

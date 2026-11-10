@@ -3,3 +3,15 @@ name = "libbz2-rs-sys"
 version = "=0.2.5"
 review_by = "2026-12-11"
 reason = "GPUI Kit 0.6.6 enables bzip2 through its HTTP compression stack with no facade opt-out. The supplied license permits source and binary redistribution, requires attribution and marking altered sources, and forbids endorsement. Qrow does not modify this dependency and packages its full license in THIRD_PARTY_NOTICES.txt. Recheck upstream feature controls and license text before upgrading."
+
+[[dependency]]
+name = "keyring"
+version = "=3.6.3"
+review_by = "2026-12-11"
+reason = "MIT OR Apache-2.0. Windows-only safe Credential Manager adapter. Native backend uses generic credentials and erases temporary secret buffers."
+
+[[dependency]]
+name = "open"
+version = "=5.3.2"
+review_by = "2026-12-11"
+reason = "MIT. Windows-only ShellExecuteExW adapter with shellexecute-on-windows enabled; URLs do not pass through cmd.exe."

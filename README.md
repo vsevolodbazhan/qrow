@@ -27,7 +27,7 @@ Qrow is heavily inspired by DataGrip and [Zed](https://zed.dev/). It's built usi
 
 ## Features
 
-The shortcuts below use macOS symbols. On Linux, use Ctrl in place of ⌘.
+The shortcuts below use macOS symbols. On Linux and Windows, use Ctrl in place of ⌘.
 
 ### Connections
 
@@ -43,7 +43,7 @@ a JVM, an ODBC driver, or a separately installed database driver.
 
 ![Qrow demo with connection creation menu open](assets/screenshots/demo-connections.png)
 
-Qrow keeps passwords in macOS Keychain or the Linux desktop secret store. One OpenID Connect sign-in can
+Qrow keeps passwords in macOS Keychain the Linux desktop secret store, or Windows Credential Manager. One OpenID Connect sign-in can
 authenticate several connections, and you can copy its settings to share them
 with a colleague. Drag connections to change their order. See
 [connections](docs/connections.md).
@@ -167,6 +167,14 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 
 ## Installation
 
+### Windows
+
+Download `Qrow-VERSION-windows-x86_64.zip` from GitHub Releases. Extract the
+archive and run `qrow.exe`. The unsigned binary can cause a SmartScreen
+warning. There is no installer or ARM64 Windows package yet. UI, browser
+sign-in, assistant shutdown, and title bar behavior need real Windows testing.
+The executable has no embedded Windows icon or version resource yet.
+
 ### Linux
 
 Download the archive for your architecture from the releases page:
@@ -223,6 +231,7 @@ with Apple Developer ID. To bypass the Gatekeeper:
 ### Prerequisites
 
 - Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the pinned toolchain.
+- On Windows, Visual Studio Build Tools with Desktop development with C++ and the Windows SDK.
 - On macOS, Xcode command-line tools. Install them with `xcode-select --install` if needed.
 - On Linux, a C and C++ toolchain, pkg-config, CMake, and the Wayland, X11,
   xkbcommon, xkbcommon-x11, fontconfig, FreeType, and Vulkan development libraries.
@@ -337,3 +346,6 @@ You are free to fork it, though.
 
 Qrow uses the [MIT License](LICENSE).
 Third-party code retains its original licenses. See [NOTICE](NOTICE).
+
+On Windows, build the native unsigned archive with
+`uv run --locked python scripts/package/windows.py`.

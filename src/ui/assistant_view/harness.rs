@@ -40,21 +40,29 @@ pub(super) fn discover_harness(
         AssistantHarness::Codex => "codex",
         AssistantHarness::Claude => "claude",
     };
-    let mut candidates = Vec::new();
+    let mut directories = Vec::new();
     if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join(program)));
+        directories.extend(std::env::split_paths(&path));
     }
-    candidates.extend(
-        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
-            .map(|dir| PathBuf::from(dir).join(program)),
-    );
-    if harness == AssistantHarness::Claude
-        && let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
-    {
-        // The native installer of Claude Code uses these folders.
-        candidates.push(home.join(".local/bin/claude"));
-        candidates.push(home.join(".claude/local/claude"));
+    #[cfg(not(windows))]
+    directories.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].map(PathBuf::from));
+    if let Some(home) = crate::storage::home_dir() {
+        directories.push(home.join(".local/bin"));
+        if harness == AssistantHarness::Claude {
+            directories.push(home.join(".claude/local"));
+        }
     }
+    #[cfg(windows)]
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        directories.push(PathBuf::from(appdata).join("npm"));
+    }
+    #[cfg(windows)]
+    let names = [format!("{program}.exe"), format!("{program}.cmd")];
+    #[cfg(not(windows))]
+    let names = [program.to_owned()];
+    let candidates = directories
+        .into_iter()
+        .flat_map(|directory| names.iter().map(move |name| directory.join(name)));
     candidates
         .into_iter()
         .find(|path| path.is_file())

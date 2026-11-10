@@ -1291,3 +1291,10 @@ The [external authentication service](../src/external_auth.rs) shares in-memory
 tokens and authentication work for Trino connections. The
 [Trino challenge adapter](../src/connector/trino/external.rs) follows the
 [upstream Trino client protocol](https://github.com/trinodb/trino/tree/483/client/trino-client/src/main/java/io/trino/client/auth/external).
+
+## Windows credentials
+
+Windows stores passwords and sign-in tokens in Windows Credential Manager.
+Each generic credential has a target with the service name and profile UUID.
+Passwords and tokens use separate services. Workspace files do not contain
+these secrets. The Windows backend has a synthetic round-trip test in native CI.

@@ -19,7 +19,7 @@ pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
 /// application menu icon with the sidebar title: the 0.75 rem title inset,
 /// less the 0.3125 rem between a small icon button and its 0.875 rem icon,
 /// less the blank 3/24 at the left of the menu icon.
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 const APPLICATION_MENU_INSET_REMS: f32 = 0.75 - 0.3125 - 0.875 * 3. / 24.;
 
 fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
@@ -40,7 +40,7 @@ fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static s
 }
 
 impl Qrow {
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     fn open_application_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let assistant_enabled = self.settings.assistant.enabled;
         let catalog_focused = self.catalog_has_focus(window, cx);
@@ -1239,8 +1239,8 @@ impl Qrow {
                     .on_close_window(
                         cx.listener(|this, _, window, cx| this.request_quit(window, cx)),
                     )
-                    .when(cfg!(target_os = "linux"), |bar| {
-                        #[cfg(target_os = "linux")]
+                    .when(cfg!(not(target_os = "macos")), |bar| {
+                        #[cfg(not(target_os = "macos"))]
                         let bar = bar.pl(rems(APPLICATION_MENU_INSET_REMS)).child(
                             Button::new("application-menu")
                                 .ghost()

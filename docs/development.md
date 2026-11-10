@@ -337,3 +337,12 @@ The landing page is in [website](../website). It is static HTML with no build
 step. A push to `main` that changes it deploys it to <https://qrow.dev>. See
 the [website README](../website/README.md) to preview the page, to update its
 screenshot, and for the deployment.
+
+## Windows builds
+
+Build release packages on Windows. GPUI compiles release shaders with the
+Windows SDK. Linux cross checks cannot produce a working release package.
+For local type checks, install `cargo-xwin` and the
+`x86_64-pc-windows-msvc` Rust target. Run `cargo xwin check --target
+x86_64-pc-windows-msvc --all-targets --features ui-test`. Run Clippy with the
+same arguments. Use two Cargo jobs on hosts with limited memory.
