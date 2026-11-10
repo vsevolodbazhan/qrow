@@ -395,6 +395,36 @@ mod windows_tests {
     use std::os::windows::process::CommandExt;
 
     #[test]
+    fn stopping_a_run_kills_its_child_tree() {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command",
+            "$child = Start-Process -FilePath ($PSHOME + '\\powershell.exe') -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 60' -WindowStyle Hidden -PassThru; [Console]::Out.WriteLine($child.Id); Start-Sleep -Seconds 60"])
+            .creation_flags(0x08000000 | 0x00000200)
+            .stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut leader = LaunchChild::new(command.spawn().unwrap());
+        let mut line = String::new();
+        std::io::BufReader::new(leader.child_mut().stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let descendant: u32 = line.trim().parse().unwrap();
+        kill_process_tree(leader.child_mut()).unwrap();
+        leader.child_mut().wait().unwrap();
+        let status = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!(
+                    "if (Get-Process -Id {descendant} -ErrorAction SilentlyContinue) {{ exit 1 }}"
+                ),
+            ])
+            .creation_flags(0x08000000)
+            .status()
+            .unwrap();
+        assert!(status.success(), "assistant descendant survived shutdown");
+    }
+
+    #[test]
     fn npm_cmd_shim_accepts_arguments() {
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("synthetic.cmd");

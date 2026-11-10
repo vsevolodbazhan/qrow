@@ -73,6 +73,9 @@ class ValidationGraphTests(unittest.TestCase):
             self.assertEqual(platforms.tier(event), "full")
         self.assertEqual(platforms.tier("pull_request", full=True), "full")
         self.assertEqual(platforms.native_targets("pr"), ["linux-x86_64"])
+        self.assertNotIn("windows-x86_64", platforms.native_targets("pr"))
+        for selected in ("merge", "full"):
+            self.assertIn("windows-x86_64", platforms.native_targets(selected))
         self.assertEqual(platforms.native_targets("merge"), supported)
         self.assertEqual(platforms.native_targets("full"), supported)
         self.assertEqual(platforms.outputs("merge_group")["full"], "false")
