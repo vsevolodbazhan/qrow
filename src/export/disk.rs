@@ -4,10 +4,26 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{self, Write},
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
+fn volume_id(directory: &Path) -> io::Result<u64> {
+    #[cfg(unix)]
+    {
+        Ok(directory.metadata()?.dev())
+    }
+    #[cfg(windows)]
+    {
+        // Conservatively reserve across all Windows volumes. Free-space checks
+        // still use the actual output directory.
+        directory.metadata()?;
+        Ok(0)
+    }
+}
 
 const FLOOR: u64 = 1024 * 1024 * 1024;
 const CHUNK: usize = 8 * 1024 * 1024;
@@ -75,7 +91,7 @@ impl<W> DiskWriter<W> {
         Ok(Self {
             inner,
             directory: directory.to_path_buf(),
-            volume: directory.metadata()?.dev(),
+            volume: volume_id(directory)?,
             reservations: VOLUMES.clone(),
         })
     }

@@ -509,3 +509,6 @@ Changing these handlers requires pointer checks. Verify dragging, release, the
 next click, both scroll axes, and modal overlays. Earlier automation could not
 establish horizontal trackpad behavior or column resizing. A passing native
 build does not close those verification gaps.
+
+On Windows, export disk reservations conservatively share one counter across
+all volumes. Free-space checks use the volume of each output directory.

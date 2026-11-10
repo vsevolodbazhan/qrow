@@ -14,10 +14,54 @@ use serde::{
 use std::{
     fs::File,
     io::{self, BufWriter, Write},
-    os::unix::fs::FileExt,
     sync::{Arc, Condvar, Mutex, atomic::AtomicBool},
     time::Duration,
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
+
+#[cfg(windows)]
+trait PositionedFile {
+    fn read_exact_at(&self, bytes: &mut [u8], offset: u64) -> io::Result<()>;
+    #[cfg(test)]
+    fn write_all_at(&self, bytes: &[u8], offset: u64) -> io::Result<()>;
+}
+
+#[cfg(windows)]
+impl PositionedFile for File {
+    fn read_exact_at(&self, mut bytes: &mut [u8], mut offset: u64) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+        while !bytes.is_empty() {
+            match self.seek_read(bytes, offset) {
+                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Ok(count) => {
+                    offset += count as u64;
+                    bytes = &mut bytes[count..];
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+    #[cfg(test)]
+    fn write_all_at(&self, mut bytes: &[u8], mut offset: u64) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+        while !bytes.is_empty() {
+            match self.seek_write(bytes, offset) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(count) => {
+                    offset += count as u64;
+                    bytes = &bytes[count..];
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+}
 
 const MAGIC: &[u8; 8] = b"QROWSP\0\x01";
 const MAX_COLUMNS: usize = 4096;
@@ -137,8 +181,20 @@ impl Spool {
         });
         let metadata = budget.acquire(metadata_bytes + context_bytes + 512)?;
         let buffer = memory.acquire(8192)?;
-        let file = tempfile::tempfile()?;
-        let mut out = BufWriter::new(DiskWriter::new(file.try_clone()?, &std::env::temp_dir())?);
+        #[cfg(unix)]
+        let (file, writer) = {
+            let file = tempfile::tempfile()?;
+            let writer = file.try_clone()?;
+            (file, writer)
+        };
+        #[cfg(windows)]
+        let (file, writer) = {
+            // Reopen gives the producer a separate cursor. A Windows
+            // positioned read can change its handle's current offset.
+            let temporary = tempfile::NamedTempFile::new()?;
+            (temporary.reopen()?, temporary.into_file())
+        };
+        let mut out = BufWriter::new(DiskWriter::new(writer, &std::env::temp_dir())?);
         out.write_all(MAGIC)?;
         let header = Header {
             columns,
