@@ -349,4 +349,4 @@ Qrow uses the [MIT License](LICENSE).
 Third-party code retains its original licenses. See [NOTICE](NOTICE).
 
 On Windows, build the native unsigned archive with
-`uv run --locked python scripts/package/windows.py`.
+`uv run --locked --no-dev python scripts/package/windows.py`.
