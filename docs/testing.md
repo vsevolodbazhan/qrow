@@ -1005,6 +1005,6 @@ jobs and the `qtest ci` scheduler have been removed.
 
 Windows CI runs core unit tests, a synthetic Credential Manager round trip,
 and the packaged demo window check. Server-backed E2E tests run in Linux
-Docker jobs. Windows headless UI tests are not enabled. Native CI builds the
+Docker jobs. Windows headless UI tests compile for cross checks, but do not run in CI. Native CI builds the
 release on Windows to compile GPUI shaders with the SDK. A Linux cross check
 verifies types only; it does not verify Windows rendering or interaction.

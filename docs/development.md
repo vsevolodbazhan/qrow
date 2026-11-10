@@ -344,5 +344,5 @@ Build release packages on Windows. GPUI compiles release shaders with the
 Windows SDK. Linux cross checks cannot produce a working release package.
 For local type checks, install `cargo-xwin` and the
 `x86_64-pc-windows-msvc` Rust target. Run `cargo xwin check --target
-x86_64-pc-windows-msvc --all-targets --features ui-test`. Run Clippy with the
+x86_64-pc-windows-msvc --all-targets`. Run Clippy with the
 same arguments. Use two Cargo jobs on hosts with limited memory.
