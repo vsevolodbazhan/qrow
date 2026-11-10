@@ -349,11 +349,10 @@ impl Qrow {
     }
 }
 
-/// The transcript store of a window with a saved workspace.
-pub(in crate::ui) fn transcript_store(
-    workspace: Option<&std::path::Path>,
-) -> Option<TranscriptStore> {
-    let directory = crate::storage::assistant_transcripts_directory(workspace?);
+/// The transcript store of a window with a saved workspace, in its local
+/// data directory.
+pub(in crate::ui) fn transcript_store(local: Option<&std::path::Path>) -> Option<TranscriptStore> {
+    let directory = crate::storage::transcripts_directory(local?);
     TranscriptStore::new(directory)
         .map_err(|error| eprintln!("Could not start the transcript writer: {error}"))
         .ok()

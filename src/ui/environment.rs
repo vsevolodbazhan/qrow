@@ -14,6 +14,9 @@ pub type Browser = Arc<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync>;
 pub struct Environment {
     /// `None` shows the built-in demo data and saves nothing.
     workspace: Option<PathBuf>,
+    /// The folder of the caches and transcripts of the workspace. See
+    /// [`storage::local_data_directory`].
+    local: Option<PathBuf>,
     credentials: Arc<dyn Credentials>,
     tokens: Arc<dyn TokenStore>,
     trust: Trust,
@@ -26,6 +29,7 @@ impl Environment {
     pub fn user() -> Self {
         Self {
             workspace: Some(storage::workspace_path()),
+            local: Some(storage::local_data_directory()),
             credentials: Arc::new(Keychain),
             tokens: Arc::new(Keychain),
             trust: Trust::system(),
@@ -38,6 +42,7 @@ impl Environment {
     pub fn demo() -> Self {
         Self {
             workspace: None,
+            local: None,
             credentials: Arc::new(Keychain),
             tokens: Arc::new(MemoryTokenStore::default()),
             trust: Trust::system(),
@@ -47,9 +52,16 @@ impl Environment {
 
     /// A workspace file and a password store chosen by the caller, for
     /// example a temporary directory and synthetic passwords in tests.
-    /// Sign-in tokens stay in memory.
+    /// Caches and transcripts are next to the workspace file. Sign-in tokens
+    /// stay in memory.
     pub fn isolated(workspace: PathBuf, credentials: Arc<dyn Credentials>) -> Self {
         Self {
+            local: Some(
+                workspace
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(".")),
+            ),
             workspace: Some(workspace),
             credentials,
             tokens: Arc::new(MemoryTokenStore::default()),
@@ -78,6 +90,11 @@ impl Environment {
 
     pub(crate) fn workspace(&self) -> Option<&PathBuf> {
         self.workspace.as_ref()
+    }
+
+    /// The folder of the caches and transcripts, or `None` for the demo.
+    pub(crate) fn local_directory(&self) -> Option<&PathBuf> {
+        self.local.as_ref()
     }
 
     pub(crate) fn credentials(&self) -> Arc<dyn Credentials> {

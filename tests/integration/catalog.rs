@@ -850,7 +850,7 @@ fn cancel_stops_a_running_request_and_keeps_the_catalog() {
 fn a_conditional_refresh_reads_only_a_catalog_that_was_never_read() {
     let directory = tempfile::tempdir().unwrap();
     let profile = profile();
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     let server = warehouse();
     let mut h = Harness::new(server.clone(), profile.clone(), Some(path.clone()));
     h.worker.refresh_if_unloaded(h.id);
@@ -899,7 +899,7 @@ fn a_waiting_schema_refresh_absorbs_its_relation_refreshes() {
 fn the_cache_restores_without_a_session_and_profile_changes_update_it() {
     let directory = tempfile::tempdir().unwrap();
     let profile = profile();
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     {
         let mut h = Harness::new(warehouse(), profile.clone(), Some(path.clone()));
         h.refresh(Scope::Connection);
@@ -1159,7 +1159,7 @@ fn a_warm_connection_refreshes_by_itself_and_a_cold_one_never_connects() {
 fn a_fresh_cache_waits_for_its_period_and_a_stale_one_refreshes_when_warm() {
     let directory = tempfile::tempdir().unwrap();
     let profile = profile();
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     let now = qrow::catalog::now();
     cached_warehouse(&path, &profile, now);
 
@@ -1188,7 +1188,7 @@ fn a_fresh_cache_waits_for_its_period_and_a_stale_one_refreshes_when_warm() {
 fn a_warm_connection_resumes_a_cached_unfinished_refresh_before_its_period() {
     let directory = tempfile::tempdir().unwrap();
     let profile = profile();
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     let at = qrow::catalog::now();
     cached_warehouse(&path, &profile, at);
     let mut catalog = storage::load_catalog(&path).unwrap();
@@ -1219,7 +1219,7 @@ fn a_warm_connection_resumes_a_cached_unfinished_refresh_before_its_period() {
 fn a_connection_refresh_reads_the_oldest_schemas_first() {
     let directory = tempfile::tempdir().unwrap();
     let profile = profile();
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     cached_warehouse(&path, &profile, 1_000);
     let server = warehouse();
     let mut h = Harness::new(server.clone(), profile, Some(path));
@@ -1911,16 +1911,16 @@ fn logs_entries_name_the_member_that_ran_the_refresh() {
 #[test]
 fn a_new_shared_catalog_starts_with_the_private_catalog_of_its_member() {
     let directory = tempfile::tempdir().unwrap();
-    let workspace = directory.path().join("workspace.json");
+    let local = directory.path().to_path_buf();
     let (config, small, _) = shared(None);
-    let private = storage::catalog_path(&workspace, small.id);
+    let private = storage::catalog_cache_path(&local, small.id);
     cached_warehouse(&private, &small, 1_000);
     let seed = qrow::catalog::Seed::File {
         path: private.clone(),
         owner: small.id,
         identity: qrow::catalog::CatalogIdentity::of(&small),
     };
-    let path = storage::catalog_path(&workspace, config.id);
+    let path = storage::catalog_cache_path(&local, config.id);
     let server = warehouse();
     let mut h = Harness::with_config(server.clone(), config.clone(), Some(path.clone()), MINUTE);
     h.worker.seed(seed);
@@ -1947,10 +1947,10 @@ fn a_new_shared_catalog_starts_with_the_private_catalog_of_its_member() {
 #[test]
 fn a_seeded_shared_catalog_keeps_its_columns_when_an_automatic_read_fails() {
     let directory = tempfile::tempdir().unwrap();
-    let workspace = directory.path().join("workspace.json");
+    let local = directory.path().to_path_buf();
     let (mut config, small, _) = shared(None);
     config.settings.refresh = CatalogRefresh::WhileConnected;
-    let private = storage::catalog_path(&workspace, small.id);
+    let private = storage::catalog_cache_path(&local, small.id);
     cached_warehouse(&private, &small, 1_000);
     let server = warehouse();
     server

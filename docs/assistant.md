@@ -535,8 +535,8 @@ card opens to the same query tab, arguments, and result. A card whose call did
 not end, for example because Qrow quit during the call, shows **Cancelled**.
 
 Qrow saves the copy about one second after a change, at the end of each turn,
-and at quit. Each copy is a file in the `assistant/transcripts` folder next to
-the workspace file. Only your user account can read it. A tool result in the
+and at quit. Each copy is a file in the `assistant/transcripts` folder of the
+[local data directory](workspace.md#saved-state). Only your user account can read it. A tool result in the
 copy can contain query rows. When a copy is larger than 8 MB, Qrow keeps its
 newest part. Delete a conversation to delete its copy.
 

@@ -221,8 +221,8 @@ pub(super) struct CatalogTree {
     /// The list around the tree. The tree shows its selection only while
     /// it has the focus.
     focus: FocusHandle,
-    /// The workspace file. Caches are next to it. `None` keeps them in memory.
-    workspace: Option<PathBuf>,
+    /// The local data directory of the caches. `None` keeps them in memory.
+    local: Option<PathBuf>,
     /// The connections that the search looks in.
     pub(super) scope: SearchScope,
     /// The connection of the active tab when the tree was last built.
@@ -230,7 +230,7 @@ pub(super) struct CatalogTree {
 }
 
 impl CatalogTree {
-    pub(super) fn new(workspace: Option<PathBuf>, window: &mut Window, cx: &mut App) -> Self {
+    pub(super) fn new(local: Option<PathBuf>, window: &mut Window, cx: &mut App) -> Self {
         Self {
             state: cx.new(|cx| TreeState::new(cx)),
             search: cx.new(|cx| {
@@ -248,7 +248,7 @@ impl CatalogTree {
             widths: Rc::new(RefCell::new(HashMap::new())),
             tips: Rc::new(RefCell::new(HashMap::new())),
             focus: cx.focus_handle(),
-            workspace,
+            local,
             scope: SearchScope::All,
             built_for: None,
         }
@@ -929,10 +929,10 @@ impl Qrow {
     /// The cache file of the catalog `key`, or `None` to keep it in memory.
     fn catalog_cache(&self, key: Uuid) -> Option<PathBuf> {
         self.catalog
-            .workspace
+            .local
             .as_deref()
             .filter(|_| self.saver.is_some() && !self.demo)
-            .map(|workspace| storage::catalog_path(workspace, key))
+            .map(|local| storage::catalog_cache_path(local, key))
     }
 
     /// Find the catalog key of each connection again.
