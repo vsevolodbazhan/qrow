@@ -43,7 +43,7 @@ a JVM, an ODBC driver, or a separately installed database driver.
 
 ![Qrow demo with connection creation menu open](assets/screenshots/demo-connections.png)
 
-Qrow keeps passwords in macOS Keychain the Linux desktop secret store, or Windows Credential Manager. One OpenID Connect sign-in can
+Qrow keeps passwords in macOS Keychain, the Linux desktop secret store, or Windows Credential Manager. One OpenID Connect sign-in can
 authenticate several connections, and you can copy its settings to share them
 with a colleague. Drag connections to change their order. See
 [connections](docs/connections.md).
