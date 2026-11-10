@@ -81,7 +81,7 @@ class NativePipelineTests(unittest.TestCase):
         self.assertEqual(calls["copied"], [Path("target/x86_64-apple-darwin/debug/examples/tooltip-layout")])
 
     def test_native_builds_lint_one_architecture_per_os(self):
-        for host, linted in (("macos-arm64", True), ("linux-x86_64", True), ("linux-arm64", False)):
+        for host, linted in (("macos-arm64", True), ("linux-x86_64", True), ("linux-arm64", False), ("windows-x86_64", True)):
             with self.subTest(host=host):
                 calls = self.build_calls(host, host)
                 self.assertEqual("clippy-native" in calls["checked"][0], linted)
@@ -90,7 +90,7 @@ class NativePipelineTests(unittest.TestCase):
         self.assertEqual(calls["commands"][0][:4], ["cargo", "build", "--locked", "--example"])
         self.assertEqual(calls["copied"], [Path("target/debug/examples/tooltip-layout")])
         self.assertEqual({target.system for target in TARGETS.values() if target.name in native.platforms.LINT_TARGETS},
-                         {"macos", "linux"})
+                         {"macos", "linux", "windows"})
 
     def test_cross_build_scope_keeps_an_existing_target_setting(self):
         target = TARGETS["macos-x86_64"]

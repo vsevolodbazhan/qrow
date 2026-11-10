@@ -24,7 +24,7 @@ crates are not static paths, because a crate can embed its README.
 
 A pull request gets fast feedback from the common jobs and one native target.
 It does not wait for macOS builds. After the merge, the `main` run tests all
-four native targets. If a target fails on `main`, fix the change or revert it.
+five native targets. If a target fails on `main`, fix the change or revert it.
 A release candidate always passes all five native targets before publication,
 because the release workflow runs its own full validation. Full mode adds
 timing stress and measurements; see [Full runs and releases](#full-runs-and-releases).
@@ -42,6 +42,7 @@ The native targets and their runners are:
 | macOS Intel | `macos-15` | `macos-15-intel` |
 | Linux x86-64 | `ubuntu-24.04` | `ubuntu-24.04` |
 | Linux ARM64 | `ubuntu-24.04-arm` | `ubuntu-24.04-arm` |
+| Windows x86-64 | `windows-latest` | `windows-latest` |
 
 Intel runners compile several times slower than Apple silicon runners. Thus
 the macOS ARM64 runner compiles the Intel candidate and test binaries for
