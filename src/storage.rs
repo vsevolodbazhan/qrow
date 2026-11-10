@@ -194,7 +194,12 @@ pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
     file.write_all(data)?;
     file.sync_all()?;
     fs::rename(&temporary.0, path)?;
+    // Unix records the rename durably only after a sync of the folder.
+    // Windows cannot open a folder as a file, and NTFS journals the rename.
+    #[cfg(unix)]
     fs::File::open(parent)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = parent;
     Ok(())
 }
 

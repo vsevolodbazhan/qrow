@@ -188,6 +188,12 @@ fn rule(kind: SchemaRuleKind, from: &str, to: &str) -> SchemaRule {
 
 #[test]
 fn a_dbt_project_is_optional_and_valid_with_an_absolute_manifest() {
+    // An absolute path on Windows starts with a drive.
+    let manifest = if cfg!(windows) {
+        r"C:\projects\lake\target\manifest.json"
+    } else {
+        "/projects/lake/target/manifest.json"
+    };
     let mut profile = Profile {
         host: "localhost".into(),
         username: "user".into(),
@@ -197,13 +203,13 @@ fn a_dbt_project_is_optional_and_valid_with_an_absolute_manifest() {
     assert!(json.get("dbt").is_none(), "{json}");
 
     profile.dbt = Some(DbtProject {
-        manifest: "/projects/lake/target/manifest.json".into(),
+        manifest: manifest.into(),
         refresh: DbtRefresh::default(),
         schema_mapping: vec![],
     });
     assert!(profile.validate().is_ok());
     // A saved project without the optional fields loads with defaults.
-    let json = serde_json::json!({"manifest": "/projects/lake/target/manifest.json"});
+    let json = serde_json::json!({"manifest": manifest});
     let project: DbtProject = serde_json::from_value(json).unwrap();
     assert_eq!(project.refresh, DbtRefresh::Automatic);
     assert!(project.schema_mapping.is_empty());
@@ -211,7 +217,7 @@ fn a_dbt_project_is_optional_and_valid_with_an_absolute_manifest() {
     profile.dbt.as_mut().unwrap().manifest = "target/manifest.json".into();
     assert!(profile.validate().is_err());
     let dbt = profile.dbt.as_mut().unwrap();
-    dbt.manifest = "/projects/lake/target/manifest.json".into();
+    dbt.manifest = manifest.into();
     dbt.schema_mapping = vec![rule(SchemaRuleKind::Exact, "analytics", "")];
     assert!(profile.validate().is_err());
 
