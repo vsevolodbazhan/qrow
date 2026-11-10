@@ -16,6 +16,11 @@ name = "qrow"
 path = "src/main.rs"
 required-features = ["ui"]
 
+# Embeds the icon and version resources of the Windows executable. Build
+# scripts compile for the host, so this is not limited to Windows hosts.
+[build-dependencies]
+embed-resource = "=3.0.11"
+
 [dependencies]
 anyhow = "1"
 async-channel = { version = "2", optional = true }

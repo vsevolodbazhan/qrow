@@ -174,7 +174,6 @@ Download `Qrow-VERSION-windows-x86_64.zip` for Intel/AMD or
 archive and run `qrow.exe`. The unsigned binary can cause a SmartScreen
 warning. There is no installer yet. UI, browser
 sign-in, assistant shutdown, and title bar behavior need real Windows testing.
-The executable has no embedded Windows icon or version resource yet.
 
 ### Linux
 

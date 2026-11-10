@@ -245,5 +245,6 @@ checks the receipt before it publishes `Qrow-VERSION-windows-x86_64.zip` and
 
 Pull requests keep the Linux fast path. Full workflow runs also validate
 Windows. Windows does not run Docker server fixtures or headless UI tests.
-An installer, signing, and embedded icon/version resources are
-not supplied. Real Windows desktop interaction still needs manual checks.
+The package step stops if `qrow.exe` has no icon or version resource.
+An installer and signing are not supplied. Real Windows desktop interaction
+still needs manual checks.

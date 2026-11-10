@@ -21,3 +21,9 @@ name = "rustls-platform-verifier"
 version = "=0.7.0"
 review_by = "2026-12-11"
 reason = "MIT OR Apache-2.0. Windows-only rustls verifier that checks server chains with CertGetCertificateChain. Windows then installs missing trusted roots, which a copied root store cannot do. macOS and Linux keep rustls-native-certs."
+
+[[dependency]]
+name = "embed-resource"
+version = "=3.0.11"
+review_by = "2026-12-11"
+reason = "MIT. Build dependency that compiles the Windows icon and version resource script with rc.exe on Windows or llvm-rc on cross builds, and links it into qrow.exe. It does nothing for macOS and Linux targets."

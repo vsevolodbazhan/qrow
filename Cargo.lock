@@ -5537,6 +5537,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "csv",
+ "embed-resource",
  "form_urlencoded",
  "fs2",
  "futures-lite",

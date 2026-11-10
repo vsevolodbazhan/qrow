@@ -290,11 +290,14 @@ texts. When you update a font, replace all its files from one release, and
 update the version and the license text in NOTICE.
 Also make the WOFF2 subsets of the [website](../website/README.md) again.
 
-## Generated icon asset
+## Generated icon assets
 
 The executable embeds [the small application icon](../assets/app-icons/qrow-256.png)
-for the About dialog. The Linux archive installs it as the launcher icon. After a change of the
-[source icon](../assets/app-icons/macos/qrow.png), make the asset again:
+for the About dialog. The Linux archive installs it as the launcher icon. The
+Windows executable also embeds [the Windows icon](../assets/app-icons/windows/qrow.ico)
+as a resource, with sizes from 16 to 256 pixels. Explorer, the title bar, the
+taskbar, and Alt+Tab show it. After a change of the
+[source icon](../assets/app-icons/macos/qrow.png), make both assets again:
 
 ```sh
 uv run --locked python scripts/generate/app_icon.py

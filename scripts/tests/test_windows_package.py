@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,13 +15,57 @@ windows = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(windows)
 
 
+def synthetic_pe(resource_types, pe32_plus=True):
+    """A minimal PE file with one section that holds a resource directory."""
+    optional_size = 240 if pe32_plus else 224
+    header, section_table = 0x40, 0x40 + 4 + 20 + optional_size
+    raw, address = 0x200, 0x1000
+    directory = struct.pack("<IIHHHH", 0, 0, 0, 0, 0, len(resource_types))
+    directory += b"".join(struct.pack("<II", kind, 0x80000000) for kind in resource_types)
+    data = bytearray(raw + len(directory))
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, header)
+    data[header:header + 4] = b"PE\0\0"
+    coff = header + 4
+    struct.pack_into("<HH", data, coff, 0x8664, 1)
+    struct.pack_into("<H", data, coff + 16, optional_size)
+    optional = coff + 20
+    struct.pack_into("<H", data, optional, 0x20B if pe32_plus else 0x10B)
+    directories = optional + (112 if pe32_plus else 96)
+    if resource_types:
+        struct.pack_into("<II", data, directories + 16, address, len(directory))
+    data[section_table:section_table + 8] = b".rsrc\0\0\0"
+    struct.pack_into("<IIII", data, section_table + 8, len(directory), address, len(directory), raw)
+    data[raw:] = directory
+    return bytes(data)
+
+
+class ResourceTests(unittest.TestCase):
+    def test_an_executable_needs_an_icon_and_a_version_resource(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "qrow.exe"
+            for pe32_plus in (True, False):
+                executable.write_bytes(synthetic_pe([3, windows.RT_GROUP_ICON, windows.RT_VERSION], pe32_plus))
+                self.assertEqual(windows.resource_types(executable), {3, 14, 16})
+                windows.require_resources(executable)
+            executable.write_bytes(synthetic_pe([3, windows.RT_GROUP_ICON]))
+            with self.assertRaisesRegex(ValueError, "no Windows version resource"):
+                windows.require_resources(executable)
+            executable.write_bytes(synthetic_pe([]))
+            with self.assertRaisesRegex(ValueError, "no Windows icon, version resource"):
+                windows.require_resources(executable)
+            executable.write_bytes(b"synthetic PE")
+            with self.assertRaisesRegex(ValueError, "not a PE file"):
+                windows.require_resources(executable)
+
+
 class WindowsPackageTests(unittest.TestCase):
     def test_both_archives_use_default_version_when_manual_input_is_empty(self):
         for machine, architecture in [('AMD64', 'x86_64'), ('ARM64', 'aarch64')]:
             with self.subTest(machine=machine), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / 'target/release').mkdir(parents=True)
-                (root / 'target/release/qrow.exe').write_bytes(b'synthetic PE')
+                (root / 'target/release/qrow.exe').write_bytes(synthetic_pe([14, 16]))
                 for name in ('LICENSE', 'NOTICE'):
                     (root / name).write_text('synthetic license')
                 metadata = json.dumps({'packages': [{'name': 'qrow', 'version': '1.2.3'}],
@@ -45,6 +90,6 @@ class WindowsPackageTests(unittest.TestCase):
                     with zipfile.ZipFile(root / f'target/package/Qrow-1.2.3-windows-{architecture}.zip') as archive:
                         self.assertEqual(set(archive.namelist()),
                                          {'qrow.exe', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.txt'})
-                        self.assertEqual(archive.read('qrow.exe'), b'synthetic PE')
+                        self.assertEqual(archive.read('qrow.exe'), synthetic_pe([14, 16]))
                 finally:
                     os.chdir(previous)
