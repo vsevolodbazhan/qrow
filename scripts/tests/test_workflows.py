@@ -350,7 +350,7 @@ class WebsiteWorkflowTests(unittest.TestCase):
         build, deploy = job("build", path), job("deploy", path)
         # Pull requests build the site without the rights to publish it.
         self.assertNotIn("pages: write", build)
-        self.assertIn("--exclude README.md --exclude optimize-media.sh website/ _site/", build)
+        self.assertIn("--exclude README.md --exclude '*.sh' website/ _site/", build)
         deploys = "github.ref == 'refs/heads/main' && github.event_name != 'pull_request'"
         self.assertIn(f"if: {deploys}", deploy)
         # A run that cannot deploy must not share the deploy group: it would replace a pending deployment.
