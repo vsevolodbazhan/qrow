@@ -224,32 +224,6 @@ The current release package uses ad hoc code signing. Homebrew can install the
 custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
 with Apple Developer ID.
 
-[packaging/aur](../packaging/aur) holds the Arch User Repository (AUR) packages
-for stable releases. `qrow` builds the release tag from source with the
-[Linux packaging script](../scripts/package/linux.sh). `qrow-bin` installs the
-release archive for x86-64 or ARM64. Both install the same files to `/usr`. The
-AUR does not accept versions with a hyphen, so there is no nightly package.
-
-The AUR package names are not available yet: another maintainer owns `qrow`
-and `qrow-bin`. After the names are free, do these steps after each stable
-release:
-
-1. Set the version and the archive checksums:
-
-   ```sh
-   uv run --locked python scripts/package/aur.py 0.4.0
-   ```
-
-2. In an Arch Linux container, build each package and write its `.SRCINFO`:
-
-   ```sh
-   makepkg --syncdeps --cleanbuild
-   makepkg --printsrcinfo > .SRCINFO
-   ```
-
-3. Copy `PKGBUILD` and `.SRCINFO` to the AUR Git repository of the package and
-   push them.
-
 Cargo does not publish Qrow to crates.io. Cargo ignores the patches in `vendor/`
 when it builds a published crate, so the crate does not compile.
 
