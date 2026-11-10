@@ -56,7 +56,9 @@ stress-test iteration. Exported snapshots without Git keep the supplied build
 identity, if any.
 
 The portable entry point is `uv run --locked python scripts/qtest`. On Windows,
-`qtest.cmd` calls this entry point. Windows server fixtures and headless UI suites are not enabled. Local `run`, hook, fixture, and
+`qtest.cmd` calls this entry point without Python development dependencies.
+Windows native suites do not use the DuckDB benchmark module or Ruff. The
+common Linux static job runs the Python script checks. Windows server fixtures and headless UI suites are not enabled. Local `run`, hook, fixture, and
 comparison commands remain available. The legacy `ci` scheduler was removed;
 see [Continuous integration](ci.md) for job ownership.
 

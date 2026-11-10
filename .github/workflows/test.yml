@@ -510,6 +510,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     env:
+      UV_NO_DEV: "1"
       QROW_E2E_REUSE_MACOS_PACKAGE: "true"
       QROW_MACOS_PACKAGE: target/package/Qrow-macos.zip
       QROW_NATIVE_PREPARED: "true"
@@ -567,6 +568,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     env:
+      UV_NO_DEV: "1"
       QROW_E2E_REUSE_MACOS_PACKAGE: "true"
       QROW_MACOS_PACKAGE: target/package/Qrow-macos.zip
       QROW_NATIVE_PREPARED: "true"
@@ -615,6 +617,7 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 120
     env:
+      UV_NO_DEV: "1"
       QROW_E2E_REUSE_MACOS_PACKAGE: "true"
       QROW_MACOS_PACKAGE: target/package/Qrow-macos.zip
       QROW_NATIVE_PREPARED: "true"
@@ -672,6 +675,7 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 90
     env:
+      UV_NO_DEV: "1"
       QROW_E2E_REUSE_MACOS_PACKAGE: "true"
       QROW_MACOS_PACKAGE: target/package/Qrow-macos.zip
       QROW_NATIVE_PREPARED: "true"

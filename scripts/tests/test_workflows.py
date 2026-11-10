@@ -55,6 +55,9 @@ class ValidationGraphTests(unittest.TestCase):
             self.assertIn("name: prepared-" + target.name, test)
             self.assertIn("name: candidate-" + target.name, test)
             self.assertNotIn("rust-cache@", test)
+            if target.system == "windows":
+                for body in (build, test):
+                    self.assertIn('UV_NO_DEV: "1"', body)
         self.assertEqual(needs(job("common-required")), ["plan", "common"])
         self.assertEqual(set(needs(job("ci-required"))), {"plan", "common-required", *("test-" + t.name.replace("_", "-") for t in targets)})
         self.assertIn("platforms.py gate", job("ci-required"))
