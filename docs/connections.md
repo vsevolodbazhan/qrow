@@ -1299,6 +1299,8 @@ Each generic credential has a target with the service name and profile UUID.
 Passwords and tokens use separate services. Workspace files do not contain
 these secrets. The Windows backend has a synthetic round-trip test in native CI.
 
-Windows stores these records as UTF-8 bytes. Generic credentials have a
-2560-byte limit. If a sign-in record exceeds
-this limit, saving it fails. Qrow reports the storage error.
+A Windows generic credential holds at most 2560 bytes. A sign-in record with
+large tokens can be larger. Thus Qrow divides a large secret into parts of
+2048 bytes and saves each part as a different credential. The credential with
+the profile target holds the first part and the number of parts. Qrow writes
+this credential last, so a save that stops halfway keeps the previous secret.

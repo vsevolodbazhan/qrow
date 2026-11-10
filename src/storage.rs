@@ -749,39 +749,66 @@ mod keychain_tests {
 #[cfg(windows)]
 mod windows_secrets {
     use super::*;
+    use credential_chunks::Blobs;
 
-    fn entry(service: &str, id: Uuid) -> Result<keyring::Entry> {
-        Ok(keyring::Entry::new_with_target(
-            &credential_target(service, id),
-            service,
-            &id.to_string(),
-        )?)
+    /// Windows generic credentials of one service.
+    struct CredentialManager {
+        service: &'static str,
     }
 
-    fn load(service: &str, id: Uuid) -> Result<Option<Zeroizing<String>>> {
-        match entry(service, id)?.get_secret() {
-            Ok(secret) => {
-                let bytes = Zeroizing::new(secret);
-                Ok(Some(Zeroizing::new(
-                    std::str::from_utf8(&bytes)?.to_owned(),
-                )))
+    impl CredentialManager {
+        fn entry(&self, target: &str) -> Result<keyring::Entry> {
+            Ok(keyring::Entry::new_with_target(
+                target,
+                self.service,
+                target,
+            )?)
+        }
+    }
+
+    impl Blobs for CredentialManager {
+        fn get(&self, target: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
+            match self.entry(target)?.get_secret() {
+                Ok(secret) => Ok(Some(Zeroizing::new(secret))),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(error) => Err(error).context("Could not read Windows Credential Manager"),
             }
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(error).context("Could not read Windows Credential Manager"),
+        }
+
+        fn set(&self, target: &str, bytes: &[u8]) -> Result<()> {
+            self.entry(target)?
+                .set_secret(bytes)
+                .context("Could not write Windows Credential Manager")
+        }
+
+        fn delete(&self, target: &str) -> Result<()> {
+            match self.entry(target)?.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(error) => Err(error).context("Could not delete Windows credential"),
+            }
         }
     }
 
-    fn save(service: &str, id: Uuid, secret: &str) -> Result<()> {
-        entry(service, id)?
-            .set_secret(secret.as_bytes())
-            .context("Could not write Windows Credential Manager")
+    fn load(service: &'static str, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+        credential_chunks::load(
+            &CredentialManager { service },
+            &credential_target(service, id),
+        )
     }
 
-    fn delete(service: &str, id: Uuid) -> Result<()> {
-        match entry(service, id)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error).context("Could not delete Windows credential"),
-        }
+    fn save(service: &'static str, id: Uuid, secret: &str) -> Result<()> {
+        credential_chunks::save(
+            &CredentialManager { service },
+            &credential_target(service, id),
+            secret,
+        )
+    }
+
+    fn delete(service: &'static str, id: Uuid) -> Result<()> {
+        credential_chunks::delete(
+            &CredentialManager { service },
+            &credential_target(service, id),
+        )
     }
 
     impl Credentials for Keychain {
@@ -824,14 +851,268 @@ mod windows_secrets {
             store.load_tokens(id).unwrap().unwrap().as_str(),
             "synthetic-token"
         );
-        let record = Zeroizing::new("x".repeat(2048));
+        // A sign-in record with large tokens needs several credentials.
+        let record = Zeroizing::new("synthetic-tokens-".repeat(600));
         store.save_tokens(id, &record).unwrap();
         assert_eq!(
             store.load_tokens(id).unwrap().unwrap().as_str(),
             record.as_str()
         );
+        store.save_tokens(id, "synthetic-token").unwrap();
+        assert_eq!(
+            store.load_tokens(id).unwrap().unwrap().as_str(),
+            "synthetic-token"
+        );
         store.delete_tokens(id).unwrap();
         store.delete_tokens(id).unwrap();
+        assert!(store.load_tokens(id).unwrap().is_none());
+    }
+}
+
+/// Splits a secret over several small records. A Windows generic credential
+/// holds at most 2560 bytes, and a sign-in record with its access and refresh
+/// tokens can be larger.
+///
+/// The record at the base target holds a header and the first part. The other
+/// parts have targets with a random generation. A save writes the new parts
+/// first and the base record last, so an interrupted save keeps the previous
+/// secret readable. Then it deletes the parts of the previous generation.
+#[cfg(any(windows, test))]
+mod credential_chunks {
+    use super::*;
+
+    /// Windows limits a generic credential to 2560 bytes. Keep space for the
+    /// header.
+    pub(super) const PART_BYTES: usize = 2048;
+    const MAGIC: &str = "qrow-secret-v1";
+
+    pub(super) trait Blobs {
+        fn get(&self, target: &str) -> Result<Option<Zeroizing<Vec<u8>>>>;
+        fn set(&self, target: &str, bytes: &[u8]) -> Result<()>;
+        /// Succeeds when the record does not exist.
+        fn delete(&self, target: &str) -> Result<()>;
+    }
+
+    struct Header {
+        generation: String,
+        parts: usize,
+    }
+
+    fn part_target(base: &str, generation: &str, index: usize) -> String {
+        format!("{base}/{generation}/{index}")
+    }
+
+    /// Splits a base record into its header and its first part.
+    fn parse(record: &[u8]) -> Result<(Header, &[u8])> {
+        let end = record
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .context("The saved secret has no header")?;
+        let header = std::str::from_utf8(&record[..end])?;
+        let mut fields = header.split(' ');
+        anyhow::ensure!(
+            fields.next() == Some(MAGIC),
+            "The saved secret has an unknown format"
+        );
+        let generation = fields
+            .next()
+            .context("The saved secret has no generation")?;
+        let parts: usize = fields
+            .next()
+            .context("The saved secret has no part count")?
+            .parse()?;
+        anyhow::ensure!(
+            parts >= 1 && fields.next().is_none(),
+            "The saved secret has an invalid header"
+        );
+        Ok((
+            Header {
+                generation: generation.to_owned(),
+                parts,
+            },
+            &record[end + 1..],
+        ))
+    }
+
+    fn header(store: &impl Blobs, base: &str) -> Option<Header> {
+        let record = store.get(base).ok()??;
+        parse(&record).ok().map(|(header, _)| header)
+    }
+
+    pub(super) fn load(store: &impl Blobs, base: &str) -> Result<Option<Zeroizing<String>>> {
+        let Some(record) = store.get(base)? else {
+            return Ok(None);
+        };
+        let (header, first) = parse(&record)?;
+        let mut bytes = Zeroizing::new(first.to_vec());
+        for index in 1..header.parts {
+            let part = store
+                .get(&part_target(base, &header.generation, index))?
+                .context("A part of the saved secret is missing. Save it again")?;
+            bytes.extend_from_slice(&part);
+        }
+        Ok(Some(Zeroizing::new(
+            std::str::from_utf8(&bytes)?.to_owned(),
+        )))
+    }
+
+    pub(super) fn save(store: &impl Blobs, base: &str, secret: &str) -> Result<()> {
+        let previous = header(store, base);
+        let generation = Uuid::new_v4().simple().to_string();
+        let bytes = secret.as_bytes();
+        let parts: Vec<&[u8]> = if bytes.is_empty() {
+            vec![bytes]
+        } else {
+            bytes.chunks(PART_BYTES).collect()
+        };
+        for (index, part) in parts.iter().enumerate().skip(1) {
+            store.set(&part_target(base, &generation, index), part)?;
+        }
+        let mut record =
+            Zeroizing::new(format!("{MAGIC} {generation} {}\n", parts.len()).into_bytes());
+        record.extend_from_slice(parts[0]);
+        store.set(base, &record)?;
+        if let Some(previous) = previous {
+            // The new secret is complete. A stale part is no longer readable
+            // through the base record, so a failed delete does not fail the save.
+            for index in 1..previous.parts {
+                let _ = store.delete(&part_target(base, &previous.generation, index));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn delete(store: &impl Blobs, base: &str) -> Result<()> {
+        let previous = header(store, base);
+        store.delete(base)?;
+        let mut result = Ok(());
+        if let Some(previous) = previous {
+            for index in 1..previous.parts {
+                if let Err(error) = store.delete(&part_target(base, &previous.generation, index))
+                    && result.is_ok()
+                {
+                    result = Err(error);
+                }
+            }
+        }
+        result
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::{cell::RefCell, collections::BTreeMap};
+
+        /// Windows' limit of a generic credential.
+        const LIMIT: usize = 2560;
+
+        #[derive(Default)]
+        struct Memory {
+            records: RefCell<BTreeMap<String, Vec<u8>>>,
+            fail_set: RefCell<Option<String>>,
+        }
+
+        impl Blobs for Memory {
+            fn get(&self, target: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
+                Ok(self
+                    .records
+                    .borrow()
+                    .get(target)
+                    .cloned()
+                    .map(Zeroizing::new))
+            }
+            fn set(&self, target: &str, bytes: &[u8]) -> Result<()> {
+                anyhow::ensure!(bytes.len() <= LIMIT, "record of {} bytes", bytes.len());
+                anyhow::ensure!(
+                    self.fail_set.borrow().as_deref() != Some(target),
+                    "synthetic failure"
+                );
+                self.records
+                    .borrow_mut()
+                    .insert(target.into(), bytes.to_vec());
+                Ok(())
+            }
+            fn delete(&self, target: &str) -> Result<()> {
+                self.records.borrow_mut().remove(target);
+                Ok(())
+            }
+        }
+
+        const BASE: &str = "io.qrow.oidc/synthetic";
+
+        #[test]
+        fn secrets_of_any_size_round_trip_within_the_record_limit() {
+            let store = Memory::default();
+            for size in [
+                0,
+                1,
+                PART_BYTES - 1,
+                PART_BYTES,
+                PART_BYTES + 1,
+                3 * PART_BYTES,
+                20_000,
+            ] {
+                let secret = "s".repeat(size);
+                save(&store, BASE, &secret).unwrap();
+                assert_eq!(load(&store, BASE).unwrap().unwrap().as_str(), secret);
+                assert_eq!(
+                    store.records.borrow().len(),
+                    size.div_ceil(PART_BYTES).max(1)
+                );
+            }
+        }
+
+        #[test]
+        fn multibyte_characters_survive_a_split_inside_a_character() {
+            let store = Memory::default();
+            let secret = "é".repeat(PART_BYTES);
+            save(&store, BASE, &secret).unwrap();
+            assert_eq!(load(&store, BASE).unwrap().unwrap().as_str(), secret);
+        }
+
+        #[test]
+        fn a_smaller_save_and_a_delete_remove_old_parts() {
+            let store = Memory::default();
+            save(&store, BASE, &"a".repeat(5 * PART_BYTES)).unwrap();
+            save(&store, BASE, "short").unwrap();
+            assert_eq!(store.records.borrow().len(), 1);
+            assert_eq!(load(&store, BASE).unwrap().unwrap().as_str(), "short");
+            save(&store, BASE, &"b".repeat(3 * PART_BYTES)).unwrap();
+            delete(&store, BASE).unwrap();
+            assert!(store.records.borrow().is_empty());
+            assert!(load(&store, BASE).unwrap().is_none());
+            delete(&store, BASE).unwrap();
+        }
+
+        #[test]
+        fn an_interrupted_save_keeps_the_previous_secret() {
+            let store = Memory::default();
+            let previous = "p".repeat(3 * PART_BYTES);
+            save(&store, BASE, &previous).unwrap();
+            *store.fail_set.borrow_mut() = Some(BASE.into());
+            assert!(save(&store, BASE, &"n".repeat(4 * PART_BYTES)).is_err());
+            assert_eq!(load(&store, BASE).unwrap().unwrap().as_str(), previous);
+        }
+
+        #[test]
+        fn a_missing_part_or_an_unknown_record_is_an_error() {
+            let store = Memory::default();
+            save(&store, BASE, &"m".repeat(2 * PART_BYTES)).unwrap();
+            let part = store
+                .records
+                .borrow()
+                .keys()
+                .find(|target| *target != BASE)
+                .cloned()
+                .unwrap();
+            store.records.borrow_mut().remove(&part);
+            assert!(load(&store, BASE).is_err());
+            store
+                .records
+                .borrow_mut()
+                .insert(BASE.into(), b"raw secret".to_vec());
+            assert!(load(&store, BASE).is_err());
+        }
     }
 }
 
