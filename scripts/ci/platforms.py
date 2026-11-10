@@ -106,6 +106,11 @@ def gate(results, targets, selected_tier, event):
 # Production Clippy runs on one architecture of each OS. Other architectures
 # add little lint coverage and a complete check build.
 LINT_TARGETS = ("macos-arm64", "linux-x86_64", "windows-x86_64")
+# The Rust caches of these targets keep only debug dependencies, so that all
+# caches fit the 10 GB repository limit. Their release builds compile all
+# dependencies, but still end before the macOS ARM64 jobs. Pull requests and
+# the critical path of main use the complete caches of the other targets.
+DEBUG_CACHE_TARGETS = ("linux-arm64", "windows-arm64", "windows-x86_64")
 
 
 def suites(target, full=False):

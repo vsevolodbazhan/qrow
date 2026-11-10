@@ -3,7 +3,7 @@ import contextlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import tempfile
@@ -567,7 +567,7 @@ class ToolArchiveTests(unittest.TestCase):
                 with self.subTest(tool=tool.name, platform=archive.platform):
                     self.assertTrue(archive.url.startswith("https://github.com/"))
                     self.assertIn(tool.version, archive.url)
-                    self.assertTrue(archive.member.endswith(tool.name))
+                    self.assertEqual(PurePosixPath(archive.member).name.removesuffix(".exe"), tool.name)
                     self.assertRegex(archive.sha256, r"^[0-9a-f]{64}$")
             platforms = [archive.platform for archive in tool.archives]
             self.assertEqual(len(platforms), len(set(platforms)), tool.name)
@@ -581,7 +581,8 @@ class ToolArchiveTests(unittest.TestCase):
     def test_host_platform_names_the_system_and_the_processor(self):
         cases = {("Darwin", "arm64"): "macos-aarch64", ("Darwin", "x86_64"): "macos-x86_64",
                  ("Linux", "x86_64"): "linux-x86_64", ("Linux", "aarch64"): "linux-aarch64",
-                 ("Linux", "AMD64"): "linux-x86_64", ("Windows", "AMD64"): None}
+                 ("Linux", "AMD64"): "linux-x86_64", ("Windows", "AMD64"): "windows-x86_64",
+                 ("Windows", "ARM64"): "windows-aarch64", ("FreeBSD", "amd64"): None}
         for (system, machine), expected in cases.items():
             with self.subTest(system=system, machine=machine), \
                     patch.object(catalog.platform, "system", return_value=system), \
@@ -614,6 +615,23 @@ class ToolArchiveTests(unittest.TestCase):
                 self.assertTrue(cli.install_archive(tool, catalog.Archive("macos-aarch64", path.as_uri(), digest, member)))
             self.assertTrue(os.access(root / "home/bin/cargo-deny", os.X_OK))
             self.assertEqual(sorted(item.name for item in (root / "home/bin").iterdir()), ["cargo-deny"])
+
+    def test_a_windows_archive_installs_the_executable_under_its_own_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path, digest = self.make_archive(root, "cargo-nextest.exe")
+            tool = catalog.TOOLS["cargo-nextest"]
+            archive = catalog.Archive("windows-x86_64", path.as_uri(), digest, "cargo-nextest.exe")
+            with patch.dict(os.environ, {"CARGO_HOME": str(root / "home")}), contextlib.redirect_stderr(io.StringIO()):
+                self.assertTrue(cli.install_archive(tool, archive))
+            self.assertEqual(sorted(item.name for item in (root / "home/bin").iterdir()), ["cargo-nextest.exe"])
+
+    def test_cargo_nextest_has_an_archive_for_every_native_ci_runner(self):
+        platforms = [archive.platform for archive in catalog.TOOLS["cargo-nextest"].archives]
+        for platform in ("macos-aarch64", "macos-x86_64", "linux-x86_64", "linux-aarch64",
+                         "windows-x86_64", "windows-aarch64"):
+            with self.subTest(platform=platform):
+                self.assertIn(platform, platforms)
 
     def run_install(self, tool, installs, checks):
         """Run install_tools for one fake tool. Returns the commands that it ran."""

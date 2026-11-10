@@ -561,6 +561,13 @@ jobs:
             !target/qtest/runs/**/*.app/**
           retention-days: 14
           if-no-files-found: error
+      # Only the debug dependencies of this target go into its Rust cache. See
+      # DEBUG_CACHE_TARGETS in scripts/ci/platforms.py.
+      - name: Keep release dependencies out of the Rust cache
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+        shell: bash
+        run: rm -rf target/release target/*/release
+
 
   test-windows-x86-64:
     name: test-windows-x86_64
@@ -668,6 +675,13 @@ jobs:
             !target/qtest/runs/**/*.app/**
           retention-days: 14
           if-no-files-found: error
+      # Only the debug dependencies of this target go into its Rust cache. See
+      # DEBUG_CACHE_TARGETS in scripts/ci/platforms.py.
+      - name: Keep release dependencies out of the Rust cache
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+        shell: bash
+        run: rm -rf target/release target/*/release
+
 
   test-windows-arm64:
     name: test-windows-arm64
@@ -773,6 +787,13 @@ jobs:
             !target/qtest/runs/**/*.app/**
           retention-days: 14
           if-no-files-found: error
+      # Only the debug dependencies of this target go into its Rust cache. See
+      # DEBUG_CACHE_TARGETS in scripts/ci/platforms.py.
+      - name: Keep release dependencies out of the Rust cache
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+        shell: bash
+        run: rm -rf target/release target/*/release
+
 
   test-linux-arm64:
     name: test-linux-arm64
