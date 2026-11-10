@@ -69,7 +69,7 @@ fn cache(directory: &TempDir, profile: &Profile, schemas: &[(&str, Option<&[Rela
             1,
         );
     }
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
 }
 
@@ -1268,10 +1268,10 @@ fn deleting_a_connection_deletes_its_cache(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     avia(&directory, &kept);
     avia(&directory, &deleted);
-    let workspace_file = directory.path().join("workspace.json");
+    let local = directory.path().to_path_buf();
     let (kept_cache, deleted_cache) = (
-        storage::catalog_path(&workspace_file, kept.id),
-        storage::catalog_path(&workspace_file, deleted.id),
+        storage::catalog_cache_path(&local, kept.id),
+        storage::catalog_cache_path(&local, deleted.id),
     );
     let app = TestApp::launch_in(
         cx,
@@ -1749,7 +1749,7 @@ fn a_tooltip_shows_only_a_cut_name_or_a_comment(cx: &mut TestAppContext) {
         )]),
         1,
     );
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
     let app = TestApp::launch_in(
         cx,
@@ -2149,8 +2149,8 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     let second = offline_profile("Large");
     let directory = tempfile::tempdir().unwrap();
     avia(&directory, &first);
-    let workspace_file = directory.path().join("workspace.json");
-    let private = storage::catalog_path(&workspace_file, first.id);
+    let local = directory.path().to_path_buf();
+    let private = storage::catalog_cache_path(&local, first.id);
     let credentials = MemoryCredentials::default();
     for profile in [&first, &second] {
         credentials
@@ -2246,7 +2246,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     let lake = app.saved().shared_catalogs[0].clone();
     assert_eq!(lake.name, "Lake");
     assert_eq!(lake.settings.exclude, ["scratch"]);
-    let shared = storage::catalog_path(&workspace_file, lake.id);
+    let shared = storage::catalog_cache_path(&local, lake.id);
     app.wait_until(cx, "the moved cache", Duration::from_secs(10), |_, _| {
         shared.exists() && !private.exists()
     });

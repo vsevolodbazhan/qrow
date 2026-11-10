@@ -61,7 +61,7 @@ fn cache(directory: &TempDir, profile: &Profile) {
             .collect();
         catalog.apply_relations(schema, None, relations, 1);
     }
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
 }
 
@@ -322,7 +322,7 @@ fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestApp
         )]),
         1,
     );
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
     let saved = directory.path().join("dbt");
     let mut tab = SavedTab::new(1, Some(profile.id));
@@ -382,7 +382,7 @@ fn launch_project_with_columns(
     });
     cache(&directory, &profile);
     if !columns.is_empty() {
-        let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+        let path = storage::catalog_cache_path(directory.path(), profile.id);
         let mut catalog = storage::load_catalog(&path).unwrap();
         let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
         let alias = dbt_manifest::model_alias(1);

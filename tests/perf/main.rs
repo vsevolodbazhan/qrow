@@ -206,7 +206,7 @@ fn large_catalog(cx: &mut TestAppContext) -> TestApp {
             .collect();
         catalog.apply_columns(schema, None, columns, 1);
     }
-    let path = qrow::storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = qrow::storage::catalog_cache_path(directory.path(), profile.id);
     qrow::storage::save_catalog(&path, &catalog).unwrap();
     let workspace = Workspace {
         tabs: vec![SavedTab::new(1, Some(profile.id))],
@@ -489,7 +489,7 @@ fn wide_catalog(cx: &mut TestAppContext) -> TestApp {
             .collect();
         catalog.apply_relations(schema, None, relations, 1);
     }
-    let path = qrow::storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = qrow::storage::catalog_cache_path(directory.path(), profile.id);
     qrow::storage::save_catalog(&path, &catalog).unwrap();
     let workspace = Workspace {
         tabs: vec![SavedTab::new(1, Some(profile.id))],

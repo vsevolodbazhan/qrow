@@ -387,7 +387,7 @@ impl Qrow {
         };
         let wake = self.wake.clone();
         // Claude Code files sessions by working folder, so its folder stays
-        // the same next to the workspace. The demo uses a temporary folder.
+        // the same in the local data directory. The demo uses a temporary folder.
         let working_directory = match harness {
             AssistantHarness::Claude => self
                 .assistant_state

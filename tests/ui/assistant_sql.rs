@@ -273,7 +273,7 @@ fn the_catalog_tools_read_the_cached_schemas_without_a_session(cx: &mut TestAppC
         )]),
         1,
     );
-    let cache = qrow::storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let cache = qrow::storage::catalog_cache_path(directory.path(), profile.id);
     qrow::storage::save_catalog(&cache, &catalog).unwrap();
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT gate FROM avia.bookings".into();

@@ -634,7 +634,8 @@ duration and result.
 
 To remove the project, clear **Manifest** and save.
 
-Qrow saves a compact copy of each manifest next to the workspace, and loads it
+Qrow saves a compact copy of each manifest in the
+[local data directory](workspace.md#saved-state), and loads it
 at launch. Connections with the same manifest path share one copy. Qrow
 removes a copy when no connection uses its manifest.
 

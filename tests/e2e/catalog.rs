@@ -61,7 +61,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
             );
         }
         storage::save_catalog(
-            &storage::catalog_path(&directory.path().join("workspace.json"), profile.id),
+            &storage::catalog_cache_path(directory.path(), profile.id),
             &catalog,
         )
         .unwrap();
@@ -550,7 +550,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
     let profile = workspace.profiles[0].clone();
     assert_eq!(profile.catalog_column_reads, CatalogColumnReads::Table);
     let directory = tempfile::tempdir().unwrap();
-    let catalog_path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let catalog_path = storage::catalog_cache_path(directory.path(), profile.id);
     let app = TestApp::launch_in(cx, directory, workspace, credentials);
     let scroll_tree = |cx: &mut TestAppContext, pixels: f32| {
         app.update(cx, |window, cx| {
@@ -752,7 +752,7 @@ fn a_live_shared_connection_resumes_an_unfinished_cache_before_its_period(cx: &m
     workspace.shared_catalogs.push(shared.clone());
 
     let directory = tempfile::tempdir().unwrap();
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), shared.id);
+    let path = storage::catalog_cache_path(directory.path(), shared.id);
     let at = qrow::catalog::now();
     let mut catalog = Catalog::empty(shared.id, None);
     catalog.apply_schemas(vec![done.clone(), pending.clone()], &settings, at);
@@ -889,8 +889,8 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
     workspace.profiles[0].catalog.include = vec![schema.clone()];
     let profile = workspace.profiles[0].clone();
     let directory = tempfile::tempdir().unwrap();
-    let workspace_file = directory.path().join("workspace.json");
-    let private = storage::catalog_path(&workspace_file, profile.id);
+    let local = directory.path().to_path_buf();
+    let private = storage::catalog_cache_path(&local, profile.id);
     let at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -945,7 +945,7 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
         let Some(shared) = saved.shared_catalogs.first() else {
             return false;
         };
-        storage::load_catalog(&storage::catalog_path(&workspace_file, shared.id)).is_some_and(
+        storage::load_catalog(&storage::catalog_cache_path(&local, shared.id)).is_some_and(
             |cache| {
                 cache
                     .relation(&schema, "cached_orders")

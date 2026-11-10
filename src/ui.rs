@@ -1021,7 +1021,7 @@ impl Qrow {
             }
         });
         let mut catalog =
-            catalog_tree::CatalogTree::new(environment.workspace().cloned(), window, cx);
+            catalog_tree::CatalogTree::new(environment.local_directory().cloned(), window, cx);
         catalog.scope = workspace.search_scope.clone();
         let catalog_subscriptions = [
             cx.subscribe(
@@ -1037,19 +1037,20 @@ impl Qrow {
             }),
         ];
         let activity = cx.new(|cx| activity_view::ActivityView::new(window, cx));
-        // The saved dbt indexes are next to the workspace, which its lock
-        // protects. Without a saved workspace, they stay in memory.
+        // The saved dbt indexes are in the local data directory, which the
+        // workspace lock protects. Without a saved workspace, they stay in
+        // memory.
         let dbt_directory = environment
-            .workspace()
+            .local_directory()
             .filter(|_| saver.is_some() && !demo)
-            .map(|workspace| storage::dbt_directory(workspace));
+            .map(|local| storage::dbt_index_directory(local));
         let dbt = dbt::DbtProjects::new(dbt_directory, wake.clone());
         // Assistant transcripts follow the same rule as the dbt indexes.
         assistant_state.store = assistant_view::transcript_store(
             environment
-                .workspace()
+                .local_directory()
                 .filter(|_| saver.is_some() && !demo)
-                .map(|workspace| workspace.as_path()),
+                .map(|local| local.as_path()),
         );
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)

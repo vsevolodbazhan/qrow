@@ -135,8 +135,28 @@ On Linux, the path is `$XDG_DATA_HOME/qrow/workspace.json`. If
 `XDG_DATA_HOME` is not set to an absolute path, Qrow uses
 `~/.local/share/qrow/workspace.json`.
 
+On Windows, the path is `%APPDATA%\Qrow\workspace.json`, in the roaming
+profile. If `APPDATA` is not set to an absolute path, Qrow uses
+`AppData\Roaming\Qrow\workspace.json` in the home directory. Home directory
+lookups use `HOME`, then `USERPROFILE` if `HOME` is empty or absent.
+
+`QROW_DATA_DIR` changes the workspace directory on all platforms.
+
+Qrow keeps the schema copies, the dbt copies, and the assistant conversation
+copies in the local data directory. These files are caches or are specific to
+the computer, and they can be large. On macOS and Linux, and with
+`QROW_DATA_DIR`, the local data directory is the workspace directory. On
+Windows, it is `%LOCALAPPDATA%\Qrow`, in the local profile, so these files do
+not roam with the workspace. If `LOCALAPPDATA` is not set to an absolute path,
+Qrow uses `AppData\Local\Qrow` in the home directory. The workspace lock also
+protects the local data directory.
+When a Windows workspace roams to another computer, that computer has no
+schema copies and no dbt copies until a refresh or a manifest load makes
+them. The assistant conversations show in the list, but their saved copies
+stay on the first computer.
+
 Qrow keeps the [schema copy](connections.md#browse-schemas) of each connection
-in a separate file, in the `catalog` folder next to the workspace file. The
+in a separate file, in the `catalog` folder of the local data directory. The
 file name is the profile identifier. A [shared catalog](connections.md#share-schemas)
 has one file, with the identifier of the shared catalog as its name. A schema
 copy contains schema, table, view, and column names, their types, and their
@@ -149,14 +169,14 @@ clear a shared catalog. If Qrow cannot open the workspace, it does not write
 schema copies.
 
 Qrow keeps a compact copy of each [dbt manifest](connections.md#attach-a-dbt-project)
-in the `dbt` folder next to the workspace file. The copy has the names,
+in the `dbt` folder of the local data directory. The copy has the names,
 descriptions, tests, and lineage of the manifest, and the positions of its SQL
 texts, but not the SQL. Qrow deletes a copy when no connection uses its
 manifest. If Qrow cannot open the workspace, it keeps the copies only in
 memory.
 
 Qrow keeps a [copy of each assistant conversation](assistant.md#saved-conversations)
-in the `assistant/transcripts` folder next to the workspace file. A copy has
+in the `assistant/transcripts` folder of the local data directory. A copy has
 the messages, replies, errors, and tool call cards of the conversation,
 including tool arguments and results. Qrow deletes a copy when you delete its
 conversation. If Qrow cannot open the workspace, it does not save copies.
@@ -268,10 +288,3 @@ identifiers must remain compatible.
 Native focus, window dragging, double-click behavior, appearance changes, and
 workspace restoration need direct UI verification when changed. The existing
 end-to-end suite does not establish every layout and window interaction.
-
-## Windows workspace
-
-Windows stores the workspace in `%APPDATA%\Qrow\workspace.json`.
-If `APPDATA` is absent, Qrow uses `AppData/Roaming/Qrow/workspace.json` in
-the home directory. `QROW_DATA_DIR` overrides this location on all platforms.
-Home directory lookups use `HOME`, then `USERPROFILE` if `HOME` is empty or absent.

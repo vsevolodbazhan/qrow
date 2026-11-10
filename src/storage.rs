@@ -36,6 +36,29 @@ pub fn workspace_path() -> PathBuf {
         .join("Library/Application Support/Qrow/workspace.json")
 }
 
+/// The folder of the files that stay on this computer: the schema caches,
+/// the dbt indexes, and the assistant transcripts. On Windows, the default
+/// workspace is in the roaming profile, and these files are in the local
+/// profile, so they do not roam. Elsewhere, and with `QROW_DATA_DIR`, they
+/// are next to the workspace file.
+pub fn local_data_directory() -> PathBuf {
+    if let Some(path) = std::env::var_os("QROW_DATA_DIR") {
+        return PathBuf::from(path);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_local_directory(
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+            home_dir().unwrap_or_default(),
+        )
+    }
+    #[cfg(not(target_os = "windows"))]
+    workspace_path()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+}
+
 /// Resolve the home directory for CLI configuration and user paths.
 pub fn home_dir() -> Option<PathBuf> {
     resolve_home(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
@@ -56,6 +79,14 @@ fn windows_workspace_path(appdata: Option<PathBuf>, home: PathBuf) -> PathBuf {
         .filter(|path| path.is_absolute())
         .unwrap_or_else(|| home.join("AppData/Roaming"))
         .join("Qrow/workspace.json")
+}
+
+#[cfg(any(windows, test))]
+fn windows_local_directory(local: Option<PathBuf>, home: PathBuf) -> PathBuf {
+    local
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join("AppData/Local"))
+        .join("Qrow")
 }
 
 #[cfg(test)]
@@ -85,6 +116,23 @@ fn roaming_workspace_fallback() {
         windows_workspace_path(None, home.clone()),
         home.join("AppData/Roaming/Qrow/workspace.json")
     );
+}
+
+#[cfg(test)]
+#[test]
+fn local_data_fallback() {
+    let home = std::env::temp_dir().join("synthetic-home");
+    let local = std::env::temp_dir().join("synthetic-local");
+    assert_eq!(
+        windows_local_directory(Some(local.clone()), home.clone()),
+        local.join("Qrow")
+    );
+    for local in [None, Some(PathBuf::from("relative"))] {
+        assert_eq!(
+            windows_local_directory(local, home.clone()),
+            home.join("AppData/Local/Qrow")
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -210,30 +258,22 @@ impl Drop for TemporaryFile {
     }
 }
 
-/// The schema cache of a profile, next to the workspace file. The workspace
-/// lock also protects this directory.
-pub fn catalog_path(workspace: &Path, profile: Uuid) -> PathBuf {
-    workspace
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("catalog")
-        .join(format!("{profile}.json"))
+/// The schema cache of a profile in the [local data directory](local_data_directory)
+/// `local`. The workspace lock also protects this directory.
+pub fn catalog_cache_path(local: &Path, profile: Uuid) -> PathBuf {
+    local.join("catalog").join(format!("{profile}.json"))
 }
 
-/// The folder of the saved dbt indexes, next to the workspace file. The
-/// workspace lock also protects this folder.
-pub fn dbt_directory(workspace: &Path) -> PathBuf {
-    workspace.parent().unwrap_or(Path::new(".")).join("dbt")
+/// The folder of the saved dbt indexes in the local data directory `local`.
+/// The workspace lock also protects this folder.
+pub fn dbt_index_directory(local: &Path) -> PathBuf {
+    local.join("dbt")
 }
 
-/// The folder of the saved assistant transcripts, next to the workspace
-/// file. The workspace lock also protects this folder.
-pub fn assistant_transcripts_directory(workspace: &Path) -> PathBuf {
-    workspace
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("assistant")
-        .join("transcripts")
+/// The folder of the saved assistant transcripts in the local data
+/// directory `local`. The workspace lock also protects this folder.
+pub fn transcripts_directory(local: &Path) -> PathBuf {
+    local.join("assistant").join("transcripts")
 }
 
 /// Read a schema cache. A missing, unreadable, or outdated file gives `None`,
