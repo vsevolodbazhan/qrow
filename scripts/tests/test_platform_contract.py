@@ -27,7 +27,7 @@ class MatrixGateTests(unittest.TestCase):
     def test_matrix_has_all_supported_native_targets_including_windows(self):
         matrix = platforms.matrix()['include']
         self.assertEqual({item['target'] for item in matrix},
-                         {'linux-x86_64', 'linux-arm64', 'macos-arm64', 'macos-x86_64', 'windows-x86_64'})
+                         {'linux-x86_64', 'linux-arm64', 'macos-arm64', 'macos-x86_64', 'windows-x86_64', 'windows-arm64'})
         self.assertTrue(all(item['runner'] and 'package-smoke' in item['suites'] for item in matrix))
         self.assertEqual(platforms.matrix(), platforms.matrix(True))
 
@@ -78,7 +78,7 @@ class MatrixGateTests(unittest.TestCase):
             # Evidence of other targets is unexpected in a pull request run.
             with self.assertRaisesRegex(ValueError, 'unexpected'):
                 platforms.verify(root, sha, targets=['linux-x86_64'])
-            for name in ('linux-arm64', 'macos-arm64', 'macos-x86_64', 'windows-x86_64'):
+            for name in ('linux-arm64', 'macos-arm64', 'macos-x86_64', 'windows-x86_64', 'windows-arm64'):
                 for path in (root / name).iterdir():
                     path.unlink()
             platforms.verify(root, sha, targets=['linux-x86_64'])
@@ -157,6 +157,7 @@ class PublicationTests(unittest.TestCase):
                 (dist / f'Qrow-1.2.3{suffix}.dmg').write_bytes(b'synthetic dmg')
             for arch in ['x86_64', 'aarch64']:
                 (dist / f'Qrow-1.2.3-linux-{arch}.tar.gz').write_bytes(b'synthetic archive')
+            (dist / 'Qrow-1.2.3-windows-aarch64.zip').write_bytes(b'synthetic Windows ARM archive')
             (dist / 'Qrow-1.2.3-windows-x86_64.zip').write_bytes(b'synthetic Windows archive')
             (root / 'release-notes.md').write_text('Synthetic release')
             tools = root / 'tools'
@@ -330,6 +331,7 @@ class WindowsArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.assertEqual(qualify.windows_archive(self.archive(root), root / 'valid').name, 'qrow.exe')
+            self.assertEqual(qualify.windows_archive(self.archive(root, machine=0xaa64), root / 'arm', 'aarch64').name, 'qrow.exe')
             with self.assertRaisesRegex(ValueError, 'architecture'):
                 qualify.windows_archive(self.archive(root, machine=0xaa64), root / 'wrong')
             with self.assertRaisesRegex(ValueError, 'Unexpected'):

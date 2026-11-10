@@ -169,9 +169,10 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 
 ### Windows
 
-Download `Qrow-VERSION-windows-x86_64.zip` from GitHub Releases. Extract the
+Download `Qrow-VERSION-windows-x86_64.zip` for Intel/AMD or
+`Qrow-VERSION-windows-aarch64.zip` for ARM64 from GitHub Releases. Extract the
 archive and run `qrow.exe`. The unsigned binary can cause a SmartScreen
-warning. There is no installer or ARM64 Windows package yet. UI, browser
+warning. There is no installer yet. UI, browser
 sign-in, assistant shutdown, and title bar behavior need real Windows testing.
 The executable has no embedded Windows icon or version resource yet.
 

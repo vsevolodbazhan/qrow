@@ -608,6 +608,111 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  build-windows-arm64:
+    name: build-windows-arm64
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets), 'windows-arm64')
+    runs-on: windows-11-arm
+    timeout-minutes: 120
+    env:
+      QROW_E2E_REUSE_MACOS_PACKAGE: "true"
+      QROW_MACOS_PACKAGE: target/package/Qrow-macos.zip
+      QROW_NATIVE_PREPARED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/ci-setup
+        with:
+          app: "true"
+          java: "false"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: ${{ !(inputs.cold-cache == true || github.event_name == 'schedule') }}
+        with:
+          shared-key: native-windows-arm64
+          save-if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+      - env:
+          FULL: ${{ needs.plan.outputs.full }}
+        shell: bash
+        run: |
+          flags=()
+          if [ "$FULL" = true ]; then flags+=(--full); fi
+          uv run --locked python scripts/ci/native.py build --target windows-arm64 "${flags[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: prepared-windows-arm64
+          path: target/native-transfer.tar
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-windows-arm64
+          path: target/package/*.zip
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+        with:
+          name: build-evidence-windows-arm64
+          path: |
+            target/platform/*.json
+            target/platform/*.log
+            target/qtest/runs/
+            !target/qtest/runs/**/prepared/*/target/**
+            !target/qtest/runs/**/*.app/**
+          retention-days: 14
+          if-no-files-found: error
+
+  test-windows-arm64:
+    name: test-windows-arm64
+    needs: [plan, build-windows-arm64]
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    env:
+      QROW_E2E_REUSE_MACOS_PACKAGE: "true"
+      QROW_MACOS_PACKAGE: target/package/Qrow-macos.zip
+      QROW_NATIVE_PREPARED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/ci-setup
+        with:
+          app: "true"
+          java: "false"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: prepared-windows-arm64
+          path: target
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: candidate-windows-arm64
+          path: target/package
+      - run: uv run --locked python scripts/qtest install cargo-nextest
+      - env:
+          FULL: ${{ needs.plan.outputs.full }}
+        shell: bash
+        run: |
+          flags=()
+          if [ "$FULL" = true ]; then flags+=(--full); fi
+          uv run --locked python scripts/ci/native.py test "${flags[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+        with:
+          name: platform-evidence-windows-arm64
+          path: |
+            target/platform/*.json
+            target/platform/*.log
+            target/qtest/runs/
+            !target/qtest/runs/**/prepared/*/target/**
+            !target/qtest/runs/**/*.app/**
+          retention-days: 14
+          if-no-files-found: error
+
   build-linux-arm64:
     name: build-linux-arm64
     needs: plan
@@ -714,7 +819,7 @@ jobs:
   ci-required:
     name: ci-required
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    needs: [plan, common-required, test-macos-arm64, test-macos-x86-64, test-linux-x86-64, test-linux-arm64, test-windows-x86-64]
+    needs: [plan, common-required, test-macos-arm64, test-macos-x86-64, test-linux-x86-64, test-linux-arm64, test-windows-x86-64, test-windows-arm64]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

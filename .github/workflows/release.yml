@@ -249,6 +249,8 @@ jobs:
         include:
           - arch: x86_64
             target: windows-x86_64
+          - arch: aarch64
+            target: windows-arm64
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -436,6 +438,7 @@ jobs:
             "dist/Qrow-${RELEASE_VERSION}-linux-x86_64.tar.gz"
             "dist/Qrow-${RELEASE_VERSION}-linux-aarch64.tar.gz"
             "dist/Qrow-${RELEASE_VERSION}-windows-x86_64.zip"
+            "dist/Qrow-${RELEASE_VERSION}-windows-aarch64.zip"
             --repo "$GITHUB_REPOSITORY"
             --target "$TARGET_SHA"
             --title "$RELEASE_TITLE"

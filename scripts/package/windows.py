@@ -11,7 +11,7 @@ import zipfile
 
 
 def main():
-    if (sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64")
+    if (sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64", "arm64", "aarch64")
             or os.environ.get("CARGO_BUILD_TARGET")):
         raise ValueError("A native Windows build is required; unset CARGO_BUILD_TARGET")
     metadata = json.loads(subprocess.check_output(
@@ -23,7 +23,8 @@ def main():
     subprocess.run(["cargo", "build", "--locked", "--release", "--bin", "qrow"], check=True)
     output = Path("target/package")
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / f"Qrow-{version}-windows-x86_64.zip"
+    architecture = "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
+    archive = output / f"Qrow-{version}-windows-{architecture}.zip"
     with tempfile.TemporaryDirectory(prefix="qrow-notices-") as directory:
         notices = Path(directory) / "THIRD_PARTY_NOTICES.txt"
         subprocess.run([sys.executable, "scripts/package/notices.py", str(notices)], check=True)

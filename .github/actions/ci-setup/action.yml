@@ -44,3 +44,15 @@ runs:
         qrow_java_home="$(/usr/libexec/java_home -v 17)"
         echo "JAVA_HOME=$qrow_java_home" >> "$GITHUB_ENV"
         echo "$qrow_java_home/bin" >> "$GITHUB_PATH"
+    - if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $clang = Join-Path $env:ProgramFiles 'LLVM/bin'
+        if (Test-Path (Join-Path $clang 'clang.exe')) {
+          $clang | Out-File -FilePath $env:GITHUB_PATH -Append
+          $env:PATH = "$clang;$env:PATH"
+        }
+        if (-not (Get-Command clang.exe -ErrorAction SilentlyContinue)) {
+          throw 'The Windows build needs clang from LLVM for ring.'
+        }
+        clang.exe --version

@@ -76,6 +76,7 @@ class ValidationGraphTests(unittest.TestCase):
         self.assertNotIn("windows-x86_64", platforms.native_targets("pr"))
         for selected in ("merge", "full"):
             self.assertIn("windows-x86_64", platforms.native_targets(selected))
+            self.assertIn("windows-arm64", platforms.native_targets(selected))
         self.assertEqual(platforms.native_targets("merge"), supported)
         self.assertEqual(platforms.native_targets("full"), supported)
         self.assertEqual(platforms.outputs("merge_group")["full"], "false")

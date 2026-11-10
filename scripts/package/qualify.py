@@ -42,7 +42,7 @@ def linux_archive(archive, destination, machine):
     return executable
 
 
-def windows_archive(archive, destination):
+def windows_archive(archive, destination, machine="x86_64"):
     required = {"qrow.exe", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"}
     with zipfile.ZipFile(archive) as bundle:
         if set(bundle.namelist()) != required:
@@ -51,7 +51,9 @@ def windows_archive(archive, destination):
     executable = destination / "qrow.exe"
     data = executable.read_bytes()
     offset = int.from_bytes(data[60:64], "little")
-    if data[:2] != b"MZ" or data[offset:offset + 6] != b"PE\0\0\x64\x86":
+    expected = {"x86_64": 0x8664, "aarch64": 0xaa64}[machine]
+    if (data[:2] != b"MZ" or data[offset:offset + 4] != b"PE\0\0"
+            or int.from_bytes(data[offset + 4:offset + 6], "little") != expected):
         raise ValueError("Package PE architecture mismatch")
     return executable
 
@@ -155,7 +157,7 @@ def main():
         if target.system == "linux":
             executable = linux_archive(archive, destination, target.machine)
         elif target.system == "windows":
-            executable = windows_archive(archive, destination)
+            executable = windows_archive(archive, destination, target.machine)
         else:
             subprocess.run(["ditto", "-x", "-k", archive, destination], check=True)
             app = destination / "Qrow.app"

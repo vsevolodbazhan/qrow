@@ -25,6 +25,7 @@ TARGETS = {item.name: item for item in (
     Target("macos-x86_64", "macos", "x86_64", "x86_64-apple-darwin", "macos-15-intel", cross_runner="macos-15"),
     Target("linux-x86_64", "linux", "x86_64", "x86_64-unknown-linux-gnu", "ubuntu-24.04"),
     Target("linux-arm64", "linux", "aarch64", "aarch64-unknown-linux-gnu", "ubuntu-24.04-arm"),
+    Target("windows-arm64", "windows", "aarch64", "aarch64-pc-windows-msvc", "windows-11-arm"),
     Target("windows-x86_64", "windows", "x86_64", "x86_64-pc-windows-msvc", "windows-latest"),
 )}
 
