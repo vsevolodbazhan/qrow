@@ -306,7 +306,7 @@ memory reservation until it stops. Failed cleanup closes the session.
   buffer has a 1 MiB limit. Qrow keeps a raw JSON page and decodes one row at a
   time. Decoding and one response page use memory in addition to the retained
   result limits. Direct fetches contain at most 1,000 rows and 48 MiB, with one
-  pending row of up to 16 MiB. See [Export downloaded rows](results.md#export-downloaded-rows).
+  pending row of up to 16 MiB. See [Export all rows and reuse a download](results.md#export-all-rows-and-reuse-a-download).
 - A schema can have 4,096 columns. Column names have a 1 KiB limit, type names
   have a 4 KiB limit, and their combined text has a 1 MiB limit. Session state
   can have 1,024 settings and 256 KiB of text. Each setting or encoded prepared

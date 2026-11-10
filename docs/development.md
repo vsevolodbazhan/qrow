@@ -43,7 +43,7 @@ The suites with servers run only when you select them.
 
 ## Check the native UI
 
-Use the release [demo](../README.md#preview) for visual checks without database,
+Use the release [demo](../README.md#demo) for visual checks without database,
 Keychain, or workspace access. Test the interactions affected by a UI change.
 Compilation alone does not establish correct interaction behavior.
 
@@ -78,7 +78,7 @@ screen, and report these checks. The
 interface decisions of the project and the known UI bug classes.
 
 Use release builds for performance measurements. `cargo build` does not update
-`dist/Qrow.app`. Follow the [packaging instructions](../README.md#release) when
+`dist/Qrow.app`. Follow the [packaging instructions](../README.md#package) when
 you need a new distributable. Do not replace the app while someone is testing it.
 
 ### Interface text
@@ -187,7 +187,7 @@ ARM64 and check their recorded SHA-256 digests. They do not rebuild the app.
 The DMG jobs check the archive digest, wrap the qualified app, mount the final
 image, compare its app files, and launch the mounted app.
 The publish job creates the release tag and an unpublished release with both
-DMGs and both Linux archives. It downloads the assets and checks SHA256SUMS
+DMGs, both Linux archives, and both Windows archives. It downloads the assets and checks SHA256SUMS
 before publishing. A failed upload or digest check leaves an unpublished
 release. A rerun with an existing release stops; inspect that release before
 retrying. It also
@@ -342,7 +342,21 @@ or cancellation.
 The landing page is in [website](../website). It is static HTML with no build
 step. A push to `main` that changes it deploys it to <https://qrow.dev>. See
 the [website README](../website/README.md) to preview the page, to update its
-screenshot, and for the deployment.
+screenshots, and for the deployment. The page has the feature overview and the
+install steps, so update it with a feature or an install change.
+
+## macOS builds
+
+The minimum macOS version is 12.0. [`.cargo/config.toml`](../.cargo/config.toml)
+sets the build baseline, and packaging uses it for the app bundle. A higher
+`MACOSX_DEPLOYMENT_TARGET` raises both values. A lower value stops packaging.
+Do not use `target-cpu=native` for a package that you share with older Macs.
+
+To build for another Mac architecture, install its Rust target and set
+`CARGO_BUILD_TARGET` to `x86_64-apple-darwin` or `aarch64-apple-darwin`.
+Packaging reads the executable from the target's subdirectory and checks its
+architecture. The package includes license notices for the selected target.
+CI tests both builds on macOS 15. It does not test every macOS 12 driver.
 
 ## Windows builds
 

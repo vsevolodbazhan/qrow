@@ -1,14 +1,15 @@
 #!/bin/sh
-# Make the page screenshot website/media/hero.webp from the README screenshot
-# assets/screenshots/demo.png: crop it to the window and remove the macOS
-# shadow, then write a lossless WebP image. Lossless keeps the exact colors, so
-# the page background (--bg) matches the app panels.
+# Make the page images in website/media from the screenshots in
+# assets/screenshots: crop each image to its window, remove the macOS shadow,
+# and write a lossless WebP image. Lossless keeps the exact colors, so the
+# page background (--bg) matches the app panels. Feature screenshots are
+# scaled to the largest size that the page shows.
 # Needs uv and cwebp.
 set -eu
 
 site="$(cd "$(dirname "$0")" && pwd)"
 repository="$(dirname "$site")"
-src="${1:-$repository/assets/screenshots/demo.png}"
+shots="$repository/assets/screenshots"
 out="$site/media"
 mkdir -p "$out"
 
@@ -19,24 +20,46 @@ done
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-uv run --quiet --with pillow python -I - "$src" "$work" <<'PY'
+# Output name, maximum width in pixels (0 keeps the width), and source in
+# assets/screenshots. The source is last, so it can contain spaces.
+cat >"$work/list" <<'EOF'
+hero 0 demo.png
+connections 1800 demo-connections.png
+results 1800 demo-results.png
+export 1800 demo-export.png
+catalog 1800 demo-catalog.png
+dbt 1800 demo-dbt.png
+assistant 1800 demo-assistant.png
+gatekeeper-warning 0 gatekeeper/warning.png
+gatekeeper-settings 0 gatekeeper/settings.png
+EOF
+
+uv run --quiet --with pillow python -I - "$work" "$shots" <<'PY'
 import sys
 from PIL import Image, ImageChops
 
-src, work = sys.argv[1], sys.argv[2]
-image = Image.open(src).convert("RGBA")
-# The window is opaque. The shadow around it is partly transparent.
-box = image.getchannel("A").point(lambda a: 255 if a >= 250 else 0).getbbox()
-window = image.crop(box)
-# Remove what is left of the shadow: black pixels that are not fully opaque.
-# The antialiased window edge is gray, so it stays.
-r, g, b, a = window.split()
-dark = ImageChops.lighter(ImageChops.lighter(r, g), b).point(lambda v: 255 if v < 24 else 0)
-partial = a.point(lambda v: 255 if v < 255 else 0)
-window.putalpha(ImageChops.subtract(a, ImageChops.multiply(dark, partial)))
-window.save(f"{work}/hero.png")
-print(f"Window: {window.size[0]}x{window.size[1]} px")
+work, shots = sys.argv[1], sys.argv[2]
+with open(f"{work}/list") as entries:
+    for line in entries:
+        name, width, src = line.rstrip("\n").split(" ", 2)
+        image = Image.open(f"{shots}/{src}").convert("RGBA")
+        # The window is opaque. The shadow around it is partly transparent.
+        box = image.getchannel("A").point(lambda a: 255 if a >= 250 else 0).getbbox()
+        window = image.crop(box)
+        # Remove what is left of the shadow: black pixels that are not fully
+        # opaque. The antialiased window edge is gray, so it stays.
+        r, g, b, a = window.split()
+        dark = ImageChops.lighter(ImageChops.lighter(r, g), b).point(lambda v: 255 if v < 24 else 0)
+        partial = a.point(lambda v: 255 if v < 255 else 0)
+        window.putalpha(ImageChops.subtract(a, ImageChops.multiply(dark, partial)))
+        width = int(width)
+        if width and window.width > width:
+            window = window.resize((width, round(window.height * width / window.width)), Image.LANCZOS)
+        window.save(f"{work}/{name}.png")
+        print(f"{name}: {window.width}x{window.height} px")
 PY
 
-cwebp -quiet -lossless -z 9 -exact "$work/hero.png" -o "$out/hero.webp"
-echo "$out/hero.webp"
+while read -r name _; do
+    cwebp -quiet -lossless -z 9 -exact "$work/$name.png" -o "$out/$name.webp"
+    echo "$out/$name.webp"
+done <"$work/list"
