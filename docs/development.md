@@ -224,6 +224,9 @@ The current release package uses ad hoc code signing. Homebrew can install the
 custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
 with Apple Developer ID.
 
+Cargo does not publish Qrow to crates.io. Cargo ignores the patches in `vendor/`
+when it builds a published crate, so the crate does not compile.
+
 Local checks cannot verify GitHub event filters, run cancellation, artifact
 transfer, or ruleset settings.
 

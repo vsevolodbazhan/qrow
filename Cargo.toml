@@ -4,6 +4,10 @@ version = "0.4.0"
 edition = "2024"
 description = "Desktop SQL workbench, written in Rust."
 license = "MIT"
+homepage = "https://qrow.dev"
+repository = "https://github.com/vsevolodbazhan/qrow"
+# Qrow ships as release packages. crates.io ignores the patches in vendor/.
+publish = false
 default-run = "qrow"
 
 [features]

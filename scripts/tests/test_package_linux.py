@@ -38,6 +38,9 @@ class LinuxPackageTest(unittest.TestCase):
                 files = {member.name.removeprefix("./") for member in bundle.getmembers()}
                 self.assertTrue({"bin/qrow", "share/applications/qrow.desktop", "share/icons/hicolor/256x256/apps/qrow.png", "share/licenses/qrow/THIRD_PARTY_NOTICES.txt"} <= files)
                 self.assertEqual(bundle.extractfile("./bin/qrow").read(), b"synthetic-binary")
+                directories = {member.name: member.mode for member in bundle.getmembers() if member.isdir()}
+                self.assertEqual(directories["."], 0o755)
+                self.assertTrue(all(mode & 0o755 == 0o755 and not mode & 0o022 for mode in directories.values()))
             env["QROW_RELEASE_VERSION"] = "../bad"
             result = subprocess.run(["sh", "scripts/package/linux.sh"], cwd=root, env=env, capture_output=True)
             self.assertNotEqual(result.returncode, 0)

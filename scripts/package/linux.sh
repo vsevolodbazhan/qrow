@@ -13,6 +13,8 @@ case "$qrow_version" in *[!a-zA-Z0-9.+-]*|'') echo 'Invalid release version' >&2
 cargo build --locked --release --bin qrow
 qrow_package=$(mktemp -d)
 trap 'rm -rf "$qrow_package"' EXIT HUP INT TERM
+# The archive root is extracted onto ~/.local or /usr. mktemp makes it private.
+chmod 755 "$qrow_package"
 mkdir -p "$qrow_package/bin" "$qrow_package/share/applications" "$qrow_package/share/icons/hicolor/256x256/apps" "$qrow_package/share/licenses/qrow"
 cp "${CARGO_TARGET_DIR:-target}/release/qrow" "$qrow_package/bin/qrow"
 cp assets/app-icons/qrow-256.png "$qrow_package/share/icons/hicolor/256x256/apps/qrow.png"
