@@ -350,3 +350,6 @@ same arguments. Use two Cargo jobs on hosts with limited memory.
 For ARM64 cross checks, select `--target aarch64-pc-windows-msvc` and set
 `XWIN_CROSS_COMPILER=clang`. The clang backend supplies SDK include flags
 that the ARM64 `ring` build accepts.
+
+Package notices use UTF-8 for Cargo metadata and license files on all platforms.
+They do not depend on the Windows system code page.

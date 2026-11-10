@@ -36,9 +36,10 @@ class WindowsPackageTests(unittest.TestCase):
                     with patch.object(windows.sys, 'platform', 'win32'), \
                             patch.object(windows.platform, 'machine', return_value=machine), \
                             patch.dict(os.environ, {'QROW_RELEASE_VERSION': '', 'CARGO_BUILD_TARGET': ''}), \
-                            patch.object(windows.subprocess, 'check_output', return_value=metadata), \
+                            patch.object(windows.subprocess, 'check_output', return_value=metadata) as metadata_call, \
                             patch.object(windows.subprocess, 'run', side_effect=run) as calls:
                         windows.main()
+                    self.assertEqual(metadata_call.call_args.kwargs["encoding"], "utf-8")
                     self.assertEqual(calls.call_args_list[0].args[0],
                                      ['cargo', 'build', '--locked', '--release', '--bin', 'qrow'])
                     with zipfile.ZipFile(root / f'target/package/Qrow-1.2.3-windows-{architecture}.zip') as archive:

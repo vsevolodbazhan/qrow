@@ -15,7 +15,7 @@ def main():
             or os.environ.get("CARGO_BUILD_TARGET")):
         raise ValueError("A native Windows build is required; unset CARGO_BUILD_TARGET")
     metadata = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], text=True))
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], text=True, encoding="utf-8"))
     package = next(item for item in metadata["packages"] if item["name"] == "qrow")
     version = os.environ.get("QROW_RELEASE_VERSION") or package["version"]
     if not re.fullmatch(r"[a-zA-Z0-9.+-]+", version):

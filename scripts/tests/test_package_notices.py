@@ -16,13 +16,14 @@ INTEL = "x86_64-apple-darwin"
 
 
 class NoticeTests(unittest.TestCase):
-    def generate(self, host, target=None):
+    def generate(self, host, target=None, license_text="Synthetic dependency license text"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "LICENSE").write_text("Synthetic dependency license text")
+            (root / "LICENSE").write_text(license_text, encoding="utf-8")
             output = root / "notices.txt"
 
             def command(args, **kwargs):
+                self.assertEqual(kwargs.get("encoding"), "utf-8")
                 if args == ["rustc", "-vV"]:
                     return f"rustc test\nhost: {host}\n"
                 self.assertEqual(args[:-1], ["cargo", "metadata", "--locked", "--format-version", "1",
@@ -38,7 +39,7 @@ class NoticeTests(unittest.TestCase):
                     patch.object(sys, "argv", [str(SCRIPT), str(output)]), \
                     patch.object(subprocess, "check_output", side_effect=command):
                 runpy.run_path(str(SCRIPT), run_name="__main__")
-            return output.read_text()
+            return output.read_text(encoding="utf-8")
 
     def test_cross_target_notices_include_target_dependencies_and_license_text(self):
         for host, target, expected, excluded in ((ARM64, INTEL, "intel-only", "arm-only"),
@@ -53,3 +54,7 @@ class NoticeTests(unittest.TestCase):
         notices = self.generate(ARM64)
         self.assertIn("arm-only 1.0.0", notices)
         self.assertNotIn("intel-only", notices)
+
+    def test_notices_preserve_non_ascii_license_text(self):
+        text = "Synthetic license — 測試 — автор"
+        self.assertIn(text, self.generate(ARM64, license_text=text))
