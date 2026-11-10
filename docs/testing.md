@@ -909,7 +909,8 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
   fails when the servers are not there. It does not skip the test.
 - `cell(window, row, column)` and `header(window, column)` read the result
   table. Column 0 holds the row number.
-- `app.type_sql` replaces the SQL of the active tab through the editor.
+- `app.type_sql` replaces the SQL of the active tab through the editor. It checks
+  that the editor owns keyboard focus before it sends keys.
   `app.run_sql` also runs it. `app.wait_status("Complete")` waits for the
   status of the active tab, which its dot tooltip shows, and `app.wait_cell(row, column, text)` waits for a result.
 - `app.select_connection(profile)` selects a connection, and `app.logs()`
