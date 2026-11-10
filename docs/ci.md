@@ -5,12 +5,13 @@ Use the `ci-required` check to decide if a commit passes CI. Open the
 job name identifies common validation, a native build, or a native test.
 Use [Testing](testing.md) to run an individual suite locally.
 
-CI has three levels:
+CI uses these validation levels:
 
 | Event | Common jobs | Native targets | Full mode |
 | --- | --- | --- | --- |
 | Ready pull request that changes only static paths | `common-static` | None | No |
 | Other ready pull request | All six | Linux x86-64 | No |
+| Merge queue | All six | All six | No |
 | Push to `main`, weekly scheduled run, manual run, release candidate | All six | All six | Yes |
 
 Static paths cannot change a Rust build, a test binary, a server fixture, or
@@ -238,8 +239,7 @@ job consumes those artifacts, runs core tests and synthetic Credential Manager
 tests, then checks the archive and waits for the demo window. The qualification
 receipt binds the source commit to the archive digest. Release publication
 checks the receipt before it publishes `Qrow-VERSION-windows-x86_64.zip` and
-`Qrow-VERSION-windows-aarch64.zip`. It
-includes the zip in `SHA256SUMS`.
+`Qrow-VERSION-windows-aarch64.zip`. It includes both archives in `SHA256SUMS`.
 
 Pull requests keep the Linux fast path. Full workflow runs also validate
 Windows. Windows does not run Docker server fixtures or headless UI tests.

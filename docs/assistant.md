@@ -679,3 +679,15 @@ The demo uses synthetic query data and an in-memory workspace. Qrow asks Codex
 to delete demo conversations on normal exit. It reads the deletion replies
 after stopping the assistant worker. A conversation can remain if Codex does
 not confirm deletion before exit or if Qrow crashes.
+
+## Windows harnesses
+
+Executable discovery checks `PATH`, the home `.local/bin` folder, and
+`%APPDATA%\npm`. It accepts `.exe` files and npm `.cmd` shims. You can also
+select a path in Settings. Rust starts batch shims through its Windows command
+adapter. Qrow does not build a command-interpreter string from the arguments.
+
+CLI children run without a console window. Stopping a live run uses
+`taskkill /T /F` to stop its process tree. This does not give the lifetime
+guarantees of a Windows Job Object. Detached children, or children whose parent
+has already exited, can need separate cleanup.
