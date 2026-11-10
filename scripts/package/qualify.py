@@ -58,6 +58,31 @@ def windows_archive(archive, destination, machine="x86_64"):
     return executable
 
 
+def windows_has_visible_window(pid):
+    """Whether a process has a visible top-level window. Win32 answers at once;
+    PowerShell can need more than 10 seconds to start on ARM64 runners."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    found = []
+
+    def visit(window, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(window, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(window):
+            found.append(window)
+            return False
+        return True
+
+    user32.EnumWindows(callback_type(visit), 0)
+    return bool(found)
+
+
 def smoke(executable, system, evidence):
     """Wait for a native window, without a blocking read on application output."""
     with tempfile.TemporaryDirectory(prefix="qrow-package-smoke-") as workspace:
@@ -84,11 +109,7 @@ def smoke(executable, system, evidence):
                                                 capture_output=True, timeout=5)
                         ready = window.returncode == 0 and bool(window.stdout.strip())
                     elif system == "windows":
-                        window = subprocess.run(
-                            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                             f"(Get-Process -Id {process.pid}).MainWindowHandle"],
-                            capture_output=True, text=True, timeout=10)
-                        ready = window.returncode == 0 and window.stdout.strip() not in ("", "0")
+                        ready = windows_has_visible_window(process.pid)
                     else:
                         window = subprocess.run([observer, str(process.pid)], capture_output=True, timeout=5)
                         ready = window.returncode == 0
