@@ -17,7 +17,7 @@ def main():
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], text=True))
     package = next(item for item in metadata["packages"] if item["name"] == "qrow")
-    version = os.environ.get("QROW_RELEASE_VERSION", package["version"])
+    version = os.environ.get("QROW_RELEASE_VERSION") or package["version"]
     if not re.fullmatch(r"[a-zA-Z0-9.+-]+", version):
         raise ValueError("Invalid release version")
     subprocess.run(["cargo", "build", "--locked", "--release", "--bin", "qrow"], check=True)

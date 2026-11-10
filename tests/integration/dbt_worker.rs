@@ -321,7 +321,7 @@ fn a_manifest_link_reads_its_current_target() {
     std::fs::write(&first, dbt_manifest::generate(&shape(5))).unwrap();
     std::fs::write(&second, dbt_manifest::generate(&shape(7))).unwrap();
     let link = folder.join("current.json");
-    std::os::unix::fs::symlink(&first, &link).unwrap();
+    test_symlink(&first, &link).unwrap();
     let uses = vec![Use {
         manifest: link.clone(),
         automatic: false,
@@ -329,7 +329,7 @@ fn a_manifest_link_reads_its_current_target() {
     fixture.worker.configure(uses);
     fixture.wait("the first target", |state| models(state) == 5);
     std::fs::remove_file(&link).unwrap();
-    std::os::unix::fs::symlink(&second, &link).unwrap();
+    test_symlink(&second, &link).unwrap();
     fixture.worker.refresh(&link);
     fixture.wait("the second target", |state| models(state) == 7);
 }
@@ -353,7 +353,7 @@ fn a_parent_part_after_a_folder_link_names_the_parent_of_its_target() {
         dbt_manifest::generate(&shape(6)),
     )
     .unwrap();
-    std::os::unix::fs::symlink(releases.join("v1"), root.join("current")).unwrap();
+    test_symlink(releases.join("v1"), root.join("current")).unwrap();
     let path = root.join("current/./../manifest.json");
     assert_eq!(manifest_key(&path), root.join("current/../manifest.json"));
     fixture.worker.configure(vec![Use {
@@ -383,7 +383,7 @@ fn an_automatic_manifest_link_follows_a_new_target_in_another_folder() {
         .unwrap();
     }
     let link = root.join("current.json");
-    std::os::unix::fs::symlink(first.join("manifest.json"), &link).unwrap();
+    test_symlink(first.join("manifest.json"), &link).unwrap();
     fixture.worker.configure(vec![Use {
         manifest: link.clone(),
         automatic: true,
@@ -391,7 +391,7 @@ fn an_automatic_manifest_link_follows_a_new_target_in_another_folder() {
     fixture.wait("the first target", |state| models(state) == 5);
     fixture.settle();
     let replacement = root.join("current.tmp");
-    std::os::unix::fs::symlink(second.join("manifest.json"), &replacement).unwrap();
+    test_symlink(second.join("manifest.json"), &replacement).unwrap();
     std::fs::rename(&replacement, &link).unwrap();
     fixture.wait("the second target", |state| models(state) == 7);
     // A write to the new target refreshes too.
@@ -402,4 +402,24 @@ fn an_automatic_manifest_link_follows_a_new_target_in_another_folder() {
     )
     .unwrap();
     fixture.wait("the change of the new target", |state| models(state) == 9);
+}
+
+// Windows selects the link type explicitly. These tests keep their Unix
+// coverage and compile for Windows; native CI currently runs core tests.
+fn test_symlink(
+    source: impl AsRef<std::path::Path>,
+    target: impl AsRef<std::path::Path>,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, target)
+    }
+    #[cfg(windows)]
+    {
+        if source.as_ref().is_dir() {
+            std::os::windows::fs::symlink_dir(source, target)
+        } else {
+            std::os::windows::fs::symlink_file(source, target)
+        }
+    }
 }

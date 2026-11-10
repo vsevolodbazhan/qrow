@@ -5,13 +5,13 @@ use super::{TestApp, elements, label, labels, present};
 use gpui_kit::{TestAppContext, Window};
 use qrow::model::{AssistantHarness, AssistantTitleSource, Settings, Workspace};
 use qrow::ui::ToggleAssistant;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
 use tempfile::TempDir;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 /// A synthetic reply takes well under a second; some turns wait for a marker.
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(30);

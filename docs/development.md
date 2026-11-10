@@ -346,3 +346,7 @@ For local type checks, install `cargo-xwin` and the
 `x86_64-pc-windows-msvc` Rust target. Run `cargo xwin check --target
 x86_64-pc-windows-msvc --all-targets`. Run Clippy with the
 same arguments. Use two Cargo jobs on hosts with limited memory.
+
+For ARM64 cross checks, select `--target aarch64-pc-windows-msvc` and set
+`XWIN_CROSS_COMPILER=clang`. The clang backend supplies SDK include flags
+that the ARM64 `ring` build accepts.
