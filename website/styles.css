@@ -9,7 +9,6 @@
 :root {
   color-scheme: dark;
   --bg: #27292e; /* the panel color as stored in the screenshot, so both render the same */
-  --surface: #30343c;
   --chrome: #30343c;
   --hover: #3b414c;
   --border: #3b414c;
@@ -42,7 +41,6 @@ main { flex: 1; }
 img { display: block; max-width: 100%; height: auto; }
 a { color: inherit; text-decoration: none; }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
-.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 /* Buttons (GPUI Kit Button: 6 px radius, medium label, 16 px icon) */
 .btn {
