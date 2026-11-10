@@ -233,7 +233,9 @@ transfer, cancellation events, ruleset settings, or actual release publication.
 
 `windows-x86_64` uses `windows-latest` and `x86_64-pc-windows-msvc`.
 `windows-arm64` uses `windows-11-arm` and `aarch64-pc-windows-msvc`.
-Setup checks LLVM clang, which `ring` needs on Windows ARM64.
+Setup checks LLVM clang, which `ring` needs on Windows ARM64. It selects
+an installed SDK shader compiler through `GPUI_FXC_PATH`. ARM64 uses the
+x64 SDK compiler if the SDK has no ARM64 compiler.
 The build job prepares core tests and the native release candidate. The test
 job consumes those artifacts, runs core tests and synthetic Credential Manager
 tests, then checks the archive and waits for the demo window. The qualification
