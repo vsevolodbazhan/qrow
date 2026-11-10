@@ -178,8 +178,6 @@ mkdir -p ~/.local
 tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local
 ```
 
-Linux archives are added by the next release. Until then, build from source.
-
 The archive includes a desktop launcher. Qrow needs a Vulkan driver and a
 desktop Secret Service, such as GNOME Keyring, for saved credentials. The
 archive uses system libraries and needs a compatible Linux distribution.
