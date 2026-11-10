@@ -20,28 +20,29 @@ done
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# Source, output name, and maximum width in pixels (0 keeps the width).
-cat >"$work/list" <<EOF
-$shots/demo.png hero 0
-$shots/demo-connections.png connections 1800
-$shots/demo-results.png results 1800
-$shots/demo-export.png export 1800
-$shots/demo-catalog.png catalog 1800
-$shots/demo-dbt.png dbt 1800
-$shots/demo-assistant.png assistant 1800
-$shots/gatekeeper/warning.png gatekeeper-warning 0
-$shots/gatekeeper/settings.png gatekeeper-settings 0
+# Output name, maximum width in pixels (0 keeps the width), and source in
+# assets/screenshots. The source is last, so it can contain spaces.
+cat >"$work/list" <<'EOF'
+hero 0 demo.png
+connections 1800 demo-connections.png
+results 1800 demo-results.png
+export 1800 demo-export.png
+catalog 1800 demo-catalog.png
+dbt 1800 demo-dbt.png
+assistant 1800 demo-assistant.png
+gatekeeper-warning 0 gatekeeper/warning.png
+gatekeeper-settings 0 gatekeeper/settings.png
 EOF
 
-uv run --quiet --with pillow python -I - "$work" <<'PY'
+uv run --quiet --with pillow python -I - "$work" "$shots" <<'PY'
 import sys
 from PIL import Image, ImageChops
 
-work = sys.argv[1]
+work, shots = sys.argv[1], sys.argv[2]
 with open(f"{work}/list") as entries:
     for line in entries:
-        src, name, width = line.split()
-        image = Image.open(src).convert("RGBA")
+        name, width, src = line.rstrip("\n").split(" ", 2)
+        image = Image.open(f"{shots}/{src}").convert("RGBA")
         # The window is opaque. The shadow around it is partly transparent.
         box = image.getchannel("A").point(lambda a: 255 if a >= 250 else 0).getbbox()
         window = image.crop(box)
@@ -58,7 +59,7 @@ with open(f"{work}/list") as entries:
         print(f"{name}: {window.width}x{window.height} px")
 PY
 
-while read -r _ name _; do
+while read -r name _; do
     cwebp -quiet -lossless -z 9 -exact "$work/$name.png" -o "$out/$name.webp"
     echo "$out/$name.webp"
 done <"$work/list"
