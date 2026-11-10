@@ -48,8 +48,9 @@ def draw_text(top, text, font, color, tracking=0.0):
     cap_top = font.getbbox("H", anchor="ls")[1]
     baseline = top - cap_top
     for index, character in enumerate(text):
-        # The prefix width keeps the kerning of the font.
-        x = left + font.getlength(text[:index]) + spacing * index
+        # Measure up to the end of this character, so its kerning with the
+        # previous character counts too.
+        x = left + font.getlength(text[:index + 1]) - font.getlength(character) + spacing * index
         draw.text((x, baseline), character, font=font, fill=color, anchor="ls")
     return baseline
 
