@@ -150,6 +150,10 @@ Windows, it is `%LOCALAPPDATA%\Qrow`, in the local profile, so these files do
 not roam with the workspace. If `LOCALAPPDATA` is not set to an absolute path,
 Qrow uses `AppData\Local\Qrow` in the home directory. The workspace lock also
 protects the local data directory.
+When a Windows workspace roams to another computer, that computer has no
+schema copies and no dbt copies until a refresh or a manifest load makes
+them. The assistant conversations show in the list, but their saved copies
+stay on the first computer.
 
 Qrow keeps the [schema copy](connections.md#browse-schemas) of each connection
 in a separate file, in the `catalog` folder of the local data directory. The
