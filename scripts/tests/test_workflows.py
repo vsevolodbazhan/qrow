@@ -67,6 +67,10 @@ class ValidationGraphTests(unittest.TestCase):
         self.assertIn("verify-common evidence", job("common-required"))
         self.assertIn("platforms.py verify evidence", job("ci-required"))
 
+    def test_windows_launcher_keeps_nested_uv_commands_out_of_dev_dependencies(self):
+        self.assertIn('set "UV_NO_DEV=1"', read("qtest.cmd"))
+        self.assertIn("setlocal", read("qtest.cmd"))
+
     def test_pull_requests_qualify_one_target_and_the_merge_queue_qualifies_all(self):
         supported = [name for name, target in platforms.TARGETS.items() if target.supported]
         self.assertIn("merge_group:", read(TEST))
