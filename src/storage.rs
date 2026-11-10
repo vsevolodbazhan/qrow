@@ -759,8 +759,13 @@ mod windows_secrets {
     }
 
     fn load(service: &str, id: Uuid) -> Result<Option<Zeroizing<String>>> {
-        match entry(service, id)?.get_password() {
-            Ok(secret) => Ok(Some(Zeroizing::new(secret))),
+        match entry(service, id)?.get_secret() {
+            Ok(secret) => {
+                let bytes = Zeroizing::new(secret);
+                Ok(Some(Zeroizing::new(
+                    std::str::from_utf8(&bytes)?.to_owned(),
+                )))
+            }
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(error).context("Could not read Windows Credential Manager"),
         }
@@ -768,7 +773,7 @@ mod windows_secrets {
 
     fn save(service: &str, id: Uuid, secret: &str) -> Result<()> {
         entry(service, id)?
-            .set_password(secret)
+            .set_secret(secret.as_bytes())
             .context("Could not write Windows Credential Manager")
     }
 
@@ -818,6 +823,12 @@ mod windows_secrets {
         assert_eq!(
             store.load_tokens(id).unwrap().unwrap().as_str(),
             "synthetic-token"
+        );
+        let record = Zeroizing::new("x".repeat(2048));
+        store.save_tokens(id, &record).unwrap();
+        assert_eq!(
+            store.load_tokens(id).unwrap().unwrap().as_str(),
+            record.as_str()
         );
         store.delete_tokens(id).unwrap();
         store.delete_tokens(id).unwrap();
