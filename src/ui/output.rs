@@ -89,6 +89,7 @@ impl Qrow {
             .child(
                 div()
                     .id("output-scroll")
+                    .test_support()
                     .flex_1()
                     .min_h_0()
                     .min_w_0()

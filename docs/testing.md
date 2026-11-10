@@ -875,6 +875,8 @@ Follow these rules:
 
 - Find controls by element ID. Do not find them by the text that they show.
 - Do not sleep. Wait for a condition with `wait_until`.
+- For coordinate gestures, use a fully visible target. A visible snapshot can
+  still be partly outside the scroll viewport.
 - After each action, make sure that it had an effect before the next action.
 - Check the result that a user can see, and the saved state when it applies.
 - Include a negative case when it applies, for example a rejected input.
