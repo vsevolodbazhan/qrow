@@ -11,8 +11,6 @@ Each query tab has a tab strip below the editor. The strip starts with
 **Logs**, followed by one or more result tabs. Select a result tab to view
 its preview. The [Queries](queries.md) page describes the Logs panel.
 
-![Query results](../assets/screenshots/demo-results.png)
-
 ## Result tabs
 
 A new execution fills an unpinned result tab and shows it. Qrow uses the shown
@@ -167,8 +165,6 @@ Click **Export results** in the Results toolbar. The button is available
 when the result has columns. Choose a format, then **Save**. The export
 includes all rows and columns. Grid selection does not limit the export.
 Use the [copy commands](#browse-and-copy) to copy selected cells.
-
-![Export window](../assets/screenshots/demo-export.png)
 
 A complete result needs no server work. For an incomplete result, the export
 uses a retained download or reads the remaining cursor. If the cursor is

@@ -50,8 +50,6 @@ and **Assistant**. The **Assistant** page shows only while the
 [assistant](assistant.md) is on. Click a page to show its fields. Type in the
 search field above the pages to find a field.
 
-![Connection creation menu](../assets/screenshots/demo-connections.png)
-
 1. Click **+** beside Connections.
 2. On the **General** page, select **Connection Type**.
 3. Enter a name, the server hostname or IP address, and the port.
@@ -684,8 +682,6 @@ comment comes before the dbt description. If both have the same text, the
 tooltip shows the text once. Column names use the same letter case rules as
 relation names. Ambiguous matches show no dbt description.
 
-![dbt model details](../assets/screenshots/demo-dbt.png)
-
 To read the full description, right-click the table and select **Show dbt
 details**. A panel opens at the right side of the window. It shows:
 
@@ -784,8 +780,6 @@ and its type in lowercase. A schema row shows the number of its tables and
 views. The type of a column, and the dbt kind of a table, show only when they
 fit beside the full name. The columns of one table show their types all
 together or not at all.
-
-![Schema catalog](../assets/screenshots/demo-catalog.png)
 
 Schema browsing is off for a new connection. To turn it on, open the
 connection settings and set **Schema Refresh**, the first field of the
