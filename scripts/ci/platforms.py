@@ -204,6 +204,12 @@ def verify(directory, sha, full=False, targets=None):
                 manifest.get("identity") != builds.identity(value) or
                 manifest.get("assets", {}).get("target/package/" + receipt.get("archive", "")) != receipt["sha256"]):
             raise ValueError("Prepared build or package identity mismatch")
+        # Windows also publishes the qualified files as a portable archive.
+        if TARGETS[name].system == "windows" and (
+                len(receipt.get("portable_sha256", "")) != 64 or
+                manifest.get("assets", {}).get("target/package/" + receipt.get("portable", "")) !=
+                receipt["portable_sha256"]):
+            raise ValueError("Portable archive identity mismatch")
         seen.add(name)
     if seen != expected:
         raise ValueError(f"Missing native target results: {sorted(expected - seen)}")

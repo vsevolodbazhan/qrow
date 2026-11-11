@@ -262,7 +262,7 @@ jobs:
         with:
           name: platform-evidence-${{ matrix.target }}
           path: evidence
-      - name: Verify qualified archive
+      - name: Verify qualified archives
         env:
           RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
           PACKAGE_ARCH: ${{ matrix.arch }}
@@ -273,16 +273,22 @@ jobs:
           import hashlib, json, os
           from pathlib import Path
           receipt = json.loads(Path("evidence/platform/receipt.json").read_text())
-          archive = Path("candidate") / f"Qrow-{os.environ['RELEASE_VERSION']}-windows-{os.environ['PACKAGE_ARCH']}-setup.exe"
+          name = f"Qrow-{os.environ['RELEASE_VERSION']}-windows-{os.environ['PACKAGE_ARCH']}"
+          archive = Path("candidate") / f"{name}-setup.exe"
+          portable = Path("candidate") / f"{name}.zip"
           assert receipt["target"] == os.environ["TARGET"]
           assert receipt["source_sha"] == os.environ["SOURCE_SHA"]
           assert receipt["archive"] == archive.name
           assert receipt["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert receipt["portable"] == portable.name
+          assert receipt["portable_sha256"] == hashlib.sha256(portable.read_bytes()).hexdigest()
           PYVERIFY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-windows-${{ matrix.arch }}
-          path: candidate/*-setup.exe
+          path: |
+            candidate/*-setup.exe
+            candidate/*-windows-*.zip
           retention-days: 14
           if-no-files-found: error
 
@@ -439,6 +445,8 @@ jobs:
             "dist/Qrow-${RELEASE_VERSION}-linux-aarch64.tar.gz"
             "dist/Qrow-${RELEASE_VERSION}-windows-x86_64-setup.exe"
             "dist/Qrow-${RELEASE_VERSION}-windows-aarch64-setup.exe"
+            "dist/Qrow-${RELEASE_VERSION}-windows-x86_64.zip"
+            "dist/Qrow-${RELEASE_VERSION}-windows-aarch64.zip"
             --repo "$GITHUB_REPOSITORY"
             --target "$TARGET_SHA"
             --title "$RELEASE_TITLE"
@@ -450,7 +458,7 @@ jobs:
           if [ "$PRERELEASE" = true ]; then
             release_args+=(--prerelease)
           fi
-          (cd dist && sha256sum -- ./*.dmg ./*.tar.gz ./*-setup.exe > SHA256SUMS)
+          (cd dist && sha256sum -- ./*.dmg ./*.tar.gz ./*-setup.exe ./*-windows-*.zip > SHA256SUMS)
           release_args+=(dist/SHA256SUMS)
           gh "${release_args[@]}"
           verification_dir="$(mktemp -d)"

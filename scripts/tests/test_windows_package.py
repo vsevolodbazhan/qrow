@@ -8,6 +8,7 @@ import re
 import struct
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -98,7 +99,13 @@ class WindowsPackageTests(unittest.TestCase):
                                      ['cargo', 'build', '--locked', '--release', '--bin', 'qrow'])
                     installer = root / f'target/package/Qrow-1.2.3-windows-{architecture}-setup.exe'
                     self.assertEqual(installer.read_bytes(), b'synthetic setup')
-                    self.assertEqual(sorted(path.name for path in (root / 'target/package').iterdir()), [installer.name])
+                    portable = root / f'target/package/Qrow-1.2.3-windows-{architecture}.zip'
+                    self.assertEqual(sorted(path.name for path in (root / 'target/package').iterdir()),
+                                     sorted([installer.name, portable.name]))
+                    with zipfile.ZipFile(portable) as bundle:
+                        self.assertEqual(sorted(bundle.namelist()), sorted(windows.PACKAGE_FILES))
+                        self.assertEqual({name: bundle.read(name) for name in bundle.namelist()},
+                                         {name: data for name, data in staged.items() if name != 'options'})
                     options = staged.pop('options')
                     self.assertEqual(set(staged), set(windows.PACKAGE_FILES))
                     self.assertEqual(staged['qrow.exe'], synthetic_pe([14, 16]))
@@ -107,6 +114,21 @@ class WindowsPackageTests(unittest.TestCase):
                     self.assertTrue(options['Icon'].endswith('qrow.ico'))
                 finally:
                     os.chdir(previous)
+
+    def test_portable_archive_is_reproducible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory, 'source')
+            source.mkdir()
+            for name in windows.PACKAGE_FILES:
+                (source / name).write_text(f'synthetic {name}')
+            first, second = Path(directory, 'first.zip'), Path(directory, 'second.zip')
+            windows.portable_archive(source, first)
+            os.utime(source / 'qrow.exe', (0, 0))
+            windows.portable_archive(source, second)
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            with zipfile.ZipFile(first) as bundle:
+                self.assertEqual(bundle.namelist(), sorted(windows.PACKAGE_FILES))
+                self.assertTrue(all(item.date_time == (1980, 1, 1, 0, 0, 0) for item in bundle.infolist()))
 
     def test_file_version_is_numeric(self):
         self.assertEqual(windows.file_version('1.2.3'), '1.2.3.0')
