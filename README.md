@@ -50,19 +50,21 @@ and [Zed](https://zed.dev/).
 macOS, with [Homebrew](https://github.com/vsevolodbazhan/homebrew-qrow):
 
 ```sh
-brew install --cask vsevolodbazhan/qrow/qrow
+brew install --cask vsevolodbazhan/qrow/qrow          # stable
+brew install --cask vsevolodbazhan/qrow/qrow@nightly  # nightly
 ```
 
 Windows, with [Scoop](https://github.com/vsevolodbazhan/scoop-qrow):
 
 ```powershell
 scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
-scoop install qrow
+scoop install qrow           # stable
+scoop install qrow-nightly   # nightly
 ```
 
 Or download a package from [GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases).
-See [installation](docs/installation.md) for Linux, nightly builds, and the
-first-open warnings.
+Nightly builds are the pre-releases. See [installation](docs/installation.md)
+for Linux and the first-open warnings.
 
 ## Build
 
