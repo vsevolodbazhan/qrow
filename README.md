@@ -47,8 +47,11 @@ and [Zed](https://zed.dev/).
 
 ## Installation
 
-Qrow has two channels: stable releases, and nightly builds with the latest
-changes.
+Qrow has two channels:
+
+- **Stable** for daily work. Choose it if you want fewer surprises.
+- **Nightly** for the latest features and fixes. Choose it if you want to try
+  changes early and report problems. Nightly builds can have bugs.
 
 ### macOS
 
