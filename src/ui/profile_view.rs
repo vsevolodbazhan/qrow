@@ -555,8 +555,8 @@ impl Qrow {
         let saving = form.saving.is_some();
         let pasted_note = form.pasted.as_ref().map(|pasted| match &pasted.sign_in {
             Some(sign_in) => format!(
-                "Pasted from the clipboard. Make sure that you trust the host and the sign-in issuer. Save also adds the sign-in \"{}\".",
-                sign_in.name
+                "Pasted from the clipboard. Make sure that you trust the host and the issuer {}. Save also adds the sign-in \"{}\".",
+                sign_in.issuer, sign_in.name
             ),
             None => "Pasted from the clipboard. Make sure that you trust the host before you save."
                 .to_owned(),

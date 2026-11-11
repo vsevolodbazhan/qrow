@@ -223,7 +223,9 @@ fn a_pasted_connection_uses_a_matching_sign_in_or_adds_its_own_on_save(cx: &mut 
         assert!(
             label(window, "connection-pasted-note")
                 .unwrap()
-                .contains("Save also adds the sign-in \"Company copy\".")
+                .contains(
+                    "the issuer https://other.example.test/realms/data. Save also adds the sign-in \"Company copy\"."
+                )
         );
     });
     app.click(cx, "cancel-profile");
@@ -369,16 +371,12 @@ fn imported_connections_fill_an_empty_workspace(cx: &mut TestAppContext) {
     );
     // The query tab that had no connection uses the imported one.
     assert!(saved.tabs.iter().all(|tab| tab.profile == Some(id)));
-    app.wait_for(cx, "connections-imported-toast");
-    app.update(cx, |window, _| {
-        // A sign-in connection needs no password.
-        assert!(
-            window
-                .within("connections-imported-toast")
-                .try_find("detail")
-                .is_none()
-        );
-    });
+    // A sign-in connection needs no password. The toast names the new
+    // sign-in and its issuer.
+    assert_eq!(
+        toast_detail(&app, cx, "connections-imported-toast"),
+        "Added sign-ins: \"Company\" (https://id.example.test/realms/data)."
+    );
 }
 
 #[gpui_kit::test]

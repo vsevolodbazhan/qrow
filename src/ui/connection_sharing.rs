@@ -264,6 +264,11 @@ impl Qrow {
             .iter()
             .any(|profile| profile.authentication == Authentication::Password);
         let ids: Vec<Uuid> = placed.profiles.iter().map(|profile| profile.id).collect();
+        let added: Vec<String> = placed
+            .sign_ins
+            .iter()
+            .map(|sign_in| format!("\"{}\" ({})", sign_in.name, sign_in.issuer))
+            .collect();
         self.sign_ins.extend(placed.sign_ins);
         self.profiles.extend(placed.profiles);
         // The first connection takes the query tabs that had no connection.
@@ -289,12 +294,21 @@ impl Qrow {
         } else {
             format!("Imported {count} connections")
         };
+        let mut lines = Vec::new();
+        if passwords {
+            lines.push("Edit each connection to enter its password.".to_owned());
+        }
+        if !added.is_empty() {
+            lines.push(format!("Added sign-ins: {}.", added.join(", ")));
+        }
+        let detail = !lines.is_empty();
+        let detail_text = lines.join(" ");
         window.push_notification(
             toast::notice(
                 NotificationType::Success,
                 "connections-imported-toast",
                 title,
-                passwords.then(|| "Edit each connection to enter its password.".into()),
+                detail.then_some(detail_text.into()),
             ),
             cx,
         );
