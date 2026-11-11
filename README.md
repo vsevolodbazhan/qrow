@@ -9,20 +9,18 @@ and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
 ![Qrow demo with the schema catalog and assistant](assets/screenshots/demo.png)
 
-## Description
+## Overview
 
-I'm a data engineer, and for years I used [DataGrip](https://www.jetbrains.com/datagrip/)
-every day. Slow startup, high memory use, and freezes made me look for an
-alternative. I found none, so I built Qrow, inspired by DataGrip and
-[Zed](https://zed.dev/). I'm not a Rust developer: AI models write the code,
-and I give the direction and product decisions.
-
-Qrow is a personal tool, tailored to my setup and my needs.
+Qrow is a SQL client for data engineers and analysts. It starts quickly,
+stays responsive with large results, and connects to databases without a JVM
+or separate drivers. It brings your schema catalog, your dbt project, and an
+optional AI assistant into one window. Qrow is inspired by
+[DataGrip](https://www.jetbrains.com/datagrip/) and [Zed](https://zed.dev/).
 
 ## Features
 
 - **[Connections](docs/connections.md):** Spark (HiveServer2), Postgres, and
-  Trino, with no JVM or ODBC driver. Passwords stay in the system secret store.
+  Trino. Passwords stay in the system secret store.
 - **[Queries](docs/queries.md):** query tabs that run at the same time, each
   with its own session.
 - **[Results](docs/results.md):** paged results and export to CSV, TSV,
