@@ -1,0 +1,101 @@
+# Installation
+
+Install Qrow from a package manager or from the packages on
+[GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases). Replace
+`VERSION` in the file names below with the release version.
+
+| System | Requirements | Package |
+| --- | --- | --- |
+| macOS | macOS 12 or later, a Metal-capable GPU | `Qrow-VERSION-arm64.dmg` (Apple Silicon) or `Qrow-VERSION-x86_64.dmg` (Intel) |
+| Windows | Windows 10 or later | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64), or the portable `Qrow-VERSION-windows-ARCH.zip` |
+| Linux | Wayland or X11 desktop, Vulkan, a Secret Service provider | `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz` |
+
+The packages are not signed. Signing and notarization need paid developer
+certificates. Thus macOS and Windows show a warning the first time you open
+Qrow. The sections below show how to continue.
+
+## macOS
+
+Install Qrow from the [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
+
+```sh
+brew tap vsevolodbazhan/qrow
+brew install --cask vsevolodbazhan/qrow/qrow
+```
+
+To install the latest nightly build, use the separate cask:
+
+```sh
+brew install --cask vsevolodbazhan/qrow/qrow@nightly
+```
+
+The Homebrew casks install the Apple Silicon build only. On an Intel Mac,
+download the `x86_64` DMG from GitHub Releases.
+
+Alternatively, download the DMG for your Mac, open it, and drag Qrow to
+Applications.
+
+### Gatekeeper warning
+
+<img src="../assets/screenshots/gatekeeper/warning.png" alt="Gatekeeper Warning" width="384" height="384">
+
+macOS shows this warning because Qrow is not notarized. To open Qrow:
+
+1. Open Qrow. You see the warning. Close it.
+2. Open **System Settings → Privacy & Security** and click **Open Anyway**.
+
+![Gatekeeper Settings](../assets/screenshots/gatekeeper/settings.png)
+
+## Windows
+
+Install Qrow from the [Scoop bucket](https://github.com/vsevolodbazhan/scoop-qrow):
+
+```powershell
+scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow
+```
+
+To install the latest nightly build, use `scoop install qrow-nightly`. To
+upgrade, use `scoop update qrow` or `scoop update qrow-nightly`. Both packages
+add Qrow to the Start menu and use the same workspace and settings.
+
+Alternatively, download the installer for your processor and run it. The
+installer installs Qrow for your user account and adds it to the Start menu.
+It does not need administrator rights. To install for all users, select that
+option in the first dialog.
+
+- **Upgrade:** run the installer of the new version. It closes a running Qrow
+  first.
+- **Remove:** open **Settings → Apps → Installed apps**, find Qrow, and select
+  **Uninstall**. Your workspace and settings stay on the computer.
+
+To use Qrow without an installer, extract the portable
+`Qrow-VERSION-windows-ARCH.zip` to a folder and run `qrow.exe`.
+
+Windows support is new. It has had less real-desktop use than macOS and Linux.
+Please report problems in [issues](https://github.com/vsevolodbazhan/qrow/issues).
+
+### SmartScreen warning
+
+The installer is not signed, so your browser can warn about the download, and
+Windows can show **Windows protected your PC** when you run it. To continue:
+
+1. In the browser download list, select **Keep** if the browser asks.
+2. Run the installer. In the SmartScreen dialog, select **More info**.
+3. Make sure that the file name is a Qrow installer, then select **Run anyway**.
+
+## Linux
+
+Download the archive for your architecture. Extract it into `~/.local` and make
+sure that `~/.local/bin` is in your `PATH`:
+
+```sh
+mkdir -p ~/.local
+tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local
+```
+
+The archive includes a desktop launcher. Saved passwords need a desktop Secret
+Service, such as GNOME Keyring. The archive uses the system libraries and is
+built on Ubuntu 24.04. Use it on that or a newer, compatible distribution.
+
+Use the application menu at the top left for Settings and other commands.
