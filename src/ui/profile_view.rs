@@ -553,11 +553,29 @@ impl Qrow {
             return div().into_any_element();
         };
         let saving = form.saving.is_some();
+        let pasted_note = form.pasted.as_ref().map(|pasted| match &pasted.sign_in {
+            Some(sign_in) => format!(
+                "Pasted from the clipboard. Make sure that you trust the host and the sign-in issuer. Save also adds the sign-in \"{}\".",
+                sign_in.name
+            ),
+            None => "Pasted from the clipboard. Make sure that you trust the host before you save."
+                .to_owned(),
+        });
         v_flex()
             .w_full()
             .gap_2()
             .key_context("ConnectionSettings")
             .on_action(cx.listener(|this, _: &SaveConnection, _, cx| this.save_profile(cx)))
+            .when_some(pasted_note, |el, note| {
+                el.child(
+                    div()
+                        .id("connection-pasted-note")
+                        .test_support()
+                        .role(Role::Note)
+                        .aria_label(note.clone())
+                        .child(Alert::info("connection-pasted-alert", note)),
+                )
+            })
             .when_some(form.error.clone(), |el, error| {
                 el.child(
                     div()

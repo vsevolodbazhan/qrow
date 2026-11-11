@@ -229,3 +229,62 @@ fn a_missing_initial_database_is_named_in_the_status_and_logs(cx: &mut TestAppCo
     );
     assert!(logs.contains("SCHEMA_NOT_FOUND"), "{logs}");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn shared_connections_run_queries_after_the_user_enters_a_password(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().connections(&["Shared"], "SELECT 1");
+    let source = workspace.profiles[0].clone();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+
+    // Paste: New Connection asks for the password before Save.
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
+    app.context_menu(cx, connection_row(source.id));
+    app.choose(cx, "popup-menu", "Copy settings");
+    app.wait_gone(cx, "popup-menu");
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
+    assert!(!copied.contains(PASSWORD), "{copied}");
+    app.click(cx, "paste-connection");
+    app.wait_for(cx, "connection-pasted-note");
+    app.scroll_to(cx, "connection-password");
+    app.fill(cx, "connection-password", PASSWORD);
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "the pasted connection", QUERY_TIMEOUT, |_, _| {
+        app.saved().profiles.len() == 2
+    });
+    let pasted = app.saved().profiles[1].clone();
+    assert_eq!(pasted.name, "Shared copy");
+    app.select_connection(cx, &pasted);
+    app.run_complete(cx, "SELECT 7 AS value");
+    app.wait_cell(cx, 0, 1, "7");
+
+    // Import: the connection has no password until the user edits it.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("connections.json");
+    std::fs::write(&path, &copied).unwrap();
+    app.dispatch(cx, qrow::ui::ImportConnections);
+    cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
+    app.wait_until(cx, "the imported connection", QUERY_TIMEOUT, |_, _| {
+        app.saved().profiles.len() == 3
+    });
+    let imported = app.saved().profiles[2].clone();
+    assert_eq!(imported.name, "Shared copy 2");
+    assert!(app.credentials.get(imported.id).is_none());
+    app.context_menu(cx, connection_row(imported.id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-password");
+    app.scroll_to(cx, "connection-password");
+    app.fill(cx, "connection-password", PASSWORD);
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "the saved password", QUERY_TIMEOUT, |_, _| {
+        app.credentials.get(imported.id).as_deref() == Some(PASSWORD)
+    });
+    app.select_connection(cx, &imported);
+    app.run_complete(cx, "SELECT 8 AS value");
+    app.wait_cell(cx, 0, 1, "8");
+}

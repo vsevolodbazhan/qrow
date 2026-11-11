@@ -455,8 +455,8 @@ To add a sign-in that a colleague sent to you:
 Qrow ignores other text of the message around the settings. If a sign-in
 with the same name exists, Qrow adds `copy` to the name. If the clipboard
 does not contain sign-in settings, Qrow tells you and adds nothing. Each
-user signs in with their own account. Each connection keeps its own
-database username, so a colleague must add their own connections.
+user signs in with their own account. To give a connection together with its
+sign-in, see [Share connections](#share-connections).
 
 ### Sign in and use a sign-in
 
@@ -769,6 +769,56 @@ Deletion requires confirmation. Qrow closes sessions that use the deleted
 profile, even when another profile is selected. Qrow removes the profile and requests deletion
 of its stored password. Secret store deletion failures are not reported in the UI,
 so a failed deletion can leave the password in the secret store.
+
+## Share connections
+
+To give a connection to a colleague, for example in a Slack message:
+
+1. Right-click the connection and select **Copy settings**.
+2. Paste the text into the message.
+
+To add a connection that a colleague sent to you:
+
+1. Copy the text of the message.
+2. In the **Connections** sidebar, click the paste button beside **+**, or
+   select **File → Paste connection**.
+3. **New Connection** opens with the values. Make sure that you trust the
+   host. Change the username to your username, and enter your password.
+4. Click **Save**.
+
+The text contains the settings of all pages of **Connection Settings**,
+including the username, the session parameters, and the assistant notes.
+Remove secrets from the session parameters before you share a connection.
+The text does not contain the password, the identifier, the dbt project, or
+the shared catalog. A member of a shared catalog gives the settings of the
+shared catalog as its own schema settings. A connection with a sign-in
+includes the sign-in settings, but not your account or your tokens.
+
+Qrow ignores other text of the message around the settings. If a connection
+with the same name exists, Qrow adds `copy` to the name. If the clipboard does
+not contain connection settings, Qrow tells you and adds nothing.
+
+A pasted sign-in uses a sign-in that you have with the same issuer, client ID,
+scopes, and resource. If you do not have one, **Save** also adds the sign-in.
+The note at the bottom of **New Connection** tells you which sign-in Qrow adds.
+Make sure that you trust its issuer.
+
+### Export and import connections
+
+To move all connections to another computer, or to give them to a colleague:
+
+1. Select **File → Export connections…** and choose a file. The file contains
+   the same settings as **Copy settings** for each connection, without
+   passwords.
+2. On the other computer, select **File → Import connections…** and choose the
+   file.
+
+Qrow adds the connections of the file after your connections. Import uses the
+same rules for names and sign-ins as Paste connection. Import also accepts a
+file with the text of **Copy settings**. If one connection in the file is not
+valid, Qrow tells you which one and adds nothing. Imported connections with
+password authentication have no password. Edit each one and enter its
+password before you use it.
 
 ## Browse schemas
 
