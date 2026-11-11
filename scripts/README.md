@@ -2,8 +2,9 @@
 
 See [Testing](../docs/testing.md) for `./qtest`, which runs all checks and tests.
 See [Development](../docs/development.md) for hooks, dependency
-maintenance, and binding generation. Build and package commands are in the
-[project README](../README.md#build).
+maintenance, binding generation, and
+[package commands](../docs/development.md#package-the-app). Build commands are
+in the [project README](../README.md#build).
 
 | Path | Purpose |
 | --- | --- |
