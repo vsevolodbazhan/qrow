@@ -5,6 +5,8 @@ conversation has its own query tab. You and the assistant work in the same
 tab, and you can edit its SQL at any time. Several conversations can work at
 the same time in different tabs.
 
+![Assistant conversation](../assets/screenshots/demo-assistant.png)
+
 ## Set up the assistant
 
 The assistant runs on a harness: the Codex or the Claude Code command-line

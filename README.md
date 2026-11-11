@@ -31,12 +31,6 @@ and [Zed](https://zed.dev/).
 - **[Assistant](docs/assistant.md):** an optional AI assistant that runs on
   your own Codex or Claude Code.
 
-| | |
-| --- | --- |
-| ![Connections](assets/screenshots/demo-connections.png) | ![Results](assets/screenshots/demo-results.png) |
-| ![Export](assets/screenshots/demo-export.png) | ![Schema catalog](assets/screenshots/demo-catalog.png) |
-| ![dbt details](assets/screenshots/demo-dbt.png) | ![Assistant](assets/screenshots/demo-assistant.png) |
-
 ## Limitations
 
 - Spark (HiveServer2), Postgres, and Trino only. DuckDB is planned. No
