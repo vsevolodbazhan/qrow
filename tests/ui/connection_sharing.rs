@@ -317,6 +317,18 @@ fn exported_connections_import_with_free_names_and_their_sign_ins(cx: &mut TestA
         Authentication::Oidc { sign_in: existing }
     );
     assert!(app.credentials.get(saved.profiles[2].id).is_none());
+    // Each imported connection has a query tab, so that it can be selected.
+    for profile in &saved.profiles[2..] {
+        assert!(
+            saved.tabs.iter().any(|tab| tab.profile == Some(profile.id)),
+            "{}",
+            profile.name
+        );
+    }
+    app.click(cx, connection_row(saved.profiles[3].id));
+    app.wait_until(cx, "the imported connection", WAIT, |window, _| {
+        label(window, "current-connection").as_deref() == Some("Current connection: Lake copy")
+    });
 }
 
 #[gpui_kit::test]
@@ -399,4 +411,40 @@ fn export_without_connections_says_why(cx: &mut TestAppContext) {
         "Add a connection first."
     );
     assert!(!cx.did_prompt_for_new_path());
+}
+
+#[gpui_kit::test]
+fn an_imported_trino_connection_keeps_an_empty_password(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("connections.json");
+    let trino = qrow::model::Profile {
+        database_type: qrow::model::DatabaseType::Trino,
+        port: 8080,
+        ..offline_profile("Trino")
+    };
+    let postgres = qrow::model::Profile {
+        database_type: qrow::model::DatabaseType::Postgres,
+        port: 5432,
+        ..offline_profile("Postgres")
+    };
+    std::fs::write(
+        &path,
+        qrow::model::sharing::connections_file_text([
+            (&trino, trino.catalog.clone(), None),
+            (&postgres, postgres.catalog.clone(), None),
+        ]),
+    )
+    .unwrap();
+    app.dispatch(cx, qrow::ui::ImportConnections);
+    cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
+    app.wait_until(cx, "the imported connections", WAIT, |_, _| {
+        app.saved().profiles.len() == 2
+    });
+    let saved = app.saved();
+    app.wait_until(cx, "the empty Trino password", WAIT, |_, _| {
+        app.credentials.get(saved.profiles[0].id).as_deref() == Some("")
+    });
+    // Postgres needs a password, so it has none until the user enters it.
+    assert!(app.credentials.get(saved.profiles[1].id).is_none());
 }

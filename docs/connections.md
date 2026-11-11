@@ -816,9 +816,11 @@ To move all connections to another computer, or to give them to a colleague:
 Qrow adds the connections of the file after your connections. Import uses the
 same rules for names and sign-ins as Paste connection. Import also accepts a
 file with the text of **Copy settings**. If one connection in the file is not
-valid, Qrow tells you which one and adds nothing. Imported connections with
-password authentication have no password. Edit each one and enter its
-password before you use it.
+valid, Qrow tells you which one and adds nothing. Each imported connection
+gets a query tab. Imported Spark and Postgres connections with password
+authentication have no password. Edit each one and enter its password before
+you use it. An imported Trino connection with password authentication has an
+empty password, like a new Trino connection.
 
 ## Browse schemas
 

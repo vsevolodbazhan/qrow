@@ -286,3 +286,27 @@ fn placed_connections_get_free_names_and_reuse_matching_sign_ins() {
     );
     assert_eq!(taken.sign_ins[0].name, "Company copy");
 }
+
+#[test]
+fn a_legacy_postgres_connection_keeps_its_tls_mode() {
+    for (tls, mode) in [
+        (true, PostgresSslMode::VerifyFull),
+        (false, PostgresSslMode::Disable),
+    ] {
+        let legacy = Profile {
+            database_type: DatabaseType::Postgres,
+            port: 5432,
+            tls,
+            postgres_ssl_mode: None,
+            ..profile()
+        };
+        let text = legacy.to_shared_text(&legacy.catalog, None);
+        let pasted = Profile::from_shared_text(&text).unwrap().profile;
+        assert_eq!(pasted.postgres_ssl_mode, Some(mode));
+        // A file without the mode reads it from the TLS switch.
+        let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        json.as_object_mut().unwrap().remove("postgres_ssl_mode");
+        let read = read_connections_file(&json.to_string()).unwrap();
+        assert_eq!(read[0].profile.postgres_ssl_mode, Some(mode));
+    }
+}

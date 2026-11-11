@@ -117,7 +117,9 @@ impl SharedConnection {
             trino_schema: profile.trino_schema.clone(),
             parameters: profile.parameters.clone(),
             tls: profile.tls,
-            postgres_ssl_mode: profile.postgres_ssl_mode,
+            // Profiles before the Postgres TLS modes keep their mode.
+            postgres_ssl_mode: (profile.database_type == DatabaseType::Postgres)
+                .then(|| profile.postgres_ssl_mode()),
             authentication,
             transfer: profile.transfer.clone(),
             lifecycle: profile.lifecycle.clone(),
@@ -180,6 +182,10 @@ impl SharedConnection<serde_json::Value> {
             dbt: None,
             ..Profile::default()
         };
+        let mut profile = profile;
+        if profile.database_type == DatabaseType::Postgres {
+            profile.postgres_ssl_mode = Some(profile.postgres_ssl_mode());
+        }
         profile.validate()?;
         Ok(SharedConnectionSettings { profile, sign_in })
     }

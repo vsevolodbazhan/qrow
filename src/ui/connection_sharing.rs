@@ -236,13 +236,37 @@ impl Qrow {
             .profiles
             .iter()
             .any(|profile| profile.authentication == Authentication::Password);
+        let ids: Vec<Uuid> = placed.profiles.iter().map(|profile| profile.id).collect();
+        // Like New Connection, a Trino connection with password
+        // authentication keeps an empty password until the user enters one.
+        let trino: Vec<(Uuid, String)> = placed
+            .profiles
+            .iter()
+            .filter(|profile| {
+                profile.database_type == crate::model::DatabaseType::Trino
+                    && profile.authentication == Authentication::Password
+            })
+            .map(|profile| (profile.id, profile.name.clone()))
+            .collect();
+        if !self.demo && !trino.is_empty() {
+            self.save_empty_passwords(trino, window, cx);
+        }
         self.sign_ins.extend(placed.sign_ins);
         self.profiles.extend(placed.profiles);
         // The first connection takes the query tabs that had no connection.
+        // Each other connection gets a query tab, like a new connection.
         if !had_profiles {
             for tab in &mut self.tabs {
                 tab.saved.profile = Some(first);
             }
+        }
+        for id in ids {
+            if !self.tabs.iter().any(|tab| tab.saved.profile == Some(id)) {
+                let tab = self.make_tab(SavedTab::new(1, Some(id)), window, cx);
+                self.tabs.push(tab);
+            }
+        }
+        if !had_profiles {
             self.activate(self.active, window, cx);
         }
         self.sync_catalogs(None, cx);
@@ -261,6 +285,44 @@ impl Qrow {
             ),
             cx,
         );
+    }
+}
+
+impl Qrow {
+    /// Saves an empty password for each connection of `profiles`, by ID and
+    /// name, and reports the first failure.
+    fn save_empty_passwords(
+        &self,
+        profiles: Vec<(Uuid, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let credentials = self.credentials.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let failed = cx
+                .background_spawn(async move {
+                    profiles.into_iter().find_map(|(id, name)| {
+                        credentials
+                            .set_password(id, "")
+                            .err()
+                            .map(|error| format!("{name}: {error:#}"))
+                    })
+                })
+                .await;
+            if let Some(error) = failed {
+                let _ = this.update_in(cx, |_, window, cx| {
+                    window.push_notification(
+                        toast::error(
+                            "connections-file-toast",
+                            "Could not save an empty password",
+                            error,
+                        ),
+                        cx,
+                    )
+                });
+            }
+        })
+        .detach();
     }
 }
 
