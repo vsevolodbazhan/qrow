@@ -141,16 +141,6 @@ Enable it in **Qrow → Settings… → Assistant**, then press **⌘R**.
 
 See [assistant](docs/assistant.md) for setup, data sharing, and query safety.
 
-## Metrics
-
-Measured on MacBook Air M3 (macOS 15.7.7).
-
-| Metric | Qrow | DataGrip 2026.2.5 |
-| --- | ---: | ---: |
-| Time to first window | 0.52 s | 1.84 s |
-| Idle memory usage | 152 MB | 1,302 MB |
-| App size on disk | 27 MB | 2.6 GB |
-
 ## Limitations
 
 Qrow is a personal tool, tailored to my setup and my needs, so:
