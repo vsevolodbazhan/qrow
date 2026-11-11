@@ -47,7 +47,14 @@ and [Zed](https://zed.dev/).
 
 ## Installation
 
-macOS, with [Homebrew](https://github.com/vsevolodbazhan/homebrew-qrow):
+Qrow has two channels: stable releases, and nightly builds with the latest
+changes.
+
+### macOS
+
+Install with [Homebrew](https://github.com/vsevolodbazhan/homebrew-qrow).
+
+Stable:
 
 ```sh
 brew install --cask vsevolodbazhan/qrow/qrow
@@ -59,7 +66,11 @@ Nightly:
 brew install --cask vsevolodbazhan/qrow/qrow@nightly
 ```
 
-Windows, with [Scoop](https://github.com/vsevolodbazhan/scoop-qrow):
+### Windows
+
+Install with [Scoop](https://github.com/vsevolodbazhan/scoop-qrow).
+
+Stable:
 
 ```powershell
 scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
@@ -73,7 +84,9 @@ scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
 scoop install qrow-nightly
 ```
 
-Or download a package from [GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases).
+### Other options
+
+Download a package from [GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases).
 Nightly builds are the pre-releases. See [installation](docs/installation.md)
 for Linux and the first-open warnings.
 
