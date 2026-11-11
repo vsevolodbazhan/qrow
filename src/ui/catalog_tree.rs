@@ -1633,7 +1633,7 @@ impl Qrow {
 
     /// The button after the search field that picks the connections to
     /// search. It shows as selected when the search skips connections. It
-    /// has the size of New connection and sits in the same lane.
+    /// is as wide as the status slots and centered under New connection.
     fn search_scope_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let size = self.ui_px(STATUS_SLOT_WIDTH);
         let scope = self.catalog.scope.clone();
