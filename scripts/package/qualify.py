@@ -97,9 +97,10 @@ def windows_installer(installer, destination, machine="x86_64", installed=None, 
         if uninstaller.exists():
             subprocess.run([str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
                            check=True, timeout=10 * 60)
-    # The uninstaller continues from a temporary copy after its own process exits.
+    # The uninstaller continues from a temporary copy after its own process
+    # exits, and deletes unins000.exe and the folder last.
     deadline = time.monotonic() + timeout
-    while installed() or (app / "qrow.exe").exists():
+    while installed() or app.exists():
         if time.monotonic() > deadline:
             raise ValueError("The uninstaller did not remove Qrow")
         time.sleep(0.5)

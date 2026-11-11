@@ -373,7 +373,7 @@ class WindowsInstallerTests(unittest.TestCase):
                     with context as executable:
                         self.assertEqual(executable, root / 'install/Qrow/qrow.exe')
                         self.assertTrue(installed())
-                    self.assertFalse(executable.exists())
+                    self.assertFalse(executable.parent.exists())
                 self.assertFalse(installed())
 
     def test_an_existing_install_stops_the_check(self):

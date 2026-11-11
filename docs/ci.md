@@ -246,7 +246,7 @@ Setup installer. The test job consumes those artifacts and runs core tests and
 synthetic Credential Manager tests. Then it installs the candidate silently for
 the runner user into a temporary folder. It checks the installed files and the
 executable architecture, and waits for the demo window. Then it uninstalls
-Qrow and makes sure that the uninstaller removed it. The qualification
+Qrow and makes sure that the uninstaller removed the install folder. The qualification
 receipt binds the source commit to the installer digest. Release publication
 checks the receipt before it publishes `Qrow-VERSION-windows-x86_64-setup.exe`
 and `Qrow-VERSION-windows-aarch64-setup.exe`. It includes both installers in
