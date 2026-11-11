@@ -4,8 +4,9 @@ Use local checks to verify code, scripts, and dependency policy before a commit.
 [Testing](testing.md) describes `./qtest`, the command for all checks and
 tests, including the suites with real servers and the desktop suite.
 
-For application prerequisites, builds, packaging, and demo launch commands, see
-the [project README](../README.md). Run the commands below from the repository
+For application prerequisites, builds, and demo launch commands, see the
+[project README](../README.md). [Package the app](#package-the-app) describes
+the release packages. Run the commands below from the repository
 root. The full local suite requires macOS.
 
 ## Set up check tools
@@ -78,7 +79,7 @@ screen, and report these checks. The
 interface decisions of the project and the known UI bug classes.
 
 Use release builds for performance measurements. `cargo build` does not update
-`dist/Qrow.app`. Follow the [packaging instructions](../README.md#release) when
+`dist/Qrow.app`. Follow [package the app](#package-the-app) when
 you need a new distributable. Do not replace the app while someone is testing it.
 
 ### Interface text
@@ -345,21 +346,71 @@ step. A push to `main` that changes it deploys it to <https://qrow.dev>. See
 the [website README](../website/README.md) to preview the page, to update its
 screenshot, and for the deployment.
 
-## Windows builds
+## Package the app
 
-Build release packages on Windows. GPUI compiles release shaders with the
-Windows SDK. Linux cross checks cannot produce a working release package.
-For local type checks, install `cargo-xwin` and the
-`x86_64-pc-windows-msvc` Rust target. Run `cargo xwin check --target
-x86_64-pc-windows-msvc --all-targets`. Run Clippy with the
-same arguments. Use two Cargo jobs on hosts with limited memory.
+The packaging scripts build release packages for the current computer. CI
+uses the same scripts for release packages. See [continuous integration](ci.md)
+for package qualification and release publication.
 
-For ARM64 cross checks, select `--target aarch64-pc-windows-msvc` and set
-`XWIN_CROSS_COMPILER=clang`. The clang backend supplies SDK include flags
-that the ARM64 `ring` build accepts.
+### macOS
 
-The release package is an installer that
-[scripts/package/qrow.iss](../scripts/package/qrow.iss) defines. The packaging
+Build the application bundle and the installer image, then launch the app:
+
+```sh
+sh scripts/package/macos.sh
+open dist/Qrow.app
+```
+
+The script builds for the architecture of the current Mac. It writes
+`dist/Qrow.app`, `dist/Qrow-macos.zip`, and `dist/Qrow-VERSION-ARCH.dmg`.
+`cargo build` does not update the packaged app. After a source change, quit
+Qrow, run the script again, and open the app again.
+
+The minimum macOS version is 12.0. [`.cargo/config.toml`](../.cargo/config.toml)
+sets the build baseline, and packaging uses it for the app bundle. A higher
+`MACOSX_DEPLOYMENT_TARGET` raises both values. A lower value stops packaging.
+Do not use `target-cpu=native` for a package that you share with older Macs.
+The Intel build needs SSE4.1. It does not need AVX.
+
+To build for the other Mac architecture, install its Rust target and set
+`CARGO_BUILD_TARGET` to `x86_64-apple-darwin` or `aarch64-apple-darwin`.
+Packaging reads the executable from the target subdirectory and checks its
+architecture. The package includes the license notices of the selected
+target. CI tests both builds on macOS 15. It does not test every macOS 12
+driver.
+
+GitHub releases contain `Qrow-VERSION-arm64.dmg` and
+`Qrow-VERSION-x86_64.dmg`. The file `Qrow-VERSION.dmg` without an architecture
+suffix is a copy of the ARM64 image. The Homebrew casks use it, so they
+install only the ARM64 app. Keep this file until the tap updater supports
+both architectures.
+
+GPUI compiles Metal shaders at run time, so the Xcode Metal compiler is not
+necessary.
+
+### Linux
+
+Build a native archive in `target/package`:
+
+```sh
+sh scripts/package/linux.sh
+```
+
+The archive uses the libraries of the build system. Build it on a system that
+is compatible with the target computers. Release archives are built on
+Ubuntu 24.04.
+
+### Windows
+
+Build the unsigned installer on Windows:
+
+```sh
+uv run --locked --no-dev python scripts/package/windows.py
+```
+
+GPUI compiles release shaders with the Windows SDK, so Linux cross checks
+cannot produce a working package. The installer is defined in
+[scripts/package/qrow.iss](../scripts/package/qrow.iss). The packaging
 script downloads the pinned Inno Setup compiler, checks its SHA-256 digest,
 and installs it in portable mode in `target/tools`. Set `QROW_ISCC` to the
 path of `ISCC.exe` to use another compiler. Do not change the `AppId` of the
@@ -371,3 +422,14 @@ without Qrow.
 
 Package notices use UTF-8 for Cargo metadata and license files on all platforms.
 They do not depend on the Windows system code page.
+
+## Windows cross checks
+
+For local type checks on Linux, install `cargo-xwin` and the
+`x86_64-pc-windows-msvc` Rust target. Run `cargo xwin check --target
+x86_64-pc-windows-msvc --all-targets`. Run Clippy with the
+same arguments. Use two Cargo jobs on hosts with limited memory.
+
+For ARM64 cross checks, select `--target aarch64-pc-windows-msvc` and set
+`XWIN_CROSS_COMPILER=clang`. The clang backend supplies SDK include flags
+that the ARM64 `ring` build accepts.

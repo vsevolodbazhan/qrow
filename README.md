@@ -31,10 +31,10 @@ The shortcuts below use macOS symbols. On Linux and Windows, use Ctrl in place o
 
 ### Connections
 
-Qrow connects directly to Kyuubi (Spark), Postgres, and Trino. It does not need
-a JVM, an ODBC driver, or a separately installed database driver.
+Qrow connects directly to Spark (HiveServer2), Postgres, and Trino. It does not
+need a JVM, an ODBC driver, or a separately installed database driver.
 
-- **Kyuubi** uses HiveServer2 over SASL PLAIN, with a password or an OpenID
+- **Spark (HiveServer2)** uses SASL PLAIN, with a password or an OpenID
   Connect access token.
 - **Postgres** uses password authentication with TLS encryption and optional
   certificate verification.
@@ -43,9 +43,10 @@ a JVM, an ODBC driver, or a separately installed database driver.
 
 ![Qrow demo with connection creation menu open](assets/screenshots/demo-connections.png)
 
-Qrow keeps passwords in macOS Keychain, the Linux desktop secret store, or Windows Credential Manager. One OpenID Connect sign-in can
-authenticate several connections, and you can copy its settings to share them
-with a colleague. Drag connections to change their order. See
+Qrow keeps passwords in macOS Keychain, the Linux desktop secret store, or
+Windows Credential Manager. One OpenID Connect sign-in can authenticate
+several connections, and you can copy its settings to share them with a
+colleague. Drag connections to change their order. See
 [connections](docs/connections.md).
 
 ### Queries and Results
@@ -140,67 +141,38 @@ Enable it in **Qrow → Settings… → Assistant**, then press **⌘R**.
 
 See [assistant](docs/assistant.md) for setup, data sharing, and query safety.
 
-## Metrics
-
-Measured on MacBook Air M3 (macOS 15.7.7).
-
-| Metric | Qrow | DataGrip 2026.2.5 |
-| --- | ---: | ---: |
-| Time to first window | 0.52 s | 1.84 s |
-| Idle memory usage | 152 MB | 1,302 MB |
-| App size on disk | 27 MB | 2.6 GB |
-
 ## Limitations
 
 Qrow is a personal tool, tailored to my setup and my needs, so:
 
-- **Kyuubi/Spark, Postgres, and Trino only.** DuckDB is planned. Kerberos and
-  SSH tunnels are not supported. See [connections](docs/connections.md) for
-  connector limits.
-- **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
-  The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
-- **Linux.** Qrow needs a Wayland or X11 desktop, Vulkan, and a Secret Service provider.
-  Release archives target x86-64 and ARM64 Linux and are built on Ubuntu 24.04.
+- **Spark (HiveServer2), Postgres, and Trino only.** DuckDB is planned.
+  Kerberos and SSH tunnels are not supported. See
+  [connections](docs/connections.md) for connector limits.
 - **Bring your own assistant.** The assistant needs a separately installed Codex
   or Claude Code executable and your own subscription or API key.
-- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap and GitHub releases, and macOS may show a Gatekeeper warning on first launch.
+- **Unsigned packages.** Signing and notarization need paid developer
+  certificates. Qrow is early in development, so I don't pay for them yet.
+  macOS shows a Gatekeeper warning and Windows shows a SmartScreen warning
+  the first time you open Qrow. [Installation](#installation) shows how to
+  continue.
+- **Windows support is new.** It has had less real-desktop use than macOS and
+  Linux. Please report problems in
+  [issues](https://github.com/vsevolodbazhan/qrow/issues).
 
 ## Installation
 
-### Windows
+Download packages from [GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases).
+Replace `VERSION` in the file names below with the release version.
 
-Download `Qrow-VERSION-windows-x86_64-setup.exe` for Intel/AMD or
-`Qrow-VERSION-windows-aarch64-setup.exe` for ARM64 from GitHub Releases, and
-run it. The installer installs Qrow for your user account and adds it to the
-Start menu. It does not need administrator rights. To install for all users,
-select that option in the first dialog. To upgrade, run the installer of the
-new version. To remove Qrow, use **Settings > Apps > Installed apps**. Your
-workspace and settings stay on the computer.
+| System | Requirements | Package |
+| --- | --- | --- |
+| macOS | macOS 12 or later, a Metal-capable GPU | `Qrow-VERSION-arm64.dmg` (Apple Silicon) or `Qrow-VERSION-x86_64.dmg` (Intel) |
+| Windows | Windows 10 or later | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64) |
+| Linux | Wayland or X11 desktop, Vulkan, a Secret Service provider | `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz` |
 
-The installer is not signed, so SmartScreen can show a warning. Select
-**More info**, then **Run anyway**. UI, browser sign-in, assistant shutdown,
-and title bar behavior need real Windows testing.
+### macOS
 
-### Linux
-
-Download the archive for your architecture from the releases page:
-`Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz`.
-Extract it into `~/.local` and make sure `~/.local/bin` is in your `PATH`:
-
-```sh
-mkdir -p ~/.local
-tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local
-```
-
-The archive includes a desktop launcher. Qrow needs a Vulkan driver and a
-desktop Secret Service, such as GNOME Keyring, for saved credentials. The
-archive uses system libraries and needs a compatible Linux distribution.
-Use the application menu at the top left for Settings and other commands.
-The window controls are on the right when the desktop allows Qrow to draw them.
-
-### Homebrew
-
-Qrow is available from the custom [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
+Install Qrow from the [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
 
 ```sh
 brew tap vsevolodbazhan/qrow
@@ -213,144 +185,129 @@ To install the latest nightly build, use the separate cask:
 brew install --cask vsevolodbazhan/qrow/qrow@nightly
 ```
 
-### GitHub Releases
+The Homebrew casks install the Apple Silicon build only. On an Intel Mac,
+download the `x86_64` DMG from GitHub Releases.
 
-Alternatively, head over to the [GH releases page](https://github.com/vsevolodbazhan/qrow/releases), download the DMG, and drag it to Applications.
+Alternatively, download the DMG for your Mac, open it, and drag Qrow to
+Applications.
 
-## Gatekeeper
+#### Gatekeeper warning
 
 <img src="assets/screenshots/gatekeeper/warning.png" alt="Gatekeeper Warning" width="384" height="384">
 
-The current release package uses ad hoc code signing. Homebrew can install the
-custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
-with Apple Developer ID. To bypass the Gatekeeper:
+macOS shows this warning because Qrow is not notarized. To open Qrow:
 
-1. Open the app. You'll see the warning.
-2. Head over to "Settings", open "Privacy & Security", click "Open Anyway".
+1. Open Qrow. You'll see the warning. Close it.
+2. Open **System Settings → Privacy & Security** and click **Open Anyway**.
 
 ![Gatekeeper Settings](assets/screenshots/gatekeeper/settings.png)
+
+### Windows
+
+Download the installer for your processor and run it. The installer installs Qrow for your user account and adds it to the Start
+menu. It does not need administrator rights. To install for all users, select
+that option in the first dialog.
+
+- **Upgrade:** run the installer of the new version. It closes a running Qrow
+  first.
+- **Remove:** open **Settings → Apps → Installed apps**, find Qrow, and select
+  **Uninstall**. Your workspace and settings stay on the computer.
+
+#### SmartScreen warning
+
+The installer is not signed, so your browser can warn about the download, and
+Windows can show **Windows protected your PC** when you run it. To continue:
+
+1. In the browser download list, select **Keep** if the browser asks.
+2. Run the installer. In the SmartScreen dialog, select **More info**.
+3. Make sure that the file name is a Qrow installer, then select **Run anyway**.
+
+### Linux
+
+Download the archive for your architecture. Extract it into `~/.local` and make
+sure that `~/.local/bin` is in your `PATH`:
+
+```sh
+mkdir -p ~/.local
+tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local
+```
+
+The archive includes a desktop launcher. Saved passwords need a desktop Secret
+Service, such as GNOME Keyring. The archive uses the system libraries and is
+built on Ubuntu 24.04. Use it on that or a newer, compatible distribution.
+
+Use the application menu at the top left for Settings and other commands.
 
 ## Build
 
 ### Prerequisites
 
-- Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the pinned toolchain.
-- On Windows, Visual Studio Build Tools with Desktop development with C++ and the Windows SDK.
-- On macOS, Xcode command-line tools. Install them with `xcode-select --install` if needed.
+- Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the
+  pinned toolchain.
+- [uv](https://docs.astral.sh/uv/) for `./qtest` and the build scripts. It
+  installs the Python version that the scripts need.
+- On macOS, the Xcode command-line tools: `xcode-select --install`.
+- On Windows, Visual Studio Build Tools with **Desktop development with C++**
+  and the Windows SDK.
 - On Linux, a C and C++ toolchain, pkg-config, CMake, and the Wayland, X11,
-  xkbcommon, xkbcommon-x11, fontconfig, FreeType, and Vulkan development libraries.
-  On Ubuntu, `sh scripts/ci/linux-build-deps.sh` installs the libraries.
-- [uv](https://docs.astral.sh/uv/), which provisions the pinned Python 3.11+
-  toolchain used by `./qtest` and by the packaging, dependency-license, and
-  code-generation scripts. A separately installed Python is not required.
+  xkbcommon, fontconfig, FreeType, and Vulkan development libraries. On
+  Ubuntu, `sh scripts/ci/linux-build-deps.sh` installs them.
 
-Check your tools:
+Java, ODBC drivers, and the Thrift compiler are not required.
 
-```sh
-rustc --version
-cargo --version
-uv --version
-```
+### Run
 
-Java, ODBC drivers, and the Thrift compiler are not required to build or run Qrow. On macOS, GPUI uses runtime Metal
-shader compilation, so the separate Xcode Metal compiler is not required either.
-
-### Debug
-
-For development, compile and launch the debug build in one command:
+Compile and launch the debug build:
 
 ```sh
 cargo run --locked --bin qrow
 ```
 
-To build an optimized executable without creating an app bundle:
+Build and launch an optimized executable:
 
 ```sh
 cargo build --locked --release --bin qrow
 ./target/release/qrow
 ```
 
-Use the release build when checking startup time and responsiveness. Running
-the executable from a terminal also shows startup timing and diagnostic output.
+Use the release build to check startup time and responsiveness.
 
-### Release
-
-On macOS, build the optimized application bundle and launch it:
-
-```sh
-sh scripts/package/macos.sh
-open dist/Qrow.app
-```
-The script builds for the current Mac's architecture and produces `dist/Qrow.app`,
-`dist/Qrow-macos.zip`, and the installer image `dist/Qrow-VERSION-ARCH.dmg`.
-Open the DMG and drag the app to Applications.
-
-You can also double-click `dist/Qrow.app` in Finder or copy it to Applications.
-After changing the source, quit Qrow, rerun the packaging script, and reopen the
-app. The packaged app does not update automatically when you run `cargo build`.
-
-The minimum macOS version is 12.0. [`.cargo/config.toml`](.cargo/config.toml)
-sets the build baseline, and packaging uses it for the app bundle. A higher
-`MACOSX_DEPLOYMENT_TARGET` raises both values. A lower value stops packaging.
-Do not use `target-cpu=native` for a package that you share with older Macs.
-
-To build for another Mac architecture, install its Rust target and set
-`CARGO_BUILD_TARGET` to `x86_64-apple-darwin` or `aarch64-apple-darwin`.
-Packaging reads the executable from the target's subdirectory and checks its
-architecture. The package includes license notices for the selected target.
-GitHub releases contain `Qrow-VERSION-arm64.dmg` for Apple
-Silicon and `Qrow-VERSION-x86_64.dmg` for Intel. Choose the file for your Mac.
-CI tests both builds on macOS 15. It does not test every macOS 12 driver.
-The file without an architecture suffix remains an ARM64 alias for older tap
-updaters. Until the tap update and a new release are published, use a local
-Intel build. Existing Homebrew releases contain only the ARM64 app.
-
-On Linux, build a native archive in `target/package`:
-
-```sh
-sh scripts/package/linux.sh
-```
-
-The archive uses the libraries of the build system. Build it on a system that
-is compatible with the target computers.
+To build a DMG, a Linux archive, or a Windows installer, see
+[package the app](docs/development.md#package-the-app).
 
 ## Preview
 
-Launch the demo to inspect the SQL editor, results, schema catalog, and dbt
-details. The first connection opens with the columns of `avia.bookings`.
-Expand other tables or use **Search…** to inspect the catalog.
-In either Rivendell connection, right-click a table and select **Show dbt
-details** to read its description, columns, tests, lineage, and SQL.
-
-The demo uses synthetic data. It does not connect to a server, access Keychain,
-or change the saved workspace. It writes a temporary dbt manifest and removes
-the file when the window closes:
+Launch the demo to see the SQL editor, results, schema catalog, and dbt
+details without a database server:
 
 ```sh
 cargo run --locked --bin qrow -- --demo
 ```
 
-Or, after building the release executable:
+Or, after you build the release executable:
 
 ```sh
 ./target/release/qrow --demo
 ```
 
+The first connection opens with the columns of `avia.bookings`. Expand other
+tables or use **Search…** to look at the catalog. In either Rivendell
+connection, right-click a table and select **Show dbt details**.
+
+The demo uses synthetic data. It does not connect to a server, read saved
+passwords, or change your workspace.
+
 ## Documentation
 
 See the [documentation index](docs/README.md) for application behavior,
-architecture, development, and end-to-end testing.
+architecture, development, and testing.
 
 ## Contributions
 
-Issues and discussion are welcome, but the project isn't set up for external pull requests right now.
-You are free to fork it, though.
+Issues and discussion are welcome, but the project isn't set up for external
+pull requests right now. You are free to fork it, though.
 
 ## License
 
 Qrow uses the [MIT License](LICENSE).
 Third-party code retains its original licenses. See [NOTICE](NOTICE).
-
-On Windows, build the native unsigned installer with
-`uv run --locked --no-dev python scripts/package/windows.py`. The script
-downloads the pinned Inno Setup compiler into `target/tools` the first time.
