@@ -7,6 +7,7 @@ For build and launch instructions, see the [project README](../README.md).
 
 | Topic | What you can find |
 | --- | --- |
+| [Installation](installation.md) | Install Qrow and open it the first time on macOS, Windows, and Linux. |
 | [Connections](connections.md) | Create profiles, manage sessions, and reconnect. |
 | [Queries](queries.md) | Use tabs, run selected SQL, and cancel work. |
 | [Activity](activity.md) | See the background work and errors of each connection. |

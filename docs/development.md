@@ -4,10 +4,26 @@ Use local checks to verify code, scripts, and dependency policy before a commit.
 [Testing](testing.md) describes `./qtest`, the command for all checks and
 tests, including the suites with real servers and the desktop suite.
 
-For application prerequisites, builds, and demo launch commands, see the
-[project README](../README.md). [Package the app](#package-the-app) describes
-the release packages. Run the commands below from the repository
+For build and demo launch commands, see the
+[project README](../README.md#build). [Package the app](#package-the-app)
+describes the release packages. Run the commands below from the repository
 root. The full local suite requires macOS.
+
+## Build prerequisites
+
+- Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the
+  pinned toolchain.
+- [uv](https://docs.astral.sh/uv/) for `./qtest` and the build scripts. It
+  installs the Python version that the scripts need.
+- On macOS, the Xcode command-line tools: `xcode-select --install`.
+- On Windows, Visual Studio Build Tools with **Desktop development with C++**
+  and the Windows SDK.
+- On Linux, a C and C++ toolchain, pkg-config, CMake, and the Wayland, X11,
+  xkbcommon, fontconfig, FreeType, and Vulkan development libraries. On
+  Ubuntu, `sh scripts/ci/linux-build-deps.sh` installs them.
+
+Java, ODBC drivers, and the Thrift compiler are not necessary. Use the release
+build to check startup time and responsiveness.
 
 ## Set up check tools
 
@@ -45,7 +61,8 @@ The suites with servers run only when you select them.
 ## Check the native UI
 
 Use the release [demo](../README.md#preview) for visual checks without database,
-Keychain, or workspace access. Test the interactions affected by a UI change.
+Keychain, or workspace access. The demo uses synthetic data. In either Rivendell
+connection, right-click a table and select **Show dbt details**. Test the interactions affected by a UI change.
 Compilation alone does not establish correct interaction behavior.
 
 For persistence checks, use a temporary workspace and synthetic profiles:
