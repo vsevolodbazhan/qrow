@@ -1,4 +1,4 @@
-"""Build the unsigned native Windows installer."""
+"""Build the unsigned native Windows installer and the portable archive."""
 import hashlib
 import json
 import os
@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -99,6 +100,18 @@ def compiler(root=ROOT):
     return iscc
 
 
+def portable_archive(source, archive):
+    """Write the package files to a zip archive without a top folder, for Scoop
+    and manual use. Fixed timestamps and modes make it reproducible."""
+    archive.unlink(missing_ok=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
+        for name in sorted(PACKAGE_FILES):
+            member = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            member.compress_type = zipfile.ZIP_DEFLATED
+            member.external_attr = 0o644 << 16
+            bundle.writestr(member, (source / name).read_bytes())
+
+
 def compile_command(iscc, version, architecture, source, output):
     return [str(iscc), "/Qp",
             f"/DVersion={version}",
@@ -127,6 +140,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     architecture = "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
     installer = output / f"Qrow-{version}-windows-{architecture}-setup.exe"
+    portable = output / f"Qrow-{version}-windows-{architecture}.zip"
     executable = Path(metadata["target_directory"]) / "release/qrow.exe"
     require_resources(executable)
     iscc = compiler()
@@ -139,9 +153,11 @@ def main():
             shutil.copyfile(name, staging / name)
         installer.unlink(missing_ok=True)
         subprocess.run(compile_command(iscc, version, architecture, staging, installer), check=True)
+        portable_archive(staging, portable)
     if not installer.is_file():
         raise ValueError(f"Inno Setup did not create {installer}")
     print(installer)
+    print(portable)
 
 
 if __name__ == "__main__":

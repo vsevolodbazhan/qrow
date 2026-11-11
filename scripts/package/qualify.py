@@ -10,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qtest"))
 from contract import atomic_json, source_sha  # noqa: E402
@@ -76,6 +77,16 @@ def windows_executable(app, machine="x86_64"):
             or int.from_bytes(data[offset + 4:offset + 6], "little") != expected):
         raise ValueError("Installed PE architecture mismatch")
     return executable
+
+
+def windows_portable(archive, app):
+    """Check that the portable archive holds the installed files, byte for byte."""
+    with zipfile.ZipFile(archive) as bundle:
+        if sorted(bundle.namelist()) != sorted(WINDOWS_FILES):
+            raise ValueError("Unexpected Windows portable archive files")
+        for name in sorted(WINDOWS_FILES):
+            if bundle.read(name) != (app / name).read_bytes():
+                raise ValueError(f"The portable archive and the installer have a different {name}")
 
 
 @contextlib.contextmanager
@@ -220,6 +231,13 @@ def main():
     if len(archives) != 1:
         raise ValueError(f"Expected one candidate archive; found {len(archives)}")
     archive = archives[0]
+    portable = {}
+    if target.system == "windows":
+        portables = sorted(args.directory.glob("*-windows-*.zip"))
+        if len(portables) != 1:
+            raise ValueError(f"Expected one portable archive; found {len(portables)}")
+        portable = {"portable": portables[0].name,
+                    "portable_sha256": hashlib.sha256(portables[0].read_bytes()).hexdigest()}
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="qrow-qualify-") as directory:
         destination = Path(directory)
@@ -227,6 +245,7 @@ def main():
             executable = linux_archive(archive, destination, target.machine)
         elif target.system == "windows":
             with windows_installer(archive, destination, target.machine) as executable:
+                windows_portable(portables[0], executable.parent)
                 smoke(executable, target.system, args.receipt.with_suffix(".log"))
         else:
             subprocess.run(["ditto", "-x", "-k", archive, destination], check=True)
@@ -242,7 +261,7 @@ def main():
                               "archive": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                               "host": platform.platform(), "runner_image": os.environ.get("ImageVersion"),
                               "release_version": os.environ.get("QROW_RELEASE_VERSION"),
-                              "qualification": "native-package-smoke"})
+                              "qualification": "native-package-smoke", **portable})
     return 0
 
 

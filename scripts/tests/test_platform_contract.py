@@ -53,8 +53,12 @@ class MatrixGateTests(unittest.TestCase):
                 result['suites'].append(evidence)
             receipt = dict(schema=1, target=target.name, source_sha=sha, sha256='b' * 64,
                            qualification='native-package-smoke', archive='candidate.tar.gz')
+            assets = {'target/package/candidate.tar.gz': 'b' * 64}
+            if target.system == 'windows':
+                receipt.update(portable='candidate.zip', portable_sha256='c' * 64)
+                assets['target/package/candidate.zip'] = 'c' * 64
             import builds
-            manifest = dict(identity=builds.identity(value), assets={'target/package/candidate.tar.gz': 'b' * 64})
+            manifest = dict(identity=builds.identity(value), assets=assets)
             manifest_path = directory / 'build-manifest.json'
             contract.atomic_json(manifest_path, manifest)
             result['build_manifest_sha256'] = builds.sha256(manifest_path)
@@ -71,6 +75,21 @@ class MatrixGateTests(unittest.TestCase):
                 (root / 'linux-arm64/result.json').unlink()
                 with self.assertRaisesRegex(ValueError, 'Missing'):
                     platforms.verify(root, sha, full)
+
+    def test_windows_evidence_needs_the_digest_of_the_built_portable_archive(self):
+        for change in ('missing', 'different'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                sha = self.evidence(root)
+                path = root / 'windows-arm64/receipt.json'
+                receipt = json.loads(path.read_text())
+                if change == 'missing':
+                    del receipt['portable_sha256']
+                else:
+                    receipt['portable_sha256'] = 'd' * 64
+                path.write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(ValueError, 'Portable archive identity'):
+                    platforms.verify(root, sha)
 
     def test_pull_request_evidence_needs_only_its_target_and_rejects_extra_targets(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -172,6 +191,7 @@ class PublicationTests(unittest.TestCase):
                 (dist / f'Qrow-1.2.3-linux-{arch}.tar.gz').write_bytes(b'synthetic archive')
             for arch in ['x86_64', 'aarch64']:
                 (dist / f'Qrow-1.2.3-windows-{arch}-setup.exe').write_bytes(b'synthetic installer')
+                (dist / f'Qrow-1.2.3-windows-{arch}.zip').write_bytes(b'synthetic portable archive')
             (root / 'release-notes.md').write_text('Synthetic release')
             tools = root / 'tools'
             tools.mkdir()
@@ -205,6 +225,8 @@ class PublicationTests(unittest.TestCase):
         self.assertIn('--draft', calls[0])
         self.assertIn('--latest=false', calls[0])
         self.assertIn('--latest', calls[-1])
+        for arch in ('x86_64', 'aarch64'):
+            self.assertIn(f'dist/Qrow-1.2.3-windows-{arch}.zip', calls[0])
 
     def test_corrupt_upload_stays_unpublished(self):
         result, calls = self.run_publication(corrupt=True)
@@ -375,6 +397,29 @@ class WindowsInstallerTests(unittest.TestCase):
                         self.assertTrue(installed())
                     self.assertFalse(executable.parent.exists())
                 self.assertFalse(installed())
+
+    def test_the_portable_archive_must_hold_the_installed_files(self):
+        import zipfile
+        files = {name: f'synthetic {name}'.encode() for name in qualify.WINDOWS_FILES}
+        cases = [({}, None), ({'qrow.exe': b'other build'}, 'different qrow.exe'),
+                 ({'extra.dll': b'extra'}, 'Unexpected'), ({'LICENSE': None}, 'Unexpected')]
+        for change, error in cases:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                app = root / 'Qrow'
+                app.mkdir()
+                for name, data in files.items():
+                    (app / name).write_bytes(data)
+                archive = root / 'portable.zip'
+                with zipfile.ZipFile(archive, 'w') as bundle:
+                    for name, data in {**files, **change}.items():
+                        if data is not None:
+                            bundle.writestr(name, data)
+                if error:
+                    with self.assertRaisesRegex(ValueError, error):
+                        qualify.windows_portable(archive, app)
+                else:
+                    qualify.windows_portable(archive, app)
 
     def test_an_existing_install_stops_the_check(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(qualify.subprocess, 'run') as run:

@@ -124,7 +124,7 @@ accept a test filter.
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
 | `windows-unit` * | Core unit tests without UI or database servers. | Windows, cargo-nextest |
 | `windows-storage` * | Synthetic Credential Manager round trip. | Windows, cargo-nextest |
-| `windows-package` | Build the unsigned native installer in `target/package`. | Windows, MSVC, Windows SDK |
+| `windows-package` | Build the unsigned native installer and the portable archive in `target/package`. | Windows, MSVC, Windows SDK |
 | `linux-package` | Build the native archive in `target/package`. | Linux desktop build libraries |
 | `package-smoke` | Inspect and launch the extracted package. | A built package; on Linux, Xvfb and xdotool |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |

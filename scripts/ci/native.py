@@ -37,8 +37,10 @@ def checked(args):
 
 def asset_paths(target):
     package = ROOT / "target/package"
-    if target.system in ("linux", "windows"):
-        return sorted(package.glob("*-setup.exe" if target.system == "windows" else "*.tar.gz"))
+    if target.system == "windows":
+        return sorted([*package.glob("*-setup.exe"), *package.glob("*-windows-*.zip")])
+    if target.system == "linux":
+        return sorted(package.glob("*.tar.gz"))
     return [package / "Qrow-macos.zip", *(ROOT / "target/native-tools").glob("*"),
             ROOT / "target/e2e-tools/native-driver"]
 

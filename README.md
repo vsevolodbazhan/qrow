@@ -167,7 +167,7 @@ Replace `VERSION` in the file names below with the release version.
 | System | Requirements | Package |
 | --- | --- | --- |
 | macOS | macOS 12 or later, a Metal-capable GPU | `Qrow-VERSION-arm64.dmg` (Apple Silicon) or `Qrow-VERSION-x86_64.dmg` (Intel) |
-| Windows | Windows 10 or later | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64) |
+| Windows | Windows 10 or later | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64), or the portable `Qrow-VERSION-windows-ARCH.zip` |
 | Linux | Wayland or X11 desktop, Vulkan, a Secret Service provider | `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz` |
 
 ### macOS
@@ -204,7 +204,18 @@ macOS shows this warning because Qrow is not notarized. To open Qrow:
 
 ### Windows
 
-Download the installer for your processor and run it. The installer installs Qrow for your user account and adds it to the Start
+Install Qrow from the [Scoop bucket](https://github.com/vsevolodbazhan/scoop-qrow):
+
+```powershell
+scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow
+```
+
+To install the latest nightly build, use `scoop install qrow-nightly`. To
+upgrade, use `scoop update qrow` or `scoop update qrow-nightly`. Both packages
+add Qrow to the Start menu and use the same workspace and settings.
+
+Alternatively, download the installer for your processor and run it. The installer installs Qrow for your user account and adds it to the Start
 menu. It does not need administrator rights. To install for all users, select
 that option in the first dialog.
 
@@ -212,6 +223,9 @@ that option in the first dialog.
   first.
 - **Remove:** open **Settings → Apps → Installed apps**, find Qrow, and select
   **Uninstall**. Your workspace and settings stay on the computer.
+
+To use Qrow without an installer, extract the portable
+`Qrow-VERSION-windows-ARCH.zip` to a folder and run `qrow.exe`.
 
 #### SmartScreen warning
 
@@ -272,7 +286,7 @@ cargo build --locked --release --bin qrow
 
 Use the release build to check startup time and responsiveness.
 
-To build a DMG, a Linux archive, or a Windows installer, see
+To build a DMG, a Linux archive, or a Windows installer and portable archive, see
 [package the app](docs/development.md#package-the-app).
 
 ## Preview

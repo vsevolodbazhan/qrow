@@ -166,7 +166,7 @@ tag is `v<version>`. The nightly tag is
 The jobs run in this order:
 
 ```text
-resolve-target -> validation (shared test workflow) -> dmg and linux -> publish
+resolve-target -> validation (shared test workflow) -> dmg, linux, and windows -> publish
 ```
 
 `resolve-target` finds the commit and release version. The validation
@@ -187,9 +187,11 @@ fails packaging. The `linux` jobs download the qualified Ubuntu 24.04 archives f
 ARM64 and check their recorded SHA-256 digests. They do not rebuild the app.
 The DMG jobs check the archive digest, wrap the qualified app, mount the final
 image, compare its app files, and launch the mounted app.
-The `windows` jobs do the same for the qualified Windows installers.
+The `windows` jobs do the same for the qualified Windows installers and
+portable archives.
 The publish job creates the release tag and an unpublished release with both
-DMGs, both Linux archives, and both Windows installers. It downloads the assets and checks SHA256SUMS
+DMGs, both Linux archives, both Windows installers, and both Windows portable
+archives. It downloads the assets and checks SHA256SUMS
 before publishing. A failed upload or digest check leaves an unpublished
 release. A rerun with an existing release stops; inspect that release before
 retrying. It also
@@ -225,6 +227,15 @@ brew install --cask vsevolodbazhan/qrow/qrow@nightly
 The current release package uses ad hoc code signing. Homebrew can install the
 custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
 with Apple Developer ID.
+
+The custom [Scoop bucket](https://github.com/vsevolodbazhan/scoop-qrow)
+publishes the latest stable release as `qrow` and the latest prerelease as
+`qrow-nightly`. Both manifests install the Windows portable archives. A
+scheduled job in the bucket checks the public GitHub releases every hour,
+downloads each new archive, calculates its SHA-256 checksum, and updates the
+manifest. The bucket does not need a secret in this repository. Scoop installs
+each package in its own folder and does not use the installer, so stable and
+nightly builds can be installed at the same time.
 
 Cargo does not publish Qrow to crates.io. Cargo ignores the patches in `vendor/`
 when it builds a published crate, so the crate does not compile.
@@ -402,7 +413,7 @@ Ubuntu 24.04.
 
 ### Windows
 
-Build the unsigned installer on Windows:
+Build the unsigned installer and the portable archive on Windows:
 
 ```sh
 uv run --locked --no-dev python scripts/package/windows.py
@@ -410,7 +421,8 @@ uv run --locked --no-dev python scripts/package/windows.py
 
 GPUI compiles release shaders with the Windows SDK, so Linux cross checks
 cannot produce a working package. The installer is defined in
-[scripts/package/qrow.iss](../scripts/package/qrow.iss). The packaging
+[scripts/package/qrow.iss](../scripts/package/qrow.iss). The portable zip
+archive holds the same files for Scoop and manual use. It has no top folder. The packaging
 script downloads the pinned Inno Setup compiler, checks its SHA-256 digest,
 and installs it in portable mode in `target/tools`. Set `QROW_ISCC` to the
 path of `ISCC.exe` to use another compiler. Do not change the `AppId` of the

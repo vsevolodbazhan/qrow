@@ -207,7 +207,7 @@ cache restoration. It proves weekly that a clean checkout builds, and it
 finds new dependency advisories and changed server images. A push to `main`
 cannot replace it in the queue. A manual test run can select `cold-cache`. The release workflow downloads qualified
 candidates. It wraps the macOS app in a DMG, mounts and launches that app, and
-forwards the Linux archives and the Windows installers. It does not compile
+forwards the Linux archives and the Windows installers and portable archives. It does not compile
 the application again.
 See [Development](development.md#hooks-and-continuous-integration) for release
 publication and channel details.
@@ -242,15 +242,16 @@ Setup checks LLVM clang, which `ring` needs on Windows ARM64. It selects
 an installed SDK shader compiler through `GPUI_FXC_PATH`. ARM64 uses the
 x64 SDK compiler if the SDK has no ARM64 compiler.
 The build job prepares core tests and the native release candidate, an Inno
-Setup installer. The test job consumes those artifacts and runs core tests and
+Setup installer and a portable zip archive of the same files. The test job consumes those artifacts and runs core tests and
 synthetic Credential Manager tests. Then it installs the candidate silently for
 the runner user into a temporary folder. It checks the installed files and the
-executable architecture, and waits for the demo window. Then it uninstalls
+executable architecture, and makes sure that the portable archive holds the
+same files, byte for byte. It waits for the demo window. Then it uninstalls
 Qrow and makes sure that the uninstaller removed the install folder. The qualification
-receipt binds the source commit to the installer digest. Release publication
-checks the receipt before it publishes `Qrow-VERSION-windows-x86_64-setup.exe`
-and `Qrow-VERSION-windows-aarch64-setup.exe`. It includes both installers in
-`SHA256SUMS`.
+receipt binds the source commit to the installer digest and the portable
+archive digest. Release publication checks the receipt before it publishes
+`Qrow-VERSION-windows-ARCH-setup.exe` and `Qrow-VERSION-windows-ARCH.zip` for
+x86-64 and ARM64. It includes all four files in `SHA256SUMS`.
 
 Pull requests keep the Linux fast path. Full workflow runs also validate
 Windows. Windows does not run Docker server fixtures or headless UI tests.

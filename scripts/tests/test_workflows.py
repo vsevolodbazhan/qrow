@@ -366,14 +366,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn('cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"', dmg)
         windows = job("windows", RELEASE)
         self.assertIn("-setup.exe", windows)
-        self.assertNotIn(".zip", windows)
+        # The portable archive must match the qualified receipt, like the installer.
+        self.assertIn('assert receipt["portable_sha256"] == hashlib.sha256(portable.read_bytes()).hexdigest()', windows)
+        self.assertIn("candidate/*-setup.exe\n            candidate/*-windows-*.zip\n", windows)
         publish = job("publish", RELEASE)
         for architecture in ("x86_64", "aarch64"):
             self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-windows-{architecture}-setup.exe"', publish)
-        self.assertIn("./*-setup.exe > SHA256SUMS", publish)
-        self.assertNotIn(".zip", publish)
+            self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-windows-{architecture}.zip"', publish)
+        self.assertIn("./*-setup.exe ./*-windows-*.zip > SHA256SUMS", publish)
         for target in ("windows-x86_64", "windows-arm64"):
-            self.assertIn(f"name: candidate-{target}\n          path: target/package/*-setup.exe", read(TEST))
+            self.assertIn(f"name: candidate-{target}\n          path: |\n            target/package/*-setup.exe\n"
+                          "            target/package/*-windows-*.zip\n", read(TEST))
         self.assertIn("merge-multiple: true", job("publish", RELEASE))
         self.assertIn("Select the workflow branch at the candidate commit", job("resolve-target", RELEASE))
 
