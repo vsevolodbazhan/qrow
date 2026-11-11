@@ -1255,7 +1255,7 @@ impl Qrow {
                 self.show_sign_in_editor(sign_in, None, false, true, window, cx);
             }
             Err(error) => {
-                super::connection_sharing::error_alert(
+                error_alert(
                     "paste-sign-in-error",
                     "Cannot paste the sign-in",
                     error.to_string(),
@@ -1900,6 +1900,38 @@ impl SignInAction {
             Self::Retry => "retry",
         }
     }
+}
+
+/// An alert with `message` and an OK button. `id` names the message, and
+/// `close-{id}` the button.
+fn error_alert(
+    id: &'static str,
+    title: &'static str,
+    message: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        alert
+            .width(px(360.))
+            .title(title)
+            .description(
+                div()
+                    .id(id)
+                    .test_support()
+                    .role(Role::Label)
+                    .aria_label(message.clone())
+                    .child(message.clone()),
+            )
+            .footer(
+                DialogFooter::new().justify_end().child(
+                    Button::new(SharedString::from(format!("close-{id}")))
+                        .primary()
+                        .label("OK")
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                ),
+            )
+    });
 }
 
 #[cfg(test)]

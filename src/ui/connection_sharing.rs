@@ -79,16 +79,14 @@ impl Qrow {
                 };
                 self.open_profile_editor(profile, true, Some(pasted), window, cx);
             }
-            Err(error) => {
-                error_alert(
-                    "paste-connection-error",
-                    "Cannot paste the connection",
+            Err(error) => window.push_notification(
+                toast::error(
+                    "paste-connection-toast",
+                    "Could not paste connection",
                     error.to_string(),
-                    window,
-                    cx,
-                );
-                cx.notify();
-            }
+                ),
+                cx,
+            ),
         }
     }
 
@@ -331,38 +329,6 @@ fn save_empty_passwords(
         }
     }
     Ok(())
-}
-
-/// An alert with `message` and an OK button. `id` names the message, and
-/// `close-{id}` the button.
-pub(super) fn error_alert(
-    id: &'static str,
-    title: &'static str,
-    message: String,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    window.open_alert_dialog(cx, move |alert, _, _| {
-        alert
-            .width(px(360.))
-            .title(title)
-            .description(
-                div()
-                    .id(id)
-                    .test_support()
-                    .role(Role::Label)
-                    .aria_label(message.clone())
-                    .child(message.clone()),
-            )
-            .footer(
-                DialogFooter::new().justify_end().child(
-                    Button::new(SharedString::from(format!("close-{id}")))
-                        .primary()
-                        .label("OK")
-                        .on_click(|_, window, cx| window.close_dialog(cx)),
-                ),
-            )
-    });
 }
 
 fn read_file(path: &Path) -> anyhow::Result<String> {

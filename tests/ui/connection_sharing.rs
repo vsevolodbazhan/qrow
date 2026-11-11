@@ -255,17 +255,56 @@ fn pasting_other_text_explains_why_and_adds_nothing(cx: &mut TestAppContext) {
     let app = TestApp::launch_with(cx, workspace, credentials);
     cx.write_to_clipboard(ClipboardItem::new_string("SELECT 1".into()));
     app.dispatch(cx, qrow::ui::PasteConnection);
-    app.wait_for(cx, "paste-connection-error");
+    let detail = toast_detail(&app, cx, "paste-connection-toast");
+    assert!(
+        detail.contains("does not contain connection settings"),
+        "{detail}"
+    );
     app.update(cx, |window, _| {
-        assert!(
-            label(window, "paste-connection-error")
-                .unwrap()
-                .contains("does not contain connection settings")
+        assert_eq!(
+            window
+                .within("paste-connection-toast")
+                .find("title")
+                .label(),
+            Some("Could not paste connection")
         );
         assert!(window.try_find("connection-name").is_none());
     });
-    app.click(cx, "close-paste-connection-error");
-    app.wait_gone(cx, "paste-connection-error");
+}
+
+#[gpui_kit::test]
+fn a_pasted_connection_without_a_username_asks_for_one_on_save(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    paste(
+        &app,
+        cx,
+        r#"{"qrow_connection": 1, "name": "Team", "host": "db.example.test", "database": "default"}"#
+            .into(),
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, "connection-name").as_deref(), Some("Team"));
+        assert_eq!(value(window, "connection-username").as_deref(), Some(""));
+        // A missing port is the default port of the database type.
+        assert_eq!(value(window, "connection-port").as_deref(), Some("10009"));
+    });
+    app.click(cx, "save-profile");
+    app.wait_until(cx, "the username error", WAIT, |window, _| {
+        crate::support::labels(window)
+            .iter()
+            .any(|label| label == "Enter a username.")
+    });
+    app.fill(cx, "connection-username", "colleague");
+    app.scroll_to(cx, "connection-password");
+    app.fill(cx, "connection-password", "colleague-password");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "the pasted connection", WAIT, |_, _| {
+        app.saved().profiles.len() == 3
+    });
+    let saved = app.saved().profiles[2].clone();
+    assert_eq!(saved.username, "colleague");
+    assert_eq!(saved.port, 10009);
 }
 
 #[gpui_kit::test]

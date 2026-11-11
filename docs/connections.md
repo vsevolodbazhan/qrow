@@ -794,9 +794,15 @@ the shared catalog. A member of a shared catalog gives the settings of the
 shared catalog as its own schema settings. A connection with a sign-in
 includes the sign-in settings, but not your account or your tokens.
 
+The pasted settings can be partial. For example, remove the `username` line
+from the text so that each colleague enters their own username. **New
+Connection** shows the fields that you must complete when you click **Save**.
+Without a port, Qrow uses the default port of the database type.
+
 Qrow ignores other text of the message around the settings. If a connection
 with the same name exists, Qrow adds `copy` to the name. If the clipboard does
-not contain connection settings, Qrow tells you and adds nothing.
+not contain connection settings, an error message tells you why and Qrow adds
+nothing.
 
 A pasted sign-in uses a sign-in that you have with the same issuer, client ID,
 scopes, and resource. If you do not have one, **Save** also adds the sign-in.
@@ -817,7 +823,9 @@ A connections file can have 1,000 connections and 16 MB or less.
 
 Qrow adds the connections of the file after your connections. Import uses the
 same rules for names and sign-ins as Paste connection. Import also accepts a
-file with the text of **Copy settings**. The message after the import gives
+file with the text of **Copy settings**. Import adds connections without
+**New Connection**, so each connection in the file must be complete. Use Paste
+connection for partial settings. The message after the import gives
 the name and the issuer of each sign-in that Qrow adds. If one connection in the file is not
 valid, Qrow tells you which one and adds nothing. Each imported connection
 gets a query tab. Imported Spark and Postgres connections with password

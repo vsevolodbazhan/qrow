@@ -36,12 +36,20 @@ struct SharedConnection<S = SharedSignIn> {
     /// Marks the object as connection settings and gives the format version.
     #[serde(default)]
     qrow_connection: u32,
+    // Paste accepts settings without the fields below, for example without
+    // a username that each colleague enters. Save checks them.
+    #[serde(default)]
     name: String,
     #[serde(default)]
     database_type: DatabaseType,
+    #[serde(default)]
     host: String,
-    port: u16,
+    /// The default port of the database type when it is not given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(default)]
     username: String,
+    #[serde(default)]
     database: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     trino_schema: String,
@@ -111,7 +119,7 @@ impl SharedConnection {
             name: profile.name.clone(),
             database_type: profile.database_type,
             host: profile.host.clone(),
-            port: profile.port,
+            port: Some(profile.port),
             username: profile.username.clone(),
             database: profile.database.clone(),
             trino_schema: profile.trino_schema.clone(),
@@ -131,8 +139,10 @@ impl SharedConnection {
 }
 
 impl SharedConnection<serde_json::Value> {
-    /// A new connection from the shared settings in `value`.
-    fn read(value: serde_json::Value) -> anyhow::Result<SharedConnectionSettings> {
+    /// A new connection from the shared settings in `value`. A `complete`
+    /// connection passes the checks of Connection Settings. Otherwise the
+    /// connection can lack fields, and only its sign-in is checked.
+    fn read(value: serde_json::Value, complete: bool) -> anyhow::Result<SharedConnectionSettings> {
         let version = value
             .get("qrow_connection")
             .map_or(Some(0), serde_json::Value::as_u64)
@@ -141,9 +151,8 @@ impl SharedConnection<serde_json::Value> {
             version <= u64::from(SHARED_CONNECTION_VERSION),
             "These connection settings come from a newer version of Qrow. Update Qrow, then try again."
         );
-        let shared: Self = serde_json::from_value(value).map_err(|error| {
-            anyhow::anyhow!("The connection settings are not complete: {error}.")
-        })?;
+        let shared: Self = serde_json::from_value(value)
+            .map_err(|error| anyhow::anyhow!("The connection settings are not valid: {error}."))?;
         let (authentication, sign_in) = match shared.authentication {
             SharedAuthentication::Password => (Authentication::Password, None),
             SharedAuthentication::TrinoExternal => (Authentication::TrinoExternal, None),
@@ -165,7 +174,9 @@ impl SharedConnection<serde_json::Value> {
             database_type: shared.database_type,
             name: shared.name.trim().to_owned(),
             host: shared.host.trim().to_owned(),
-            port: shared.port,
+            port: shared
+                .port
+                .unwrap_or_else(|| shared.database_type.default_port()),
             username: shared.username.trim().to_owned(),
             database: shared.database.trim().to_owned(),
             trino_schema: shared.trino_schema.trim().to_owned(),
@@ -186,7 +197,9 @@ impl SharedConnection<serde_json::Value> {
         if profile.database_type == DatabaseType::Postgres {
             profile.postgres_ssl_mode = Some(profile.postgres_ssl_mode());
         }
-        profile.validate()?;
+        if complete {
+            profile.validate()?;
+        }
         Ok(SharedConnectionSettings { profile, sign_in })
     }
 }
@@ -209,7 +222,8 @@ impl Profile {
     }
 
     /// Reads settings from [`Self::to_shared_text`] into a new connection
-    /// without a password. Text around the settings, like the rest of a chat
+    /// without a password. The settings can be partial: Connection Settings
+    /// checks them before Save. Text around the settings, like the rest of a chat
     /// message, and typographic quotes are accepted.
     pub fn from_shared_text(text: &str) -> anyhow::Result<SharedConnectionSettings> {
         anyhow::ensure!(text.len() <= MAX_SHARED_CONNECTION_BYTES, NOT_A_CONNECTION);
@@ -220,7 +234,7 @@ impl Profile {
                     .is_some_and(serde_json::Value::is_u64)
             })
             .ok_or_else(|| anyhow::anyhow!(NOT_A_CONNECTION))?;
-        SharedConnection::<serde_json::Value>::read(value)
+        SharedConnection::<serde_json::Value>::read(value, false)
     }
 }
 
@@ -243,12 +257,15 @@ pub fn connections_file_text<'a>(
 }
 
 /// Reads the connections of a connections file. A file with the settings of
-/// one connection, as Copy settings makes them, is also accepted.
+/// one connection, as Copy settings makes them, is also accepted. Each
+/// connection must be complete, because import adds it without a review.
 pub fn read_connections_file(text: &str) -> anyhow::Result<Vec<SharedConnectionSettings>> {
     let value: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|error| anyhow::anyhow!("The file is not valid JSON: {error}."))?;
     if value.get("qrow_connection").is_some() {
-        return Ok(vec![SharedConnection::<serde_json::Value>::read(value)?]);
+        return Ok(vec![SharedConnection::<serde_json::Value>::read(
+            value, true,
+        )?]);
     }
     let version = value
         .get("qrow_connections")
@@ -274,7 +291,7 @@ pub fn read_connections_file(text: &str) -> anyhow::Result<Vec<SharedConnectionS
         .iter()
         .enumerate()
         .map(|(index, connection)| {
-            SharedConnection::<serde_json::Value>::read(connection.clone()).map_err(|error| {
+            SharedConnection::<serde_json::Value>::read(connection.clone(), true).map_err(|error| {
                 let name = connection
                     .get("name")
                     .and_then(serde_json::Value::as_str)

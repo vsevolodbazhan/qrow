@@ -143,13 +143,9 @@ fn shared_connection_text_rejects_other_or_invalid_content() {
     json["qrow_connection"] = serde_json::json!(SHARED_CONNECTION_VERSION + 1);
     assert!(error(&json.to_string()).contains("newer version"));
     json["qrow_connection"] = serde_json::json!(SHARED_CONNECTION_VERSION);
-    json.as_object_mut().unwrap().remove("host");
-    assert!(error(&json.to_string()).contains("host"));
-    // The settings pass the same checks as Connection Settings.
-    json["host"] = serde_json::json!("kyuubi.example.test");
-    json["username"] = serde_json::json!(" ");
-    assert!(error(&json.to_string()).contains("username"));
-    json["username"] = serde_json::json!("alice");
+    json["port"] = serde_json::json!("ten");
+    assert!(error(&json.to_string()).contains("not valid"));
+    json["port"] = serde_json::json!(10009);
     json["authentication"] = serde_json::json!({"method": "oidc"});
     assert!(error(&json.to_string()).contains("sign_in"));
     let mut bad_sign_in: serde_json::Value =
@@ -157,6 +153,29 @@ fn shared_connection_text_rejects_other_or_invalid_content() {
     bad_sign_in["issuer"] = serde_json::json!("http://id.example.test");
     json["authentication"] = serde_json::json!({"method": "oidc", "sign_in": bad_sign_in});
     assert!(error(&json.to_string()).contains("HTTPS"));
+}
+
+#[test]
+fn pasted_settings_can_be_partial_but_a_file_needs_complete_connections() {
+    // A colleague enters their own username, and Save checks the fields.
+    let partial =
+        r#"{"qrow_connection": 1, "database_type": "postgres", "host": "db.example.test"}"#;
+    let pasted = Profile::from_shared_text(partial).unwrap().profile;
+    assert_eq!(pasted.host, "db.example.test");
+    assert_eq!(pasted.username, "");
+    assert_eq!(pasted.name, "");
+    // A missing port is the default port of the database type.
+    assert_eq!(pasted.port, 5432);
+    let error = read_connections_file(partial).unwrap_err().to_string();
+    assert!(error.contains("Give this connection a name."), "{error}");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&profile().to_shared_text(&CatalogSettings::default(), None)).unwrap();
+    json.as_object_mut().unwrap().remove("username");
+    let file = serde_json::json!({"qrow_connections": 1, "connections": [json]});
+    let error = read_connections_file(&file.to_string())
+        .unwrap_err()
+        .to_string();
+    assert!(error.starts_with("Connection 1 \"Warehouse\": "), "{error}");
 }
 
 #[test]
