@@ -49,7 +49,7 @@ Qrow has two channels:
 
 ### macOS
 
-Install with [Homebrew](https://github.com/vsevolodbazhan/homebrew-qrow).
+Install with [Homebrew](https://brew.sh/).
 
 ```sh
 brew install --cask vsevolodbazhan/qrow/qrow
@@ -61,7 +61,7 @@ brew install --cask vsevolodbazhan/qrow/qrow@nightly
 
 ### Windows
 
-Install with [Scoop](https://github.com/vsevolodbazhan/scoop-qrow).
+Install with [Scoop](https://scoop.sh/).
 
 ```powershell
 scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
