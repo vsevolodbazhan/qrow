@@ -722,11 +722,11 @@ fn the_search_field_has_equal_gaps_above_and_below_at_each_zoom(cx: &mut TestApp
                 (above - below).abs() <= gpui_kit::px(0.5),
                 "The gap above the search ({above:?}) must match the gap below it ({below:?})"
             );
-            // The scope button is under New connection.
+            // The scope button is centered under New connection. New
+            // connection has the compact size of the Sign-ins header actions.
             let add = bounds_of(window, "add-connection");
             let scope = bounds_of(window, "search-scope");
             assert!((add.center().x - scope.center().x).abs() <= gpui_kit::px(0.5));
-            assert_eq!(add.size, scope.size);
             assert!((scope.center().y - search.center().y).abs() <= gpui_kit::px(0.5));
             assert!(search.right() < scope.left());
         });

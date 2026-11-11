@@ -1695,7 +1695,7 @@ impl Qrow {
 
     /// The Connections sidebar: its header, the search, and the tree.
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let action_size = self.ui_px(STATUS_SLOT_WIDTH);
+        let action_size = self.ui_px(workspace_view::SIDEBAR_HEADER_ACTION_SIZE);
         let active = self.active_profile();
         let rows: Rc<HashMap<Uuid, ConnectionRow>> = Rc::new(
             self.profiles
@@ -1788,11 +1788,15 @@ impl Qrow {
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
-                // The header actions touch, so they read as one group. New
-                // connection stays as wide as the status slots below it.
+                // The header actions match the Sign-ins header and touch, so
+                // they read as one group. The inset keeps New connection
+                // centered over the status slots below it.
                 self.sidebar_header("Connections", cx).child(
                     h_flex()
                         .flex_shrink_0()
+                        .mr(self.ui_px(
+                            (STATUS_SLOT_WIDTH - workspace_view::SIDEBAR_HEADER_ACTION_SIZE) / 2.,
+                        ))
                         .child(
                             Button::new("paste-connection")
                                 .ghost()

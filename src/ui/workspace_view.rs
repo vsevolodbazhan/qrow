@@ -14,6 +14,8 @@ use gpui_kit::component::{
 };
 
 pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
+/// The width and height of a sidebar header action button.
+pub(super) const SIDEBAR_HEADER_ACTION_SIZE: f32 = 24.;
 
 /// The left padding of the Linux title bar, in rems. It aligns the ink of the
 /// application menu icon with the sidebar title: the 0.75 rem title inset,

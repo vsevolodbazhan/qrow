@@ -941,7 +941,7 @@ impl Qrow {
 
     /// The Sign-ins sidebar: its header and one row for each sign-in.
     pub(super) fn sign_ins_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let group_action_size = self.ui_px(24.);
+        let group_action_size = self.ui_px(workspace_view::SIDEBAR_HEADER_ACTION_SIZE);
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
