@@ -1788,19 +1788,37 @@ impl Qrow {
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
+                // The header actions touch, so they read as one group. New
+                // connection stays as wide as the status slots below it.
                 self.sidebar_header("Connections", cx).child(
-                    Button::new("add-connection")
-                        .ghost()
-                        .small()
-                        .w(action_size)
-                        .h(action_size)
+                    h_flex()
                         .flex_shrink_0()
-                        .icon(IconName::Plus)
-                        .accessibility_label("New connection")
-                        .tooltip("New connection")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.edit_profile(Profile::default(), true, window, cx)
-                        })),
+                        .child(
+                            Button::new("paste-connection")
+                                .ghost()
+                                .small()
+                                .w(action_size)
+                                .h(action_size)
+                                .icon(gpui_kit::assets::IconName::ClipboardPaste)
+                                .accessibility_label("Paste connection")
+                                .tooltip("Paste connection")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.paste_connection(&PasteConnection, window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("add-connection")
+                                .ghost()
+                                .small()
+                                .w(action_size)
+                                .h(action_size)
+                                .icon(IconName::Plus)
+                                .accessibility_label("New connection")
+                                .tooltip("New connection")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.edit_profile(Profile::default(), true, window, cx)
+                                })),
+                        ),
                 ),
             )
             .when(!self.profiles.is_empty(), |el| {

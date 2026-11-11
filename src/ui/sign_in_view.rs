@@ -1159,7 +1159,7 @@ impl Qrow {
             )
     }
 
-    /// The menu of a sign-in row: the account actions, Edit, Copy Settings,
+    /// The menu of a sign-in row: the account actions, Edit, Copy settings,
     /// and Delete.
     fn open_sign_in_menu(
         &mut self,
@@ -1255,28 +1255,13 @@ impl Qrow {
                 self.show_sign_in_editor(sign_in, None, false, true, window, cx);
             }
             Err(error) => {
-                let message = error.to_string();
-                window.open_alert_dialog(cx, move |alert, _, _| {
-                    alert
-                        .width(px(360.))
-                        .title("Cannot paste the sign-in")
-                        .description(
-                            div()
-                                .id("paste-sign-in-error")
-                                .test_support()
-                                .role(Role::Label)
-                                .aria_label(message.clone())
-                                .child(message.clone()),
-                        )
-                        .footer(
-                            DialogFooter::new().justify_end().child(
-                                Button::new("close-paste-sign-in-error")
-                                    .primary()
-                                    .label("OK")
-                                    .on_click(|_, window, cx| window.close_dialog(cx)),
-                            ),
-                        )
-                });
+                error_alert(
+                    "paste-sign-in-error",
+                    "Cannot paste the sign-in",
+                    error.to_string(),
+                    window,
+                    cx,
+                );
                 cx.notify();
             }
         }
@@ -1360,9 +1345,14 @@ impl Qrow {
                 )
             })
             .unwrap_or_default();
-        let choices = connection_form::sign_in_choices(&self.sign_ins, database_type);
-        let list =
-            connection_form::sign_in_combobox(&choices, &self.sign_ins, selected, window, cx);
+        let sign_ins = self.offered_sign_ins(
+            self.form
+                .as_ref()
+                .and_then(|form| form.pasted.as_ref())
+                .and_then(|pasted| pasted.sign_in.as_ref()),
+        );
+        let choices = connection_form::sign_in_choices(&sign_ins, database_type);
+        let list = connection_form::sign_in_combobox(&choices, &sign_ins, selected, window, cx);
         let subscription = Self::subscribe_sign_in_list(&list, window, cx);
         if let Some(form) = &mut self.form {
             form.sign_in_choices = choices;
@@ -1910,6 +1900,38 @@ impl SignInAction {
             Self::Retry => "retry",
         }
     }
+}
+
+/// An alert with `message` and an OK button. `id` names the message, and
+/// `close-{id}` the button.
+fn error_alert(
+    id: &'static str,
+    title: &'static str,
+    message: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        alert
+            .width(px(360.))
+            .title(title)
+            .description(
+                div()
+                    .id(id)
+                    .test_support()
+                    .role(Role::Label)
+                    .aria_label(message.clone())
+                    .child(message.clone()),
+            )
+            .footer(
+                DialogFooter::new().justify_end().child(
+                    Button::new(SharedString::from(format!("close-{id}")))
+                        .primary()
+                        .label("OK")
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                ),
+            )
+    });
 }
 
 #[cfg(test)]

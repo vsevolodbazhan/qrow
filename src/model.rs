@@ -2,6 +2,7 @@ use crate::sql::{KeywordCase, SqlStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
+pub mod sharing;
 pub mod transfer;
 
 pub const PREVIEW_ROWS: usize = 1_000;
@@ -52,6 +53,19 @@ where
     F: Fn(&str) -> bool,
 {
     copied_name(name, MAX_PROFILE_NAME, is_taken)
+}
+
+/// Keep the name of a pasted or imported connection when it is available,
+/// otherwise append a copy suffix.
+pub fn unique_profile_name<F>(name: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    if !is_taken(name) {
+        name.to_owned()
+    } else {
+        copied_name(name, MAX_PROFILE_NAME, is_taken)
+    }
 }
 
 /// Keep the name of a pasted sign-in when it is available, otherwise append
@@ -820,6 +834,26 @@ impl SharedCatalog {
     }
 }
 
+/// The catalog settings that Connection Settings shows for `profile`. A
+/// member of a shared catalog shows the shared settings, also while it does
+/// not browse schemas.
+pub fn shown_catalog(profile: &Profile, shared: &[SharedCatalog]) -> CatalogSettings {
+    match profile
+        .shared_catalog
+        .and_then(|id| shared.iter().find(|catalog| catalog.id == id))
+    {
+        Some(shared) => CatalogSettings {
+            refresh: if profile.catalog.browses() {
+                shared.settings.refresh
+            } else {
+                CatalogRefresh::Disabled
+            },
+            ..shared.settings.clone()
+        },
+        None => profile.catalog.clone(),
+    }
+}
+
 /// The catalog settings that apply to `profile`. A member of a shared
 /// catalog uses the shared settings. A connection with schema browsing off
 /// stays off.
@@ -1343,49 +1377,41 @@ struct SharedSignIn {
     callback_ports: Vec<u16>,
 }
 
-impl SignIn {
-    /// The settings of this sign-in as text that another user can paste.
-    pub fn to_shared_text(&self) -> String {
-        let shared = SharedSignIn {
-            qrow_sign_in: if self.provider == SignInProvider::Oidc {
+impl SharedSignIn {
+    /// The shared settings of `sign_in`.
+    fn of(sign_in: &SignIn) -> Self {
+        Self {
+            qrow_sign_in: if sign_in.provider == SignInProvider::Oidc {
                 1
             } else {
                 SHARED_SIGN_IN_VERSION
             },
-            name: self.name.clone(),
-            provider: self.provider,
-            issuer: self.issuer.clone(),
-            client_id: self.client_id.clone(),
-            scopes: extra_scopes(&self.scopes)
+            name: sign_in.name.clone(),
+            provider: sign_in.provider,
+            issuer: sign_in.issuer.clone(),
+            client_id: sign_in.client_id.clone(),
+            scopes: extra_scopes(&sign_in.scopes)
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
-            resource: self.resource.clone(),
-            callback_ports: self.callback_ports.clone(),
-        };
-        serde_json::to_string_pretty(&shared).expect("sign-in settings serialize")
+            resource: sign_in.resource.clone(),
+            callback_ports: sign_in.callback_ports.clone(),
+        }
     }
 
-    /// Reads settings from [`Self::to_shared_text`] into a new sign-in with
-    /// no account. Text around the settings, like the rest of a chat
-    /// message, and typographic quotes are accepted.
-    pub fn from_shared_text(text: &str) -> anyhow::Result<Self> {
-        const NOT_A_SIGN_IN: &str = "The clipboard does not contain sign-in settings. Use Copy Settings on a sign-in, then try again.";
-        anyhow::ensure!(text.len() <= MAX_SHARED_SIGN_IN_BYTES, NOT_A_SIGN_IN);
-        let value = shared_sign_in_object(text)
-            .or_else(|| shared_sign_in_object(&text.replace(['\u{201C}', '\u{201D}'], "\"")))
-            .ok_or_else(|| anyhow::anyhow!(NOT_A_SIGN_IN))?;
+    /// A new sign-in with no account from the shared settings in `value`.
+    fn read(value: serde_json::Value) -> anyhow::Result<SignIn> {
         let version = value
             .get("qrow_sign_in")
             .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| anyhow::anyhow!(NOT_A_SIGN_IN))?;
+            .ok_or_else(|| anyhow::anyhow!("The sign-in settings have no format version."))?;
         anyhow::ensure!(
             version <= u64::from(SHARED_SIGN_IN_VERSION),
             "These sign-in settings come from a newer version of Qrow. Update Qrow, then try again."
         );
-        let shared: SharedSignIn = serde_json::from_value(value)
+        let shared: Self = serde_json::from_value(value)
             .map_err(|error| anyhow::anyhow!("The sign-in settings are not complete: {error}."))?;
-        let sign_in = Self {
+        let sign_in = SignIn {
             name: shared.name.trim().to_owned(),
             provider: shared.provider,
             issuer: shared.issuer.trim().to_owned(),
@@ -1395,32 +1421,72 @@ impl SignIn {
                 .resource
                 .filter(|resource| !resource.trim().is_empty()),
             callback_ports: shared.callback_ports,
-            ..Self::default()
+            ..SignIn::default()
         };
         sign_in.validate()?;
         Ok(sign_in)
     }
 }
 
-/// The first JSON object in `text` that has the `qrow_sign_in` marker. Other
-/// text, also text with braces, can come before and after it.
-fn shared_sign_in_object(text: &str) -> Option<serde_json::Value> {
+impl SignIn {
+    /// The settings of this sign-in as text that another user can paste.
+    pub fn to_shared_text(&self) -> String {
+        serde_json::to_string_pretty(&SharedSignIn::of(self)).expect("sign-in settings serialize")
+    }
+
+    /// Reads settings from [`Self::to_shared_text`] into a new sign-in with
+    /// no account. Text around the settings, like the rest of a chat
+    /// message, and typographic quotes are accepted.
+    pub fn from_shared_text(text: &str) -> anyhow::Result<Self> {
+        const NOT_A_SIGN_IN: &str = "The clipboard does not contain sign-in settings. Use Copy settings on a sign-in, then try again.";
+        anyhow::ensure!(text.len() <= MAX_SHARED_SIGN_IN_BYTES, NOT_A_SIGN_IN);
+        let value = shared_object(text, "qrow_sign_in")
+            .filter(|value| {
+                value
+                    .get("qrow_sign_in")
+                    .is_some_and(serde_json::Value::is_u64)
+            })
+            .ok_or_else(|| anyhow::anyhow!(NOT_A_SIGN_IN))?;
+        SharedSignIn::read(value)
+    }
+
+    /// Return whether `other` has the same provider settings as this
+    /// sign-in, so that the two can share tokens. Names and callback ports
+    /// do not matter.
+    pub fn same_provider_settings(&self, other: &Self) -> bool {
+        self.token_requirements_eq(&Self {
+            id: self.id,
+            ..other.clone()
+        })
+    }
+}
+
+/// The first JSON object in `text` that has the key `marker`, also after
+/// typographic quotes change to straight quotes.
+fn shared_object(text: &str, marker: &str) -> Option<serde_json::Value> {
+    shared_object_in(text, marker)
+        .or_else(|| shared_object_in(&text.replace(['\u{201C}', '\u{201D}'], "\""), marker))
+}
+
+/// The first JSON object in `text` that has the key `marker`. Other text,
+/// also text with braces, can come before and after it.
+fn shared_object_in(text: &str, marker: &str) -> Option<serde_json::Value> {
     // The object starts at one of the nearest braces before a marker. A few
     // tries for each marker keep the work linear in the length of the text.
     const STARTS_PER_MARKER: usize = 4;
-    text.match_indices("\"qrow_sign_in\"")
-        .find_map(|(marker, _)| {
-            text[..marker]
-                .rmatch_indices('{')
-                .take(STARTS_PER_MARKER)
-                .find_map(|(start, _)| {
-                    serde_json::Deserializer::from_str(&text[start..])
-                        .into_iter::<serde_json::Value>()
-                        .next()?
-                        .ok()
-                        .filter(|value| value.get("qrow_sign_in").is_some())
-                })
-        })
+    let quoted = format!("\"{marker}\"");
+    text.match_indices(&quoted).find_map(|(at, _)| {
+        text[..at]
+            .rmatch_indices('{')
+            .take(STARTS_PER_MARKER)
+            .find_map(|(start, _)| {
+                serde_json::Deserializer::from_str(&text[start..])
+                    .into_iter::<serde_json::Value>()
+                    .next()?
+                    .ok()
+                    .filter(|value| value.get(marker).is_some())
+            })
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

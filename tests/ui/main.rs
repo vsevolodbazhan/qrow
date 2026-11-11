@@ -13,6 +13,7 @@ mod assistant_threads;
 mod assistant_transcript;
 mod catalog;
 mod composer_motion;
+mod connection_sharing;
 mod connections;
 mod dbt;
 #[path = "../support/dbt_manifest.rs"]

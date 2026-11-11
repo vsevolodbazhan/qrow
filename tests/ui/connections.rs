@@ -716,6 +716,7 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
             "Disconnect",
             "Edit",
             "Duplicate",
+            "Copy settings",
             "Delete",
             "Schemas",
             "Refresh",

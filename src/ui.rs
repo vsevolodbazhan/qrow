@@ -6,6 +6,7 @@ mod button_pair;
 mod catalog_tree;
 mod comments;
 mod connection_form;
+mod connection_sharing;
 mod dbt;
 mod dbt_details;
 mod demo;
@@ -88,6 +89,7 @@ actions!(
         NewTab,
         ImportSqlFile,
         SaveAsSqlFile,
+        PasteConnection,
         CloseTab,
         ToggleSidebar,
         ShowConnections,
@@ -240,6 +242,8 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                 MenuItem::action("New query tab", NewTab),
                 MenuItem::action("Import SQL file…", ImportSqlFile),
                 MenuItem::action("Close tab", CloseTab),
+                MenuItem::separator(),
+                MenuItem::action("Paste connection", PasteConnection),
             ],
         },
         Menu {
@@ -623,6 +627,8 @@ struct ProfileEditor {
     /// The dbt project fields.
     dbt: dbt::DbtForm,
     is_new: bool,
+    /// The form came from Paste connection.
+    pasted: Option<connection_sharing::PastedConnection>,
     error: Option<String>,
     /// The errors of single fields, by index in `fields`. Each shows below
     /// its field; `error` holds an error of the whole form for the footer.
@@ -636,6 +642,8 @@ struct ProfileSave {
     /// The shared catalog that the connection uses, with its edited settings.
     shared: Option<SharedCatalog>,
     password_changed: bool,
+    /// The sign-in of a pasted connection, which the workspace does not have.
+    sign_in: Option<crate::model::SignIn>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProfileSaveAction {
@@ -2050,7 +2058,16 @@ impl Qrow {
                     profile,
                     shared,
                     password_changed,
+                    sign_in,
                 } = saved;
+                if let Some(mut sign_in) = sign_in
+                    && !self.sign_ins.iter().any(|other| other.id == sign_in.id)
+                {
+                    sign_in.name = crate::model::unique_sign_in_name(&sign_in.name, |name| {
+                        self.sign_ins.iter().any(|other| other.name == name)
+                    });
+                    self.sign_ins.push(sign_in);
+                }
                 let id = profile.id;
                 let is_new = self.form.as_ref().is_some_and(|form| form.is_new);
                 let had_profiles = !self.profiles.is_empty();
@@ -3152,6 +3169,8 @@ impl Qrow {
             });
             this.edit_profile(profile, true, window, cx);
         });
+        let copy_settings =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.copy_connection_settings(id, cx));
         let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.confirm_delete_profile(id, window, cx)
         });
@@ -3192,6 +3211,7 @@ impl Qrow {
                     )
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
+                    .item(PopupMenuItem::new("Copy settings").on_click(copy_settings))
                     .item(PopupMenuItem::new("Show activity").on_click(show_activity))
                     // The actions only show the shortcuts: a click runs the handler.
                     .item(
@@ -3399,6 +3419,18 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_profile_editor(profile, is_new, None, window, cx);
+    }
+    /// Opens Connection Settings with the settings of `profile`. `pasted`
+    /// comes from Paste connection.
+    fn open_profile_editor(
+        &mut self,
+        profile: Profile,
+        is_new: bool,
+        pasted: Option<connection_sharing::PastedConnection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !is_new && self.profile_busy(profile.id) {
             self.message =
                 Some("Wait for queries using this connection to finish before editing it.".into());
@@ -3411,19 +3443,7 @@ impl Qrow {
                 .find(|catalog| catalog.id == id)
                 .cloned()
         });
-        // A member shows the settings of its shared catalog, also while it
-        // does not browse schemas.
-        let settings = match &shared {
-            Some(shared) => CatalogSettings {
-                refresh: if profile.catalog.browses() {
-                    shared.settings.refresh
-                } else {
-                    CatalogRefresh::Disabled
-                },
-                ..shared.settings.clone()
-            },
-            None => profile.catalog.clone(),
-        };
+        let settings = crate::model::shown_catalog(&profile, &self.shared_catalogs);
         let values = [
             profile.name.clone(),
             profile.host.clone(),
@@ -3536,8 +3556,9 @@ impl Qrow {
                     cx.notify();
                 }
             });
-        let sign_in_choices =
-            connection_form::sign_in_choices(&self.sign_ins, profile.database_type);
+        let sign_ins =
+            self.offered_sign_ins(pasted.as_ref().and_then(|pasted| pasted.sign_in.as_ref()));
+        let sign_in_choices = connection_form::sign_in_choices(&sign_ins, profile.database_type);
         let authentication = connection_form::authentication_select(
             profile.authentication,
             profile.database_type,
@@ -3546,7 +3567,7 @@ impl Qrow {
         );
         let sign_in = connection_form::sign_in_combobox(
             &sign_in_choices,
-            &self.sign_ins,
+            &sign_ins,
             profile.authentication.sign_in(),
             window,
             cx,
@@ -3645,7 +3666,8 @@ impl Qrow {
             });
         let postgres_ssl_mode = connection_form::choice_select(
             &connection_form::postgres_ssl_mode_choices(),
-            &if is_new {
+            // A copied connection keeps its mode.
+            &if is_new && profile.postgres_ssl_mode.is_none() {
                 crate::model::PostgresSslMode::Require
             } else {
                 profile.postgres_ssl_mode()
@@ -3691,6 +3713,7 @@ impl Qrow {
             profile,
             fields,
             is_new,
+            pasted,
             error: None,
             field_errors: Vec::new(),
             focus_field: Default::default(),
@@ -3943,9 +3966,18 @@ impl Qrow {
             } else if profile.database_type != crate::model::DatabaseType::Postgres
                 && connection_form::uses_sign_in(&form.authentication, cx)
             {
+                let pasted = form
+                    .pasted
+                    .as_ref()
+                    .and_then(|pasted| pasted.sign_in.as_ref());
                 let sign_in =
                     connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
-                        .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
+                        .and_then(|id| {
+                            self.sign_ins
+                                .iter()
+                                .chain(pasted)
+                                .find(|sign_in| sign_in.id == id)
+                        })
                         .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
                 match sign_in.provider {
                     crate::model::SignInProvider::Oidc => Authentication::Oidc {
@@ -4002,6 +4034,12 @@ impl Qrow {
         let demo = self.demo;
         let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();
+        // The sign-in of a pasted connection joins the workspace with it.
+        let sign_in = form
+            .pasted
+            .as_ref()
+            .and_then(|pasted| pasted.sign_in.clone())
+            .filter(|sign_in| profile.authentication.sign_in() == Some(sign_in.id));
         std::thread::spawn(move || {
             let result = if !demo
                 && (!password.is_empty()
@@ -4019,6 +4057,7 @@ impl Qrow {
                 profile,
                 shared,
                 password_changed,
+                sign_in,
             }));
         });
         cx.notify();

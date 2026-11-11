@@ -229,3 +229,36 @@ fn a_missing_initial_database_is_named_in_the_status_and_logs(cx: &mut TestAppCo
     );
     assert!(logs.contains("SCHEMA_NOT_FOUND"), "{logs}");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_pasted_connection_runs_queries_after_the_user_enters_a_password(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().connections(&["Shared"], "SELECT 1");
+    let source = workspace.profiles[0].clone();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+
+    // New Connection asks for the password before Save.
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
+    app.context_menu(cx, connection_row(source.id));
+    app.choose(cx, "popup-menu", "Copy settings");
+    app.wait_gone(cx, "popup-menu");
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
+    assert!(!copied.contains(PASSWORD), "{copied}");
+    app.click(cx, "paste-connection");
+    app.wait_for(cx, "connection-pasted-note");
+    app.scroll_to(cx, "connection-password");
+    app.fill(cx, "connection-password", PASSWORD);
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "the pasted connection", QUERY_TIMEOUT, |_, _| {
+        app.saved().profiles.len() == 2
+    });
+    let pasted = app.saved().profiles[1].clone();
+    assert_eq!(pasted.name, "Shared copy");
+    app.select_connection(cx, &pasted);
+    app.run_complete(cx, "SELECT 7 AS value");
+    app.wait_cell(cx, 0, 1, "7");
+}
