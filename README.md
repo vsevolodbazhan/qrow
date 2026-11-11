@@ -4,17 +4,17 @@
 
 # Qrow
 
-A fast, native desktop SQL workbench, written in Rust with [GPUI](https://gpui.rs/)
-and [GPUI Kit](https://github.com/longbridge/gpui-kit).
+Desktop SQL workbench, written in Rust. Built with [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
 ![Qrow demo with the schema catalog and assistant](assets/screenshots/demo.png)
 
 ## Overview
 
-Qrow is a SQL client for data engineers and analysts. It starts quickly,
-stays responsive with large results, and connects to databases without a JVM
-or separate drivers. It brings your schema catalog, your dbt project, and an
-optional AI assistant into one window. Qrow is inspired by
+Qrow is a SQL client for data engineers and analysts. It is fast because it
+is a native Rust application: it does not run in Electron or on a JVM, and it
+draws its interface on the GPU. It also connects to databases without separate
+drivers. It brings your schema catalog, your dbt project, and an optional AI
+assistant into one window. Qrow is inspired by
 [DataGrip](https://www.jetbrains.com/datagrip/) and [Zed](https://zed.dev/).
 
 ## Features
