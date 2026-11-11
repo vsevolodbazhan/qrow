@@ -14,6 +14,8 @@ use gpui_kit::component::{
 };
 
 pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
+/// The width and height of a sidebar header action button.
+pub(super) const SIDEBAR_HEADER_ACTION_SIZE: f32 = 24.;
 
 /// The left padding of the Linux title bar, in rems. It aligns the ink of the
 /// application menu icon with the sidebar title: the 0.75 rem title inset,
@@ -127,6 +129,16 @@ impl Qrow {
             window,
             cx,
         );
+    }
+
+    /// The group of action buttons at the end of a sidebar header. The
+    /// buttons touch, so they read as one group. The inset centers the last
+    /// button over the status slots of the Connections tree, in every
+    /// sidebar, so the actions do not move when the panel changes.
+    pub(super) fn sidebar_header_actions(&self) -> Div {
+        h_flex()
+            .flex_shrink_0()
+            .mr(self.ui_px((catalog_tree::STATUS_SLOT_WIDTH - SIDEBAR_HEADER_ACTION_SIZE) / 2.))
     }
 
     pub(super) fn sidebar_header(

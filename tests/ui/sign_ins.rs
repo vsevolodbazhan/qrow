@@ -4,7 +4,7 @@
 use crate::support::{
     MemoryCredentials, SignIns, TestApp, assert_sign_in_dot,
     assistant::editor_text,
-    click_element, find_in, label, offline_profile,
+    bounds_of, click_element, find_in, label, offline_profile,
     oidc::{Provider, subject, trust},
     present, value,
 };
@@ -175,6 +175,44 @@ fn the_status_bar_buttons_choose_and_hide_the_sidebar_panel(cx: &mut TestAppCont
     app.update(cx, |window, _| {
         assert!(!present(window, &"sidebar-toggle".into()));
     });
+}
+
+/// The size of a header action, the distance between the centers of the two
+/// header actions of a sidebar, and the center of the last action.
+fn header_actions(
+    app: &TestApp,
+    cx: &mut TestAppContext,
+    paste: &str,
+    add: &str,
+) -> (f32, f32, f32) {
+    app.update(cx, |window, _| {
+        let paste = bounds_of(window, paste);
+        let add = bounds_of(window, add);
+        assert_eq!(paste.size, add.size);
+        (
+            f32::from(add.size.width),
+            f32::from(add.center().x - paste.center().x),
+            f32::from(add.center().x),
+        )
+    })
+}
+
+#[gpui_kit::test]
+fn the_connections_and_sign_ins_headers_place_their_actions_the_same(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, _) = workspace(&provider, false);
+    let app = launch(cx, &provider, workspace);
+    app.wait_for(cx, "add-connection");
+    let connections = header_actions(&app, cx, "Paste connection", "New connection");
+    // New connection stays centered over the search scope button below it.
+    app.update(cx, |window, _| {
+        let add = bounds_of(window, "New connection");
+        let scope = bounds_of(window, "search-scope");
+        assert!((f32::from(add.center().x - scope.center().x)).abs() < 0.01);
+    });
+    open_sign_ins(&app, cx);
+    let sign_ins = header_actions(&app, cx, "Paste sign-in", "New sign-in");
+    assert_eq!(connections, sign_ins);
 }
 
 #[gpui_kit::test]

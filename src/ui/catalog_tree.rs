@@ -47,7 +47,7 @@ const ROW_HEIGHT: f32 = 30.;
 /// The gap between the columns of a tree row, in pixels at UI scale 1.
 const ROW_GAP: f32 = 4.;
 /// The trailing lane shared by catalog status icons and the header action.
-const STATUS_SLOT_WIDTH: f32 = 28.;
+pub(super) const STATUS_SLOT_WIDTH: f32 = 28.;
 /// The opacity of the accent fill of the current connection row.
 const CURRENT_CONNECTION_FILL: f32 = 0.18;
 /// The key of the width that all tree rows share.
@@ -1633,7 +1633,7 @@ impl Qrow {
 
     /// The button after the search field that picks the connections to
     /// search. It shows as selected when the search skips connections. It
-    /// has the size of New connection and sits in the same lane.
+    /// is as wide as the status slots and centered under New connection.
     fn search_scope_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let size = self.ui_px(STATUS_SLOT_WIDTH);
         let scope = self.catalog.scope.clone();
@@ -1695,7 +1695,7 @@ impl Qrow {
 
     /// The Connections sidebar: its header, the search, and the tree.
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let action_size = self.ui_px(STATUS_SLOT_WIDTH);
+        let action_size = self.ui_px(workspace_view::SIDEBAR_HEADER_ACTION_SIZE);
         let active = self.active_profile();
         let rows: Rc<HashMap<Uuid, ConnectionRow>> = Rc::new(
             self.profiles
@@ -1788,11 +1788,10 @@ impl Qrow {
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
-                // The header actions touch, so they read as one group. New
-                // connection stays as wide as the status slots below it.
+                // The header actions have the same size and place as the
+                // Sign-ins header actions.
                 self.sidebar_header("Connections", cx).child(
-                    h_flex()
-                        .flex_shrink_0()
+                    self.sidebar_header_actions()
                         .child(
                             Button::new("paste-connection")
                                 .ghost()
