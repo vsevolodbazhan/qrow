@@ -47,7 +47,7 @@ const ROW_HEIGHT: f32 = 30.;
 /// The gap between the columns of a tree row, in pixels at UI scale 1.
 const ROW_GAP: f32 = 4.;
 /// The trailing lane shared by catalog status icons and the header action.
-const STATUS_SLOT_WIDTH: f32 = 28.;
+pub(super) const STATUS_SLOT_WIDTH: f32 = 28.;
 /// The opacity of the accent fill of the current connection row.
 const CURRENT_CONNECTION_FILL: f32 = 0.18;
 /// The key of the width that all tree rows share.
@@ -1788,15 +1788,10 @@ impl Qrow {
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
-                // The header actions match the Sign-ins header and touch, so
-                // they read as one group. The inset keeps New connection
-                // centered over the status slots below it.
+                // The header actions have the same size and place as the
+                // Sign-ins header actions.
                 self.sidebar_header("Connections", cx).child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .mr(self.ui_px(
-                            (STATUS_SLOT_WIDTH - workspace_view::SIDEBAR_HEADER_ACTION_SIZE) / 2.,
-                        ))
+                    self.sidebar_header_actions()
                         .child(
                             Button::new("paste-connection")
                                 .ghost()

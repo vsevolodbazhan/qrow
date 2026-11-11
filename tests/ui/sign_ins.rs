@@ -177,9 +177,14 @@ fn the_status_bar_buttons_choose_and_hide_the_sidebar_panel(cx: &mut TestAppCont
     });
 }
 
-/// The size of a header action and the distance between the centers of the
-/// two header actions of a sidebar.
-fn header_actions(app: &TestApp, cx: &mut TestAppContext, paste: &str, add: &str) -> (f32, f32) {
+/// The size of a header action, the distance between the centers of the two
+/// header actions of a sidebar, and the center of the last action.
+fn header_actions(
+    app: &TestApp,
+    cx: &mut TestAppContext,
+    paste: &str,
+    add: &str,
+) -> (f32, f32, f32) {
     app.update(cx, |window, _| {
         let paste = bounds_of(window, paste);
         let add = bounds_of(window, add);
@@ -187,12 +192,13 @@ fn header_actions(app: &TestApp, cx: &mut TestAppContext, paste: &str, add: &str
         (
             f32::from(add.size.width),
             f32::from(add.center().x - paste.center().x),
+            f32::from(add.center().x),
         )
     })
 }
 
 #[gpui_kit::test]
-fn the_connections_and_sign_ins_headers_space_their_actions_the_same(cx: &mut TestAppContext) {
+fn the_connections_and_sign_ins_headers_place_their_actions_the_same(cx: &mut TestAppContext) {
     let provider = Provider::start();
     let (workspace, _) = workspace(&provider, false);
     let app = launch(cx, &provider, workspace);
