@@ -156,7 +156,7 @@ fn shared_connection_text_rejects_other_or_invalid_content() {
 }
 
 #[test]
-fn pasted_settings_can_be_partial_but_a_file_needs_complete_connections() {
+fn pasted_settings_can_be_partial() {
     // A colleague enters their own username, and Save checks the fields.
     let partial =
         r#"{"qrow_connection": 1, "database_type": "postgres", "host": "db.example.test"}"#;
@@ -166,16 +166,6 @@ fn pasted_settings_can_be_partial_but_a_file_needs_complete_connections() {
     assert_eq!(pasted.name, "");
     // A missing port is the default port of the database type.
     assert_eq!(pasted.port, 5432);
-    let error = read_connections_file(partial).unwrap_err().to_string();
-    assert!(error.contains("Give this connection a name."), "{error}");
-    let mut json: serde_json::Value =
-        serde_json::from_str(&profile().to_shared_text(&CatalogSettings::default(), None)).unwrap();
-    json.as_object_mut().unwrap().remove("username");
-    let file = serde_json::json!({"qrow_connections": 1, "connections": [json]});
-    let error = read_connections_file(&file.to_string())
-        .unwrap_err()
-        .to_string();
-    assert!(error.starts_with("Connection 1 \"Warehouse\": "), "{error}");
 }
 
 #[test]
@@ -194,52 +184,33 @@ fn trino_browser_authentication_is_shared() {
 }
 
 #[test]
-fn a_connections_file_round_trips_and_accepts_one_connection() {
-    let account = sign_in();
-    let first = Profile {
-        authentication: Authentication::Oidc {
-            sign_in: account.id,
-        },
-        ..profile()
-    };
-    let second = Profile {
-        name: "Analytics".into(),
-        ..profile()
-    };
-    let text = connections_file_text([
-        (&first, first.catalog.clone(), Some(&account)),
-        (&second, second.catalog.clone(), None),
-    ]);
-    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(json["qrow_connections"], 1);
-    let read = read_connections_file(&text).unwrap();
-    assert_eq!(read.len(), 2);
-    assert_eq!(read[0].profile.name, "Warehouse");
-    assert_eq!(read[0].sign_in.as_ref().unwrap().issuer, account.issuer);
-    assert_eq!(read[1].profile.name, "Analytics");
-    assert_eq!(read[1].sign_in, None);
-    let one = read_connections_file(&second.to_shared_text(&second.catalog, None)).unwrap();
-    assert_eq!(one[0].profile.name, "Analytics");
+fn a_legacy_postgres_connection_keeps_its_tls_mode() {
+    for (tls, mode) in [
+        (true, PostgresSslMode::VerifyFull),
+        (false, PostgresSslMode::Disable),
+    ] {
+        let legacy = Profile {
+            database_type: DatabaseType::Postgres,
+            port: 5432,
+            tls,
+            postgres_ssl_mode: None,
+            ..profile()
+        };
+        let text = legacy.to_shared_text(&legacy.catalog, None);
+        let pasted = Profile::from_shared_text(&text).unwrap().profile;
+        assert_eq!(pasted.postgres_ssl_mode, Some(mode));
+        // Settings without the mode read it from the TLS switch.
+        let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        json.as_object_mut().unwrap().remove("postgres_ssl_mode");
+        let pasted = Profile::from_shared_text(&json.to_string())
+            .unwrap()
+            .profile;
+        assert_eq!(pasted.postgres_ssl_mode, Some(mode));
+    }
 }
 
 #[test]
-fn a_connections_file_names_the_invalid_connection() {
-    let error = |text: &str| read_connections_file(text).unwrap_err().to_string();
-    assert!(error("not json").contains("not valid JSON"));
-    assert!(error("{}").contains("does not contain connections"));
-    assert!(error(r#"{"qrow_connections": 1, "connections": []}"#).contains("does not contain"));
-    assert!(error(r#"{"qrow_connections": 2, "connections": []}"#).contains("newer version"));
-    let invalid = r#"{"qrow_connections": 1, "connections": [
-        {"qrow_connection": 1, "name": "Good", "host": "h", "port": 1, "username": "u", "database": "d"},
-        {"qrow_connection": 1, "name": "Bad", "host": "h", "port": 0, "username": "u", "database": "d"}
-    ]}"#;
-    let message = error(invalid);
-    assert!(message.starts_with("Connection 2 \"Bad\": "), "{message}");
-    assert!(message.contains("Port"), "{message}");
-}
-
-#[test]
-fn placed_connections_get_free_names_and_reuse_matching_sign_ins() {
+fn a_placed_connection_gets_a_free_name_and_reuses_a_matching_sign_in() {
     let existing_sign_in = SignIn {
         name: "Ours".into(),
         callback_ports: vec![8765],
@@ -258,74 +229,34 @@ fn placed_connections_get_free_names_and_reuse_matching_sign_ins() {
         },
         sign_in,
     };
-    let other = SignIn {
-        issuer: "https://other.example.test".into(),
-        ..sign_in()
-    };
-    let placed = place_connections(
-        vec![
-            shared("Warehouse", Some(sign_in())),
-            shared("Warehouse", None),
-            shared("Lake", Some(other.clone())),
-            shared("Lake 2", Some(SignIn { ..other.clone() })),
-        ],
-        std::slice::from_ref(&existing),
-        std::slice::from_ref(&existing_sign_in),
-    );
-    let names: Vec<_> = placed.profiles.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(
-        names,
-        ["Warehouse copy", "Warehouse copy 2", "Lake", "Lake 2"]
-    );
+    let profiles = std::slice::from_ref(&existing);
+    let sign_ins = std::slice::from_ref(&existing_sign_in);
     // The same provider settings use the sign-in of the workspace.
+    let (placed, new) = place_connection(shared("Warehouse", Some(sign_in())), profiles, sign_ins);
+    assert_eq!(placed.name, "Warehouse copy");
     assert_eq!(
-        placed.profiles[0].authentication,
+        placed.authentication,
         Authentication::Oidc {
             sign_in: existing_sign_in.id
         }
     );
-    assert_eq!(placed.profiles[1].authentication, Authentication::Password);
-    // Other settings add one sign-in, with a free name, for both connections.
-    assert_eq!(placed.sign_ins.len(), 1);
-    assert_eq!(placed.sign_ins[0].name, "Company");
-    assert_eq!(placed.sign_ins[0].provider, SignInProvider::Oidc);
-    let added = Authentication::Oidc {
-        sign_in: placed.sign_ins[0].id,
+    assert_eq!(new, None);
+    let (placed, new) = place_connection(shared("Lake", None), profiles, sign_ins);
+    assert_eq!(placed.name, "Lake");
+    assert_eq!(placed.authentication, Authentication::Password);
+    assert_eq!(new, None);
+    // Other settings make a new sign-in with a free name.
+    let other = SignIn {
+        name: "Ours".into(),
+        issuer: "https://other.example.test".into(),
+        ..sign_in()
     };
-    assert_eq!(placed.profiles[2].authentication, added);
-    assert_eq!(placed.profiles[3].authentication, added);
-    let taken = place_connections(
-        vec![shared("Lake", Some(other))],
-        &[],
-        &[SignIn {
-            name: "Company".into(),
-            issuer: "https://third.example.test".into(),
-            ..sign_in()
-        }],
+    let (placed, new) = place_connection(shared("Lake", Some(other)), profiles, sign_ins);
+    let new = new.unwrap();
+    assert_eq!(new.name, "Ours copy");
+    assert_eq!(new.provider, SignInProvider::Oidc);
+    assert_eq!(
+        placed.authentication,
+        Authentication::Oidc { sign_in: new.id }
     );
-    assert_eq!(taken.sign_ins[0].name, "Company copy");
-}
-
-#[test]
-fn a_legacy_postgres_connection_keeps_its_tls_mode() {
-    for (tls, mode) in [
-        (true, PostgresSslMode::VerifyFull),
-        (false, PostgresSslMode::Disable),
-    ] {
-        let legacy = Profile {
-            database_type: DatabaseType::Postgres,
-            port: 5432,
-            tls,
-            postgres_ssl_mode: None,
-            ..profile()
-        };
-        let text = legacy.to_shared_text(&legacy.catalog, None);
-        let pasted = Profile::from_shared_text(&text).unwrap().profile;
-        assert_eq!(pasted.postgres_ssl_mode, Some(mode));
-        // A file without the mode reads it from the TLS switch.
-        let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        json.as_object_mut().unwrap().remove("postgres_ssl_mode");
-        let read = read_connections_file(&json.to_string()).unwrap();
-        assert_eq!(read[0].profile.postgres_ssl_mode, Some(mode));
-    }
 }

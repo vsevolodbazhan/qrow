@@ -71,14 +71,6 @@ impl Qrow {
                                 PopupMenuItem::new("Paste connection")
                                     .action(Box::new(PasteConnection)),
                             )
-                            .item(
-                                PopupMenuItem::new("Import connections…")
-                                    .action(Box::new(ImportConnections)),
-                            )
-                            .item(
-                                PopupMenuItem::new("Export connections…")
-                                    .action(Box::new(ExportConnections)),
-                            )
                     })
                     .submenu("Edit", window, cx, move |menu, _, _| {
                         use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
@@ -1151,8 +1143,6 @@ impl Qrow {
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::import_sql_file))
             .on_action(cx.listener(Self::paste_connection))
-            .on_action(cx.listener(Self::import_connections))
-            .on_action(cx.listener(Self::export_connections))
             .on_action(cx.listener(Self::save_as_sql_file))
             .on_action(cx.listener(Self::select_tab))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {

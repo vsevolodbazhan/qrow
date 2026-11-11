@@ -1,5 +1,5 @@
-//! Connection settings as text that a user copies to another user or to a
-//! file. The text has no identifiers, passwords, tokens, or accounts.
+//! Connection settings as text that a user copies to another user. The
+//! text has no identifiers, passwords, tokens, or accounts.
 
 use super::{
     Authentication, CatalogColumnReads, CatalogSettings, ConnectionLifecycle, DatabaseType,
@@ -11,18 +11,10 @@ use std::collections::BTreeMap;
 
 /// The format version of shared connection settings.
 pub const SHARED_CONNECTION_VERSION: u32 = 1;
-/// The format version of a connections file.
-pub const CONNECTIONS_FILE_VERSION: u32 = 1;
 /// The longest text that Qrow reads as the settings of one connection.
 const MAX_SHARED_CONNECTION_BYTES: usize = 256 * 1024;
-/// The largest connections file that Qrow reads.
-pub const MAX_CONNECTIONS_FILE_BYTES: u64 = 16 * 1024 * 1024;
-/// The most connections in one connections file.
-pub const MAX_FILE_CONNECTIONS: usize = 1_000;
 
 const NOT_A_CONNECTION: &str = "The clipboard does not contain connection settings. Use Copy settings on a connection, then try again.";
-const NOT_A_FILE: &str =
-    "The file does not contain connections. Choose a file from Export connections.";
 
 /// The settings of a connection that one user gives to another. Each field
 /// is named here, so that a new private field of [`Profile`] does not go into
@@ -139,10 +131,10 @@ impl SharedConnection {
 }
 
 impl SharedConnection<serde_json::Value> {
-    /// A new connection from the shared settings in `value`. A `complete`
-    /// connection passes the checks of Connection Settings. Otherwise the
-    /// connection can lack fields, and only its sign-in is checked.
-    fn read(value: serde_json::Value, complete: bool) -> anyhow::Result<SharedConnectionSettings> {
+    /// A new connection from the shared settings in `value`. The connection
+    /// can lack fields: Connection Settings checks them before Save. Only
+    /// its sign-in is checked here, because the form cannot change it.
+    fn read(value: serde_json::Value) -> anyhow::Result<SharedConnectionSettings> {
         let version = value
             .get("qrow_connection")
             .map_or(Some(0), serde_json::Value::as_u64)
@@ -197,18 +189,8 @@ impl SharedConnection<serde_json::Value> {
         if profile.database_type == DatabaseType::Postgres {
             profile.postgres_ssl_mode = Some(profile.postgres_ssl_mode());
         }
-        if complete {
-            profile.validate()?;
-        }
         Ok(SharedConnectionSettings { profile, sign_in })
     }
-}
-
-/// The connections of a connections file.
-#[derive(Serialize)]
-struct ConnectionsFile<'a> {
-    qrow_connections: u32,
-    connections: &'a [SharedConnection],
 }
 
 impl Profile {
@@ -234,129 +216,44 @@ impl Profile {
                     .is_some_and(serde_json::Value::is_u64)
             })
             .ok_or_else(|| anyhow::anyhow!(NOT_A_CONNECTION))?;
-        SharedConnection::<serde_json::Value>::read(value, false)
+        SharedConnection::<serde_json::Value>::read(value)
     }
 }
 
-/// The text of a connections file with `connections`: each connection with
-/// its schema settings and its sign-in.
-pub fn connections_file_text<'a>(
-    connections: impl IntoIterator<Item = (&'a Profile, CatalogSettings, Option<&'a SignIn>)>,
-) -> String {
-    let connections: Vec<_> = connections
-        .into_iter()
-        .map(|(profile, catalog, sign_in)| SharedConnection::of(profile, &catalog, sign_in))
-        .collect();
-    let mut text = serde_json::to_string_pretty(&ConnectionsFile {
-        qrow_connections: CONNECTIONS_FILE_VERSION,
-        connections: &connections,
-    })
-    .expect("connections serialize");
-    text.push('\n');
-    text
-}
-
-/// Reads the connections of a connections file. A file with the settings of
-/// one connection, as Copy settings makes them, is also accepted. Each
-/// connection must be complete, because import adds it without a review.
-pub fn read_connections_file(text: &str) -> anyhow::Result<Vec<SharedConnectionSettings>> {
-    let value: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
-        .map_err(|error| anyhow::anyhow!("The file is not valid JSON: {error}."))?;
-    if value.get("qrow_connection").is_some() {
-        return Ok(vec![SharedConnection::<serde_json::Value>::read(
-            value, true,
-        )?]);
-    }
-    let version = value
-        .get("qrow_connections")
-        .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| anyhow::anyhow!(NOT_A_FILE))?;
-    anyhow::ensure!(
-        version <= u64::from(CONNECTIONS_FILE_VERSION),
-        "This file comes from a newer version of Qrow. Update Qrow, then try again."
-    );
-    let connections = value
-        .get("connections")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!(NOT_A_FILE))?;
-    anyhow::ensure!(
-        !connections.is_empty(),
-        "The file does not contain connections."
-    );
-    anyhow::ensure!(
-        connections.len() <= MAX_FILE_CONNECTIONS,
-        "The file contains more than {MAX_FILE_CONNECTIONS} connections."
-    );
-    connections
-        .iter()
-        .enumerate()
-        .map(|(index, connection)| {
-            SharedConnection::<serde_json::Value>::read(connection.clone(), true).map_err(|error| {
-                let name = connection
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|name| format!(" \"{}\"", name.trim()))
-                    .unwrap_or_default();
-                anyhow::anyhow!("Connection {}{name}: {error}", index + 1)
-            })
-        })
-        .collect()
-}
-
-/// Shared connections, ready to add to a workspace with `profiles` and
-/// `sign_ins`.
-#[derive(Debug, Default, PartialEq)]
-pub struct PlacedConnections {
-    /// The new connections, with names that no other connection has.
-    pub profiles: Vec<Profile>,
-    /// The sign-ins that the workspace does not have yet.
-    pub sign_ins: Vec<SignIn>,
-}
-
-/// Gives each shared connection a free name, and a sign-in of the workspace
-/// when one has the same provider settings. Other sign-ins are new, with free
-/// names, and connections with the same sign-in settings share one.
-pub fn place_connections(
-    connections: Vec<SharedConnectionSettings>,
+/// Gives a shared connection a free name, and a sign-in of the workspace
+/// when one has the same provider settings. Otherwise the sign-in is new, with
+/// a free name, and is returned so that Save can add it.
+pub fn place_connection(
+    shared: SharedConnectionSettings,
     profiles: &[Profile],
     sign_ins: &[SignIn],
-) -> PlacedConnections {
-    let mut placed = PlacedConnections::default();
-    for SharedConnectionSettings {
+) -> (Profile, Option<SignIn>) {
+    let SharedConnectionSettings {
         mut profile,
         sign_in,
-    } in connections
-    {
-        if let Some(sign_in) = sign_in {
-            let id = match sign_ins
-                .iter()
-                .chain(&placed.sign_ins)
-                .find(|existing| existing.same_provider_settings(&sign_in))
-            {
-                Some(existing) => existing.id,
-                None => {
-                    let name = unique_sign_in_name(&sign_in.name, |name| {
-                        sign_ins
-                            .iter()
-                            .chain(&placed.sign_ins)
-                            .any(|other| other.name == name)
-                    });
-                    let id = sign_in.id;
-                    placed.sign_ins.push(SignIn { name, ..sign_in });
-                    id
-                }
-            };
-            profile.authentication = Authentication::Oidc { sign_in: id };
-        }
-        profile.name = super::unique_profile_name(&profile.name, |name| {
-            profiles
-                .iter()
-                .chain(&placed.profiles)
-                .any(|other| other.name == name)
-        });
-        placed.profiles.push(profile);
+    } = shared;
+    let mut new_sign_in = None;
+    if let Some(sign_in) = sign_in {
+        let id = match sign_ins
+            .iter()
+            .find(|existing| existing.same_provider_settings(&sign_in))
+        {
+            Some(existing) => existing.id,
+            None => {
+                let name = unique_sign_in_name(&sign_in.name, |name| {
+                    sign_ins.iter().any(|other| other.name == name)
+                });
+                let id = sign_in.id;
+                new_sign_in = Some(SignIn { name, ..sign_in });
+                id
+            }
+        };
+        profile.authentication = Authentication::Oidc { sign_in: id };
     }
-    placed
+    profile.name = super::unique_profile_name(&profile.name, |name| {
+        profiles.iter().any(|other| other.name == name)
+    });
+    (profile, new_sign_in)
 }
 
 #[cfg(test)]

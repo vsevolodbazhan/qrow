@@ -90,8 +90,6 @@ actions!(
         ImportSqlFile,
         SaveAsSqlFile,
         PasteConnection,
-        ImportConnections,
-        ExportConnections,
         CloseTab,
         ToggleSidebar,
         ShowConnections,
@@ -246,8 +244,6 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                 MenuItem::action("Close tab", CloseTab),
                 MenuItem::separator(),
                 MenuItem::action("Paste connection", PasteConnection),
-                MenuItem::action("Import connections…", ImportConnections),
-                MenuItem::action("Export connections…", ExportConnections),
             ],
         },
         Menu {

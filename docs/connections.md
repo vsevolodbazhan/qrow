@@ -809,30 +809,6 @@ scopes, and resource. If you do not have one, **Save** also adds the sign-in.
 The note at the bottom of **New Connection** gives the name and the issuer of
 the sign-in that Qrow adds. Make sure that you trust the issuer.
 
-### Export and import connections
-
-To move all connections to another computer, or to give them to a colleague:
-
-1. Select **File → Export connections…** and choose a file. The file contains
-   the same settings as **Copy settings** for each connection, without
-   passwords.
-2. On the other computer, select **File → Import connections…** and choose the
-   file.
-
-A connections file can have 1,000 connections and 16 MB or less.
-
-Qrow adds the connections of the file after your connections. Import uses the
-same rules for names and sign-ins as Paste connection. Import also accepts a
-file with the text of **Copy settings**. Import adds connections without
-**New Connection**, so each connection in the file must be complete. Use Paste
-connection for partial settings. The message after the import gives
-the name and the issuer of each sign-in that Qrow adds. If one connection in the file is not
-valid, Qrow tells you which one and adds nothing. Each imported connection
-gets a query tab. Imported Spark and Postgres connections with password
-authentication have no password. Edit each one and enter its password before
-you use it. An imported Trino connection with password authentication has an
-empty password, like a new Trino connection.
-
 ## Browse schemas
 
 The Connections sidebar is a tree. Each connection is a root row. Under a
