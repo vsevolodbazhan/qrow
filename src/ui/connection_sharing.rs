@@ -3,11 +3,12 @@
 //! secret store of this computer.
 use super::*;
 use crate::model::{
-    SignIn, effective_catalog,
+    SignIn,
     sharing::{
-        MAX_CONNECTIONS_FILE_BYTES, PlacedConnections, connections_file_text, place_connections,
-        read_connections_file,
+        MAX_CONNECTIONS_FILE_BYTES, MAX_FILE_CONNECTIONS, PlacedConnections,
+        SharedConnectionSettings, connections_file_text, place_connections, read_connections_file,
     },
+    shown_catalog,
 };
 use gpui_kit::component::notification::NotificationType;
 use std::{
@@ -39,7 +40,7 @@ impl Qrow {
         let Some(profile) = self.profiles.iter().find(|profile| profile.id == id) else {
             return;
         };
-        let catalog = effective_catalog(profile, &self.shared_catalogs);
+        let catalog = shown_catalog(profile, &self.shared_catalogs);
         cx.write_to_clipboard(ClipboardItem::new_string(
             profile.to_shared_text(&catalog, self.connection_sign_in(profile)),
         ));
@@ -116,10 +117,25 @@ impl Qrow {
         let text = connections_file_text(self.profiles.iter().map(|profile| {
             (
                 profile,
-                effective_catalog(profile, &self.shared_catalogs),
+                shown_catalog(profile, &self.shared_catalogs),
                 self.connection_sign_in(profile),
             )
         }));
+        // Import connections must be able to read the file.
+        if count > MAX_FILE_CONNECTIONS || text.len() as u64 > MAX_CONNECTIONS_FILE_BYTES {
+            window.push_notification(
+                toast::error(
+                    "connections-file-toast",
+                    "Could not export connections",
+                    format!(
+                        "A file can have {MAX_FILE_CONNECTIONS} connections and {} MB or less.",
+                        MAX_CONNECTIONS_FILE_BYTES / 1024 / 1024
+                    ),
+                ),
+                cx,
+            );
+            return;
+        }
         let directory = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
         let prompt = cx.prompt_for_new_path(&directory, Some(EXPORT_FILENAME));
         cx.spawn_in(window, async move |this, cx| {
@@ -196,9 +212,20 @@ impl Qrow {
                     return;
                 }
             };
+            let Ok((credentials, demo)) =
+                this.read_with(cx, |this, _| (this.credentials.clone(), this.demo))
+            else {
+                return;
+            };
+            // The passwords are ready before the connections show.
             let read = cx
                 .background_spawn(async move {
-                    read_file(&path).and_then(|text| read_connections_file(&text))
+                    let connections =
+                        read_file(&path).and_then(|text| read_connections_file(&text))?;
+                    if !demo {
+                        save_empty_passwords(credentials.as_ref(), &connections)?;
+                    }
+                    anyhow::Ok(connections)
                 })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| match read {
@@ -237,20 +264,6 @@ impl Qrow {
             .iter()
             .any(|profile| profile.authentication == Authentication::Password);
         let ids: Vec<Uuid> = placed.profiles.iter().map(|profile| profile.id).collect();
-        // Like New Connection, a Trino connection with password
-        // authentication keeps an empty password until the user enters one.
-        let trino: Vec<(Uuid, String)> = placed
-            .profiles
-            .iter()
-            .filter(|profile| {
-                profile.database_type == crate::model::DatabaseType::Trino
-                    && profile.authentication == Authentication::Password
-            })
-            .map(|profile| (profile.id, profile.name.clone()))
-            .collect();
-        if !self.demo && !trino.is_empty() {
-            self.save_empty_passwords(trino, window, cx);
-        }
         self.sign_ins.extend(placed.sign_ins);
         self.profiles.extend(placed.profiles);
         // The first connection takes the query tabs that had no connection.
@@ -288,42 +301,22 @@ impl Qrow {
     }
 }
 
-impl Qrow {
-    /// Saves an empty password for each connection of `profiles`, by ID and
-    /// name, and reports the first failure.
-    fn save_empty_passwords(
-        &self,
-        profiles: Vec<(Uuid, String)>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let credentials = self.credentials.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let failed = cx
-                .background_spawn(async move {
-                    profiles.into_iter().find_map(|(id, name)| {
-                        credentials
-                            .set_password(id, "")
-                            .err()
-                            .map(|error| format!("{name}: {error:#}"))
-                    })
-                })
-                .await;
-            if let Some(error) = failed {
-                let _ = this.update_in(cx, |_, window, cx| {
-                    window.push_notification(
-                        toast::error(
-                            "connections-file-toast",
-                            "Could not save an empty password",
-                            error,
-                        ),
-                        cx,
-                    )
-                });
-            }
-        })
-        .detach();
+/// Like New Connection, a Trino connection with password authentication
+/// keeps an empty password until the user enters one.
+fn save_empty_passwords(
+    credentials: &dyn crate::storage::Credentials,
+    connections: &[SharedConnectionSettings],
+) -> anyhow::Result<()> {
+    for SharedConnectionSettings { profile, .. } in connections {
+        if profile.database_type == crate::model::DatabaseType::Trino
+            && profile.authentication == Authentication::Password
+        {
+            credentials
+                .set_password(profile.id, "")
+                .map_err(|error| anyhow::anyhow!("{}: {error:#}", profile.name))?;
+        }
     }
+    Ok(())
 }
 
 /// An alert with `message` and an OK button. `id` names the message, and

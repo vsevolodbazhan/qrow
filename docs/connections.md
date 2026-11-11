@@ -813,6 +813,8 @@ To move all connections to another computer, or to give them to a colleague:
 2. On the other computer, select **File → Import connections…** and choose the
    file.
 
+A connections file can have 1,000 connections and 16 MB or less.
+
 Qrow adds the connections of the file after your connections. Import uses the
 same rules for names and sign-ins as Paste connection. Import also accepts a
 file with the text of **Copy settings**. If one connection in the file is not

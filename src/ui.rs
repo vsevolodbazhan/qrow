@@ -3447,19 +3447,7 @@ impl Qrow {
                 .find(|catalog| catalog.id == id)
                 .cloned()
         });
-        // A member shows the settings of its shared catalog, also while it
-        // does not browse schemas.
-        let settings = match &shared {
-            Some(shared) => CatalogSettings {
-                refresh: if profile.catalog.browses() {
-                    shared.settings.refresh
-                } else {
-                    CatalogRefresh::Disabled
-                },
-                ..shared.settings.clone()
-            },
-            None => profile.catalog.clone(),
-        };
+        let settings = crate::model::shown_catalog(&profile, &self.shared_catalogs);
         let values = [
             profile.name.clone(),
             profile.host.clone(),

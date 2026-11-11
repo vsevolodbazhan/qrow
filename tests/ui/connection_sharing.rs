@@ -448,3 +448,33 @@ fn an_imported_trino_connection_keeps_an_empty_password(cx: &mut TestAppContext)
     // Postgres needs a password, so it has none until the user enters it.
     assert!(app.credentials.get(saved.profiles[1].id).is_none());
 }
+
+#[gpui_kit::test]
+fn a_shared_catalog_member_copies_the_shared_schema_settings(cx: &mut TestAppContext) {
+    use qrow::model::{CatalogRefresh, CatalogSettings, SharedCatalog};
+    let (mut workspace, credentials) = workspace();
+    let shared = SharedCatalog {
+        id: uuid::Uuid::new_v4(),
+        name: "Metastore".into(),
+        settings: CatalogSettings {
+            include: vec!["sales_*".into()],
+            refresh: CatalogRefresh::Manual,
+            ..CatalogSettings::default()
+        },
+        preferred: None,
+    };
+    // One member browses schemas, the other has browsing off.
+    for profile in &mut workspace.profiles {
+        profile.shared_catalog = Some(shared.id);
+    }
+    workspace.profiles[1].catalog.refresh = CatalogRefresh::Disabled;
+    workspace.shared_catalogs = vec![shared];
+    let (browsing, off) = (workspace.profiles[0].id, workspace.profiles[1].id);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    for (id, mode) in [(browsing, "manual"), (off, "disabled")] {
+        let json: serde_json::Value = serde_json::from_str(&copy_settings(&app, cx, id)).unwrap();
+        assert_eq!(json["catalog"]["include"], serde_json::json!(["sales_*"]));
+        assert_eq!(json["catalog"]["refresh"]["mode"], mode);
+        assert!(json.get("shared_catalog").is_none());
+    }
+}

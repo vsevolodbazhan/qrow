@@ -18,7 +18,7 @@ const MAX_SHARED_CONNECTION_BYTES: usize = 256 * 1024;
 /// The largest connections file that Qrow reads.
 pub const MAX_CONNECTIONS_FILE_BYTES: u64 = 16 * 1024 * 1024;
 /// The most connections in one connections file.
-const MAX_FILE_CONNECTIONS: usize = 1_000;
+pub const MAX_FILE_CONNECTIONS: usize = 1_000;
 
 const NOT_A_CONNECTION: &str = "The clipboard does not contain connection settings. Use Copy settings on a connection, then try again.";
 const NOT_A_FILE: &str =

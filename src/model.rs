@@ -834,6 +834,26 @@ impl SharedCatalog {
     }
 }
 
+/// The catalog settings that Connection Settings shows for `profile`. A
+/// member of a shared catalog shows the shared settings, also while it does
+/// not browse schemas.
+pub fn shown_catalog(profile: &Profile, shared: &[SharedCatalog]) -> CatalogSettings {
+    match profile
+        .shared_catalog
+        .and_then(|id| shared.iter().find(|catalog| catalog.id == id))
+    {
+        Some(shared) => CatalogSettings {
+            refresh: if profile.catalog.browses() {
+                shared.settings.refresh
+            } else {
+                CatalogRefresh::Disabled
+            },
+            ..shared.settings.clone()
+        },
+        None => profile.catalog.clone(),
+    }
+}
+
 /// The catalog settings that apply to `profile`. A member of a shared
 /// catalog uses the shared settings. A connection with schema browsing off
 /// stays off.
