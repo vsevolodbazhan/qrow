@@ -186,8 +186,9 @@ fails packaging. The `linux` jobs download the qualified Ubuntu 24.04 archives f
 ARM64 and check their recorded SHA-256 digests. They do not rebuild the app.
 The DMG jobs check the archive digest, wrap the qualified app, mount the final
 image, compare its app files, and launch the mounted app.
+The `windows` jobs do the same for the qualified Windows installers.
 The publish job creates the release tag and an unpublished release with both
-DMGs and both Linux archives. It downloads the assets and checks SHA256SUMS
+DMGs, both Linux archives, and both Windows installers. It downloads the assets and checks SHA256SUMS
 before publishing. A failed upload or digest check leaves an unpublished
 release. A rerun with an existing release stops; inspect that release before
 retrying. It also
@@ -356,6 +357,17 @@ same arguments. Use two Cargo jobs on hosts with limited memory.
 For ARM64 cross checks, select `--target aarch64-pc-windows-msvc` and set
 `XWIN_CROSS_COMPILER=clang`. The clang backend supplies SDK include flags
 that the ARM64 `ring` build accepts.
+
+The release package is an installer that
+[scripts/package/qrow.iss](../scripts/package/qrow.iss) defines. The packaging
+script downloads the pinned Inno Setup compiler, checks its SHA-256 digest,
+and installs it in portable mode in `target/tools`. Set `QROW_ISCC` to the
+path of `ISCC.exe` to use another compiler. Do not change the `AppId` of the
+installer: upgrades and the uninstaller find an earlier install by it.
+
+Package qualification installs Qrow for the current user, so it stops when
+Qrow is already installed on the computer. Run it under a Windows account
+without Qrow.
 
 Package notices use UTF-8 for Cargo metadata and license files on all platforms.
 They do not depend on the Windows system code page.

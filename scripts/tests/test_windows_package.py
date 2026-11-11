@@ -1,13 +1,14 @@
-"""Windows packages contain the native executable and required license files."""
+"""Windows installers contain the native executable and required license files."""
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import tempfile
 import unittest
-from unittest.mock import patch
-import zipfile
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('windows_package', ROOT / 'scripts/package/windows.py')
@@ -60,8 +61,8 @@ class ResourceTests(unittest.TestCase):
 
 
 class WindowsPackageTests(unittest.TestCase):
-    def test_both_archives_use_default_version_when_manual_input_is_empty(self):
-        for machine, architecture in [('AMD64', 'x86_64'), ('ARM64', 'aarch64')]:
+    def test_both_installers_use_default_version_when_manual_input_is_empty(self):
+        for machine, architecture, inno in [('AMD64', 'x86_64', 'x64compatible'), ('ARM64', 'aarch64', 'arm64')]:
             with self.subTest(machine=machine), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / 'target/release').mkdir(parents=True)
@@ -70,16 +71,24 @@ class WindowsPackageTests(unittest.TestCase):
                     (root / name).write_text('synthetic license')
                 metadata = json.dumps({'packages': [{'name': 'qrow', 'version': '1.2.3'}],
                                        'target_directory': str(root / 'target')})
+                staged = {}
 
                 def run(command, **kwargs):
                     if 'scripts/package/notices.py' in command:
                         Path(command[-1]).write_text('synthetic notices')
+                    if command[0] == 'ISCC.exe':
+                        options = dict(item[2:].split('=', 1) for item in command if item.startswith('/D'))
+                        source = Path(options['Source'])
+                        staged.update({path.name: path.read_bytes() for path in source.iterdir()})
+                        staged['options'] = options
+                        (Path(options['OutputDir']) / (options['OutputName'] + '.exe')).write_bytes(b'synthetic setup')
 
                 previous = Path.cwd()
                 try:
                     os.chdir(root)
                     with patch.object(windows.sys, 'platform', 'win32'), \
                             patch.object(windows.platform, 'machine', return_value=machine), \
+                            patch.object(windows, 'compiler', return_value=Path('ISCC.exe')), \
                             patch.dict(os.environ, {'QROW_RELEASE_VERSION': '', 'CARGO_BUILD_TARGET': ''}), \
                             patch.object(windows.subprocess, 'check_output', return_value=metadata) as metadata_call, \
                             patch.object(windows.subprocess, 'run', side_effect=run) as calls:
@@ -87,9 +96,79 @@ class WindowsPackageTests(unittest.TestCase):
                     self.assertEqual(metadata_call.call_args.kwargs["encoding"], "utf-8")
                     self.assertEqual(calls.call_args_list[0].args[0],
                                      ['cargo', 'build', '--locked', '--release', '--bin', 'qrow'])
-                    with zipfile.ZipFile(root / f'target/package/Qrow-1.2.3-windows-{architecture}.zip') as archive:
-                        self.assertEqual(set(archive.namelist()),
-                                         {'qrow.exe', 'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.txt'})
-                        self.assertEqual(archive.read('qrow.exe'), synthetic_pe([14, 16]))
+                    installer = root / f'target/package/Qrow-1.2.3-windows-{architecture}-setup.exe'
+                    self.assertEqual(installer.read_bytes(), b'synthetic setup')
+                    self.assertEqual(sorted(path.name for path in (root / 'target/package').iterdir()), [installer.name])
+                    options = staged.pop('options')
+                    self.assertEqual(set(staged), set(windows.PACKAGE_FILES))
+                    self.assertEqual(staged['qrow.exe'], synthetic_pe([14, 16]))
+                    self.assertEqual((options['Version'], options['FileVersion'], options['Architecture']),
+                                     ('1.2.3', '1.2.3.0', inno))
+                    self.assertTrue(options['Icon'].endswith('qrow.ico'))
                 finally:
                     os.chdir(previous)
+
+    def test_file_version_is_numeric(self):
+        self.assertEqual(windows.file_version('1.2.3'), '1.2.3.0')
+        self.assertEqual(windows.file_version('0.4.0-nightly.20261111.12'), '0.4.0.0')
+        for invalid in ('nightly', '1.2', '1.70000.0'):
+            with self.subTest(version=invalid), self.assertRaisesRegex(ValueError, 'Invalid release version'):
+                windows.file_version(invalid)
+
+
+class CompilerTests(unittest.TestCase):
+    def download(self, payload):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = payload
+        return patch.object(windows.urllib.request, 'urlopen', return_value=response)
+
+    def test_pinned_compiler_installs_once_in_portable_mode(self):
+        payload = b'synthetic installer'
+        with tempfile.TemporaryDirectory() as directory, self.download(payload), \
+                patch.object(windows, 'INNO_SETUP_SHA256', hashlib.sha256(payload).hexdigest()), \
+                patch.dict(os.environ, {'QROW_ISCC': ''}):
+            root = Path(directory)
+            target = root / 'target/tools' / f'innosetup-{windows.INNO_SETUP_VERSION}'
+
+            def install(command, **kwargs):
+                target.mkdir(parents=True)
+                (target / 'ISCC.exe').write_bytes(b'synthetic compiler')
+
+            with patch.object(windows.subprocess, 'run', side_effect=install) as calls:
+                self.assertEqual(windows.compiler(root), target / 'ISCC.exe')
+                self.assertEqual(windows.compiler(root), target / 'ISCC.exe')
+            self.assertEqual(calls.call_count, 1)
+            command = calls.call_args.args[0]
+            self.assertIn('/PORTABLE=1', command)
+            self.assertIn('/VERYSILENT', command)
+            self.assertIn(f'/DIR={target.resolve()}', command)
+
+    def test_a_changed_download_does_not_run(self):
+        with tempfile.TemporaryDirectory() as directory, self.download(b'changed installer'), \
+                patch.dict(os.environ, {'QROW_ISCC': ''}), \
+                patch.object(windows.subprocess, 'run') as calls:
+            with self.assertRaisesRegex(ValueError, 'does not match the pinned'):
+                windows.compiler(Path(directory))
+            calls.assert_not_called()
+
+    def test_override_selects_another_compiler(self):
+        with patch.dict(os.environ, {'QROW_ISCC': r'C:\synthetic\ISCC.exe'}):
+            self.assertEqual(windows.compiler(Path('unused')), Path(r'C:\synthetic\ISCC.exe'))
+
+
+class ScriptTests(unittest.TestCase):
+    def test_script_takes_every_definition_the_build_supplies(self):
+        script = (ROOT / 'scripts/package/qrow.iss').read_text()
+        command = windows.compile_command(Path('ISCC.exe'), '1.2.3', 'x86_64', Path('source'), Path('out/Qrow-setup.exe'))
+        for name in (item[2:].split('=', 1)[0] for item in command if item.startswith('/D')):
+            self.assertIn(f'{{#{name}}}', script)
+            self.assertIn(f'!Defined({name})', script)
+        for name in windows.PACKAGE_FILES:
+            self.assertIn(f'Source: "{name}"', script)
+        self.assertIn('PrivilegesRequired=lowest', script)
+
+    def test_qualification_finds_the_install_by_the_app_id(self):
+        qualify = (ROOT / 'scripts/package/qualify.py').read_text()
+        app_id = re.search(r'^AppId=\{(\{[0-9A-F-]{36}\})$', (ROOT / 'scripts/package/qrow.iss').read_text(), re.MULTILINE)
+        self.assertIsNotNone(app_id)
+        self.assertIn(app_id.group(1) + '_is1', qualify)

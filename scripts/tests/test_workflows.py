@@ -348,7 +348,7 @@ class ValidationGraphTests(unittest.TestCase):
 
 class ReleaseWorkflowTests(unittest.TestCase):
     def test_release_promotes_qualified_candidates_without_cargo_builds(self):
-        for name in ("dmg", "linux"):
+        for name in ("dmg", "linux", "windows"):
             body = job(name, RELEASE)
             prerequisites = needs(body) or re.findall(r"^      - (\S+)$", body.split("strategy:")[0], re.MULTILINE)
             self.assertEqual(prerequisites, ["resolve-target", "validation"])
@@ -364,6 +364,16 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("scripts/package/qualify.py dist --dmg", dmg)
         self.assertIn("lipo -archs", dmg)
         self.assertIn('cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"', dmg)
+        windows = job("windows", RELEASE)
+        self.assertIn("-setup.exe", windows)
+        self.assertNotIn(".zip", windows)
+        publish = job("publish", RELEASE)
+        for architecture in ("x86_64", "aarch64"):
+            self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-windows-{architecture}-setup.exe"', publish)
+        self.assertIn("./*-setup.exe > SHA256SUMS", publish)
+        self.assertNotIn(".zip", publish)
+        for target in ("windows-x86_64", "windows-arm64"):
+            self.assertIn(f"name: candidate-{target}\n          path: target/package/*-setup.exe", read(TEST))
         self.assertIn("merge-multiple: true", job("publish", RELEASE))
         self.assertIn("Select the workflow branch at the candidate commit", job("resolve-target", RELEASE))
 

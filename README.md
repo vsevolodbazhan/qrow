@@ -169,11 +169,17 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 
 ### Windows
 
-Download `Qrow-VERSION-windows-x86_64.zip` for Intel/AMD or
-`Qrow-VERSION-windows-aarch64.zip` for ARM64 from GitHub Releases. Extract the
-archive and run `qrow.exe`. The unsigned binary can cause a SmartScreen
-warning. There is no installer yet. UI, browser
-sign-in, assistant shutdown, and title bar behavior need real Windows testing.
+Download `Qrow-VERSION-windows-x86_64-setup.exe` for Intel/AMD or
+`Qrow-VERSION-windows-aarch64-setup.exe` for ARM64 from GitHub Releases, and
+run it. The installer installs Qrow for your user account and adds it to the
+Start menu. It does not need administrator rights. To install for all users,
+select that option in the first dialog. To upgrade, run the installer of the
+new version. To remove Qrow, use **Settings > Apps > Installed apps**. Your
+workspace and settings stay on the computer.
+
+The installer is not signed, so SmartScreen can show a warning. Select
+**More info**, then **Run anyway**. UI, browser sign-in, assistant shutdown,
+and title bar behavior need real Windows testing.
 
 ### Linux
 
@@ -345,5 +351,6 @@ You are free to fork it, though.
 Qrow uses the [MIT License](LICENSE).
 Third-party code retains its original licenses. See [NOTICE](NOTICE).
 
-On Windows, build the native unsigned archive with
-`uv run --locked --no-dev python scripts/package/windows.py`.
+On Windows, build the native unsigned installer with
+`uv run --locked --no-dev python scripts/package/windows.py`. The script
+downloads the pinned Inno Setup compiler into `target/tools` the first time.
