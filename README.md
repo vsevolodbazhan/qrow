@@ -43,7 +43,7 @@ and [Zed](https://zed.dev/).
   Kerberos or SSH tunnels.
 - The packages are not signed, so macOS and Windows show a warning on first
   open.
-- Windows support is new.
+- macOS first. Windows and Linux are supported but can have rough edges.
 
 ## Installation
 
