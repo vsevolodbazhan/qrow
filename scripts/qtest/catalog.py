@@ -180,7 +180,7 @@ def suites_for_platform(system):
                   ("cargo", "cargo-nextest"),
                   (nextest("test(credential_round_trip)", "--no-default-features", "--lib", "--run-ignored", "only"),),
                   platforms=("windows",), explicit_only=True),
-            Suite("windows-package", "Build a native unsigned Windows zip archive.",
+            Suite("windows-package", "Build a native unsigned Windows installer.",
                   ("cargo", "uv"),
                   (Step((PYTHON, "scripts/package/windows.py"), timeout=60 * 60),),
                   platforms=("windows",), explicit_only=True),

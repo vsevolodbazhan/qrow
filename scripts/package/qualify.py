@@ -1,5 +1,6 @@
 """Inspect and launch an extracted candidate, then record its content digest."""
 import argparse
+import contextlib
 import hashlib
 import os
 import platform
@@ -9,7 +10,6 @@ import sys
 import tarfile
 import tempfile
 import time
-import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qtest"))
 from contract import atomic_json, source_sha  # noqa: E402
@@ -45,20 +45,64 @@ def linux_archive(archive, destination, machine):
     return executable
 
 
-def windows_archive(archive, destination, machine="x86_64"):
-    required = {"qrow.exe", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"}
-    with zipfile.ZipFile(archive) as bundle:
-        if set(bundle.namelist()) != required:
-            raise ValueError("Unexpected Windows package files")
-        bundle.extractall(destination)
-    executable = destination / "qrow.exe"
+# The uninstall registry key of the installer, from AppId in scripts/package/qrow.iss.
+WINDOWS_UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{9003EED7-6070-41D5-A2D5-1BD3A9008063}_is1"
+WINDOWS_FILES = {"qrow.exe", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.txt"}
+WINDOWS_UNINSTALLER = {"unins000.exe", "unins000.dat"}
+
+
+def windows_installed():
+    """Whether Windows has an uninstall entry for Qrow, for this user or for all users."""
+    import winreg
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                winreg.CloseKey(winreg.OpenKey(hive, WINDOWS_UNINSTALL_KEY, 0, winreg.KEY_READ | view))
+                return True
+            except OSError:
+                pass
+    return False
+
+
+def windows_executable(app, machine="x86_64"):
+    """Check the installed files and the PE architecture of qrow.exe."""
+    if {path.name for path in app.iterdir()} != WINDOWS_FILES | WINDOWS_UNINSTALLER:
+        raise ValueError("Unexpected Windows installation files")
+    executable = app / "qrow.exe"
     data = executable.read_bytes()
     offset = int.from_bytes(data[60:64], "little")
     expected = {"x86_64": 0x8664, "aarch64": 0xaa64}[machine]
     if (data[:2] != b"MZ" or data[offset:offset + 4] != b"PE\0\0"
             or int.from_bytes(data[offset + 4:offset + 6], "little") != expected):
-        raise ValueError("Package PE architecture mismatch")
+        raise ValueError("Installed PE architecture mismatch")
     return executable
+
+
+@contextlib.contextmanager
+def windows_installer(installer, destination, machine="x86_64", installed=None, timeout=120):
+    """Install silently for the current user, yield qrow.exe, then uninstall and check the removal.
+    A second install would share the uninstall entry, so an existing install stops the check."""
+    installed = installed or windows_installed
+    if installed():
+        raise ValueError("Qrow is already installed; qualify the installer under a Windows account without Qrow")
+    app = destination / "Qrow"
+    subprocess.run([str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CURRENTUSER",
+                    f"/DIR={app}", f"/LOG={destination / 'install.log'}"], check=True, timeout=10 * 60)
+    try:
+        if not installed():
+            raise ValueError("The installer did not register an uninstaller")
+        yield windows_executable(app, machine)
+    finally:
+        uninstaller = app / "unins000.exe"
+        if uninstaller.exists():
+            subprocess.run([str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
+                           check=True, timeout=10 * 60)
+    # The uninstaller continues from a temporary copy after its own process exits.
+    deadline = time.monotonic() + timeout
+    while installed() or (app / "qrow.exe").exists():
+        if time.monotonic() > deadline:
+            raise ValueError("The uninstaller did not remove Qrow")
+        time.sleep(0.5)
 
 
 def windows_has_visible_window(pid):
@@ -170,7 +214,7 @@ def main():
         command = ["xvfb-run", "-a", sys.executable, __file__, str(args.directory),
                    "--receipt", str(args.receipt), "--inside-display"]
         return subprocess.call(command)
-    extension = "*.tar.gz" if target.system == "linux" else "*.zip"
+    extension = {"linux": "*.tar.gz", "windows": "*-setup.exe"}.get(target.system, "*.zip")
     archives = sorted(args.directory.glob(extension))
     if len(archives) != 1:
         raise ValueError(f"Expected one candidate archive; found {len(archives)}")
@@ -181,7 +225,8 @@ def main():
         if target.system == "linux":
             executable = linux_archive(archive, destination, target.machine)
         elif target.system == "windows":
-            executable = windows_archive(archive, destination, target.machine)
+            with windows_installer(archive, destination, target.machine) as executable:
+                smoke(executable, target.system, args.receipt.with_suffix(".log"))
         else:
             subprocess.run(["ditto", "-x", "-k", archive, destination], check=True)
             app = destination / "Qrow.app"
@@ -190,7 +235,8 @@ def main():
             architecture = subprocess.check_output(["lipo", "-archs", executable], text=True).strip()
             if architecture != {"aarch64": "arm64", "x86_64": "x86_64"}[target.machine]:
                 raise ValueError("Mach-O architecture mismatch")
-        smoke(executable, target.system, args.receipt.with_suffix(".log"))
+        if target.system != "windows":
+            smoke(executable, target.system, args.receipt.with_suffix(".log"))
     atomic_json(args.receipt, {"schema": 1, "target": target.name, "source_sha": source_sha(Path.cwd()),
                               "archive": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                               "host": platform.platform(), "runner_image": os.environ.get("ImageVersion"),

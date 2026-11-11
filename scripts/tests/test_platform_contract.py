@@ -8,8 +8,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import os
+import textwrap
 import unittest
-import zipfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -169,8 +170,8 @@ class PublicationTests(unittest.TestCase):
                 (dist / f'Qrow-1.2.3{suffix}.dmg').write_bytes(b'synthetic dmg')
             for arch in ['x86_64', 'aarch64']:
                 (dist / f'Qrow-1.2.3-linux-{arch}.tar.gz').write_bytes(b'synthetic archive')
-            (dist / 'Qrow-1.2.3-windows-aarch64.zip').write_bytes(b'synthetic Windows ARM archive')
-            (dist / 'Qrow-1.2.3-windows-x86_64.zip').write_bytes(b'synthetic Windows archive')
+            for arch in ['x86_64', 'aarch64']:
+                (dist / f'Qrow-1.2.3-windows-{arch}-setup.exe').write_bytes(b'synthetic installer')
             (root / 'release-notes.md').write_text('Synthetic release')
             tools = root / 'tools'
             tools.mkdir()
@@ -323,29 +324,61 @@ class CommonGateTests(unittest.TestCase):
                 platforms.verify_common(root, sha, full=True)
 
 
-class WindowsArchiveTests(unittest.TestCase):
-    def archive(self, root, machine=0x8664, extra=None):
-        archive = root / 'candidate.zip'
-        data = bytearray(128)
-        data[:2] = b'MZ'
-        data[60:64] = (64).to_bytes(4, 'little')
-        data[64:68] = b'PE\0\0'
-        data[68:70] = machine.to_bytes(2, 'little')
-        with zipfile.ZipFile(archive, 'w') as bundle:
-            bundle.writestr('qrow.exe', data)
-            for name in ('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.txt'):
-                bundle.writestr(name, 'synthetic')
-            if extra:
-                bundle.writestr(extra, 'synthetic')
-        return archive
+class WindowsInstallerTests(unittest.TestCase):
+    """A synthetic installer and uninstaller stand in for Inno Setup."""
 
-    def test_windows_pe_architecture_and_closed_archive_contents(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.assertEqual(qualify.windows_archive(self.archive(root), root / 'valid').name, 'qrow.exe')
-            self.assertEqual(qualify.windows_archive(self.archive(root, machine=0xaa64), root / 'arm', 'aarch64').name, 'qrow.exe')
-            with self.assertRaisesRegex(ValueError, 'architecture'):
-                qualify.windows_archive(self.archive(root, machine=0xaa64), root / 'wrong')
-            with self.assertRaisesRegex(ValueError, 'Unexpected'):
-                qualify.windows_archive(self.archive(root, extra='../escape'), root / 'unsafe')
-            self.assertFalse((root / 'escape').exists())
+    def installer(self, root, machine=0x8664, extra=None, uninstall=True):
+        executable = bytearray(128)
+        executable[:2] = b'MZ'
+        executable[60:64] = (64).to_bytes(4, 'little')
+        executable[64:68] = b'PE\0\0'
+        executable[68:70] = machine.to_bytes(2, 'little')
+        (root / 'payload.bin').write_bytes(executable)
+        registry = root / 'registered'
+        uninstaller = textwrap.dedent(f'''
+            import pathlib, shutil
+            pathlib.Path({str(registry)!r}).unlink()
+            {"shutil.rmtree(pathlib.Path(__file__).parent)" if uninstall else ""}
+        ''')
+        script = root / 'setup.exe'
+        script.write_text('#!' + sys.executable + '\n' + textwrap.dedent(f'''
+            import pathlib, shutil, sys
+            app = pathlib.Path(next(item[5:] for item in sys.argv if item.startswith('/DIR=')))
+            app.mkdir(parents=True)
+            shutil.copyfile({str(root / 'payload.bin')!r}, app / 'qrow.exe')
+            for name in ('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.txt', 'unins000.dat', *{[extra] if extra else []!r}):
+                (app / name).write_text('synthetic')
+            (app / 'unins000.exe').write_text('#!' + sys.executable + '\\n' + {uninstaller!r})
+            (app / 'unins000.exe').chmod(0o755)
+            pathlib.Path({str(registry)!r}).write_text('synthetic')
+        '''))
+        script.chmod(0o755)
+        return script, registry.exists
+
+    @unittest.skipIf(os.name == 'nt', 'The synthetic installer is a script')
+    def test_install_checks_pe_architecture_and_closed_contents_then_uninstalls(self):
+        cases = [({}, 'x86_64', None), ({'machine': 0xaa64}, 'aarch64', None),
+                 ({'machine': 0xaa64}, 'x86_64', 'architecture'), ({'extra': 'extra.dll'}, 'x86_64', 'Unexpected'),
+                 ({'uninstall': False}, 'x86_64', 'did not remove')]
+        for options, machine, error in cases:
+            with self.subTest(options=options, machine=machine), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                installer, installed = self.installer(root, **options)
+                (root / 'install').mkdir()
+                context = qualify.windows_installer(installer, root / 'install', machine, installed, timeout=1)
+                if error:
+                    with self.assertRaisesRegex(ValueError, error), context:
+                        pass
+                else:
+                    with context as executable:
+                        self.assertEqual(executable, root / 'install/Qrow/qrow.exe')
+                        self.assertTrue(installed())
+                    self.assertFalse(executable.exists())
+                self.assertFalse(installed())
+
+    def test_an_existing_install_stops_the_check(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(qualify.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'already installed'), \
+                    qualify.windows_installer(Path('setup.exe'), Path(directory), installed=lambda: True):
+                pass
+            run.assert_not_called()
