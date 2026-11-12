@@ -1,6 +1,6 @@
 use crate::support::{TestApp, bounds_of, label, value};
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
+use gpui_kit::{TestAppContext, px};
 use qrow::{
     build_info,
     model::{CopyFormat, Workspace},
@@ -400,5 +400,45 @@ fn buffered_replies_are_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
     app.click(cx, "reset-settings");
     wait_saved(&app, cx, "buffered replies reset", |workspace| {
         !workspace.settings.assistant_buffer_replies
+    });
+}
+
+#[gpui_kit::test]
+fn settings_controls_end_at_one_right_edge(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "smooth-transitions");
+    app.update(cx, |window, _| {
+        let select = bounds_of(window, "setting-theme");
+        let switch = bounds_of(window, "smooth-transitions");
+        assert!(
+            (select.right() - switch.right()).abs() < px(1.),
+            "the switch ends at {:?}, the select at {:?}",
+            switch.right(),
+            select.right()
+        );
+        assert!(switch.size.width < select.size.width / 2.);
+    });
+}
+
+#[gpui_kit::test]
+fn setting_descriptions_use_a_compact_line_height(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "smooth-transitions");
+    app.update(cx, |window, _| {
+        // 0.875 rem text on 1.25 rem lines, not the 1.618 default.
+        let line = window.rem_size() * 1.25;
+        for title in ["Theme", "Smooth Transitions", "Scale"] {
+            let height = bounds_of(window, &format!("setting-help-{title}"))
+                .size
+                .height;
+            let lines = (height / line).round();
+            assert!(lines >= 1., "{title}: {height:?}");
+            assert!(
+                (height - line * lines).abs() < px(1.),
+                "{title}: {height:?} is not {lines} lines of {line:?}"
+            );
+        }
     });
 }

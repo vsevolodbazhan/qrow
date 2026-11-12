@@ -28,6 +28,8 @@ const SIDEBAR_MAX_REMS: f32 = 18.;
 const CONTROL_REMS: f32 = 16.;
 
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
+/// The line height of a setting description, for its small text.
+pub(super) const DESCRIPTION_LINE_REMS: f32 = 1.25;
 const SYSTEM_FONT_LABEL: &str = "System Font";
 
 /// A setting the dialog edits as a number. The variants carry their own
@@ -1421,6 +1423,9 @@ pub(super) fn setting_row<E: IntoElement>(
                             .role(Role::Label)
                             .aria_label(description.clone())
                             .text_sm()
+                            // Without it, a wrapped description inherits the
+                            // loose default line height of 1.618.
+                            .line_height(rems(DESCRIPTION_LINE_REMS))
                             .text_color(cx.theme().muted_foreground)
                             .child(description.clone()),
                     )
@@ -1445,7 +1450,15 @@ pub(super) fn setting_row<E: IntoElement>(
                     .justify_between()
                     .gap_3()
                     .child(label.flex_1().min_w_0().max_w_3_5())
-                    .child(control.w(rem * CONTROL_REMS).flex_shrink_0())
+                    // Narrow controls, like switches, end at the same right
+                    // edge as the full-width ones, so they do not float.
+                    .child(
+                        control
+                            .w(rem * CONTROL_REMS)
+                            .flex_shrink_0()
+                            .flex()
+                            .justify_end(),
+                    )
             }
         },
     )
