@@ -44,6 +44,8 @@ pub(super) struct Updates {
     waiting_for: Option<update::Channel>,
     /// Set while Qrow quits to start the installed version.
     pub(super) restarting: bool,
+    /// The popover of the Updates button is open, so its tooltip hides.
+    popover_open: bool,
     /// What to do at the exit after an install: restart or run an installer.
     finish: Option<update::Finish>,
     /// The channel of the check that runs or ran last.
@@ -633,13 +635,27 @@ impl Qrow {
             .content(move |_, _, cx| match owner.upgrade() {
                 Some(qrow) => qrow.update(cx, |qrow, cx| qrow.update_panel(cx)),
                 None => div().into_any_element(),
+            })
+            .on_open_change({
+                let owner = cx.entity().downgrade();
+                move |open, _, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.updates.popover_open = *open;
+                        cx.notify();
+                    });
+                }
             });
         div()
             .id("update-tooltip-trigger")
             .tooltip(StatusTooltip::live(
                 cx.entity().downgrade(),
                 None,
-                |qrow, _| Some(StatusTooltip::new("Updates", qrow.updates.status_line())),
+                // The open popover shows the same state; a tooltip over it
+                // would cover it.
+                |qrow, _| {
+                    (!qrow.updates.popover_open)
+                        .then(|| StatusTooltip::new("Updates", qrow.updates.status_line()))
+                },
             ))
             .child(DotStatus::on_element(
                 self.updates.dot(),
