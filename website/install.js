@@ -1,15 +1,17 @@
-// Install section: select the tab of the visitor's system, link the download
-// buttons to the files of the latest stable release, and copy commands.
-// Without this script, or if GitHub does not answer, the page shows all
-// systems and the buttons open the latest release page.
+// Install section: select the visitor's system and processor, link the
+// download buttons to the files of the latest stable release, and copy
+// commands. Without this script, or if GitHub does not answer, the page shows
+// all systems and the buttons open the latest release page.
 (() => {
   "use strict";
 
   const LATEST = "https://api.github.com/repos/vsevolodbazhan/qrow/releases/latest";
   const RELEASE_PAGE = "https://github.com/vsevolodbazhan/qrow/releases/latest";
-  const SYSTEMS =["macos", "windows", "linux"];
+  const SYSTEMS = ["macos", "windows", "linux"];
   const NAMES = { macos: "macOS", windows: "Windows", linux: "Linux" };
-  // The package that the hero button downloads, by system and architecture.
+  // The processors of each system, the most common build first.
+  const ARCHS = { macos: ["arm", "x86"], windows: ["x86", "arm"], linux: ["x86", "arm"] };
+  // The package that the download button gives, by system and processor.
   const PRIMARY = {
     macos: { arm: "arm64.dmg", x86: "x86_64.dmg" },
     windows: { arm: "windows-aarch64-setup.exe", x86: "windows-x86_64-setup.exe" },
@@ -20,6 +22,8 @@
     windows: { arm: "ARM64", x86: "Intel/AMD" },
     linux: { arm: "ARM64", x86: "x86-64" },
   };
+  // The processor of each system when the page cannot find it.
+  const DEFAULT_ARCH = { macos: "arm", windows: "x86", linux: "x86" };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -38,7 +42,7 @@
   }
 
   // Returns "arm" or "x86". Browsers hide the architecture more and more, so
-  // this is a best guess. The default is the most common build of the system.
+  // this is a best guess.
   async function detectArch(system) {
     try {
       const data = navigator.userAgentData;
@@ -48,9 +52,8 @@
         if (architecture === "x86") return system === "macos" ? macGpuArch() : "x86";
       }
     } catch (_) { /* Not available: use the guesses below. */ }
-    const ua = navigator.userAgent;
     if (system === "macos") return macGpuArch();
-    return /aarch64|arm64|armv8/i.test(ua) ? "arm" : "x86";
+    return /aarch64|arm64|armv8/i.test(navigator.userAgent) ? "arm" : "x86";
   }
 
   // All Mac browsers report "Intel" in the user agent. Chrome on Apple
@@ -65,34 +68,80 @@
     return "arm";
   }
 
-  function setupTabs(initial) {
-    const tablist = $(".tabs");
-    const tabs = SYSTEMS.map((system) => $(`#tab-${system}`));
-    const select = (system, focus) => {
-      SYSTEMS.forEach((name, index) => {
-        const active = name === system;
-        tabs[index].setAttribute("aria-selected", String(active));
-        tabs[index].tabIndex = active ? 0 : -1;
-        $(`#panel-${name}`).hidden = !active;
-      });
-      if (focus) tabs[SYSTEMS.indexOf(system)].focus();
-    };
-    tabs.forEach((tab, index) => {
-      tab.addEventListener("click", () => select(SYSTEMS[index], false));
-      tab.addEventListener("keydown", (event) => {
+  // A row of segments with one selected item. Arrow keys, Home, and End move
+  // the selection, as in a tab list.
+  function segments(buttons, attribute, onSelect) {
+    buttons.forEach((button, index) => {
+      button.addEventListener("click", () => onSelect(index, false));
+      button.addEventListener("keydown", (event) => {
         const moves = { ArrowLeft: -1, ArrowRight: 1 };
         let next = null;
-        if (event.key in moves) next = (index + moves[event.key] + SYSTEMS.length) % SYSTEMS.length;
+        if (event.key in moves) next = (index + moves[event.key] + buttons.length) % buttons.length;
         if (event.key === "Home") next = 0;
-        if (event.key === "End") next = SYSTEMS.length - 1;
+        if (event.key === "End") next = buttons.length - 1;
         if (next === null) return;
         event.preventDefault();
-        select(SYSTEMS[next], true);
+        onSelect(next, true);
       });
     });
-    document.body.classList.add("has-tabs");
-    tablist.hidden = false;
-    select(initial, false);
+    return (selected, focus) => {
+      buttons.forEach((button, index) => {
+        button.setAttribute(attribute, String(index === selected));
+        button.tabIndex = index === selected ? 0 : -1;
+      });
+      if (focus) buttons[selected].focus();
+    };
+  }
+
+  function setupSelectors(state, render) {
+    const tabs = SYSTEMS.map((system) => $(`#tab-${system}`));
+    const archGroup = $("#arch");
+    const archButtons = [0, 1].map(() => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "segment";
+      button.setAttribute("role", "radio");
+      archGroup.append(button);
+      return button;
+    });
+
+    const markTabs = segments(tabs, "aria-selected", (index, focus) => {
+      state.system = SYSTEMS[index];
+      update(focus ? "tab" : null);
+    });
+    const markArch = segments(archButtons, "aria-checked", (index, focus) => {
+      state.arch[state.system] = ARCHS[state.system][index];
+      update(focus ? "arch" : null);
+    });
+
+    function update(focus) {
+      const { system } = state;
+      const arch = state.arch[system];
+      markTabs(SYSTEMS.indexOf(system), focus === "tab");
+      archButtons.forEach((button, index) => { button.textContent = ARCH_NAMES[system][ARCHS[system][index]]; });
+      markArch(ARCHS[system].indexOf(arch), focus === "arch");
+      SYSTEMS.forEach((name) => {
+        const panel = $(`#panel-${name}`);
+        panel.hidden = name !== system;
+        $$("[data-arch]", panel).forEach((element) => { element.hidden = element.dataset.arch !== state.arch[name]; });
+      });
+      render();
+    }
+
+    // The processor selector names the build, so the buttons only say what
+    // they do. The file name goes next to the button.
+    $$(".downloads .btn").forEach((link) => {
+      link.classList.replace("btn-secondary", "btn-primary");
+      $("span", link).textContent = "Download";
+      const file = document.createElement("span");
+      file.className = "file-name";
+      file.dataset.arch = link.dataset.arch;
+      file.dataset.fileOf = link.dataset.asset;
+      link.after(file);
+    });
+    document.body.classList.add("has-script");
+    $(".selectors").hidden = false;
+    update(null);
   }
 
   function setupCopy() {
@@ -125,50 +174,58 @@
 
   // The release files are named Qrow-VERSION-SUFFIX, for example
   // Qrow-0.4.1-arm64.dmg. The data-asset attribute holds the suffix.
-  function linkAssets({ version, assets }) {
-    $$("[data-asset]").forEach((link) => {
-      const name = `Qrow-${version}-${link.dataset.asset}`;
-      const url = assets.get(name);
-      if (url) {
-        link.href = url;
-        link.title = name;
-      }
+  function linkAssets(release) {
+    $$("[data-file-of]").forEach((file) => {
+      file.textContent = `Qrow-${release.version}-${file.dataset.fileOf}`;
     });
+    $$("[data-asset]").forEach((link) => {
+      const name = `Qrow-${release.version}-${link.dataset.asset}`;
+      const url = release.assets.get(name);
+      if (!url) return;
+      link.href = url;
+      if (!link.classList.contains("btn")) link.textContent = name;
+    });
+  }
+
+  function renderHero(system, arch, release) {
+    const button = $("#download");
+    const note = $("#download-note");
+    if (!system) return;
+    $("#download-label").textContent = `Download for ${NAMES[system]}`;
+    const name = release && `Qrow-${release.version}-${PRIMARY[system][arch]}`;
+    button.href = (name && release.assets.get(name)) || RELEASE_PAGE;
+    const summary = document.createElement("span");
+    summary.textContent = release && release.version
+      ? `Version ${release.version} for ${ARCH_NAMES[system][arch]}`
+      : `For ${ARCH_NAMES[system][arch]}`;
+    const other = document.createElement("a");
+    other.href = "#install";
+    other.textContent = "Other downloads";
+    note.replaceChildren(summary, other);
   }
 
   async function main() {
     const system = detectSystem();
-    setupTabs(system || "macos");
-    setupCopy();
-
-    const button = $("#download");
-    const label = $("#download-label");
-    const note = $("#download-note");
     const arch = system ? await detectArch(system) : null;
-    if (system) label.textContent = `Download for ${NAMES[system]}`;
+    const state = { system: system || "macos", arch: { ...DEFAULT_ARCH } };
+    if (system) state.arch[system] = arch;
 
     let release = null;
+    const archive = $("#linux-archive");
+    const render = () => {
+      if (release && archive) archive.textContent = `Qrow-${release.version}-${PRIMARY.linux[state.arch.linux]}`;
+    };
+
+    setupSelectors(state, render);
+    setupCopy();
+    // Show the system at once. The version and the file links follow the API answer.
+    renderHero(system, arch, null);
     try {
       release = await latestRelease();
       linkAssets(release);
     } catch (_) { /* Keep the links to the release page. */ }
-
-    const archive = $("#linux-archive");
-    if (release && archive) {
-      archive.textContent = `Qrow-${release.version}-${PRIMARY.linux[system === "linux" ? arch : "x86"]}`;
-    }
-
-    if (!system) return;
-    const suffix = PRIMARY[system][arch];
-    const url = release && release.assets.get(`Qrow-${release.version}-${suffix}`);
-    button.href = url || RELEASE_PAGE;
-    const parts = [ARCH_NAMES[system][arch]];
-    if (release && release.version) parts.push(`Version ${release.version}`);
-    note.textContent = `${parts.join(" · ")} · `;
-    const other = document.createElement("a");
-    other.href = "#install";
-    other.textContent = "Other downloads";
-    note.append(other);
+    renderHero(system, arch, release);
+    render();
   }
 
   main();

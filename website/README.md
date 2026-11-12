@@ -6,8 +6,11 @@ build step.
 
 ## Downloads
 
-The page finds the system of the visitor and shows the **Download** button
-and the installation steps for that system. [install.js](install.js) asks the
+The page finds the system and the processor of the visitor. It shows the
+**Download** button and the installation steps for them. In the Install
+section, the visitor can select another system and processor. Elements with a
+`data-arch` attribute show only for that processor, for example the Homebrew
+commands, which install only the Apple Silicon build. [install.js](install.js) asks the
 GitHub API for the latest stable release and links the buttons to its files.
 This is the only request to another site. Without the script, or if the
 request fails, the page shows all systems, and the buttons open the latest
