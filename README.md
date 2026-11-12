@@ -4,16 +4,13 @@
 
 # Qrow
 
-Desktop SQL workbench, written in Rust. Built with [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
+Desktop SQL workbench, written in Rust.
 
 ![Qrow demo with the schema catalog and assistant](assets/screenshots/demo.png)
 
 ## Overview
 
-Qrow is a SQL client for data engineers and analysts. It is written in Rust
-and draws its interface on the GPU. With no Electron and no JVM, it starts
-quickly and stays responsive. It connects to databases without separate
-drivers. Qrow is inspired by [DataGrip](https://www.jetbrains.com/datagrip/)
+Qrow is a SQL client for data engineers and analysts. It is written in Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit). With no Electron and no JVM, it starts quickly and stays responsive. Qrow is inspired by [DataGrip](https://www.jetbrains.com/datagrip/)
 and [Zed](https://zed.dev/).
 
 ## Features
@@ -33,8 +30,7 @@ and [Zed](https://zed.dev/).
 
 ## Limitations
 
-- Spark (HiveServer2), Postgres, and Trino only. DuckDB is planned. No
-  Kerberos or SSH tunnels.
+- Spark (HiveServer2), Postgres, and Trino only.
 - The packages are not code-signed, so macOS and Windows show a warning on
   first open.
 - macOS first. Windows and Linux are supported but can have rough edges.
