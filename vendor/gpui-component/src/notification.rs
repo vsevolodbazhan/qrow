@@ -5,7 +5,7 @@ use gpui::{
     Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle, Global,
     InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, SharedString,
     StatefulInteractiveElement, StyleRefinement, Styled, Subscription, SystemNotification,
-    SystemNotificationResponse, WeakEntity, Window, WindowId, div, prelude::FluentBuilder, px,
+    SystemNotificationResponse, WeakEntity, Window, WindowId, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_base::{
     Toast as BaseToast, ToastManager, ToastMotion, ToastOptions, ToastStack, ToastStackState,
@@ -428,8 +428,11 @@ impl Render for Notification {
             .px_4()
             .gap_3()
             .refine_style(&self.style)
+            // The icon is centered on the first line: the top padding
+            // (0.875 rem) plus half of the line (1.25 rem) less half of the
+            // icon (1 rem).
             .when_some(icon, |this, icon| {
-                this.child(div().absolute().top(px(18.)).left_4().child(icon))
+                this.child(div().absolute().top_4().left_4().child(icon))
             })
             .child(
                 v_flex()
@@ -437,10 +440,16 @@ impl Render for Notification {
                     .overflow_hidden()
                     .when(has_icon, |this| this.pl_6())
                     .when_some(self.title.clone(), |this, title| {
-                        this.child(div().text_sm().font_semibold().child(title))
+                        this.child(
+                            div()
+                                .text_sm()
+                                .line_height(rems(1.25))
+                                .font_semibold()
+                                .child(title),
+                        )
                     })
                     .when_some(self.message.clone(), |this, message| {
-                        this.child(div().text_sm().child(message))
+                        this.child(div().text_sm().line_height(rems(1.25)).child(message))
                     })
                     .when_some(content, |this, content| this.child(content)),
             )
