@@ -1,8 +1,52 @@
 # Website
 
 This directory contains the Qrow landing page at <https://qrow.dev>: one
-static page that links to the GitHub repository. It has no build step and
-makes no requests to other sites.
+static page with the download links and the installation steps. It has no
+build step.
+
+## Downloads
+
+The **Install** button scrolls to the Install section. The section selects
+the system and the processor of the visitor and shows the download and the
+installation steps for them. The visitor can select another system and
+processor. Elements with a `data-arch` attribute show only for that
+processor, for example the Homebrew command, which installs only the Apple
+Silicon build. The package manager commands are in closed sections under the
+download, because they are another way to install. [install.js](install.js) asks the GitHub API for the latest
+stable release and links the download buttons to its files. This is the only
+request to another site. Without the script, or if the request fails, the
+page shows all systems, and the download buttons open the latest release
+page.
+
+The script finds the file of a button from its `data-asset` attribute: the
+release file is `Qrow-VERSION-` followed by that value. If you change the
+names of the release files, change these attributes in the same change. A
+test compares them with the files that the release workflow uploads.
+
+Limitations:
+
+- Browsers hide the processor architecture. On a Mac, the page shows the
+  Apple Silicon build, unless the browser shows an Intel or AMD graphics
+  processor. Safari always shows Apple Silicon. The other build is one click
+  away.
+- The GitHub API accepts 60 requests in an hour from one IP address without
+  sign-in. After that, the buttons open the latest release page.
+- Phones and tablets get no system. The section shows macOS first.
+
+## Install script
+
+On Linux, the page shows `curl -fsSL https://qrow.dev/install.sh | sh`.
+[install.sh](install.sh) installs the latest stable release into `~/.local`,
+the same as the manual archive steps, so Qrow then updates itself. It reads
+`SHA256SUMS` from the `releases/latest/download` folder of GitHub Releases and
+does not use the GitHub API. It verifies the signature of `SHA256SUMS` with
+`minisign`, or with OpenSSL 3 when `minisign` is not installed, and checks
+that the signed trusted comment names the release. Then it verifies the
+checksum of the archive. If neither tool can verify the signature, the script
+asks on the terminal before it continues with the checksum only. It has the
+public release key. Change it when you change the release key.
+[test_website_install.py](../scripts/tests/test_website_install.py) runs the
+script against a synthetic release.
 
 ## Preview the page
 
@@ -81,8 +125,9 @@ touches `website/` or the workflow:
 - A push to `main` builds the site and deploys it to <https://qrow.dev>.
 - You can also start the workflow manually on `main`.
 
-The site is a copy of `website/` without `README.md` and the scripts. The deployment takes approximately one minute after the
-push. The repository settings (**Settings** > **Pages**) set the source to
+The site is a copy of `website/` without `README.md` and the maintenance
+scripts. It includes `install.sh`. The deployment takes approximately one
+minute after the push. The repository settings (**Settings** > **Pages**) set the source to
 **GitHub Actions** and the custom domain to `qrow.dev`.
 
 The domain uses these DNS records:

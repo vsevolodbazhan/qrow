@@ -26,7 +26,9 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+/* No scroll anchoring: content that a selection adds or removes must not move the view. */
+html { -webkit-text-size-adjust: 100%; overflow-anchor: none; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 body {
   margin: 0;
   min-height: 100vh;
@@ -38,6 +40,7 @@ body {
   overflow-x: hidden;
 }
 main { flex: 1; }
+[hidden] { display: none !important; }
 img { display: block; max-width: 100%; height: auto; }
 a { color: inherit; text-decoration: none; }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
@@ -57,6 +60,12 @@ a { color: inherit; text-decoration: none; }
 .btn-primary:hover { background: var(--primary-hover); }
 .btn-primary:active { background: var(--primary-active); }
 .btn-lg { height: 40px; padding: 0 16px; font-size: 15px; }
+.btn-secondary { background: var(--chrome); color: var(--fg-strong); box-shadow: inset 0 0 0 1px var(--border); }
+.btn-secondary:hover { background: var(--hover); }
+.btn-ghost { color: var(--muted); }
+.btn-ghost:hover { background: var(--hover); color: var(--fg-strong); }
+.btn-sm { height: 24px; padding: 0 8px; font-size: 13px; }
+.icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 /* Hero */
 .hero { position: relative; padding: 80px var(--gutter) 0; text-align: center; }
@@ -64,6 +73,8 @@ a { color: inherit; text-decoration: none; }
 h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px); font-weight: 600; line-height: 1.05; letter-spacing: -0.025em; }
 .lede { margin: 12px 0 0; font-size: 18px; }
 .cta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 12px; margin-top: 24px; }
+.install a:not(.btn) { color: var(--primary); }
+.install a:not(.btn):hover { text-decoration: underline; }
 
 /* Screenshot with a soft shadow. */
 .stage {
@@ -72,6 +83,55 @@ h1 { margin: 20px 0 0; color: var(--fg-strong); font-size: clamp(40px, 6vw, 56px
 }
 .shot { margin: 0; }
 .shot img { width: 100%; filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.5)); }
+
+/* Install */
+.install { max-width: calc(720px + 2 * var(--gutter)); margin: 96px auto 0; padding: 0 var(--gutter); scroll-margin-top: 24px; }
+h2 { margin: 0; color: var(--fg-strong); font-size: 28px; font-weight: 600; line-height: 1.2; letter-spacing: -0.015em; }
+.selectors { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+.segmented {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--chrome); border-radius: calc(var(--radius) + 3px); box-shadow: inset 0 0 0 1px var(--border);
+}
+.segment {
+  height: 28px; padding: 0 14px; border: 0; border-radius: var(--radius);
+  font: 500 14px/1 var(--sans); color: var(--muted); background: transparent; cursor: pointer;
+  transition: background-color 0.12s, color 0.12s;
+}
+.segment:hover { color: var(--fg-strong); }
+.segment[aria-selected="true"], .segment[aria-checked="true"] { background: var(--hover); color: var(--fg-strong); }
+.panel { margin-top: 24px; }
+.panel-title { margin: 40px 0 0; color: var(--fg-strong); font-size: 18px; font-weight: 600; }
+.has-script .panel-title { display: none; }
+.downloads { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.has-script .downloads { margin-top: 0; align-items: center; column-gap: 12px; }
+.has-script .panel-title + .command { margin-top: 0; }
+.alternative > .downloads { margin-top: 12px; }
+.file-name { min-width: 0; overflow-wrap: anywhere; font-size: 13px; color: var(--muted); }
+.steps { margin: 20px 0 0; padding-left: 22px; }
+.steps li + li { margin-top: 4px; }
+b { color: var(--fg-strong); font-weight: 500; }
+code { font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--fg-strong); }
+.note { margin: 12px 0 0; font-size: 14px; color: var(--muted); }
+/* A package manager is another way to install, so it stays closed until the visitor asks for it. */
+.alternative { margin-top: 20px; }
+.alternative summary {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: -8px; padding: 4px 8px;
+  border-radius: var(--radius); list-style: none; cursor: pointer;
+  font-size: 14px; font-weight: 500; color: var(--fg);
+  transition: background-color 0.12s, color 0.12s;
+}
+.alternative summary::-webkit-details-marker { display: none; }
+.alternative summary:hover { background: var(--hover); color: var(--fg-strong); }
+.chevron { transition: transform 0.12s; }
+.alternative[open] .chevron { transform: rotate(90deg); }
+.command {
+  position: relative; margin-top: 12px; padding: 10px 12px;
+  background: var(--chrome); border-radius: var(--radius); box-shadow: inset 0 0 0 1px var(--border);
+}
+.command-label { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
+/* Keep the first line clear of the Copy button. */
+.command pre { margin: 0 52px 0 0; overflow-x: auto; }
+.command .copy { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); }
 
 /* Status bar footer */
 .statusbar { margin-top: 96px; background: var(--chrome); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
@@ -91,5 +151,6 @@ a.status-item:hover { background: var(--hover); color: var(--fg-strong); }
   .app-icon { width: 80px; height: 80px; border-radius: 18px; }
   .lede { font-size: 16.5px; }
   .stage { margin-top: 32px; }
+  .install { margin-top: 64px; }
   .statusbar { margin-top: 64px; }
 }

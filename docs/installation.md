@@ -1,8 +1,16 @@
 # Installation
 
-Install Qrow from a package manager or from the packages on
-[GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases). Replace
-`VERSION` in the file names below with the release version.
+Download Qrow from [GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases)
+and install it as the sections below show. Qrow then [updates itself](#updates).
+You can also install Qrow with a [package manager](#package-managers). Then
+the package manager updates Qrow.
+
+Use the [latest release](https://github.com/vsevolodbazhan/qrow/releases/latest)
+for the stable channel. Nightly builds are the pre-releases. You can also
+install a stable build and select **Nightly** in
+**Settings → Updates → Release Channel**.
+
+Replace `VERSION` in the file names below with the release version.
 
 | System | Requirements | Package |
 | --- | --- | --- |
@@ -18,24 +26,7 @@ sure that a package comes from the Qrow release process, see
 
 ## macOS
 
-Install Qrow from the [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
-
-```sh
-brew tap vsevolodbazhan/qrow
-brew install --cask vsevolodbazhan/qrow/qrow
-```
-
-To install the latest nightly build, use the separate cask:
-
-```sh
-brew install --cask vsevolodbazhan/qrow/qrow@nightly
-```
-
-The Homebrew casks install the Apple Silicon build only. On an Intel Mac,
-download the `x86_64` DMG from GitHub Releases.
-
-Alternatively, download the DMG for your Mac, open it, and drag Qrow to
-Applications.
+Download the DMG for your Mac, open it, and drag Qrow to Applications.
 
 ### Gatekeeper warning
 
@@ -50,29 +41,17 @@ macOS shows this warning because Qrow is not notarized. To open Qrow:
 
 ## Windows
 
-Install Qrow from the [Scoop bucket](https://github.com/vsevolodbazhan/scoop-qrow):
+Download the installer for your processor and run it. The installer installs
+Qrow for your user account and adds it to the Start menu. It does not need
+administrator rights. To install for all users, select that option in the
+first dialog.
 
-```powershell
-scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
-scoop install qrow
-```
-
-To install the latest nightly build, use `scoop install qrow-nightly`. To
-upgrade, use `scoop update qrow` or `scoop update qrow-nightly`. Both packages
-add Qrow to the Start menu and use the same workspace and settings.
-
-Alternatively, download the installer for your processor and run it. The
-installer installs Qrow for your user account and adds it to the Start menu.
-It does not need administrator rights. To install for all users, select that
-option in the first dialog.
-
-- **Upgrade:** run the installer of the new version. It closes a running Qrow
-  first.
-- **Remove:** open **Settings → Apps → Installed apps**, find Qrow, and select
-  **Uninstall**. Your workspace and settings stay on the computer.
+To remove Qrow, open **Settings → Apps → Installed apps**, find Qrow, and
+select **Uninstall**. Your workspace and settings stay on the computer.
 
 To use Qrow without an installer, extract the portable
-`Qrow-VERSION-windows-ARCH.zip` to a folder and run `qrow.exe`.
+`Qrow-VERSION-windows-ARCH.zip` to a folder and run `qrow.exe`. The portable
+copy does not update itself.
 
 Windows support is new. It has had less real-desktop use than macOS and Linux.
 Please report problems in [issues](https://github.com/vsevolodbazhan/qrow/issues).
@@ -88,8 +67,24 @@ Windows can show **Windows protected your PC** when you run it. To continue:
 
 ## Linux
 
-Download the archive for your architecture. Extract it into `~/.local` and make
-sure that `~/.local/bin` is in your `PATH`:
+Run the install script:
+
+```sh
+curl -fsSL https://qrow.dev/install.sh | sh
+```
+
+The script downloads the archive of the latest stable release for your
+processor. It verifies the signature of the release checksums with
+[minisign](https://jedisct1.github.io/minisign/) or OpenSSL 3, then the
+checksum of the archive. Then it installs Qrow into `~/.local`. If neither
+minisign nor OpenSSL 3 is installed, the script explains the risk and asks
+before it continues with the checksum only. Without a terminal, it continues. Set `QROW_PREFIX` to install into another folder that you can
+write. Make sure that `~/.local/bin` is in your `PATH`. The
+[script](../website/install.sh) is short. Read it before you run it if you
+prefer.
+
+To install without the script, download the archive for your architecture.
+Extract it into `~/.local`:
 
 ```sh
 mkdir -p ~/.local
@@ -101,6 +96,44 @@ Service, such as GNOME Keyring. The archive uses the system libraries and is
 built on Ubuntu 24.04. Use it on that or a newer, compatible distribution.
 
 Use the application menu at the top left for Settings and other commands.
+
+## Package managers
+
+A package manager installs the same release packages. Qrow does not update a
+copy that a package manager installed. It shows the command that updates it.
+
+### Homebrew
+
+Install Qrow on macOS from the [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
+
+```sh
+brew install --cask vsevolodbazhan/qrow/qrow
+```
+
+To install the latest nightly build, use the separate cask:
+
+```sh
+brew install --cask vsevolodbazhan/qrow/qrow@nightly
+```
+
+To upgrade, use `brew upgrade --cask qrow` or `brew upgrade --cask qrow@nightly`.
+The casks install the Apple Silicon build only. On an Intel Mac, use the
+`x86_64` DMG. The [Gatekeeper warning](#gatekeeper-warning) also applies.
+
+### Scoop
+
+Install Qrow on Windows from the [Scoop bucket](https://github.com/vsevolodbazhan/scoop-qrow):
+
+```powershell
+scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow
+```
+
+To install the latest nightly build, use `scoop install qrow-nightly`. To
+upgrade, use `scoop update qrow` or `scoop update qrow-nightly`. Scoop
+installs the portable archive, so stable and nightly builds can be installed
+at the same time. Both packages add Qrow to the Start menu and use the same
+workspace and settings.
 
 ## Updates
 

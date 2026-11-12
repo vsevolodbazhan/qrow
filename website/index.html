@@ -32,6 +32,10 @@
         <a class="btn btn-primary btn-lg" href="https://github.com/vsevolodbazhan/qrow">
           <span>View on GitHub</span>
         </a>
+        <a class="btn btn-secondary btn-lg" href="#install">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          <span>Install</span>
+        </a>
       </div>
     </section>
 
@@ -41,6 +45,87 @@
              alt="Qrow with the schema catalog, a SQL query, its results, and the assistant panel">
       </figure>
     </div>
+
+    <section class="install" id="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install</h2>
+
+      <div class="selectors" hidden>
+        <div class="segmented" role="tablist" aria-label="Operating system">
+          <button class="segment" type="button" role="tab" id="tab-macos" aria-controls="panel-macos">macOS</button>
+          <button class="segment" type="button" role="tab" id="tab-windows" aria-controls="panel-windows">Windows</button>
+          <button class="segment" type="button" role="tab" id="tab-linux" aria-controls="panel-linux">Linux</button>
+        </div>
+        <div class="segmented" id="arch" role="radiogroup" aria-label="Processor"></div>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-macos" aria-labelledby="tab-macos">
+        <h3 class="panel-title">macOS</h3>
+        <div class="downloads">
+          <a class="btn btn-secondary" data-arch="arm" data-asset="arm64.dmg" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Apple Silicon</span></a>
+          <a class="btn btn-secondary" data-arch="x86" data-asset="x86_64.dmg" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Intel</span></a>
+        </div>
+        <ol class="steps">
+          <li>Open the DMG and drag Qrow to Applications.</li>
+          <li>Open Qrow. macOS shows a warning because Qrow is not notarized. Close the warning.</li>
+          <li>Open <b>System Settings → Privacy &amp; Security</b> and click <b>Open Anyway</b>.</li>
+        </ol>
+        <p class="note">Requires macOS 12 or later.</p>
+        <details class="alternative" data-arch="arm">
+          <summary><svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>Or install with Homebrew</summary>
+          <div class="command">
+            <pre><code>brew install --cask vsevolodbazhan/qrow/qrow</code></pre>
+            <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-windows" aria-labelledby="tab-windows">
+        <h3 class="panel-title">Windows</h3>
+        <div class="downloads">
+          <a class="btn btn-secondary" data-arch="x86" data-asset="windows-x86_64-setup.exe" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Intel/AMD</span></a>
+          <a class="btn btn-secondary" data-arch="arm" data-asset="windows-aarch64-setup.exe" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>ARM64</span></a>
+        </div>
+        <ol class="steps">
+          <li>Run the installer. It does not need administrator rights.</li>
+          <li>If Windows shows <b>Windows protected your PC</b>, select <b>More info</b>, then <b>Run anyway</b>.</li>
+        </ol>
+        <p class="note">Requires Windows 10 or later.</p>
+        <details class="alternative">
+          <summary><svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>Or install with Scoop</summary>
+          <div class="command">
+            <pre><code>scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow</code></pre>
+            <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-linux" aria-labelledby="tab-linux">
+        <h3 class="panel-title">Linux</h3>
+        <div class="command">
+          <pre><code>curl -fsSL https://qrow.dev/install.sh | sh</code></pre>
+          <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+        </div>
+        <p class="note">Requires a Wayland or X11 desktop, Vulkan, and a Secret Service provider, such as GNOME Keyring.</p>
+        <details class="alternative">
+          <summary><svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>Or download the archive</summary>
+          <div class="downloads">
+            <a class="btn btn-secondary" data-arch="x86" data-asset="linux-x86_64.tar.gz" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>x86-64</span></a>
+            <a class="btn btn-secondary" data-arch="arm" data-asset="linux-aarch64.tar.gz" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>ARM64</span></a>
+          </div>
+          <ol class="steps">
+            <li>Extract the archive into <code>~/.local</code>.</li>
+            <li>Make sure that <code>~/.local/bin</code> is in your <code>PATH</code>.</li>
+          </ol>
+          <div class="command">
+            <span class="command-label">Extract</span>
+            <pre><code>mkdir -p ~/.local
+tar -xzf <span id="linux-archive">Qrow-VERSION-linux-ARCH.tar.gz</span> -C ~/.local</code></pre>
+            <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+          </div>
+        </details>
+      </div>
+    </section>
   </main>
 
   <footer class="statusbar">
@@ -53,5 +138,6 @@
     </div>
   </footer>
 
+  <script src="install.js" defer></script>
 </body>
 </html>

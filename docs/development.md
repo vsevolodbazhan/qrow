@@ -224,8 +224,9 @@ The publish job reads the minisign secret key from the `RELEASE_SIGNING_KEY`
 secret of the `release` environment. The key has no password. If the secret is
 missing or does not match the committed public key, the job stops before it
 creates the release. Keep a backup of the secret key outside GitHub. To change
-the key, replace the public key file and the key in
-[Installation](installation.md#verify-a-download) in the same change. To set up
+the key, replace the public key file, the key in
+[Installation](installation.md#verify-a-download), and the key in the
+[install script](../website/install.sh) in the same change. To set up
 the secret, create the `release` environment in the repository settings, then
 run:
 
@@ -242,19 +243,7 @@ publishes the latest stable release as `qrow` and the latest prerelease as
 `qrow@nightly`. A scheduled job in the tap checks the public GitHub releases
 every 15 minutes, downloads each new DMG, calculates its SHA-256 checksum, and
 updates the cask. The tap does not need a secret in this repository.
-
-Install the stable cask with:
-
-```sh
-brew tap vsevolodbazhan/qrow
-brew install --cask vsevolodbazhan/qrow/qrow
-```
-
-Install the nightly cask with:
-
-```sh
-brew install --cask vsevolodbazhan/qrow/qrow@nightly
-```
+[Installation](installation.md#package-managers) shows the install commands.
 
 The current release package uses ad hoc code signing. Homebrew can install the
 custom cask, but macOS Gatekeeper may warn until the app is signed and notarized

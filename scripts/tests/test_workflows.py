@@ -411,7 +411,10 @@ class WebsiteWorkflowTests(unittest.TestCase):
         build, deploy = job("build", path), job("deploy", path)
         # Pull requests build the site without the rights to publish it.
         self.assertNotIn("pages: write", build)
-        self.assertIn("--exclude README.md --exclude '*.sh' website/ _site/", build)
+        self.assertIn("--exclude README.md --exclude make-og.sh --exclude optimize-media.sh website/ _site/", build)
+        # The site serves install.sh. Every other shell script in website/ is a maintenance script.
+        scripts = {path.name for path in (ROOT / "website").glob("*.sh")}
+        self.assertEqual(scripts - {"install.sh"}, {"make-og.sh", "optimize-media.sh"})
         deploys = "github.ref == 'refs/heads/main' && github.event_name != 'pull_request'"
         self.assertIn(f"if: {deploys}", deploy)
         # A run that cannot deploy must not share the deploy group: it would replace a pending deployment.
@@ -423,6 +426,23 @@ class WebsiteWorkflowTests(unittest.TestCase):
         self.assertIn("name: github-pages", deploy)
         for page in ("og:url", "og:image", "canonical"):
             self.assertRegex(read("website/index.html"), rf'"{page}"[^>]*"https://qrow\.dev/')
+
+    def test_website_downloads_name_the_release_files(self):
+        # The website links each data-asset suffix to Qrow-VERSION-SUFFIX of the latest release.
+        page = read("website/index.html")
+        suffixes = set(re.findall(r'data-asset="([^"]+)"', page))
+        workflow = read(".github/workflows/release.yml")
+        start = workflow.index('release create "$RELEASE_TAG"')
+        files = workflow[start:workflow.index("--repo", start)]
+        uploads = set(re.findall(r'"dist/Qrow-\$\{RELEASE_VERSION\}-([^"]+)"', files))
+        self.assertEqual(len(uploads), 8)
+        self.assertLessEqual(suffixes, uploads)
+        # The page has one download for each system and processor, as in the PRIMARY table of the script.
+        script = read("website/install.js")
+        start = script.index("const PRIMARY")
+        primary = re.findall(r'(?:arm|x86): "([^"]+)"', script[start:script.index("};", start)])
+        self.assertEqual(len(primary), 6)
+        self.assertEqual(suffixes, set(primary))
 
 
 if __name__ == "__main__":
