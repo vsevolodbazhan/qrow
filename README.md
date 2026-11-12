@@ -67,6 +67,8 @@ To change the channel, open **Settings → Updates → Release Channel**.
 You can also install Qrow with [Homebrew](https://brew.sh/) on macOS or
 [Scoop](https://scoop.sh/) on Windows. Then the package manager updates Qrow.
 
+#### macOS
+
 ```sh
 brew install --cask vsevolodbazhan/qrow/qrow
 ```
@@ -74,6 +76,8 @@ brew install --cask vsevolodbazhan/qrow/qrow
 ```sh
 brew install --cask vsevolodbazhan/qrow/qrow@nightly
 ```
+
+#### Windows
 
 ```powershell
 scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
