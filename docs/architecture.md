@@ -31,6 +31,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
 | [Storage](../src/storage.rs) | Lock and save the workspace. Define the password and token stores and their macOS Keychain implementation. |
 | [Updates](../src/update.rs) | Find a newer release of the build channel, verify its signed checksums and package, and install the Linux archive. Detect installations that a package manager owns. |
+| [Update UI](../src/ui/updates.rs) | Run the daily check, download in the background, show the update toasts and the About status, and restart into the new version. |
 
 The [core library](../src/lib.rs) builds without the `ui` feature. The UI
 modules are in the same library behind the `ui` feature, and the application

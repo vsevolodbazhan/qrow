@@ -849,11 +849,15 @@ impl Qrow {
                 state.set_selected_value(&harness.to_owned(), window, cx)
             });
         }
+        let updates = self
+            .updates
+            .enabled()
+            .then(|| updates_page(cx.weak_entity(), self.settings.check_for_updates));
         div()
             .size_full()
             .overflow_hidden()
-            .child(
-                settings_panel("settings", window, cx)
+            .child({
+                let panel = settings_panel("settings", window, cx)
                     .page(appearance_page(
                         form,
                         cx.entity().downgrade(),
@@ -888,8 +892,12 @@ impl Qrow {
                         cx.weak_entity(),
                         self.settings.assistant.enabled,
                         self.settings.assistant.web_search,
-                    )),
-            )
+                    ));
+                match updates {
+                    Some(page) => panel.page(page),
+                    None => panel,
+                }
+            })
             .into_any_element()
     }
 
@@ -935,6 +943,29 @@ impl Qrow {
             )
             .into_any_element()
     }
+}
+
+/// Update checks. Only release builds show this page.
+fn updates_page(owner: WeakEntity<Qrow>, checked: bool) -> SettingPage {
+    SettingPage::new("Updates")
+        .resettable(false)
+        .group(SettingGroup::new().title("Updates").item(setting_item(
+            "Check Automatically",
+            "Look for a new version once a day.",
+            &["update", "version", "release", "download", "upgrade"],
+            move |_: &mut Window, _: &mut App| {
+                let owner = owner.clone();
+                Switch::new("check-for-updates")
+                    .checked(checked)
+                    .accessibility_label("Check Automatically")
+                    .on_click(move |next, _, cx| {
+                        let _ = owner.update(cx, |this, cx| {
+                            this.settings.check_for_updates = *next;
+                            this.changed(cx);
+                        });
+                    })
+            },
+        )))
 }
 
 /// Appearance settings for the interface, assistant messages, editor, and logs.

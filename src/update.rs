@@ -74,6 +74,80 @@ impl Source {
     }
 }
 
+/// How this copy of Qrow updates: the release source, the running version,
+/// the installation, and the folder for downloads.
+#[derive(Clone, Debug)]
+pub struct Setup {
+    pub source: Source,
+    pub current: Version,
+    pub install: Install,
+    /// `std::env::consts::ARCH` of this build.
+    pub arch: String,
+    /// The folder that holds downloads until they are installed.
+    pub downloads: PathBuf,
+}
+
+impl Setup {
+    /// The setup of the running release build, or `None` for a build without
+    /// an update channel. `QROW_NO_UPDATES` turns updates off, for example
+    /// for automated tests of a packaged release build.
+    pub fn for_this_build(downloads: PathBuf) -> Option<Self> {
+        if std::env::var_os("QROW_NO_UPDATES").is_some() {
+            return None;
+        }
+        let current = running_version()?;
+        let os = Os::current()?;
+        let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        // Detection compares paths, so resolve them like the executable.
+        let resolve = |path: PathBuf| path.canonicalize().unwrap_or(path);
+        let homebrew_prefixes = ["/opt/homebrew", "/usr/local"].map(PathBuf::from);
+        let homebrew_app_folders: Vec<_> = std::iter::once(PathBuf::from("/Applications"))
+            .chain(home.map(|home| home.join("Applications")))
+            .map(resolve)
+            .collect();
+        let install = install::detect(&install::Probe {
+            os,
+            channel: current.channel(),
+            executable: &executable,
+            env: &|name| std::env::var_os(name),
+            homebrew_prefixes: &homebrew_prefixes,
+            homebrew_app_folders: &homebrew_app_folders,
+        });
+        Some(Self {
+            source: Source::github(),
+            current,
+            install,
+            arch: std::env::consts::ARCH.into(),
+            downloads,
+        })
+    }
+
+    /// True when this copy can install an update itself. Other copies only
+    /// report it.
+    pub fn installs_updates(&self) -> bool {
+        cfg!(target_os = "linux") && matches!(self.install, Install::Archive { .. })
+    }
+
+    /// The executable to start after an update, when it differs from the path
+    /// that the system reports for the running process.
+    pub fn restart_path(&self) -> Option<PathBuf> {
+        match &self.install {
+            // Linux reports a replaced executable as "PATH (deleted)".
+            Install::Archive { prefix } => Some(prefix.join("bin/qrow")),
+            _ => None,
+        }
+    }
+
+    /// The web page of a release, for copies that the user updates by hand.
+    pub fn release_page(&self, version: &Version) -> String {
+        format!(
+            "https://github.com/vsevolodbazhan/qrow/releases/tag/{}",
+            version.tag()
+        )
+    }
+}
+
 /// A verified update asset in a temporary folder. Dropping it removes the file.
 #[derive(Debug)]
 pub struct Download {
@@ -149,6 +223,7 @@ impl Updater {
             asset("SHA256SUMS.minisig")?,
             asset(&name)?,
         );
+        std::fs::create_dir_all(folder).context("Could not create the update folder")?;
         let folder = tempfile::Builder::new()
             .prefix("qrow-update-")
             .tempdir_in(folder)

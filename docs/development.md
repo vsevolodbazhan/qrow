@@ -330,7 +330,11 @@ channel: `nightly` for a nightly version, otherwise `stable`. Only such builds
 can check for updates. A build without the variable has no channel. The
 [update module](../src/update.rs) reads releases, verifies the signed
 checksums with [assets/release/minisign.pub](../assets/release/minisign.pub),
-and installs the Linux archive. The application does not use it yet.
+and installs the Linux archive. [Installation](installation.md#updates)
+describes the update behavior. UI tests give the window a local release
+server and a synthetic key, so they do not contact GitHub. Set
+`QROW_NO_UPDATES` to turn updates off in a release build. The desktop and
+launch performance suites set it.
 
 ## Bundled fonts
 
