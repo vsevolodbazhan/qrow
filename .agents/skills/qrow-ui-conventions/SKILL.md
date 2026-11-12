@@ -28,6 +28,9 @@ need it.
 - **Grid alignment.** All column headers are left-aligned. Only numeric cell
   values are right-aligned, with tabular digits.
 - **Selected tab.** The selected query tab grows to show its full title.
+- **Settings controls end at the right.** In Settings and the connection
+  editor, every control ends at the right edge of its row, so switches line
+  up with dropdowns and steppers.
 
 ## Consistency rules
 

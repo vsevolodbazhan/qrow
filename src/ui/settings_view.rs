@@ -1354,7 +1354,15 @@ pub(super) fn setting_row<E: IntoElement>(
                     .justify_between()
                     .gap_3()
                     .child(label.flex_1().min_w_0().max_w_3_5())
-                    .child(control.w(rem * CONTROL_REMS).flex_shrink_0())
+                    // Narrow controls, like switches, end at the same right
+                    // edge as the full-width ones, so they do not float.
+                    .child(
+                        control
+                            .w(rem * CONTROL_REMS)
+                            .flex_shrink_0()
+                            .flex()
+                            .justify_end(),
+                    )
             }
         },
     )

@@ -1,5 +1,5 @@
 use crate::support::{TestApp, bounds_of, label, value};
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, px};
 use gpui_kit::test::TestWindowExt;
 use qrow::{
     build_info,
@@ -400,5 +400,23 @@ fn buffered_replies_are_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
     app.click(cx, "reset-settings");
     wait_saved(&app, cx, "buffered replies reset", |workspace| {
         !workspace.settings.assistant_buffer_replies
+    });
+}
+
+#[gpui_kit::test]
+fn settings_controls_end_at_one_right_edge(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "smooth-transitions");
+    app.update(cx, |window, _| {
+        let select = bounds_of(window, "setting-theme");
+        let switch = bounds_of(window, "smooth-transitions");
+        assert!(
+            (select.right() - switch.right()).abs() < px(1.),
+            "the switch ends at {:?}, the select at {:?}",
+            switch.right(),
+            select.right()
+        );
+        assert!(switch.size.width < select.size.width / 2.);
     });
 }
