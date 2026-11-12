@@ -426,12 +426,18 @@ fn a_downloaded_update_installs_and_restarts_into_the_new_version(cx: &mut TestA
     let mut restart = cx.expect_restart();
     app.click(cx, "update-restart");
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut last_poll = std::time::Instant::now();
     let (path, _) = loop {
+        // The install runs on a real thread. Advance the test clock by the
+        // wall time that passed, so the timers of the quit can fire.
+        let now = std::time::Instant::now();
+        cx.executor().advance_clock(now.duration_since(last_poll));
+        last_poll = now;
         cx.run_until_parked();
         if let Ok(Some(restart)) = restart.try_recv() {
             break restart;
         }
-        assert!(std::time::Instant::now() < deadline, "Qrow did not restart");
+        assert!(now < deadline, "Qrow did not restart");
         std::thread::sleep(Duration::from_millis(10));
     };
     assert_eq!(path, Some(prefix.path().join("bin/qrow")));
