@@ -5,10 +5,15 @@
 //! version in the background, then offers a restart. Other copies show how
 //! to update them. The About dialog shows the state and checks on request.
 
+use super::status_dot::DotStatus;
+use super::status_tooltip::StatusTooltip;
 use super::toast::{self, NotificationType};
 use super::*;
 use crate::update::{self, Download, Manager, Setup, Updater, Version};
+use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::popover::Popover;
+use gpui_kit::component::{Icon, h_flex, v_flex};
 
 /// The first automatic check waits until the window has settled.
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
@@ -122,8 +127,25 @@ impl Updates {
         matches!(self.status, Status::Ready(_) | Status::Installed(_))
     }
 
-    pub(super) fn checking(&self) -> bool {
-        self.busy()
+    /// The dot of the status bar button: news that needs the user.
+    pub(super) fn dot(&self) -> Option<DotStatus> {
+        match self.status {
+            Status::Idle | Status::UpToDate => None,
+            Status::Checking | Status::Downloading(_) | Status::Installing(_) => {
+                Some(DotStatus::Working)
+            }
+            Status::Available(_) => Some(DotStatus::Attention),
+            Status::Ready(_) | Status::Installed(_) => Some(DotStatus::Ready),
+            Status::Failed(_) => Some(DotStatus::Error),
+        }
+    }
+
+    /// The status line of the tooltip and the popover.
+    pub(super) fn status_line(&self) -> String {
+        self.summary().unwrap_or_else(|| match &self.setup {
+            Some(setup) => format!("Qrow {} is installed.", setup.current),
+            None => String::new(),
+        })
     }
 }
 
@@ -210,7 +232,22 @@ impl Qrow {
             return;
         };
         match result {
-            Ok(None) => self.updates.status = Status::UpToDate,
+            Ok(None) => {
+                self.updates.status = Status::UpToDate;
+                // The popover closes with its action, so a toast answers a
+                // check that the user asked for.
+                if manual {
+                    window.push_notification(
+                        toast::notice(
+                            NotificationType::Success,
+                            "update-up-to-date",
+                            "Qrow is up to date",
+                            None,
+                        ),
+                        cx,
+                    );
+                }
+            }
             Ok(Some(candidate)) if setup.installs_updates() => {
                 self.updates.status = Status::Downloading(candidate.version.clone());
                 let download = cx.background_executor().spawn(async move {
@@ -227,6 +264,10 @@ impl Qrow {
             Ok(Some(candidate)) => {
                 let version = candidate.version;
                 self.updates.status = Status::Available(version.clone());
+                if manual {
+                    // Answer the request even if a toast already announced it.
+                    self.updates.announced = None;
+                }
                 self.announce_update(&version, &setup, window, cx);
             }
             Err(error) => {
@@ -235,6 +276,14 @@ impl Qrow {
                 eprintln!("Update check failed: {error:#}");
                 self.updates.last_check = None;
                 self.updates.status = if manual {
+                    window.push_notification(
+                        toast::error(
+                            "update-check-failed",
+                            "Could not check for updates",
+                            "Check the network connection and try again.",
+                        ),
+                        cx,
+                    );
                     Status::Failed("Could not check for updates. Try again later.".into())
                 } else {
                     Status::Idle
@@ -375,6 +424,103 @@ impl Qrow {
         // The platform quits after it starts the new process. If it could not
         // start it, Qrow still quits; the new version starts at the next launch.
         cx.quit();
+    }
+}
+
+impl Qrow {
+    /// The Updates button of the status bar: a dot for news, the state in
+    /// its tooltip, and a popover with the action that fits the state.
+    pub(super) fn update_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let owner = cx.entity().downgrade();
+        let label = format!("Updates, {}", self.updates.status_line());
+        let popover = Popover::new("update-popover")
+            .anchor(Anchor::BottomRight)
+            .trigger(
+                Button::new("update-button")
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(AssetIconName::CircleFadingArrowUp).small())
+                    .accessibility_label(label),
+            )
+            .content(move |_, _, cx| match owner.upgrade() {
+                Some(qrow) => qrow.update(cx, |qrow, cx| qrow.update_panel(cx)),
+                None => div().into_any_element(),
+            });
+        div()
+            .id("update-tooltip-trigger")
+            .tooltip(StatusTooltip::live(
+                cx.entity().downgrade(),
+                None,
+                |qrow, _| Some(StatusTooltip::new("Updates", qrow.updates.status_line())),
+            ))
+            .child(DotStatus::on_element(
+                self.updates.dot(),
+                popover.into_any_element(),
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    /// The popover of the Updates button: the state, how to update, and one
+    /// action.
+    fn update_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let line = |id: &'static str, text: String, muted: bool| {
+            div()
+                .id(id)
+                .test_support()
+                .role(Role::Label)
+                .text_sm()
+                .when(muted, |line| line.text_color(cx.theme().muted_foreground))
+                .whitespace_normal()
+                .aria_label(text.clone())
+                .child(text)
+        };
+        let status = self.updates.status_line();
+        let action = if self.updates.can_restart() {
+            Button::new("update-panel-restart")
+                .primary()
+                .small()
+                .label("Restart to update")
+                .on_click(cx.listener(|this, _, window, cx| this.restart_to_update(window, cx)))
+        } else if let (Status::Available(version), Some(command)) =
+            (&self.updates.status, self.updates.command())
+        {
+            let _ = version;
+            Button::new("update-panel-copy")
+                .small()
+                .label("Copy command")
+                .on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(command.clone()))
+                })
+        } else if let (Status::Available(version), Some(setup)) =
+            (&self.updates.status, &self.updates.setup)
+        {
+            let page = setup.release_page(version);
+            Button::new("update-panel-open")
+                .small()
+                .label("Open release")
+                .on_click(move |_, _, cx| cx.open_url(&page))
+        } else {
+            // The button stays enabled during a check: a disabled button
+            // loses the focus, which closes the popover. The status line
+            // shows the check, and a second click does nothing.
+            Button::new("update-panel-check")
+                .small()
+                .label("Check for updates")
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.check_for_updates(true, window, cx)),
+                )
+        };
+        v_flex()
+            .id("update-panel")
+            .w(self.ui_px(280.))
+            .gap_1()
+            .child(line("update-status", status, false))
+            .when_some(self.updates.instruction(), |panel, instruction| {
+                panel.child(line("update-instruction", instruction, true))
+            })
+            .child(h_flex().mt_2().justify_end().child(action))
+            .into_any_element()
     }
 }
 

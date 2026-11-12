@@ -898,6 +898,9 @@ impl Qrow {
                         h_flex()
                             .flex_shrink_0()
                             .gap_1()
+                            .when(self.updates.enabled(), |el| {
+                                el.child(self.update_button(cx))
+                            })
                             .when(self.settings.assistant.enabled, |el| {
                                 el.child(self.assistant_button(cx))
                             })

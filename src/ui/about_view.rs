@@ -8,8 +8,6 @@ use gpui_kit::component::v_flex;
 const DIALOG_REMS: f32 = 22.;
 /// Tall enough for the icon and the three lines below it.
 const DIALOG_HEIGHT_REMS: f32 = 15.;
-/// The extra height of the update status and its button.
-const UPDATES_HEIGHT_REMS: f32 = 6.;
 /// Points, at the standard interface scale.
 const ICON_SIZE: f32 = 64.;
 
@@ -22,15 +20,7 @@ impl Qrow {
             // A short card reads as a panel about the application, so it sits
             // in the middle of the window instead of near its top.
             let viewport = window.viewport_size();
-            let updates = weak
-                .read_with(cx, |this, _| this.updates.enabled())
-                .unwrap_or(false);
-            let rems = if updates {
-                DIALOG_HEIGHT_REMS + UPDATES_HEIGHT_REMS
-            } else {
-                DIALOG_HEIGHT_REMS
-            };
-            let height = (window.rem_size() * rems).min(viewport.height);
+            let height = (window.rem_size() * DIALOG_HEIGHT_REMS).min(viewport.height);
             dialog
                 .w(Rows::dialog_width(window, DIALOG_REMS))
                 .h(height)
@@ -91,51 +81,6 @@ impl Qrow {
                     .aria_label(crate::build_info::COPYRIGHT)
                     .child(crate::build_info::COPYRIGHT),
             )
-            .when(self.updates.enabled(), |content| {
-                content.child(self.about_updates(cx))
-            })
             .into_any_element()
-    }
-
-    /// The update state and the action that fits it.
-    fn about_updates(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let line = |id: &'static str, text: String| {
-            div()
-                .id(id)
-                .test_support()
-                .role(Role::Label)
-                .text_size(rems(12. / 14.))
-                .text_color(cx.theme().muted_foreground)
-                .text_center()
-                .whitespace_normal()
-                .aria_label(text.clone())
-                .child(text)
-        };
-        let button = if self.updates.can_restart() {
-            Button::new("about-restart-update")
-                .primary()
-                .label("Restart to update")
-                .on_click(cx.listener(|this, _, window, cx| this.restart_to_update(window, cx)))
-        } else {
-            Button::new("about-check-updates")
-                .label("Check for updates")
-                .loading(self.updates.checking())
-                .disabled(self.updates.checking())
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.check_for_updates(true, window, cx)),
-                )
-        };
-        v_flex()
-            .w_full()
-            .mt_3()
-            .gap_1()
-            .items_center()
-            .when_some(self.updates.summary(), |column, summary| {
-                column.child(line("about-update-status", summary))
-            })
-            .when_some(self.updates.instruction(), |column, instruction| {
-                column.child(line("about-update-instruction", instruction))
-            })
-            .child(div().mt_1().child(button))
     }
 }

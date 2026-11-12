@@ -140,19 +140,24 @@ fn run_first_check(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn about_checks_on_request_and_reports_an_up_to_date_copy(cx: &mut TestAppContext) {
+fn the_updates_button_checks_on_request_and_reports_an_up_to_date_copy(cx: &mut TestAppContext) {
     let releases = Releases::start();
     releases.publish("v0.5.0", "Qrow-0.5.0-x86_64.dmg", b"dmg");
     let app = TestApp::launch_with_updates(cx, Workspace::default(), releases.setup(homebrew()));
-    app.dispatch(cx, OpenAbout);
-    app.wait_for(cx, "about-check-updates");
-    app.click(cx, "about-check-updates");
-    app.wait_for(cx, "about-update-status");
+    app.click(cx, "update-button");
+    app.wait_for(cx, "update-panel-check");
     app.update(cx, |window, _| {
         assert_eq!(
-            label(window, "about-update-status").as_deref(),
-            Some("Qrow is up to date.")
+            label(window, "update-status").as_deref(),
+            Some("Qrow 0.5.0 is installed.")
         );
+    });
+    app.click(cx, "update-panel-check");
+    // The popover closes with its action; a toast answers the check.
+    app.wait_for(cx, "update-up-to-date");
+    app.update(cx, |window, _| {
+        assert!(shows(window, "Qrow is up to date"));
+        assert!(labelled(window, "Updates, Qrow is up to date.").is_some());
     });
     assert_eq!(releases.requests(), ["/releases"]);
 }
@@ -171,12 +176,15 @@ fn a_managed_copy_shows_the_command_that_updates_it(cx: &mut TestAppContext) {
     });
     // Homebrew installs the package, so Qrow does not download it.
     assert_eq!(releases.requests(), ["/releases"]);
-    app.dispatch(cx, OpenAbout);
-    app.wait_for(cx, "about-update-instruction");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "Updates, Qrow 0.6.0 is available.").is_some());
+    });
+    app.click(cx, "update-button");
+    app.wait_for(cx, "update-panel-copy");
     app.update(cx, |window, _| {
         assert_eq!(
-            label(window, "about-update-status").as_deref(),
-            Some("Qrow 0.6.0 is available.")
+            label(window, "update-instruction").as_deref(),
+            Some("Run brew upgrade --cask qrow to update.")
         );
     });
 }
@@ -226,7 +234,7 @@ fn builds_without_updates_have_no_update_controls(cx: &mut TestAppContext) {
     app.dispatch(cx, OpenAbout);
     app.wait_for(cx, "about-copyright");
     app.update(cx, |window, _| {
-        assert!(!present(window, &"about-check-updates".into()));
+        assert!(!present(window, &"update-button".into()));
     });
     app.press(cx, "escape");
     app.dispatch(cx, OpenSettings);
@@ -289,6 +297,9 @@ fn a_downloaded_update_installs_and_restarts_into_the_new_version(cx: &mut TestA
             .requests()
             .contains(&format!("/download/v0.6.0/{name}"))
     );
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "Updates, Qrow 0.6.0 is ready to install.").is_some());
+    });
     // Nothing changes before the user asks for the restart.
     assert_eq!(
         std::fs::read(prefix.path().join("bin/qrow")).unwrap(),

@@ -108,9 +108,13 @@ Release builds check for a new version of their channel. A stable build
 looks for stable releases, and a nightly build looks for nightly releases.
 The first check starts a few seconds after launch. While Qrow is open, it
 checks again when the last check is more than a day old. If a check fails,
-for example offline, Qrow tries again within an hour. To stop the automatic checks, turn off
-**Settings → Updates → Check Automatically**. To check at any time, open
-**About Qrow** and select **Check for updates**.
+for example offline, Qrow tries again within an hour. To stop the automatic
+checks, turn off **Settings → Updates → Check Automatically**.
+
+The **Updates** button in the status bar shows the state. A dot on it shows
+news: an available version, a download in progress, a version that is ready,
+or a failure. Select the button to see the state and the action that fits
+it, for example **Check for updates** or **Restart to update**.
 
 What happens next depends on how you installed Qrow:
 
