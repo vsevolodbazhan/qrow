@@ -203,7 +203,12 @@ pub fn apply(download: &Download, install: &Install) -> Result<()> {
         #[cfg(target_os = "linux")]
         Install::Archive { prefix } => archive::install(&download.path, prefix),
         Install::Managed(_) => bail!("Another program updates this copy of Qrow"),
-        _ => bail!("Updates of this installation are not available yet"),
+        // Only Linux builds have an install path yet; elsewhere the download
+        // is not used.
+        _ => {
+            let _ = download;
+            bail!("Updates of this installation are not available yet")
+        }
     }
 }
 
