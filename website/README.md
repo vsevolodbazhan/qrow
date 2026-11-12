@@ -10,8 +10,9 @@ The **Install** button scrolls to the Install section. The section selects
 the system and the processor of the visitor and shows the download and the
 installation steps for them. The visitor can select another system and
 processor. Elements with a `data-arch` attribute show only for that
-processor, for example the Homebrew commands, which install only the Apple
-Silicon build. [install.js](install.js) asks the GitHub API for the latest
+processor, for example the Homebrew command, which installs only the Apple
+Silicon build. The package manager commands are in closed sections under the
+download, because they are another way to install. [install.js](install.js) asks the GitHub API for the latest
 stable release and links the download buttons to its files. This is the only
 request to another site. Without the script, or if the request fails, the
 page shows all systems, and the download buttons open the latest release

@@ -70,14 +70,14 @@
           <li>Open <b>System Settings → Privacy &amp; Security</b> and click <b>Open Anyway</b>.</li>
         </ol>
         <p class="note">Requires macOS 12 or later.</p>
-        <div data-arch="arm">
-          <h4>Homebrew</h4>
+        <details class="alternative" data-arch="arm">
+          <summary><svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>Or install with Homebrew</summary>
           <div class="command">
             <span class="command-label">Stable</span>
             <pre><code>brew install --cask vsevolodbazhan/qrow/qrow</code></pre>
             <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
           </div>
-        </div>
+        </details>
       </div>
 
       <div class="panel" role="tabpanel" id="panel-windows" aria-labelledby="tab-windows">
@@ -91,13 +91,15 @@
           <li>If Windows shows <b>Windows protected your PC</b>, select <b>More info</b>, then <b>Run anyway</b>.</li>
         </ol>
         <p class="note">Requires Windows 10 or later.</p>
-        <h4>Scoop</h4>
-        <div class="command">
-          <span class="command-label">Stable</span>
-          <pre><code>scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+        <details class="alternative">
+          <summary><svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>Or install with Scoop</summary>
+          <div class="command">
+            <span class="command-label">Stable</span>
+            <pre><code>scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
 scoop install qrow</code></pre>
-          <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
-        </div>
+            <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+          </div>
+        </details>
       </div>
 
       <div class="panel" role="tabpanel" id="panel-linux" aria-labelledby="tab-linux">
