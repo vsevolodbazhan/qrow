@@ -107,7 +107,8 @@ Use the application menu at the top left for Settings and other commands.
 Release builds check for a new version of their channel. A stable build
 looks for stable releases, and a nightly build looks for nightly releases.
 The first check starts a few seconds after launch. While Qrow is open, it
-checks again when the last check is more than a day old. To stop the automatic checks, turn off
+checks again when the last check is more than a day old. If a check fails,
+for example offline, Qrow tries again within an hour. To stop the automatic checks, turn off
 **Settings → Updates → Check Automatically**. To check at any time, open
 **About Qrow** and select **Check for updates**.
 

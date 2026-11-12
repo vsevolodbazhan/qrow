@@ -230,8 +230,10 @@ impl Qrow {
                 self.announce_update(&version, &setup, window, cx);
             }
             Err(error) => {
-                // An automatic check fails quietly, for example offline.
+                // An automatic check fails quietly, for example offline, and
+                // runs again at the next tick instead of the next day.
                 eprintln!("Update check failed: {error:#}");
+                self.updates.last_check = None;
                 self.updates.status = if manual {
                     Status::Failed("Could not check for updates. Try again later.".into())
                 } else {
@@ -259,6 +261,7 @@ impl Qrow {
             }
             Err(error) => {
                 eprintln!("Update download failed: {error:#}");
+                self.updates.last_check = None;
                 self.updates.status =
                     Status::Failed("Could not download the update. Try again later.".into());
             }

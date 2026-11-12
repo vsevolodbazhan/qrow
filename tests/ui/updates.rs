@@ -204,6 +204,23 @@ fn automatic_checks_follow_the_setting(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_failed_automatic_check_runs_again_within_the_hour(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    // No release list yet: the first check fails.
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), releases.setup(homebrew()));
+    run_first_check(cx);
+    assert_eq!(releases.requests(), ["/releases"]);
+    app.update(cx, |window, _| {
+        assert!(!present(window, &"update-available".into()))
+    });
+    releases.publish("v0.6.0", "Qrow-0.6.0-x86_64.dmg", b"dmg");
+    cx.executor().advance_clock(Duration::from_secs(60 * 60));
+    cx.run_until_parked();
+    app.wait_for(cx, "update-available");
+    assert_eq!(releases.requests(), ["/releases", "/releases"]);
+}
+
+#[gpui_kit::test]
 fn builds_without_updates_have_no_update_controls(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, OpenAbout);
