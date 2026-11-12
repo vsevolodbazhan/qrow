@@ -102,6 +102,52 @@ built on Ubuntu 24.04. Use it on that or a newer, compatible distribution.
 
 Use the application menu at the top left for Settings and other commands.
 
+## Updates
+
+Release builds check for a new version of their channel. A stable build
+looks for stable releases, and a nightly build looks for nightly releases.
+The first check starts a few seconds after launch. While Qrow is open, it
+checks again when the last check is more than a day old. If a check fails,
+for example offline, Qrow tries again within an hour. To stop the automatic
+checks, turn off **Settings → Updates → Check Automatically**.
+
+To switch channels, use **Settings → Updates → Nightly Builds**. The next
+check, within a minute, follows the new channel. A switch to nightly builds
+takes the newest nightly release that was published after your version. A
+switch back to stable releases waits until a stable release is published
+after your nightly version, so Qrow never installs an older build. Until
+then, the **Updates** button says so. Copies that a package manager
+installed keep the channel of their package: install the other package, for
+example `qrow@nightly`, to switch.
+
+The **Updates** button in the status bar shows the state. A dot on it shows
+news: an available version, a download in progress, a version that is ready,
+or a failure. Select the button to see the state and the action that fits
+it, for example **Check for updates** or **Restart to update**.
+
+What happens next depends on how you installed Qrow:
+
+| Installation | Update |
+| --- | --- |
+| Linux archive in a folder that you can write, such as `~/.local` | Qrow downloads the new version in the background and shows **Restart to update**. |
+| macOS app from the DMG, in a folder that you can write, such as `/Applications` | Qrow downloads the new DMG in the background and shows **Restart to update**. The restart replaces the app. |
+| Windows installer | Qrow downloads the new installer in the background and shows **Restart to update**. Qrow quits, the installer runs without its dialogs, and Qrow starts again. An install for all users asks for administrator rights. |
+| Homebrew or Scoop | Qrow shows the command that updates it, for example `brew upgrade --cask qrow`. |
+| Flatpak or Snap | Qrow tells you to update it with that tool. |
+| Windows portable archive | Qrow shows the new version and a link to the release. Download the new archive. |
+| Linux archive or macOS app in a folder that you cannot write, such as `/usr` | Qrow shows the new version and a link to the release. |
+
+Before Qrow installs an update, it verifies the signed checksums of the
+release, as in [Verify a download](#verify-a-download), and the checksum of
+the package. If a check fails, Qrow keeps the installed version. After
+**Restart to update**, Qrow asks before it stops running work, saves the
+workspace, and starts the new version.
+
+The check sends requests to `api.github.com` and `github.com`. A download
+also goes to the GitHub server that stores release files. The requests
+contain the Qrow version and no workspace data. Development builds do not
+check for updates.
+
 ## Verify a download
 
 Each release has a `SHA256SUMS` file with the checksums of all packages, and a

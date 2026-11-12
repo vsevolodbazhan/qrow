@@ -60,3 +60,13 @@ Name: "{autodesktop}\Qrow"; Filename: "{app}\qrow.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\qrow.exe"; Description: "{cm:LaunchProgram,Qrow}"; Flags: nowait postinstall skipifsilent
+; An update from Qrow runs the installer silently with /QROWRELAUNCH=1 and
+; quits. Start Qrow again when the files are in place, as the user who ran
+; it, also when the installer runs as administrator for all users.
+Filename: "{app}\qrow.exe"; Flags: nowait runasoriginaluser; Check: IsUpdateRelaunch
+
+[Code]
+function IsUpdateRelaunch: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:QROWRELAUNCH|0}') = '1');
+end;

@@ -19,11 +19,12 @@ const TRIANGLE_ALERT_ICON: &str = "icons/triangle-alert.svg";
 #[cfg(test)]
 const CLIPBOARD_PASTE_ICON: &str = "icons/clipboard-paste.svg";
 #[cfg(test)]
-const STATUS_BAR_ICONS: [&str; 4] = [
+const STATUS_BAR_ICONS: [&str; 5] = [
     "icons/bot.svg",
     "icons/plug.svg",
     "icons/key-round.svg",
     "icons/activity.svg",
+    "icons/circle-fading-arrow-up.svg",
 ];
 
 // Icons outside the GPUI Kit default set. The assistant tool call cards use
@@ -32,7 +33,8 @@ const STATUS_BAR_ICONS: [&str; 4] = [
 // Sign-ins sidebars use `ClipboardPaste`.
 // The result toolbar uses `FileCode` for Copy query and `Pin`, and the Logs
 // toolbar uses `Trash` for Clear. The Connections search uses `ListFilter`.
-// The conversation list toggle uses `List`.
+// The conversation list toggle uses `List`. The status bar Updates button uses
+// `CircleFadingArrowUp`.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
@@ -58,6 +60,7 @@ gpui_kit::assets::icon_assets!(
         Trash,
         ListFilter,
         List,
+        CircleFadingArrowUp,
     ]
 );
 

@@ -9,6 +9,8 @@
 
 #[cfg(target_os = "linux")]
 pub mod archive;
+#[cfg(target_os = "macos")]
+pub mod bundle;
 pub mod feed;
 mod fetch;
 pub mod install;
@@ -74,6 +76,85 @@ impl Source {
     }
 }
 
+/// How this copy of Qrow updates: the release source, the running version,
+/// the installation, and the folder for downloads.
+#[derive(Clone, Debug)]
+pub struct Setup {
+    pub source: Source,
+    pub current: Version,
+    pub install: Install,
+    /// `std::env::consts::ARCH` of this build.
+    pub arch: String,
+    /// The folder that holds downloads until they are installed.
+    pub downloads: PathBuf,
+}
+
+impl Setup {
+    /// The setup of the running release build, or `None` for a build without
+    /// an update channel. `QROW_NO_UPDATES` turns updates off, for example
+    /// for automated tests of a packaged release build.
+    pub fn for_this_build(downloads: PathBuf) -> Option<Self> {
+        if std::env::var_os("QROW_NO_UPDATES").is_some() {
+            return None;
+        }
+        let current = running_version()?;
+        let os = Os::current()?;
+        let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        // Detection compares paths, so resolve them like the executable.
+        let resolve = |path: PathBuf| path.canonicalize().unwrap_or(path);
+        let homebrew_prefixes = ["/opt/homebrew", "/usr/local"].map(PathBuf::from);
+        let homebrew_app_folders: Vec<_> = std::iter::once(PathBuf::from("/Applications"))
+            .chain(home.map(|home| home.join("Applications")))
+            .map(resolve)
+            .collect();
+        let install = install::detect(&install::Probe {
+            os,
+            channel: current.channel(),
+            executable: &executable,
+            env: &|name| std::env::var_os(name),
+            homebrew_prefixes: &homebrew_prefixes,
+            homebrew_app_folders: &homebrew_app_folders,
+        });
+        Some(Self {
+            source: Source::github(),
+            current,
+            install,
+            arch: std::env::consts::ARCH.into(),
+            downloads,
+        })
+    }
+
+    /// True when this copy can install an update itself. Other copies only
+    /// report it.
+    pub fn installs_updates(&self) -> bool {
+        match self.install {
+            Install::Archive { .. } => cfg!(target_os = "linux"),
+            Install::AppBundle { .. } => cfg!(target_os = "macos"),
+            Install::WindowsInstaller { .. } => cfg!(windows),
+            Install::Managed(_) => false,
+        }
+    }
+
+    /// The executable to start after an update, when it differs from the path
+    /// that the system reports for the running process.
+    pub fn restart_path(&self) -> Option<PathBuf> {
+        match &self.install {
+            // Linux reports a replaced executable as "PATH (deleted)".
+            Install::Archive { prefix } => Some(prefix.join("bin/qrow")),
+            _ => None,
+        }
+    }
+
+    /// The web page of a release, for copies that the user updates by hand.
+    pub fn release_page(&self, version: &Version) -> String {
+        format!(
+            "https://github.com/vsevolodbazhan/qrow/releases/tag/{}",
+            version.tag()
+        )
+    }
+}
+
 /// A verified update asset in a temporary folder. Dropping it removes the file.
 #[derive(Debug)]
 pub struct Download {
@@ -103,26 +184,31 @@ impl Updater {
 
     /// The newest release of the channel of `current` that is newer than
     /// `current`, or `None`.
-    pub fn check(&self, current: &Version) -> Result<Option<Candidate>> {
+    pub fn check(&self, current: &Version, channel: Channel) -> Result<Option<Candidate>> {
         block_on(async {
             // The list is newest first. The release workflow only publishes a
             // commit that includes the previous release of its channel, so
             // within a channel a later release has a higher version. The first
-            // page with a published release of this channel therefore has the
+            // page with a published release of the channel therefore has the
             // newest one. Releases of the other channel can fill whole pages
-            // before it.
+            // before it. A switch of channel also needs the release of
+            // `current`, for its publish time.
+            let switching = channel != current.channel();
+            let mut releases: Vec<feed::Release> = Vec::new();
             let mut url = Some(self.source.releases.clone());
             for _ in 0..MAX_FEED_PAGES {
                 let Some(page) = url.take() else { break };
                 let (body, next) = fetch::page(&self.client, &page, MAX_FEED_BYTES).await?;
-                let releases: Vec<feed::Release> =
+                let mut page: Vec<feed::Release> =
                     serde_json::from_slice(&body).context("Could not read the release list")?;
-                if feed::has_channel(&releases, current.channel()) {
-                    return Ok(feed::newest(&releases, current));
+                releases.append(&mut page);
+                let found_current = !switching || feed::published_at(&releases, current).is_some();
+                if feed::has_channel(&releases, channel) && found_current {
+                    break;
                 }
                 url = next;
             }
-            Ok(None)
+            Ok(feed::newest(&releases, current, channel))
         })
     }
 
@@ -149,6 +235,7 @@ impl Updater {
             asset("SHA256SUMS.minisig")?,
             asset(&name)?,
         );
+        std::fs::create_dir_all(folder).context("Could not create the update folder")?;
         let folder = tempfile::Builder::new()
             .prefix("qrow-update-")
             .tempdir_in(folder)
@@ -197,19 +284,77 @@ impl Updater {
     }
 }
 
-/// Installs a verified download. The new version starts at the next launch.
-pub fn apply(download: &Download, install: &Install) -> Result<()> {
+/// What Qrow does when it quits after [`apply`].
+#[derive(Debug)]
+pub enum Finish {
+    /// The new files are in place; start them.
+    Restart,
+    /// Run this installer, which replaces the files and starts Qrow.
+    Run(std::process::Command),
+}
+
+/// Installs a verified download, or prepares its installer. The new version
+/// starts after Qrow quits.
+pub fn apply(download: &Download, install: &Install) -> Result<Finish> {
     match install {
         #[cfg(target_os = "linux")]
-        Install::Archive { prefix } => archive::install(&download.path, prefix),
+        Install::Archive { prefix } => {
+            archive::install(&download.path, prefix)?;
+            Ok(Finish::Restart)
+        }
+        #[cfg(target_os = "macos")]
+        Install::AppBundle { app } => {
+            bundle::install(&download.path, app)?;
+            Ok(Finish::Restart)
+        }
+        #[cfg(windows)]
+        Install::WindowsInstaller { folder } => {
+            // The installer runs after Qrow quits, when the temporary download
+            // is gone, so it moves next to that folder. The next launch
+            // removes it.
+            let name = download
+                .path
+                .file_name()
+                .context("The installer has no name")?;
+            let kept = download
+                .path
+                .parent()
+                .and_then(Path::parent)
+                .context("The installer has no download folder")?
+                .join(name);
+            std::fs::copy(&download.path, &kept).context("Could not keep the installer")?;
+            let all_users = !install::writable(folder);
+            Ok(Finish::Run(installer_command(&kept, folder, all_users)))
+        }
         Install::Managed(_) => bail!("Another program updates this copy of Qrow"),
-        // Only Linux builds have an install path yet; elsewhere the download
-        // is not used.
+        // Only some platforms install this kind of copy; elsewhere the
+        // download is not used.
         _ => {
             let _ = download;
             bail!("Updates of this installation are not available yet")
         }
     }
+}
+
+/// The silent run of the Windows installer `setup` into `folder`.
+/// `/QROWRELAUNCH=1` makes it start Qrow when it is done. An install for all
+/// users asks Windows for administrator rights.
+pub fn installer_command(setup: &Path, folder: &Path, all_users: bool) -> std::process::Command {
+    let mut command = std::process::Command::new(setup);
+    command.args([
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        "/QROWRELAUNCH=1",
+        if all_users {
+            "/ALLUSERS"
+        } else {
+            "/CURRENTUSER"
+        },
+    ]);
+    command.arg(format!("/DIR={}", folder.display()));
+    command
 }
 
 fn block_on<T>(future: impl Future<Output = Result<T>>) -> Result<T> {

@@ -22,6 +22,8 @@ pub struct Environment {
     trust: Trust,
     /// `None` opens the default browser of the system.
     browser: Option<Browser>,
+    /// How this copy updates. `None` never checks for updates.
+    updates: Option<Arc<crate::update::Setup>>,
 }
 
 impl Environment {
@@ -34,6 +36,11 @@ impl Environment {
             tokens: Arc::new(Keychain),
             trust: Trust::system(),
             browser: None,
+            // Only release builds have an update setup.
+            updates: crate::update::Setup::for_this_build(
+                storage::local_data_directory().join("updates"),
+            )
+            .map(Arc::new),
         }
     }
 
@@ -47,6 +54,7 @@ impl Environment {
             tokens: Arc::new(MemoryTokenStore::default()),
             trust: Trust::system(),
             browser: None,
+            updates: None,
         }
     }
 
@@ -67,7 +75,15 @@ impl Environment {
             tokens: Arc::new(MemoryTokenStore::default()),
             trust: Trust::system(),
             browser: None,
+            updates: None,
         }
+    }
+
+    /// Checks for updates with this setup, for example a local release
+    /// server in tests.
+    pub fn with_updates(mut self, setup: crate::update::Setup) -> Self {
+        self.updates = Some(Arc::new(setup));
+        self
     }
 
     /// Uses these sign-in tokens, certificate authorities, and browser, for
@@ -111,5 +127,9 @@ impl Environment {
 
     pub(crate) fn browser(&self) -> Option<Browser> {
         self.browser.clone()
+    }
+
+    pub(crate) fn updates(&self) -> Option<Arc<crate::update::Setup>> {
+        self.updates.clone()
     }
 }

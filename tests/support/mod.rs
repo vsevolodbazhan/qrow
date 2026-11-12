@@ -753,6 +753,24 @@ impl TestApp {
             Some(workspace),
             credentials,
             Some(sign_ins),
+            None,
+        )
+    }
+
+    /// Opens Qrow on `workspace` with this update setup, for example a local
+    /// release server.
+    pub fn launch_with_updates(
+        cx: &mut TestAppContext,
+        workspace: Workspace,
+        updates: qrow::update::Setup,
+    ) -> Self {
+        Self::open(
+            cx,
+            tempfile::tempdir().unwrap(),
+            Some(workspace),
+            MemoryCredentials::default(),
+            None,
+            Some(updates),
         )
     }
 
@@ -764,6 +782,7 @@ impl TestApp {
             None,
             MemoryCredentials::default(),
             None,
+            None,
         )
     }
 
@@ -774,7 +793,7 @@ impl TestApp {
         workspace: Workspace,
         credentials: MemoryCredentials,
     ) -> Self {
-        Self::open(cx, directory, Some(workspace), credentials, None)
+        Self::open(cx, directory, Some(workspace), credentials, None, None)
     }
 
     /// Opens Qrow on `workspace` in `directory`, or on the demo data.
@@ -784,6 +803,7 @@ impl TestApp {
         workspace: Option<Workspace>,
         credentials: MemoryCredentials,
         sign_ins: Option<SignIns>,
+        updates: Option<qrow::update::Setup>,
     ) -> Self {
         // Worker and saver threads wake the UI. GPUI's deterministic
         // scheduler rejects wakes from other threads unless parking is allowed.
@@ -803,7 +823,10 @@ impl TestApp {
                     ..workspace
                 };
                 std::fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
-                let environment = Environment::isolated(path.clone(), credentials.clone());
+                let mut environment = Environment::isolated(path.clone(), credentials.clone());
+                if let Some(updates) = updates {
+                    environment = environment.with_updates(updates);
+                }
                 match &sign_ins {
                     Some(sign_ins) => environment.with_sign_ins(
                         sign_ins.tokens.clone() as Arc<dyn TokenStore>,

@@ -31,3 +31,4 @@ mod smooth_caret;
 mod smooth_scrolling;
 mod tabs;
 mod timing;
+mod updates;

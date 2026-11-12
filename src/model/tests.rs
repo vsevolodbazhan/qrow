@@ -837,6 +837,8 @@ fn settings_restore_defaults_and_stay_within_supported_bounds() {
         export_replay_limit_mib: 2048,
         copy_format: CopyFormat::Markdown,
         results_minimized: false,
+        check_for_updates: true,
+        update_channel: None,
     };
     settings.sanitize();
     assert_eq!(settings, Settings::default());
