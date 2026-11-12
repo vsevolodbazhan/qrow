@@ -294,3 +294,46 @@ fn a_downloaded_update_installs_and_restarts_into_the_new_version(cx: &mut TestA
         b"new qrow"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn a_cancelled_restart_does_not_restart_a_later_quit(cx: &mut TestAppContext) {
+    use std::sync::atomic::AtomicBool;
+    let releases = Releases::start();
+    let name = "Qrow-0.6.0-linux-x86_64.tar.gz";
+    releases.publish("v0.6.0", name, &linux_archive(b"new qrow"));
+    let prefix = tempfile::tempdir().unwrap();
+    write(&prefix.path().join("bin/qrow"), b"old qrow");
+    write(&prefix.path().join("share/applications/qrow.desktop"), b"");
+    let install = Install::Archive {
+        prefix: prefix.path().into(),
+    };
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), releases.setup(install));
+    run_first_check(cx);
+    app.wait_for(cx, "update-ready");
+    // Running work makes Quit ask first.
+    let guard = cx.update(|cx| {
+        cx.global::<qrow::export::Jobs>()
+            .register(Arc::new(AtomicBool::new(false)))
+    });
+    let mut restart = cx.expect_restart();
+    app.click(cx, "update-restart");
+    app.wait_for(cx, "keep-working");
+    app.click(cx, "keep-working");
+    app.wait_gone(cx, "keep-working");
+    // The update is in place; it starts at the next launch.
+    assert_eq!(
+        std::fs::read(prefix.path().join("bin/qrow")).unwrap(),
+        b"new qrow"
+    );
+    drop(guard);
+    // The test platform does not end the app on quit, so the check is that
+    // the quit that follows does not ask for a restart.
+    app.dispatch(cx, qrow::ui::Quit);
+    app.settle(cx);
+    cx.run_until_parked();
+    assert!(
+        matches!(restart.try_recv(), Ok(None)),
+        "A later Quit must not restart Qrow"
+    );
+}

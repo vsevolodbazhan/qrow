@@ -1603,7 +1603,7 @@ impl Render for WindowView {
             .size_full()
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 this.content
-                    .update(cx, |content, cx| content.request_quit(window, cx));
+                    .update(cx, |content, cx| content.request_user_quit(window, cx));
             }))
             // Capture above editor and dialog focus scopes, before text input consumes keys.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

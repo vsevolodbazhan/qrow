@@ -1186,7 +1186,7 @@ impl Qrow {
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| {
-                this.request_quit(window, cx);
+                this.request_user_quit(window, cx);
             })
             .is_err()
         });
@@ -1459,6 +1459,13 @@ impl Qrow {
         cx.notify();
     }
 
+    /// Quit that the user asks for: the Quit command or closing the window.
+    /// It replaces an earlier Restart to update that did not finish.
+    pub(super) fn request_user_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.updates.restarting = false;
+        self.request_quit(window, cx);
+    }
+
     pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending_quit.is_some() || self.quit_confirmed || self.quit_warning_open {
             return;
@@ -1527,7 +1534,7 @@ impl Qrow {
                                 .on_click(move |_, _, cx| {
                                     let _ = discard.update(cx, |this, cx| {
                                         this.quit_confirmed = true;
-                                        cx.quit();
+                                        this.exit(cx);
                                     });
                                 }),
                         )

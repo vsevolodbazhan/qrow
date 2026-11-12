@@ -22,7 +22,8 @@ pub(super) struct Updates {
     setup: Option<Arc<Setup>>,
     updater: Option<Arc<Updater>>,
     pub(super) status: Status,
-    last_check: Option<Instant>,
+    /// Wall-clock time, so that time asleep counts toward the next check.
+    last_check: Option<std::time::SystemTime>,
     /// The newest version that a toast announced, so it shows once.
     announced: Option<Version>,
     /// Set while Qrow quits to start the installed version.
@@ -83,7 +84,7 @@ impl Updates {
             Status::Installing(version) => format!("Installing Qrow {version}…"),
             Status::Installed(version) => format!("Qrow {version} starts after a restart."),
             Status::Available(version) => format!("Qrow {version} is available."),
-            Status::Failed(error) => format!("Could not update: {error}"),
+            Status::Failed(failure) => failure.clone(),
         })
     }
 
@@ -137,10 +138,14 @@ impl Qrow {
             cx.background_executor().timer(FIRST_CHECK_DELAY).await;
             loop {
                 let checked = weak.update_in(cx, |this, window, cx| {
+                    // A clock set back also makes a check due.
                     let due = this
                         .updates
                         .last_check
-                        .is_none_or(|last| last.elapsed() >= CHECK_INTERVAL);
+                        .is_none_or(|last| match last.elapsed() {
+                            Ok(age) => age >= CHECK_INTERVAL,
+                            Err(_) => true,
+                        });
                     if this.settings.check_for_updates && due {
                         this.check_for_updates(false, window, cx);
                     }
@@ -177,7 +182,7 @@ impl Qrow {
             return;
         }
         self.updates.status = Status::Checking;
-        self.updates.last_check = Some(Instant::now());
+        self.updates.last_check = Some(std::time::SystemTime::now());
         cx.notify();
         let current = setup.current.clone();
         let check = cx
@@ -228,7 +233,7 @@ impl Qrow {
                 // An automatic check fails quietly, for example offline.
                 eprintln!("Update check failed: {error:#}");
                 self.updates.status = if manual {
-                    Status::Failed(format!("{error:#}"))
+                    Status::Failed("Could not check for updates. Try again later.".into())
                 } else {
                     Status::Idle
                 };
@@ -254,7 +259,8 @@ impl Qrow {
             }
             Err(error) => {
                 eprintln!("Update download failed: {error:#}");
-                self.updates.status = Status::Failed(format!("{error:#}"));
+                self.updates.status =
+                    Status::Failed("Could not download the update. Try again later.".into());
             }
         }
         cx.notify();
@@ -325,7 +331,9 @@ impl Qrow {
                         }
                         Err(error) => {
                             let error = format!("{error:#}");
-                            this.updates.status = Status::Failed(error.clone());
+                            eprintln!("Update install failed: {error}");
+                            this.updates.status =
+                                Status::Failed("Could not install the update.".into());
                             window.push_notification(
                                 toast::error(
                                     "update-failed",
@@ -344,14 +352,12 @@ impl Qrow {
         }
     }
 
+    /// Quits and starts the installed version. Quit can still stop for
+    /// running work or a failed save; their retry buttons keep the restart,
+    /// and a later Quit from the user replaces it.
     fn quit_to_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.updates.restarting = true;
         self.request_quit(window, cx);
-        // Quit can stop for running work or a failed save. The new version
-        // then starts at the next launch.
-        if !self.quit_confirmed && self.pending_quit.is_none() && !self.quit_warning_open {
-            self.updates.restarting = false;
-        }
         cx.notify();
     }
 
@@ -362,9 +368,10 @@ impl Qrow {
                 cx.set_restart_path(path);
             }
             cx.restart();
-        } else {
-            cx.quit();
         }
+        // The platform quits after it starts the new process. If it could not
+        // start it, Qrow still quits; the new version starts at the next launch.
+        cx.quit();
     }
 }
 

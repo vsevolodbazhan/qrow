@@ -947,9 +947,10 @@ impl Qrow {
 
 /// Update checks. Only release builds show this page.
 fn updates_page(owner: WeakEntity<Qrow>, checked: bool) -> SettingPage {
+    // The page title names the topic; its one group needs no second title.
     SettingPage::new("Updates")
         .resettable(false)
-        .group(SettingGroup::new().title("Updates").item(setting_item(
+        .group(SettingGroup::new().item(setting_item(
             "Check Automatically",
             "Look for a new version once a day.",
             &["update", "version", "release", "download", "upgrade"],

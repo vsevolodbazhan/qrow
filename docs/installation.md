@@ -106,8 +106,8 @@ Use the application menu at the top left for Settings and other commands.
 
 Release builds check for a new version of their channel. A stable build
 looks for stable releases, and a nightly build looks for nightly releases.
-The first check starts a few seconds after launch. Then Qrow checks once a
-day while it is open. To stop the automatic checks, turn off
+The first check starts a few seconds after launch. While Qrow is open, it
+checks again when the last check is more than a day old. To stop the automatic checks, turn off
 **Settings → Updates → Check Automatically**. To check at any time, open
 **About Qrow** and select **Check for updates**.
 
@@ -127,7 +127,8 @@ the package. If a check fails, Qrow keeps the installed version. After
 **Restart to update**, Qrow asks before it stops running work, saves the
 workspace, and starts the new version.
 
-The check sends requests to `api.github.com` and `github.com`. The requests
+The check sends requests to `api.github.com` and `github.com`. A download
+also goes to the GitHub server that stores release files. The requests
 contain the Qrow version and no workspace data. Development builds do not
 check for updates.
 
