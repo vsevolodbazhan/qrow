@@ -140,7 +140,7 @@ impl Updates {
             update::Install::Managed(Manager::Snap) => {
                 format!("Update to Qrow {version} with Snap.")
             }
-            _ => format!("Download Qrow {version} from GitHub Releases."),
+            _ => format!("Download Qrow {version} from GitHub."),
         })
     }
 
