@@ -101,7 +101,7 @@ h2 { margin: 0; color: var(--fg-strong); font-size: 28px; font-weight: 600; line
 .segment[aria-selected="true"], .segment[aria-checked="true"] { background: var(--hover); color: var(--fg-strong); }
 .panel { margin-top: 24px; }
 .panel-title { margin: 40px 0 0; color: var(--fg-strong); font-size: 18px; font-weight: 600; }
-.has-script .panel-title, .has-script .no-script { display: none; }
+.has-script .panel-title { display: none; }
 .downloads { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .has-script .downloads { margin-top: 0; align-items: center; column-gap: 12px; }
 .file-name { min-width: 0; overflow-wrap: anywhere; font-size: 13px; color: var(--muted); }

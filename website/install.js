@@ -183,7 +183,6 @@
       const url = release.assets.get(name);
       if (!url) return;
       link.href = url;
-      if (!link.classList.contains("btn")) link.textContent = name;
     });
   }
 

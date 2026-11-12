@@ -433,13 +433,13 @@ class WebsiteWorkflowTests(unittest.TestCase):
         files = workflow[start:workflow.index("--repo", start)]
         uploads = set(re.findall(r'"dist/Qrow-\$\{RELEASE_VERSION\}-([^"]+)"', files))
         self.assertEqual(len(uploads), 8)
-        self.assertEqual(suffixes, uploads)
-        # The hero button uses the PRIMARY table of the script.
+        self.assertLessEqual(suffixes, uploads)
+        # The page has one download for each system and processor, as in the PRIMARY table of the script.
         script = read("website/install.js")
         start = script.index("const PRIMARY")
         primary = re.findall(r'(?:arm|x86): "([^"]+)"', script[start:script.index("};", start)])
         self.assertEqual(len(primary), 6)
-        self.assertLessEqual(set(primary), uploads)
+        self.assertEqual(suffixes, set(primary))
 
 
 if __name__ == "__main__":
