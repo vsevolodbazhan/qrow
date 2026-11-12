@@ -22,6 +22,7 @@ struct Releases {
     files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     requests: Arc<Mutex<Vec<String>>>,
     key: minisign::KeyPair,
+    releases: Mutex<Vec<serde_json::Value>>,
     _downloads: tempfile::TempDir,
     downloads: std::path::PathBuf,
 }
@@ -65,6 +66,7 @@ impl Releases {
             files,
             requests,
             key: minisign::KeyPair::generate_unencrypted_keypair().unwrap(),
+            releases: Mutex::default(),
             downloads: downloads.path().join("updates"),
             _downloads: downloads,
         }
@@ -72,6 +74,12 @@ impl Releases {
 
     /// Publishes `tag` with one package and its signed checksums.
     fn publish(&self, tag: &str, name: &str, package: &[u8]) {
+        self.publish_at(tag, name, package, None);
+    }
+
+    /// Adds release `tag`, published at `at`, to the release list. The list
+    /// is newest first, like GitHub's.
+    fn publish_at(&self, tag: &str, name: &str, package: &[u8], at: Option<&str>) {
         let digest = ring::digest::digest(&ring::digest::SHA256, package);
         let hex: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
         let sums = format!("{hex}  ./{name}\n");
@@ -97,13 +105,20 @@ impl Releases {
             }));
             self.files.lock().unwrap().insert(path, body);
         }
-        let releases = serde_json::json!([
-            {"tag_name": tag, "draft": false, "prerelease": false, "assets": assets}
-        ]);
+        let mut releases = self.releases.lock().unwrap();
+        releases.push(serde_json::json!({
+            "tag_name": tag, "draft": false, "prerelease": tag.contains("-nightly."),
+            "published_at": at, "assets": assets,
+        }));
+        releases.sort_by(|left, right| {
+            right["published_at"]
+                .as_str()
+                .cmp(&left["published_at"].as_str())
+        });
         self.files
             .lock()
             .unwrap()
-            .insert("/releases".into(), serde_json::to_vec(&releases).unwrap());
+            .insert("/releases".into(), serde_json::to_vec(&*releases).unwrap());
     }
 
     fn setup(&self, install: Install) -> Setup {
@@ -221,7 +236,20 @@ fn a_failed_automatic_check_runs_again_within_the_hour(cx: &mut TestAppContext) 
         assert!(!present(window, &"update-available".into()))
     });
     releases.publish("v0.6.0", "Qrow-0.6.0-x86_64.dmg", b"dmg");
-    cx.executor().advance_clock(Duration::from_secs(60 * 60));
+    // The timer ticks every minute; a failed check waits an hour.
+    for _ in 0..59 {
+        cx.executor().advance_clock(Duration::from_secs(60));
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        releases.requests(),
+        ["/releases"],
+        "no retry before the hour"
+    );
+    for _ in 0..2 {
+        cx.executor().advance_clock(Duration::from_secs(60));
+        cx.run_until_parked();
+    }
     cx.run_until_parked();
     app.wait_for(cx, "update-available");
     assert_eq!(releases.requests(), ["/releases", "/releases"]);
@@ -408,4 +436,125 @@ fn a_failed_automatic_check_is_logged_without_an_unread_error(cx: &mut TestAppCo
         activity.contains("Could not check for updates"),
         "{activity}"
     );
+}
+
+/// A Linux archive copy in a new prefix, running `current`.
+#[cfg(target_os = "linux")]
+fn archive_copy(releases: &Releases, current: &str) -> (tempfile::TempDir, Setup) {
+    let prefix = tempfile::tempdir().unwrap();
+    write(&prefix.path().join("bin/qrow"), b"old qrow");
+    write(&prefix.path().join("share/applications/qrow.desktop"), b"");
+    let mut setup = releases.setup(Install::Archive {
+        prefix: prefix.path().into(),
+    });
+    setup.current = Version::parse(current).unwrap();
+    (prefix, setup)
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn the_nightly_switch_follows_nightly_releases_from_the_next_check(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    releases.publish_at(
+        "v0.5.0",
+        "Qrow-0.5.0-linux-x86_64.tar.gz",
+        b"stable",
+        Some("2026-11-12T10:00:00Z"),
+    );
+    let nightly = "Qrow-0.5.0-nightly.20261113.1-linux-x86_64.tar.gz";
+    releases.publish_at(
+        "v0.5.0-nightly.20261113.1",
+        nightly,
+        &linux_archive(b"nightly qrow"),
+        Some("2026-11-13T04:00:00Z"),
+    );
+    let (_prefix, setup) = archive_copy(&releases, "0.5.0");
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), setup);
+    run_first_check(cx);
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "Updates, Qrow is up to date.").is_some());
+    });
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "nightly");
+    app.wait_for(cx, "update-channel-nightly");
+    app.click(cx, "update-channel-nightly");
+    app.wait_saved(cx, "nightly channel", |workspace| {
+        workspace.settings.update_channel == Some(qrow::update::Channel::Nightly)
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "update-channel-nightly");
+    cx.executor().advance_clock(Duration::from_secs(61));
+    cx.run_until_parked();
+    app.wait_for(cx, "update-ready");
+    assert!(
+        releases
+            .requests()
+            .contains(&format!("/download/v0.5.0-nightly.20261113.1/{nightly}"))
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn a_switch_to_stable_waits_for_a_newer_stable_release(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    releases.publish_at(
+        "v0.5.0",
+        "Qrow-0.5.0-linux-x86_64.tar.gz",
+        b"stable",
+        Some("2026-11-12T10:00:00Z"),
+    );
+    releases.publish_at(
+        "v0.5.0-nightly.20261113.1",
+        "Qrow-0.5.0-nightly.20261113.1-linux-x86_64.tar.gz",
+        b"nightly",
+        Some("2026-11-13T04:00:00Z"),
+    );
+    let (_prefix, setup) = archive_copy(&releases, "0.5.0-nightly.20261113.1");
+    let mut workspace = Workspace::default();
+    workspace.settings.update_channel = Some(qrow::update::Channel::Stable);
+    let app = TestApp::launch_with_updates(cx, workspace, setup);
+    run_first_check(cx);
+    app.update(cx, |window, _| {
+        assert!(
+            labelled(
+                window,
+                "Updates, Switches to Stable with the next stable release."
+            )
+            .is_some()
+        );
+    });
+    // The older stable release is never downloaded.
+    assert!(
+        !releases
+            .requests()
+            .iter()
+            .any(|path| path.starts_with("/download/"))
+    );
+}
+
+#[gpui_kit::test]
+fn a_package_manager_copy_keeps_the_channel_of_its_package(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    releases.publish_at(
+        "v0.5.0-nightly.20261113.1",
+        "Qrow-0.5.0-nightly.20261113.1-x86_64.dmg",
+        b"nightly",
+        Some("2026-11-13T04:00:00Z"),
+    );
+    let mut workspace = Workspace::default();
+    workspace.settings.update_channel = Some(qrow::update::Channel::Nightly);
+    let app = TestApp::launch_with_updates(cx, workspace, releases.setup(homebrew()));
+    run_first_check(cx);
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "Updates, Qrow is up to date.").is_some());
+    });
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "nightly");
+    app.wait_for(cx, "update-channel-nightly");
+    app.update(cx, |window, _| {
+        assert!(shows(
+            window,
+            "The package manager sets the channel of this copy."
+        ));
+    });
 }

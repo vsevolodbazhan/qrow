@@ -849,10 +849,14 @@ impl Qrow {
                 state.set_selected_value(&harness.to_owned(), window, cx)
             });
         }
-        let updates = self
-            .updates
-            .enabled()
-            .then(|| updates_page(cx.weak_entity(), self.settings.check_for_updates));
+        let updates = self.updates.enabled().then(|| {
+            updates_page(
+                cx.weak_entity(),
+                self.settings.check_for_updates,
+                self.update_channel(),
+                self.can_switch_channel(),
+            )
+        });
         div()
             .size_full()
             .overflow_hidden()
@@ -946,27 +950,62 @@ impl Qrow {
 }
 
 /// Update checks. Only release builds show this page.
-fn updates_page(owner: WeakEntity<Qrow>, checked: bool) -> SettingPage {
+fn updates_page(
+    owner: WeakEntity<Qrow>,
+    checked: bool,
+    channel: crate::update::Channel,
+    can_switch: bool,
+) -> SettingPage {
+    let check_owner = owner.clone();
+    let nightly = channel == crate::update::Channel::Nightly;
     // The page title names the topic; its one group needs no second title.
-    SettingPage::new("Updates")
-        .resettable(false)
-        .group(SettingGroup::new().item(setting_item(
-            "Check Automatically",
-            "Look for a new version once a day.",
-            &["update", "version", "release", "download", "upgrade"],
-            move |_: &mut Window, _: &mut App| {
-                let owner = owner.clone();
-                Switch::new("check-for-updates")
-                    .checked(checked)
-                    .accessibility_label("Check Automatically")
-                    .on_click(move |next, _, cx| {
-                        let _ = owner.update(cx, |this, cx| {
-                            this.settings.check_for_updates = *next;
-                            this.changed(cx);
-                        });
-                    })
-            },
-        )))
+    SettingPage::new("Updates").resettable(false).group(
+        SettingGroup::new()
+            .item(setting_item(
+                "Check Automatically",
+                "Look for a new version once a day.",
+                &["update", "version", "release", "download", "upgrade"],
+                move |_: &mut Window, _: &mut App| {
+                    let owner = check_owner.clone();
+                    Switch::new("check-for-updates")
+                        .checked(checked)
+                        .accessibility_label("Check Automatically")
+                        .on_click(move |next, _, cx| {
+                            let _ = owner.update(cx, |this, cx| {
+                                this.settings.check_for_updates = *next;
+                                this.changed(cx);
+                            });
+                        })
+                },
+            ))
+            .item(setting_item(
+                "Nightly Builds",
+                if can_switch {
+                    "Daily builds with the newest changes."
+                } else {
+                    "The package manager sets the channel of this copy."
+                },
+                &[
+                    "channel", "nightly", "stable", "update", "release", "upgrade",
+                ],
+                move |_: &mut Window, _: &mut App| {
+                    let owner = owner.clone();
+                    Switch::new("update-channel-nightly")
+                        .checked(nightly)
+                        .disabled(!can_switch)
+                        .accessibility_label("Nightly Builds")
+                        .on_click(move |next, _, cx| {
+                            let channel = if *next {
+                                crate::update::Channel::Nightly
+                            } else {
+                                crate::update::Channel::Stable
+                            };
+                            let _ =
+                                owner.update(cx, |this, cx| this.set_update_channel(channel, cx));
+                        })
+                },
+            )),
+    )
 }
 
 /// Appearance settings for the interface, assistant messages, editor, and logs.
