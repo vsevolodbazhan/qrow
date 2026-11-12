@@ -96,6 +96,9 @@ pub struct Probe<'a> {
     pub env: &'a dyn Fn(&str) -> Option<OsString>,
     /// Folders that can hold Homebrew casks, for example `/opt/homebrew`.
     pub homebrew_prefixes: &'a [PathBuf],
+    /// Folders where Homebrew puts the apps of casks: `/Applications` and
+    /// `~/Applications`.
+    pub homebrew_app_folders: &'a [PathBuf],
 }
 
 /// Decides how the running copy was installed.
@@ -137,10 +140,17 @@ fn detect_macos(probe: &Probe, folder: &Path) -> Install {
         Channel::Stable => "qrow",
         Channel::Nightly => "qrow@nightly",
     };
-    if probe
-        .homebrew_prefixes
+    // Both casks install Qrow.app into the Homebrew app folder. A copy in
+    // another folder is a separate download, even when the cask exists.
+    let in_app_folder = probe
+        .homebrew_app_folders
         .iter()
-        .any(|prefix| prefix.join("Caskroom").join(cask).is_dir())
+        .any(|folder| app == folder.join("Qrow.app"));
+    if in_app_folder
+        && probe
+            .homebrew_prefixes
+            .iter()
+            .any(|prefix| prefix.join("Caskroom").join(cask).is_dir())
     {
         return Install::Managed(Manager::Homebrew { cask: cask.into() });
     }
@@ -209,13 +219,20 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn detect_in(os: Os, channel: Channel, executable: &Path, homebrew: &[PathBuf]) -> Install {
+    fn detect_in(
+        os: Os,
+        channel: Channel,
+        executable: &Path,
+        homebrew: &[PathBuf],
+        apps: &[PathBuf],
+    ) -> Install {
         detect(&Probe {
             os,
             channel,
             executable,
             env: &|_| None,
             homebrew_prefixes: homebrew,
+            homebrew_app_folders: apps,
         })
     }
 
@@ -234,6 +251,7 @@ mod tests {
                 executable,
                 env: &|key| (key == name).then(|| "set".into()),
                 homebrew_prefixes: &[],
+                homebrew_app_folders: &[],
             });
             assert_eq!(install, Install::Managed(manager));
         }
@@ -246,26 +264,26 @@ mod tests {
         file(&prefix.join("bin/qrow"));
         let executable = prefix.join("bin/qrow");
         assert_eq!(
-            detect_in(Os::Linux, Channel::Stable, &executable, &[]),
+            detect_in(Os::Linux, Channel::Stable, &executable, &[], &[]),
             Install::Managed(Manager::Other),
             "a prefix without the launcher is not the release archive"
         );
         file(&prefix.join("share/applications/qrow.desktop"));
         assert_eq!(
-            detect_in(Os::Linux, Channel::Stable, &executable, &[]),
+            detect_in(Os::Linux, Channel::Stable, &executable, &[], &[]),
             Install::Archive {
                 prefix: prefix.clone()
             }
         );
         file(&prefix.join("bin").join(NO_SELF_UPDATE_MARKER));
         assert_eq!(
-            detect_in(Os::Linux, Channel::Stable, &executable, &[]),
+            detect_in(Os::Linux, Channel::Stable, &executable, &[], &[]),
             Install::Managed(Manager::Other)
         );
         let elsewhere = root.path().join("opt/qrow");
         file(&elsewhere);
         assert_eq!(
-            detect_in(Os::Linux, Channel::Stable, &elsewhere, &[]),
+            detect_in(Os::Linux, Channel::Stable, &elsewhere, &[], &[]),
             Install::Managed(Manager::Other)
         );
     }
@@ -277,32 +295,46 @@ mod tests {
         let executable = app.join("Contents/MacOS/qrow");
         file(&executable);
         assert_eq!(
-            detect_in(Os::MacOs, Channel::Stable, &executable, &[]),
+            detect_in(Os::MacOs, Channel::Stable, &executable, &[], &[]),
             Install::AppBundle { app: app.clone() }
         );
         let homebrew = root.path().join("homebrew");
         fs::create_dir_all(homebrew.join("Caskroom/qrow@nightly")).unwrap();
         let prefixes = [homebrew];
+        let apps = [root.path().join("Applications")];
         assert_eq!(
-            detect_in(Os::MacOs, Channel::Nightly, &executable, &prefixes),
+            detect_in(Os::MacOs, Channel::Nightly, &executable, &prefixes, &apps),
             Install::Managed(Manager::Homebrew {
                 cask: "qrow@nightly".into()
             })
         );
         // The nightly cask does not own a stable copy.
         assert_eq!(
-            detect_in(Os::MacOs, Channel::Stable, &executable, &prefixes),
+            detect_in(Os::MacOs, Channel::Stable, &executable, &prefixes, &apps),
             Install::AppBundle { app: app.clone() }
+        );
+        // A copy outside the Homebrew app folder is a separate download.
+        let downloaded = root.path().join("Downloads/Qrow.app");
+        file(&downloaded.join("Contents/MacOS/qrow"));
+        assert_eq!(
+            detect_in(
+                Os::MacOs,
+                Channel::Nightly,
+                &downloaded.join("Contents/MacOS/qrow"),
+                &prefixes,
+                &apps
+            ),
+            Install::AppBundle { app: downloaded }
         );
         file(&app.join("Contents/Resources").join(NO_SELF_UPDATE_MARKER));
         assert_eq!(
-            detect_in(Os::MacOs, Channel::Stable, &executable, &[]),
+            detect_in(Os::MacOs, Channel::Stable, &executable, &[], &[]),
             Install::Managed(Manager::Other)
         );
         let loose = root.path().join("bin/qrow");
         file(&loose);
         assert_eq!(
-            detect_in(Os::MacOs, Channel::Stable, &loose, &[]),
+            detect_in(Os::MacOs, Channel::Stable, &loose, &[], &[]),
             Install::Managed(Manager::Other)
         );
     }
@@ -315,7 +347,7 @@ mod tests {
             .join("Users/me/Scoop/apps/qrow-nightly/current/qrow.exe");
         file(&scoop);
         assert_eq!(
-            detect_in(Os::Windows, Channel::Nightly, &scoop, &[]),
+            detect_in(Os::Windows, Channel::Nightly, &scoop, &[], &[]),
             Install::Managed(Manager::Scoop {
                 app: "qrow-nightly".into()
             })
@@ -327,6 +359,7 @@ mod tests {
                 Os::Windows,
                 Channel::Stable,
                 &installed.join("qrow.exe"),
+                &[],
                 &[]
             ),
             Install::Managed(Manager::WindowsPortable)
@@ -337,6 +370,7 @@ mod tests {
                 Os::Windows,
                 Channel::Stable,
                 &installed.join("qrow.exe"),
+                &[],
                 &[]
             ),
             Install::WindowsInstaller {

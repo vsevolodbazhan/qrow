@@ -44,12 +44,22 @@ impl Candidate {
     }
 }
 
-/// True when a published release of `channel` is in `releases`.
+/// The version of a published release on `channel`: not a draft, a
+/// canonical tag, and the prerelease flag of its channel.
+fn published_version(release: &Release, channel: Channel) -> Option<Version> {
+    let version = Version::parse(&release.tag_name)?;
+    let valid = !release.draft
+        && version.channel() == channel
+        && release.prerelease == (channel == Channel::Nightly)
+        && release.tag_name == version.tag();
+    valid.then_some(version)
+}
+
+/// True when `releases` has a published release of `channel`.
 pub fn has_channel(releases: &[Release], channel: Channel) -> bool {
-    releases.iter().any(|release| {
-        !release.draft
-            && Version::parse(&release.tag_name).is_some_and(|version| version.channel() == channel)
-    })
+    releases
+        .iter()
+        .any(|release| published_version(release, channel).is_some())
 }
 
 /// The newest published release of the channel of `current` that is newer
@@ -58,15 +68,12 @@ pub fn has_channel(releases: &[Release], channel: Channel) -> bool {
 pub fn newest(releases: &[Release], current: &Version) -> Option<Candidate> {
     releases
         .iter()
-        .filter(|release| !release.draft)
         .filter_map(|release| {
-            let version = Version::parse(&release.tag_name)?;
-            let channel_matches = release.prerelease == (version.channel() == Channel::Nightly);
-            (channel_matches && release.tag_name == version.tag() && version.is_newer_than(current))
-                .then(|| Candidate {
-                    version,
-                    assets: release.assets.clone(),
-                })
+            let version = published_version(release, current.channel())?;
+            version.is_newer_than(current).then(|| Candidate {
+                version,
+                assets: release.assets.clone(),
+            })
         })
         .max_by(|left, right| left.version.cmp(&right.version))
 }
@@ -133,6 +140,24 @@ mod tests {
             newest(&releases, &version("0.5.0-nightly.20261101.1")),
             None
         );
+    }
+
+    #[test]
+    fn only_published_releases_of_the_channel_count_as_the_channel() {
+        let stable = Channel::Stable;
+        assert!(has_channel(&[release("v0.4.0", false, false)], stable));
+        for ignored in [
+            release("v0.4.0", false, true),
+            release("v0.4.0", true, false),
+            release("0.4.0", false, false),
+            release("v0.4.0-nightly.20261112.1", true, false),
+        ] {
+            assert!(
+                !has_channel(std::slice::from_ref(&ignored), stable),
+                "{}",
+                ignored.tag_name
+            );
+        }
     }
 
     #[test]

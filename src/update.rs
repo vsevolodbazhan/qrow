@@ -105,9 +105,12 @@ impl Updater {
     /// `current`, or `None`.
     pub fn check(&self, current: &Version) -> Result<Option<Candidate>> {
         block_on(async {
-            // The list is newest first, so the first page with a release of
-            // this channel has the newest one. Releases of the other channel
-            // can fill whole pages before it.
+            // The list is newest first. The release workflow only publishes a
+            // commit that includes the previous release of its channel, so
+            // within a channel a later release has a higher version. The first
+            // page with a published release of this channel therefore has the
+            // newest one. Releases of the other channel can fill whole pages
+            // before it.
             let mut url = Some(self.source.releases.clone());
             for _ in 0..MAX_FEED_PAGES {
                 let Some(page) = url.take() else { break };
