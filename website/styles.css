@@ -117,7 +117,6 @@ h4 { margin: 28px 0 0; color: var(--fg-strong); font-size: 15px; font-weight: 60
 .command-label { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
 .command pre { margin: 0; overflow-x: auto; }
 .command .copy { position: absolute; top: 6px; right: 6px; }
-.install-more { margin: 32px 0 0; padding-top: 20px; border-top: 1px solid var(--border); font-size: 14px; color: var(--muted); }
 
 /* Status bar footer */
 .statusbar { margin-top: 96px; background: var(--chrome); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }

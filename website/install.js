@@ -149,7 +149,9 @@
     $$(".command").forEach((command) => {
       const button = $(".copy", command);
       let timer = 0;
-      button.hidden = false;
+      // The Linux command needs the file name from the API answer. Until then
+      // it has a placeholder, so there is nothing useful to copy.
+      button.hidden = Boolean($("#linux-archive", command));
       button.addEventListener("click", async () => {
         try {
           await navigator.clipboard.writeText($("code", command).textContent);
@@ -213,7 +215,10 @@
     let release = null;
     const archive = $("#linux-archive");
     const render = () => {
-      if (release && archive) archive.textContent = `Qrow-${release.version}-${PRIMARY.linux[state.arch.linux]}`;
+      if (release && archive) {
+        archive.textContent = `Qrow-${release.version}-${PRIMARY.linux[state.arch.linux]}`;
+        $(".copy", archive.closest(".command")).hidden = !navigator.clipboard;
+      }
     };
 
     setupSelectors(state, render);
