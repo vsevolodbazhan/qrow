@@ -890,7 +890,10 @@ impl Qrow {
             match Saver::open(path, move || {
                 let _ = save_wake.try_send(());
             }) {
-                Ok((workspace, saver)) => (workspace, None, Some(saver)),
+                Ok((workspace, saver)) => {
+                    let notice = saver.newer.as_ref().map(storage::NewerData::notice);
+                    (workspace, notice, Some(saver))
+                }
                 Err(e) => (
                     Workspace::default(),
                     Some(format!(

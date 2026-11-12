@@ -442,3 +442,34 @@ fn setting_descriptions_use_a_compact_line_height(cx: &mut TestAppContext) {
         }
     });
 }
+
+#[gpui_kit::test]
+fn a_workspace_of_a_newer_version_keeps_its_settings_and_says_so(cx: &mut TestAppContext) {
+    let mut file = serde_json::to_value(Workspace {
+        version: qrow::model::WORKSPACE_VERSION,
+        ..Workspace::default()
+    })
+    .unwrap();
+    file["written_by"] = "9.9.9".into();
+    file["settings"]["future_option"] = 7.into();
+    let app = TestApp::launch_json(cx, file);
+    app.update(cx, |window, _| {
+        let notice = label(window, "workspace-message").unwrap_or_default();
+        assert!(notice.contains("settings from Qrow 9.9.9"), "{notice}");
+        assert!(notice.contains("workspace.backup.json"), "{notice}");
+    });
+    // A change saves the workspace.
+    app.press(cx, "secondary-j");
+    app.wait_saved(cx, "minimized results", |workspace| {
+        workspace.settings.results_minimized
+    });
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(app.workspace_path()).unwrap()).unwrap();
+    assert_eq!(saved["settings"]["future_option"], 7);
+    assert_eq!(saved["written_by"], build_info::RELEASE_VERSION);
+    assert!(
+        app.workspace_path()
+            .with_file_name("workspace.backup.json")
+            .is_file()
+    );
+}
