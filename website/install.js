@@ -112,16 +112,7 @@
       update(focus ? "arch" : null);
     });
 
-    // A selection can remove content, for example the Homebrew commands. If
-    // the page becomes shorter than the bottom of the view, the browser moves
-    // the view up. Then the section gets only the space that keeps the view
-    // where it was.
-    const section = $("#install");
-    let ready = false;
     function update(focus) {
-      const top = window.scrollY;
-      const bottom = top + window.innerHeight;
-      section.style.minHeight = "";
       const { system } = state;
       const arch = state.arch[system];
       markTabs(SYSTEMS.indexOf(system), focus === "tab");
@@ -132,9 +123,6 @@
         panel.hidden = name !== system;
         $$("[data-arch]", panel).forEach((element) => { element.hidden = element.dataset.arch !== state.arch[name]; });
       });
-      const missing = bottom - document.documentElement.scrollHeight;
-      if (ready && missing > 0) section.style.minHeight = `${section.offsetHeight + missing}px`;
-      if (ready && window.scrollY !== top) window.scrollTo({ top, behavior: "instant" });
       render();
     }
 
@@ -152,7 +140,6 @@
     document.body.classList.add("has-script");
     $(".selectors").hidden = false;
     update(null);
-    ready = true;
   }
 
   function setupCopy() {
