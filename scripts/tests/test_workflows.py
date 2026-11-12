@@ -380,6 +380,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("merge-multiple: true", job("publish", RELEASE))
         self.assertIn("Select the workflow branch at the candidate commit", job("resolve-target", RELEASE))
 
+    def test_release_signs_checksums_before_publication(self):
+        publish = job("publish", RELEASE)
+        self.assertIn("environment: release", publish)
+        self.assertIn("RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}", publish)
+        # A release without the key must fail; an unsigned release would block app updates.
+        self.assertIn('if [ -z "$RELEASE_SIGNING_KEY" ]; then', publish)
+        sign = publish.index("name: sign-checksums")
+        create = publish.index("name: publish-github-release")
+        self.assertLess(sign, create)
+        self.assertIn('-t "Qrow release $RELEASE_TAG"', publish[sign:create])
+        self.assertIn("release_args+=(dist/SHA256SUMS dist/SHA256SUMS.minisig)", publish)
+        # CI checks the signature with the committed public key before and after upload.
+        trusted = 'grep --fixed-strings --line-regexp "Trusted comment: Qrow release $RELEASE_TAG"'
+        self.assertEqual(publish.count("minisign -V -p assets/release/minisign.pub"), 2)
+        self.assertEqual(publish.count(trusted), 2)
+        self.assertIn('cmp dist/SHA256SUMS.minisig "$verification_dir/SHA256SUMS.minisig"', publish)
+        self.assertLess(publish.index("--draft\n"), publish.index("--draft=false"))
+        public_key = read("assets/release/minisign.pub").splitlines()[1]
+        # Users verify downloads with the key in the installation guide.
+        self.assertEqual(read("docs/installation.md").count(public_key), 2)
+
 
 
 class WebsiteWorkflowTests(unittest.TestCase):

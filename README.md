@@ -35,8 +35,8 @@ and [Zed](https://zed.dev/).
 
 - Spark (HiveServer2), Postgres, and Trino only. DuckDB is planned. No
   Kerberos or SSH tunnels.
-- The packages are not signed, so macOS and Windows show a warning on first
-  open.
+- The packages are not code-signed, so macOS and Windows show a warning on
+  first open.
 - macOS first. Windows and Linux are supported but can have rough edges.
 
 ## Installation

@@ -208,15 +208,30 @@ The `windows` jobs do the same for the qualified Windows installers and
 portable archives.
 The publish job creates the release tag and an unpublished release with both
 DMGs, both Linux archives, both Windows installers, and both Windows portable
-archives. It downloads the assets and checks SHA256SUMS
-before publishing. A failed upload or digest check leaves an unpublished
-release. A rerun with an existing release stops; inspect that release before
-retrying. It also
-keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
-workflow uses the latest non-draft release on the selected channel as the
-changelog start tag. If the channel has no previous release, it writes the
-target commit history as the changelog. The first release on a channel can
-run without a previous release or tag.
+archives. It signs `SHA256SUMS` with minisign and uploads
+`SHA256SUMS.minisig`. The signed trusted comment is `Qrow release TAG`. The job
+then downloads the assets, checks the signature with
+[assets/release/minisign.pub](../assets/release/minisign.pub), and checks
+SHA256SUMS before publishing. A failed upload, signature, or digest check
+leaves an unpublished release. A rerun with an existing release stops; inspect
+that release before retrying. It also keeps the unsuffixed DMG as an ARM64
+alias for the existing tap updater. The workflow uses the latest non-draft
+release on the selected channel as the changelog start tag. If the channel has
+no previous release, it writes the target commit history as the changelog. The
+first release on a channel can run without a previous release or tag.
+
+The publish job reads the minisign secret key from the `RELEASE_SIGNING_KEY`
+secret of the `release` environment. The key has no password. If the secret is
+missing or does not match the committed public key, the job stops before it
+creates the release. Keep a backup of the secret key outside GitHub. To change
+the key, replace the public key file and the key in
+[Installation](installation.md#verify-a-download) in the same change. To set up
+the secret, create the `release` environment in the repository settings, then
+run:
+
+```sh
+gh secret set RELEASE_SIGNING_KEY --env release --repo vsevolodbazhan/qrow < qrow-release.key
+```
 
 The packaged application shows the channel-specific release version in the
 About dialog. The macOS bundle metadata keeps the numeric version from

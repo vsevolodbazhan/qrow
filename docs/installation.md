@@ -10,9 +10,11 @@ Install Qrow from a package manager or from the packages on
 | Windows | Windows 10 or later | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64), or the portable `Qrow-VERSION-windows-ARCH.zip` |
 | Linux | Wayland or X11 desktop, Vulkan, a Secret Service provider | `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz` |
 
-The packages are not signed. Signing and notarization need paid developer
-certificates. Thus macOS and Windows show a warning the first time you open
-Qrow. The sections below show how to continue.
+The packages do not have macOS or Windows code signatures. These signatures
+need paid developer certificates. Thus macOS and Windows show a warning the
+first time you open Qrow. The sections below show how to continue. To make
+sure that a package comes from the Qrow release process, see
+[Verify a download](#verify-a-download).
 
 ## macOS
 
@@ -99,3 +101,28 @@ Service, such as GNOME Keyring. The archive uses the system libraries and is
 built on Ubuntu 24.04. Use it on that or a newer, compatible distribution.
 
 Use the application menu at the top left for Settings and other commands.
+
+## Verify a download
+
+Each release has a `SHA256SUMS` file with the checksums of all packages, and a
+`SHA256SUMS.minisig` signature of that file. The release process signs it with
+the Qrow release key. The public key is in
+[assets/release/minisign.pub](../assets/release/minisign.pub):
+
+```text
+RWR2pcgdcxt7jUi0QyCxd/bGK6kkC1Ggku3NNiniI/1PqQDEBbBkbzlG
+```
+
+Download `SHA256SUMS`, `SHA256SUMS.minisig`, and your package into one folder.
+Then use [minisign](https://jedisct1.github.io/minisign/) to verify the
+signature, and verify the checksum of your package:
+
+```sh
+minisign -Vm SHA256SUMS -P RWR2pcgdcxt7jUi0QyCxd/bGK6kkC1Ggku3NNiniI/1PqQDEBbBkbzlG
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS` for the
+second command. The first command shows the trusted comment
+`Qrow release TAG`. Make sure that `TAG` is the release that you downloaded.
+Releases before the first signed release do not have a signature.

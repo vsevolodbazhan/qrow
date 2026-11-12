@@ -171,16 +171,46 @@ class PackageInspectionTests(unittest.TestCase):
                     qualify.linux_archive(self.archive(root, root_mode=mode), root / f'mode-{mode:o}', 'x86_64')
 
 
+# A stand-in for minisign. It binds each signature to the key, the file bytes, and the trusted comment.
+FAKE_MINISIGN = textwrap.dedent("""
+    import hashlib, json, pathlib, sys
+    arguments = sys.argv[1:]
+    def option(name):
+        return arguments[arguments.index(name) + 1]
+    message = pathlib.Path(option('-m'))
+    signature = pathlib.Path(str(message) + '.minisig')
+    digest = hashlib.sha256(message.read_bytes()).hexdigest()
+    if arguments[0] == '-S':
+        key = hashlib.sha256(pathlib.Path(option('-s')).read_bytes().strip()).hexdigest()
+        signature.write_text(json.dumps({'key': key, 'digest': digest, 'comment': option('-t')}))
+    elif arguments[0] == '-V':
+        public = pathlib.Path(option('-p')).read_text().splitlines()[1]
+        signed = json.loads(signature.read_text())
+        if signed['key'] != public or signed['digest'] != digest:
+            sys.exit('Signature verification failed')
+        print('Signature and comment signature verified')
+        print('Trusted comment: ' + signed['comment'])
+    else:
+        sys.exit(2)
+""")
+
+
+def step_script(workflow, name):
+    step = workflow.split(f'      - name: {name}\n', 1)[1].split('\n      - name: ', 1)[0]
+    return textwrap.dedent(step.split('        run: |\n', 1)[1])
+
+
 class PublicationTests(unittest.TestCase):
-    def run_publication(self, prerelease=False, corrupt=False):
-        import os
+    def run_publication(self, prerelease=False, corrupt=False, key='matching', real_minisign=False):
+        import hashlib
         import shutil
-        import textwrap
         if shutil.which('sha256sum') is None:
             self.skipTest('Publication runs on Linux with sha256sum')
+        if real_minisign and (shutil.which('minisign') is None or
+                              subprocess.run(['minisign', '-v'], capture_output=True).returncode != 0):
+            self.skipTest('minisign is not installed')
         workflow = (ROOT / '.github/workflows/release.yml').read_text()
-        step = workflow.split('      - name: publish-github-release', 1)[1]
-        script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+        scripts = [step_script(workflow, 'sign-checksums'), step_script(workflow, 'publish-github-release')]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             dist = root / 'dist'
@@ -207,15 +237,46 @@ class PublicationTests(unittest.TestCase):
                         shutil.copyfile(source, target / source.name)
                     if os.environ.get('CORRUPT') == 'true':
                         (target / 'Qrow-1.2.3-arm64.dmg').write_text('corrupted')
+                    if os.environ.get('CORRUPT') == 'signature':
+                        (target / 'SHA256SUMS.minisig').write_text('{}')
                 '''))
             gh.chmod(0o755)
+            # Synthetic keys only: the release key never enters tests.
+            public = root / 'assets/release/minisign.pub'
+            public.parent.mkdir(parents=True)
+            secrets = {}
+            for name in ('matching', 'other'):
+                if real_minisign:
+                    subprocess.run(['minisign', '-G', '-W', '-p', root / f'{name}.pub', '-s', root / f'{name}.key'],
+                                   check=True, capture_output=True)
+                    secrets[name] = (root / f'{name}.key').read_text()
+                    if name == 'matching':
+                        shutil.copyfile(root / f'{name}.pub', public)
+                else:
+                    secrets[name] = f'synthetic {name} secret key'
+                    if name == 'matching':
+                        digest = hashlib.sha256(secrets[name].encode()).hexdigest()
+                        public.write_text(f'untrusted comment: synthetic\n{digest}\n')
+            if not real_minisign:
+                minisign = tools / 'minisign'
+                minisign.write_text('#!' + sys.executable + '\n' + FAKE_MINISIGN)
+                minisign.chmod(0o755)
+            runner_temp = root / 'runner-temp'
+            runner_temp.mkdir()
             environment = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
                                RELEASE_VERSION='1.2.3', RELEASE_TAG='v1.2.3', RELEASE_TITLE='Synthetic',
                                TARGET_SHA='a' * 40, PRERELEASE=str(prerelease).lower(),
                                GITHUB_REPOSITORY='synthetic/repository', GH_TOKEN='synthetic',
-                               CORRUPT=str(corrupt).lower())
-            result = subprocess.run(['bash', '-c', script], cwd=root, env=environment, capture_output=True)
-            calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
+                               CORRUPT=str(corrupt).lower() if isinstance(corrupt, bool) else corrupt,
+                               RELEASE_SIGNING_KEY=secrets.get(key, ''), RUNNER_TEMP=str(runner_temp))
+            for script in scripts:
+                result = subprocess.run(['bash', '-c', script], cwd=root, env=environment, capture_output=True)
+                if result.returncode != 0:
+                    break
+            calls_file = root / 'calls.jsonl'
+            calls = [json.loads(line) for line in calls_file.read_text().splitlines()] if calls_file.exists() else []
+            self.assertEqual(list(runner_temp.iterdir()), [], 'the secret key file must not remain')
+            self.signature = (dist / 'SHA256SUMS.minisig').read_text() if (dist / 'SHA256SUMS.minisig').exists() else None
             return result, calls
 
     def test_stable_publication_checks_remote_bytes_before_publishing(self):
@@ -225,6 +286,8 @@ class PublicationTests(unittest.TestCase):
         self.assertIn('--draft', calls[0])
         self.assertIn('--latest=false', calls[0])
         self.assertIn('--latest', calls[-1])
+        self.assertIn('dist/SHA256SUMS.minisig', calls[0])
+        self.assertIn('"comment": "Qrow release v1.2.3"', self.signature)
         for arch in ('x86_64', 'aarch64'):
             self.assertIn(f'dist/Qrow-1.2.3-windows-{arch}.zip', calls[0])
 
@@ -233,11 +296,31 @@ class PublicationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn(['release', 'edit'], [call[:2] for call in calls])
 
+    def test_corrupt_signature_upload_stays_unpublished(self):
+        result, calls = self.run_publication(corrupt='signature')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(['release', 'edit'], [call[:2] for call in calls])
+
+    def test_missing_or_wrong_signing_key_creates_no_release(self):
+        for key in ('missing', 'other'):
+            with self.subTest(key=key):
+                result, calls = self.run_publication(key=key)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+
     def test_nightly_is_not_marked_latest(self):
         result, calls = self.run_publication(prerelease=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('--prerelease', calls[0])
         self.assertIn('--latest=false', calls[-1])
+
+    def test_real_minisign_signs_and_rejects_a_wrong_key(self):
+        result, calls = self.run_publication(real_minisign=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('trusted comment: Qrow release v1.2.3', self.signature)
+        result, calls = self.run_publication(real_minisign=True, key='other')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, [])
 
 
 class SmokeReadinessTests(unittest.TestCase):
