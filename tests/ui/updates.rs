@@ -12,7 +12,6 @@ use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Write},
     net::TcpListener,
-    path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -272,7 +271,7 @@ fn linux_archive(executable: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(target_os = "linux")]
-fn write(path: &Path, data: &[u8]) {
+fn write(path: &std::path::Path, data: &[u8]) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, data).unwrap();
 }
