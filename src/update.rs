@@ -184,26 +184,31 @@ impl Updater {
 
     /// The newest release of the channel of `current` that is newer than
     /// `current`, or `None`.
-    pub fn check(&self, current: &Version) -> Result<Option<Candidate>> {
+    pub fn check(&self, current: &Version, channel: Channel) -> Result<Option<Candidate>> {
         block_on(async {
             // The list is newest first. The release workflow only publishes a
             // commit that includes the previous release of its channel, so
             // within a channel a later release has a higher version. The first
-            // page with a published release of this channel therefore has the
+            // page with a published release of the channel therefore has the
             // newest one. Releases of the other channel can fill whole pages
-            // before it.
+            // before it. A switch of channel also needs the release of
+            // `current`, for its publish time.
+            let switching = channel != current.channel();
+            let mut releases: Vec<feed::Release> = Vec::new();
             let mut url = Some(self.source.releases.clone());
             for _ in 0..MAX_FEED_PAGES {
                 let Some(page) = url.take() else { break };
                 let (body, next) = fetch::page(&self.client, &page, MAX_FEED_BYTES).await?;
-                let releases: Vec<feed::Release> =
+                let mut page: Vec<feed::Release> =
                     serde_json::from_slice(&body).context("Could not read the release list")?;
-                if feed::has_channel(&releases, current.channel()) {
-                    return Ok(feed::newest(&releases, current));
+                releases.append(&mut page);
+                let found_current = !switching || feed::published_at(&releases, current).is_some();
+                if feed::has_channel(&releases, channel) && found_current {
+                    break;
                 }
                 url = next;
             }
-            Ok(None)
+            Ok(feed::newest(&releases, current, channel))
         })
     }
 

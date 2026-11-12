@@ -2,8 +2,9 @@
 
 use std::{cmp::Ordering, fmt};
 
-/// The release channel of a build. A build only updates within its channel.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// The release channel of a build or of the update setting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Channel {
     Stable,
     Nightly,
@@ -64,6 +65,11 @@ impl Version {
     /// different channels are never newer than each other.
     pub fn is_newer_than(&self, other: &Self) -> bool {
         self.channel() == other.channel() && self.cmp(other) == Ordering::Greater
+    }
+
+    /// The `MAJOR.MINOR.PATCH` part.
+    pub fn core(&self) -> [u64; 3] {
+        self.core
     }
 
     /// The tag of the GitHub release, for example `v0.5.0`.
