@@ -33,18 +33,6 @@ impl DotStatus {
             .into_any_element()
     }
 
-    /// A dot on any element, for a button that a popover wraps.
-    pub(super) fn on_element(status: Option<Self>, element: AnyElement, cx: &App) -> AnyElement {
-        match status {
-            Some(status) => Badge::new()
-                .dot()
-                .color(status.color(cx))
-                .child(element)
-                .into_any_element(),
-            None => element,
-        }
-    }
-
     pub(super) fn on_button(status: Option<Self>, button: Button, cx: &App) -> AnyElement {
         match status {
             Some(status) => Badge::new()

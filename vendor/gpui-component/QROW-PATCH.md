@@ -41,6 +41,13 @@ Qrow changes these files:
   without closing a newer modal. Removing a dialog below another modal keeps
   the focus on that modal and repairs its focus restoration. Export completion
   uses this API to preserve an unanswered quit confirmation.
+- `src/notification.rs`: the type icon of a notification is centered on the
+  first line of text. The title and message lines are 1.25 rem high, as other
+  small text. Before, the lines used the taller default line height of the
+  window. The icon was 18 pixels from the top. At the default interface scale,
+  it was 2 to 3 points below the center of the first line. Qrow toasts set the
+  same line height in `src/ui/toast.rs`. Tests cannot read painted positions,
+  so check them on screen.
 - `src/tab/tab_bar.rs`: the first tab of a tab bar without a prefix has no
   left border. Before, the tab bar always assumed a prefix, so the border of
   the first tab and the divider of a sidebar beside the bar made a double line.

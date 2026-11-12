@@ -383,7 +383,10 @@ fn a_save_keeps_the_fields_of_a_newer_version_and_backs_up_the_file() {
     let (mut workspace, newer) = file.load().unwrap();
     let newer = newer.expect("the file has unknown fields");
     assert_eq!(newer.written_by.as_deref(), Some("9.9.9"));
-    assert_eq!(newer.backup, dir.path().join("workspace.backup.json"));
+    // The workspace file resolves its path, and the temporary folder of
+    // macOS is under a symbolic link (/var is /private/var).
+    let folder = dir.path().canonicalize().unwrap();
+    assert_eq!(newer.backup, folder.join("workspace.backup.json"));
     assert_eq!(fs::read(&newer.backup).unwrap(), original_text);
     assert!(newer.notice().contains("Qrow 9.9.9"));
     workspace.settings.results_minimized = true;
