@@ -46,6 +46,8 @@ pub(super) struct Updates {
     pub(super) restarting: bool,
     /// What to do at the exit after an install: restart or run an installer.
     finish: Option<update::Finish>,
+    /// The channel of the check that runs or ran last.
+    checked_channel: Option<update::Channel>,
 }
 
 #[derive(Clone, Default)]
@@ -204,8 +206,22 @@ impl Qrow {
         self.updates.last_check = None;
         self.updates.announced = None;
         self.updates.waiting_for = None;
-        if !self.updates.busy() && !self.updates.can_restart() {
+        // An update of the other channel is not wanted any more. Files that
+        // an install already replaced stay: the restart starts them. A
+        // check or download that runs now is ignored when it ends.
+        let other = |version: &Version| version.channel() != channel;
+        let discard = match &self.updates.status {
+            Status::Idle | Status::UpToDate | Status::Failed(_) => true,
+            Status::Ready(download) => other(&download.version),
+            Status::Available(version) => other(version),
+            Status::Installed(version) => {
+                other(version) && matches!(self.updates.finish, Some(update::Finish::Run(_)))
+            }
+            Status::Checking | Status::Downloading(_) | Status::Installing(_) => false,
+        };
+        if discard {
             self.updates.status = Status::Idle;
+            self.updates.finish = None;
         }
         self.changed(cx);
     }
@@ -281,6 +297,7 @@ impl Qrow {
         cx.notify();
         let current = setup.current.clone();
         let channel = self.update_channel();
+        self.updates.checked_channel = Some(channel);
         let check = cx
             .background_executor()
             .spawn(async move { updater.check(&current, channel) });
@@ -305,6 +322,13 @@ impl Qrow {
         else {
             return;
         };
+        // The channel changed during the check: the next tick checks again.
+        if self.updates.checked_channel != Some(self.update_channel()) {
+            self.updates.status = Status::Idle;
+            self.updates.last_check = None;
+            cx.notify();
+            return;
+        }
         match result {
             Ok(None) => {
                 self.updates.status = Status::UpToDate;
@@ -411,6 +435,15 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The channel changed during the download: drop it.
+        if let Ok(download) = &result
+            && download.version.channel() != self.update_channel()
+        {
+            self.updates.status = Status::Idle;
+            self.updates.last_check = None;
+            cx.notify();
+            return;
+        }
         match result {
             Ok(download) => {
                 let version = download.version.clone();

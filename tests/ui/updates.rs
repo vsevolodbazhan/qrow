@@ -569,3 +569,57 @@ fn a_package_manager_copy_keeps_the_channel_of_its_package(cx: &mut TestAppConte
         );
     });
 }
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn a_switch_drops_a_downloaded_update_of_the_other_channel(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    releases.publish_at(
+        "v0.5.0",
+        "Qrow-0.5.0-linux-x86_64.tar.gz",
+        b"stable",
+        Some("2026-11-12T10:00:00Z"),
+    );
+    releases.publish_at(
+        "v0.5.0-nightly.20261113.1",
+        "Qrow-0.5.0-nightly.20261113.1-linux-x86_64.tar.gz",
+        &linux_archive(b"nightly qrow"),
+        Some("2026-11-13T04:00:00Z"),
+    );
+    let (prefix, setup) = archive_copy(&releases, "0.5.0-nightly.20261101.1");
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), setup);
+    run_first_check(cx);
+    app.wait_for(cx, "update-ready");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "channel");
+    app.wait_for(cx, "setting-release-channel");
+    app.select(cx, "setting-release-channel", "Stable");
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "setting-release-channel");
+    // The nightly update is gone at once, and the next check waits for a
+    // stable release that is newer than this nightly.
+    app.update(cx, |window, _| {
+        assert!(
+            labelled(
+                window,
+                "Updates, Qrow 0.5.0-nightly.20261113.1 is ready to install."
+            )
+            .is_none()
+        );
+    });
+    cx.executor().advance_clock(Duration::from_secs(61));
+    cx.run_until_parked();
+    app.update(cx, |window, _| {
+        assert!(
+            labelled(
+                window,
+                "Updates, Switches to Stable with the next stable release."
+            )
+            .is_some()
+        );
+    });
+    assert_eq!(
+        std::fs::read(prefix.path().join("bin/qrow")).unwrap(),
+        b"old qrow"
+    );
+}
