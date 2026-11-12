@@ -14,6 +14,7 @@ use std::{
 struct Server {
     base: String,
     files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    links: Arc<Mutex<HashMap<String, String>>>,
     requests: Arc<Mutex<Vec<String>>>,
 }
 
@@ -23,7 +24,8 @@ impl Server {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let files: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
         let requests: Arc<Mutex<Vec<String>>> = Arc::default();
-        let (served, recorded) = (files.clone(), requests.clone());
+        let links: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+        let (served, recorded, linked) = (files.clone(), requests.clone(), links.clone());
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { return };
@@ -43,8 +45,14 @@ impl Server {
                     Some(body) => ("200 OK", body),
                     None => ("404 Not Found", Vec::new()),
                 };
+                let link = linked
+                    .lock()
+                    .unwrap()
+                    .get(&path)
+                    .map(|link| format!("Link: {link}\r\n"))
+                    .unwrap_or_default();
                 let head = format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\n{link}Connection: close\r\n\r\n",
                     body.len()
                 );
                 let _ = stream.write_all(head.as_bytes());
@@ -54,12 +62,17 @@ impl Server {
         Self {
             base,
             files,
+            links,
             requests,
         }
     }
 
     fn serve(&self, path: &str, body: impl Into<Vec<u8>>) {
         self.files.lock().unwrap().insert(path.into(), body.into());
+    }
+
+    fn link(&self, path: &str, link: String) {
+        self.links.lock().unwrap().insert(path.into(), link);
     }
 
     fn requests(&self) -> Vec<String> {
@@ -163,6 +176,36 @@ fn reports_no_update_when_the_newest_release_is_running() {
         b"p",
     );
     assert_eq!(fixture.updater.check(&current()).unwrap(), None);
+}
+
+#[test]
+fn reads_later_release_pages_until_the_channel_appears() {
+    let fixture = Fixture::new();
+    fixture.publish("v0.6.0", NAME, b"package", "v0.6.0", b"package");
+    let stable = fixture.server.files.lock().unwrap()["/releases"].clone();
+    fixture.server.serve("/releases?page=2", stable);
+    let nightlies: Vec<_> = (1..=3)
+        .map(|run| {
+            serde_json::json!({"tag_name": format!("v0.7.0-nightly.20261112.{run}"),
+                "draft": false, "prerelease": true, "assets": []})
+        })
+        .collect();
+    fixture
+        .server
+        .serve("/releases", serde_json::to_vec(&nightlies).unwrap());
+    let base = &fixture.server.base;
+    fixture.server.link(
+        "/releases",
+        format!(r#"<{base}/releases?page=2>; rel="next", <{base}/releases?page=2>; rel="last""#),
+    );
+    let candidate = fixture.updater.check(&current()).unwrap().unwrap();
+    assert_eq!(candidate.tag(), "v0.6.0");
+    let nightly = Version::parse("0.6.0-nightly.20261101.1").unwrap();
+    let candidate = fixture.updater.check(&nightly).unwrap().unwrap();
+    assert_eq!(candidate.tag(), "v0.7.0-nightly.20261112.3");
+    // A nightly build stops at the first page, which has its channel.
+    let requests = fixture.server.requests();
+    assert_eq!(requests, ["/releases", "/releases?page=2", "/releases"]);
 }
 
 #[test]

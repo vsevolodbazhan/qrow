@@ -44,6 +44,14 @@ impl Candidate {
     }
 }
 
+/// True when a published release of `channel` is in `releases`.
+pub fn has_channel(releases: &[Release], channel: Channel) -> bool {
+    releases.iter().any(|release| {
+        !release.draft
+            && Version::parse(&release.tag_name).is_some_and(|version| version.channel() == channel)
+    })
+}
+
 /// The newest published release of the channel of `current` that is newer
 /// than `current`. Drafts, other channels, and tags that do not match their
 /// version are ignored.

@@ -26,6 +26,9 @@ use std::{
 };
 
 const MAX_FEED_BYTES: u64 = 4 << 20;
+/// Release pages to read before the check gives up. Each page has 100
+/// releases, newest first.
+const MAX_FEED_PAGES: usize = 10;
 const MAX_CHECKSUM_BYTES: u64 = 64 << 10;
 const MAX_ASSET_BYTES: u64 = 1 << 30;
 
@@ -62,7 +65,7 @@ pub struct Source {
 impl Source {
     pub fn github() -> Self {
         Self {
-            releases: "https://api.github.com/repos/vsevolodbazhan/qrow/releases?per_page=30"
+            releases: "https://api.github.com/repos/vsevolodbazhan/qrow/releases?per_page=100"
                 .into(),
             downloads: "https://github.com/vsevolodbazhan/qrow/releases/download".into(),
             public_key: verify::RELEASE_PUBLIC_KEY.into(),
@@ -102,10 +105,21 @@ impl Updater {
     /// `current`, or `None`.
     pub fn check(&self, current: &Version) -> Result<Option<Candidate>> {
         block_on(async {
-            let body = fetch::bytes(&self.client, &self.source.releases, MAX_FEED_BYTES).await?;
-            let releases: Vec<feed::Release> =
-                serde_json::from_slice(&body).context("Could not read the release list")?;
-            Ok(feed::newest(&releases, current))
+            // The list is newest first, so the first page with a release of
+            // this channel has the newest one. Releases of the other channel
+            // can fill whole pages before it.
+            let mut url = Some(self.source.releases.clone());
+            for _ in 0..MAX_FEED_PAGES {
+                let Some(page) = url.take() else { break };
+                let (body, next) = fetch::page(&self.client, &page, MAX_FEED_BYTES).await?;
+                let releases: Vec<feed::Release> =
+                    serde_json::from_slice(&body).context("Could not read the release list")?;
+                if feed::has_channel(&releases, current.channel()) {
+                    return Ok(feed::newest(&releases, current));
+                }
+                url = next;
+            }
+            Ok(None)
         })
     }
 
