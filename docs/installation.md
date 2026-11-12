@@ -111,6 +111,15 @@ checks again when the last check is more than a day old. If a check fails,
 for example offline, Qrow tries again within an hour. To stop the automatic
 checks, turn off **Settings → Updates → Check Automatically**.
 
+To switch channels, use **Settings → Updates → Nightly Builds**. The next
+check, within a minute, follows the new channel. A switch to nightly builds
+takes the newest nightly release that was published after your version. A
+switch back to stable releases waits until a stable release is published
+after your nightly version, so Qrow never installs an older build. Until
+then, the **Updates** button says so. Copies that a package manager
+installed keep the channel of their package: install the other package, for
+example `qrow@nightly`, to switch.
+
 The **Updates** button in the status bar shows the state. A dot on it shows
 news: an available version, a download in progress, a version that is ready,
 or a failure. Select the button to see the state and the action that fits
@@ -121,10 +130,12 @@ What happens next depends on how you installed Qrow:
 | Installation | Update |
 | --- | --- |
 | Linux archive in a folder that you can write, such as `~/.local` | Qrow downloads the new version in the background and shows **Restart to update**. |
+| macOS app from the DMG, in a folder that you can write, such as `/Applications` | Qrow downloads the new DMG in the background and shows **Restart to update**. The restart replaces the app. |
+| Windows installer | Qrow downloads the new installer in the background and shows **Restart to update**. Qrow quits, the installer runs without its dialogs, and Qrow starts again. An install for all users asks for administrator rights. |
 | Homebrew or Scoop | Qrow shows the command that updates it, for example `brew upgrade --cask qrow`. |
 | Flatpak or Snap | Qrow tells you to update it with that tool. |
-| macOS DMG, Windows installer, or Windows portable archive | Qrow shows the new version and a link to the release. Install it as in the sections above. |
-| Linux archive in a system folder, such as `/usr` | Qrow shows the new version and a link to the release. |
+| Windows portable archive | Qrow shows the new version and a link to the release. Download the new archive. |
+| Linux archive or macOS app in a folder that you cannot write, such as `/usr` | Qrow shows the new version and a link to the release. |
 
 Before Qrow installs an update, it verifies the signed checksums of the
 release, as in [Verify a download](#verify-a-download), and the checksum of

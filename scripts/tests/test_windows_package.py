@@ -189,6 +189,19 @@ class ScriptTests(unittest.TestCase):
             self.assertIn(f'Source: "{name}"', script)
         self.assertIn('PrivilegesRequired=lowest', script)
 
+    def test_a_silent_update_starts_qrow_again_as_the_user(self):
+        script = (ROOT / 'scripts/package/qrow.iss').read_text()
+        relaunch = [line for line in script.splitlines() if 'Check: IsUpdateRelaunch' in line]
+        self.assertEqual(len(relaunch), 1)
+        # The installer can run as administrator; Qrow must not.
+        self.assertIn('runasoriginaluser', relaunch[0])
+        self.assertNotIn('skipifsilent', relaunch[0])
+        # Only Qrow's update command starts it; a silent install by an
+        # administrator or a deployment tool does not.
+        self.assertIn("WizardSilent and (ExpandConstant('{param:QROWRELAUNCH|0}') = '1')", script)
+        # The flag matches the command line that Qrow passes.
+        self.assertIn('"/QROWRELAUNCH=1"', (ROOT / 'src/update.rs').read_text())
+
     def test_qualification_finds_the_install_by_the_app_id(self):
         qualify = (ROOT / 'scripts/package/qualify.py').read_text()
         app_id = re.search(r'^AppId=\{(\{[0-9A-F-]{36}\})$', (ROOT / 'scripts/package/qrow.iss').read_text(), re.MULTILINE)

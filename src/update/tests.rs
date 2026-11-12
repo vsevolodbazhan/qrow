@@ -138,7 +138,10 @@ impl Fixture {
     }
 
     fn download(&self, name_arch: &str) -> Result<Download> {
-        let candidate = self.updater.check(&current())?.context("no update")?;
+        let candidate = self
+            .updater
+            .check(&current(), Channel::Stable)?
+            .context("no update")?;
         let install = Install::Archive {
             prefix: "/unused".into(),
         };
@@ -175,7 +178,10 @@ fn reports_no_update_when_the_newest_release_is_running() {
         "v0.5.0",
         b"p",
     );
-    assert_eq!(fixture.updater.check(&current()).unwrap(), None);
+    assert_eq!(
+        fixture.updater.check(&current(), Channel::Stable).unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -198,10 +204,18 @@ fn reads_later_release_pages_until_the_channel_appears() {
         "/releases",
         format!(r#"<{base}/releases?page=2>; rel="next", <{base}/releases?page=2>; rel="last""#),
     );
-    let candidate = fixture.updater.check(&current()).unwrap().unwrap();
+    let candidate = fixture
+        .updater
+        .check(&current(), Channel::Stable)
+        .unwrap()
+        .unwrap();
     assert_eq!(candidate.tag(), "v0.6.0");
     let nightly = Version::parse("0.6.0-nightly.20261101.1").unwrap();
-    let candidate = fixture.updater.check(&nightly).unwrap().unwrap();
+    let candidate = fixture
+        .updater
+        .check(&nightly, Channel::Nightly)
+        .unwrap()
+        .unwrap();
     assert_eq!(candidate.tag(), "v0.7.0-nightly.20261112.3");
     // A nightly build stops at the first page, which has its channel.
     let requests = fixture.server.requests();
@@ -266,7 +280,7 @@ fn refuses_plain_http_for_the_public_source() {
     let mut source = Source::github();
     source.releases = "http://127.0.0.1:9/releases".into();
     let updater = Updater::new(source, &crate::tls::Trust::system()).unwrap();
-    assert!(updater.check(&current()).is_err());
+    assert!(updater.check(&current(), Channel::Stable).is_err());
 }
 
 #[test]
@@ -300,13 +314,14 @@ fn installs_a_verified_linux_archive() {
     let prefix = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(prefix.path().join("bin")).unwrap();
     std::fs::write(prefix.path().join("bin/qrow"), b"old qrow").unwrap();
-    apply(
+    let finish = apply(
         &download,
         &Install::Archive {
             prefix: prefix.path().into(),
         },
     )
     .unwrap();
+    assert!(matches!(finish, Finish::Restart));
     assert_eq!(
         std::fs::read(prefix.path().join("bin/qrow")).unwrap(),
         b"new qrow"
@@ -326,4 +341,55 @@ fn managed_copies_do_not_apply_updates() {
         error.to_string(),
         "Another program updates this copy of Qrow"
     );
+}
+
+#[test]
+fn the_windows_installer_runs_silently_into_the_installed_folder() {
+    let setup =
+        Path::new("C:/Users/me/AppData/Local/Qrow/updates/Qrow-0.6.0-windows-x86_64-setup.exe");
+    let folder = Path::new("C:/Program Files/Qrow");
+    for (all_users, scope) in [(false, "/CURRENTUSER"), (true, "/ALLUSERS")] {
+        let command = installer_command(setup, folder, all_users);
+        assert_eq!(command.get_program(), setup.as_os_str());
+        let arguments: Vec<_> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            arguments,
+            [
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART",
+                "/CLOSEAPPLICATIONS",
+                "/QROWRELAUNCH=1",
+                scope,
+                "/DIR=C:/Program Files/Qrow",
+            ]
+        );
+    }
+}
+
+#[test]
+fn each_platform_installs_its_own_kind_of_copy() {
+    let setup = |install| Setup {
+        source: Source::github(),
+        current: current(),
+        install,
+        arch: "x86_64".into(),
+        downloads: "/unused".into(),
+    };
+    let archive = setup(Install::Archive {
+        prefix: "/p".into(),
+    });
+    let bundle = setup(Install::AppBundle {
+        app: "/A/Qrow.app".into(),
+    });
+    let installer = setup(Install::WindowsInstaller {
+        folder: "C:/Q".into(),
+    });
+    assert_eq!(archive.installs_updates(), cfg!(target_os = "linux"));
+    assert_eq!(bundle.installs_updates(), cfg!(target_os = "macos"));
+    assert_eq!(installer.installs_updates(), cfg!(windows));
+    assert!(!setup(Install::Managed(Manager::WindowsPortable)).installs_updates());
 }

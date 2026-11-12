@@ -18,8 +18,11 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 
 /// The first automatic check waits until the window has settled.
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
-/// How often the timer looks at the time of the last check.
-const TICK: Duration = Duration::from_secs(60 * 60);
+/// How often the timer looks at the time of the last check, so that a
+/// change of the settings applies soon.
+const TICK: Duration = Duration::from_secs(60);
+/// Ticks that a failed check waits before the next try: an hour.
+const RETRY_TICKS: u32 = 60;
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The update state of the window.
@@ -32,8 +35,17 @@ pub(super) struct Updates {
     last_check: Option<std::time::SystemTime>,
     /// The newest version that a toast announced, so it shows once.
     announced: Option<Version>,
+    /// Ticks to skip before the retry of a failed check.
+    retry_after: u32,
+    /// The last check or download failed; the next due tick tries again.
+    failed_since_check: bool,
+    /// The other channel that a switch waits for, after a check found no
+    /// release of it that is newer than the running build.
+    waiting_for: Option<update::Channel>,
     /// Set while Qrow quits to start the installed version.
     pub(super) restarting: bool,
+    /// What to do at the exit after an install: restart or run an installer.
+    finish: Option<update::Finish>,
 }
 
 #[derive(Clone, Default)]
@@ -60,8 +72,14 @@ impl Updates {
                 .ok()
                 .map(Arc::new)
         });
+        let setup = updater.is_some().then_some(setup).flatten();
+        // Downloads of earlier runs, like a Windows installer that already
+        // ran, are not needed any more.
+        if let Some(setup) = &setup {
+            let _ = std::fs::remove_dir_all(&setup.downloads);
+        }
         Self {
-            setup: updater.is_some().then_some(setup).flatten(),
+            setup,
             updater,
             ..Self::default()
         }
@@ -84,7 +102,14 @@ impl Updates {
         Some(match &self.status {
             Status::Idle => return None,
             Status::Checking => "Checking for updates…".into(),
-            Status::UpToDate => "Qrow is up to date.".into(),
+            Status::UpToDate => match (&self.setup, self.waiting_for) {
+                (Some(_), Some(channel)) => format!(
+                    "Switches to {} with the next {} release.",
+                    channel_name(channel),
+                    channel_name(channel).to_lowercase()
+                ),
+                _ => "Qrow is up to date.".into(),
+            },
             Status::Downloading(version) => format!("Downloading Qrow {version}…"),
             Status::Ready(download) => format!("Qrow {} is ready to install.", download.version),
             Status::Installing(version) => format!("Installing Qrow {version}…"),
@@ -150,7 +175,49 @@ impl Updates {
     }
 }
 
+pub(super) fn channel_name(channel: update::Channel) -> &'static str {
+    match channel {
+        update::Channel::Stable => "Stable",
+        update::Channel::Nightly => "Nightly",
+    }
+}
+
 impl Qrow {
+    /// The channel that updates follow. Only a copy that installs updates
+    /// itself can switch; a package manager decides the channel of others.
+    pub(super) fn update_channel(&self) -> update::Channel {
+        let Some(setup) = &self.updates.setup else {
+            return update::Channel::Stable;
+        };
+        match self.settings.update_channel {
+            Some(channel) if setup.installs_updates() => channel,
+            _ => setup.current.channel(),
+        }
+    }
+
+    /// Follows `channel` from the next check, which comes within a minute.
+    pub(super) fn set_update_channel(&mut self, channel: update::Channel, cx: &mut Context<Self>) {
+        if self.update_channel() == channel {
+            return;
+        }
+        self.settings.update_channel = Some(channel);
+        self.updates.last_check = None;
+        self.updates.announced = None;
+        self.updates.waiting_for = None;
+        if !self.updates.busy() && !self.updates.can_restart() {
+            self.updates.status = Status::Idle;
+        }
+        self.changed(cx);
+    }
+
+    /// True when this copy can choose its channel.
+    pub(super) fn can_switch_channel(&self) -> bool {
+        self.updates
+            .setup
+            .as_ref()
+            .is_some_and(|setup| setup.installs_updates())
+    }
+
     /// Starts the daily check. The timer runs for the life of the window and
     /// reads the setting at each tick, so the switch applies at once.
     pub(super) fn start_update_checks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -161,14 +228,18 @@ impl Qrow {
             cx.background_executor().timer(FIRST_CHECK_DELAY).await;
             loop {
                 let checked = weak.update_in(cx, |this, window, cx| {
-                    // A clock set back also makes a check due.
-                    let due = this
+                    // A failed check waits some ticks. A clock set back also
+                    // makes a check due.
+                    let waiting = this.updates.retry_after > 0;
+                    this.updates.retry_after = this.updates.retry_after.saturating_sub(1);
+                    let old = this
                         .updates
                         .last_check
                         .is_none_or(|last| match last.elapsed() {
                             Ok(age) => age >= CHECK_INTERVAL,
                             Err(_) => true,
                         });
+                    let due = !waiting && (old || this.updates.failed_since_check);
                     if this.settings.check_for_updates && due {
                         this.check_for_updates(false, window, cx);
                     }
@@ -206,11 +277,13 @@ impl Qrow {
         }
         self.updates.status = Status::Checking;
         self.updates.last_check = Some(std::time::SystemTime::now());
+        self.updates.failed_since_check = false;
         cx.notify();
         let current = setup.current.clone();
+        let channel = self.update_channel();
         let check = cx
             .background_executor()
-            .spawn(async move { updater.check(&current) });
+            .spawn(async move { updater.check(&current, channel) });
         cx.spawn_in(window, async move |weak, cx| {
             let result = check.await;
             let _ = weak.update_in(cx, |this, window, cx| {
@@ -235,11 +308,19 @@ impl Qrow {
         match result {
             Ok(None) => {
                 self.updates.status = Status::UpToDate;
-                self.log_update(
-                    Severity::Info,
-                    format!("Qrow {} is up to date", setup.current),
-                    cx,
-                );
+                let channel = self.update_channel();
+                // A switch to the other channel waits for a release of it
+                // that is newer than this build.
+                self.updates.waiting_for = (channel != setup.current.channel()).then_some(channel);
+                let text = match self.updates.waiting_for {
+                    Some(channel) => format!(
+                        "No {} release is newer than Qrow {} yet",
+                        channel_name(channel),
+                        setup.current
+                    ),
+                    None => format!("Qrow {} is up to date", setup.current),
+                };
+                self.log_update(Severity::Info, text, cx);
                 // The popover closes with its action, so a toast answers a
                 // check that the user asked for.
                 if manual {
@@ -255,6 +336,7 @@ impl Qrow {
                 }
             }
             Ok(Some(candidate)) if setup.installs_updates() => {
+                self.updates.waiting_for = None;
                 self.updates.status = Status::Downloading(candidate.version.clone());
                 self.log_update(
                     Severity::Info,
@@ -303,7 +385,8 @@ impl Qrow {
                     format!("Could not check for updates: {error:#}"),
                     cx,
                 );
-                self.updates.last_check = None;
+                self.updates.retry_after = RETRY_TICKS;
+                self.updates.failed_since_check = true;
                 self.updates.status = if manual {
                     window.push_notification(
                         toast::error(
@@ -349,7 +432,8 @@ impl Qrow {
                     format!("Could not download the update: {error:#}"),
                     cx,
                 );
-                self.updates.last_check = None;
+                self.updates.retry_after = RETRY_TICKS;
+                self.updates.failed_since_check = true;
                 self.updates.status =
                     Status::Failed("Could not download the update. Try again later.".into());
             }
@@ -416,12 +500,17 @@ impl Qrow {
                 cx.spawn_in(window, async move |weak, cx| {
                     let result = task.await;
                     let _ = weak.update_in(cx, |this, window, cx| match result {
-                        Ok(()) => {
-                            this.log_update(
-                                Severity::Info,
-                                format!("Installed Qrow {version}. It starts after the restart."),
-                                cx,
-                            );
+                        Ok(finish) => {
+                            let text = match finish {
+                                update::Finish::Restart => {
+                                    format!("Installed Qrow {version}. It starts after the restart.")
+                                }
+                                update::Finish::Run(_) => format!(
+                                    "Prepared the installer of Qrow {version}. It runs when Qrow quits."
+                                ),
+                            };
+                            this.log_update(Severity::Info, text, cx);
+                            this.updates.finish = Some(finish);
                             this.updates.status = Status::Installed(version);
                             this.quit_to_restart(window, cx);
                         }
@@ -471,10 +560,21 @@ impl Qrow {
     /// Ends the application: restarts into an installed update, or quits.
     pub(super) fn exit(&mut self, cx: &mut Context<Self>) {
         if self.updates.restarting {
-            if let Some(path) = self.updates.setup.as_ref().and_then(|s| s.restart_path()) {
-                cx.set_restart_path(path);
+            match self.updates.finish.take() {
+                // The installer closes nothing that is still open: Qrow quits
+                // right after it starts. It starts Qrow when it is done.
+                Some(update::Finish::Run(mut installer)) => {
+                    if let Err(error) = installer.spawn() {
+                        eprintln!("Could not start the update installer: {error}");
+                    }
+                }
+                _ => {
+                    if let Some(path) = self.updates.setup.as_ref().and_then(|s| s.restart_path()) {
+                        cx.set_restart_path(path);
+                    }
+                    cx.restart();
+                }
             }
-            cx.restart();
         }
         // The platform quits after it starts the new process. If it could not
         // start it, Qrow still quits; the new version starts at the next launch.
