@@ -6,15 +6,16 @@ build step.
 
 ## Downloads
 
-The page finds the system and the processor of the visitor. It shows the
-**Download** button and the installation steps for them. In the Install
-section, the visitor can select another system and processor. Elements with a
-`data-arch` attribute show only for that processor, for example the Homebrew
-commands, which install only the Apple Silicon build. [install.js](install.js) asks the
-GitHub API for the latest stable release and links the buttons to its files.
-This is the only request to another site. Without the script, or if the
-request fails, the page shows all systems, and the buttons open the latest
-release page.
+The **Install** button scrolls to the Install section. The section selects
+the system and the processor of the visitor and shows the download and the
+installation steps for them. The visitor can select another system and
+processor. Elements with a `data-arch` attribute show only for that
+processor, for example the Homebrew commands, which install only the Apple
+Silicon build. [install.js](install.js) asks the GitHub API for the latest
+stable release and links the download buttons to its files. This is the only
+request to another site. Without the script, or if the request fails, the
+page shows all systems, and the download buttons open the latest release
+page.
 
 The script finds the file of a button from its `data-asset` attribute: the
 release file is `Qrow-VERSION-` followed by that value. If you change the
@@ -29,8 +30,7 @@ Limitations:
   away.
 - The GitHub API accepts 60 requests in an hour from one IP address without
   sign-in. After that, the buttons open the latest release page.
-- Phones and tablets get no system. Their button goes to the installation
-  steps.
+- Phones and tablets get no system. The section shows macOS first.
 
 ## Preview the page
 

@@ -6,12 +6,10 @@
   "use strict";
 
   const LATEST = "https://api.github.com/repos/vsevolodbazhan/qrow/releases/latest";
-  const RELEASE_PAGE = "https://github.com/vsevolodbazhan/qrow/releases/latest";
   const SYSTEMS = ["macos", "windows", "linux"];
-  const NAMES = { macos: "macOS", windows: "Windows", linux: "Linux" };
   // The processors of each system, the most common build first.
   const ARCHS = { macos: ["arm", "x86"], windows: ["x86", "arm"], linux: ["x86", "arm"] };
-  // The package that the download button gives, by system and processor.
+  // The package of each system and processor.
   const PRIMARY = {
     macos: { arm: "arm64.dmg", x86: "x86_64.dmg" },
     windows: { arm: "windows-aarch64-setup.exe", x86: "windows-x86_64-setup.exe" },
@@ -114,7 +112,16 @@
       update(focus ? "arch" : null);
     });
 
+    // A selection can remove content, for example the Homebrew commands. If
+    // the page becomes shorter than the bottom of the view, the browser moves
+    // the view up. Then the section gets only the space that keeps the view
+    // where it was.
+    const section = $("#install");
+    let ready = false;
     function update(focus) {
+      const top = window.scrollY;
+      const bottom = top + window.innerHeight;
+      section.style.minHeight = "";
       const { system } = state;
       const arch = state.arch[system];
       markTabs(SYSTEMS.indexOf(system), focus === "tab");
@@ -125,6 +132,9 @@
         panel.hidden = name !== system;
         $$("[data-arch]", panel).forEach((element) => { element.hidden = element.dataset.arch !== state.arch[name]; });
       });
+      const missing = bottom - document.documentElement.scrollHeight;
+      if (ready && missing > 0) section.style.minHeight = `${section.offsetHeight + missing}px`;
+      if (ready && window.scrollY !== top) window.scrollTo({ top, behavior: "instant" });
       render();
     }
 
@@ -142,6 +152,7 @@
     document.body.classList.add("has-script");
     $(".selectors").hidden = false;
     update(null);
+    ready = true;
   }
 
   function setupCopy() {
@@ -189,22 +200,6 @@
     });
   }
 
-  function renderHero(system, arch, release) {
-    const button = $("#download");
-    const note = $("#download-note");
-    if (!system) return;
-    $("#download-label").textContent = `Download for ${NAMES[system]}`;
-    const name = release && `Qrow-${release.version}-${PRIMARY[system][arch]}`;
-    button.href = (name && release.assets.get(name)) || RELEASE_PAGE;
-    const summary = document.createElement("span");
-    summary.textContent = release && release.version
-      ? `Version ${release.version} for ${ARCH_NAMES[system][arch]}`
-      : `For ${ARCH_NAMES[system][arch]}`;
-    const other = document.createElement("a");
-    other.href = "#install";
-    other.textContent = "Other downloads";
-    note.replaceChildren(summary, other);
-  }
 
   async function main() {
     const system = detectSystem();
@@ -223,13 +218,10 @@
 
     setupSelectors(state, render);
     setupCopy();
-    // Show the system at once. The version and the file links follow the API answer.
-    renderHero(system, arch, null);
     try {
       release = await latestRelease();
       linkAssets(release);
     } catch (_) { /* Keep the links to the release page. */ }
-    renderHero(system, arch, release);
     render();
   }
 
