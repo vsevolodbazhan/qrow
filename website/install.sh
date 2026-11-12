@@ -82,27 +82,17 @@ openssl_verify() {
 # come from standard input, so the question goes to the terminal. Without a
 # terminal, the default answer applies.
 confirm_without_signature() {
-    cat >&2 <<'MESSAGE'
-qrow: neither minisign nor OpenSSL 3 is installed, so the script cannot verify
-the signature of the release.
-
-Without the signature check, the script compares the archive only with the
-checksum from the same GitHub release. This finds a damaged download. It does
-not find an archive that someone replaced together with its checksum, for
-example after they got access to the GitHub repository. After the install,
-Qrow verifies the signature of each update itself.
-
-To verify this install, install minisign or OpenSSL 3, then run the script again.
-MESSAGE
+    printf 'qrow: cannot verify the release signature: install minisign or OpenSSL 3 to verify it.\n' >&2
+    printf 'The archive could be compromised.\n' >&2
     if (: </dev/tty) 2>/dev/null; then
-        printf 'Continue without the signature check? [Y/n] ' >/dev/tty
+        printf 'Continue anyway? [Y/n] ' >/dev/tty
         read -r answer </dev/tty || answer=n
         case "$answer" in
             '' | [Yy] | [Yy][Ee][Ss]) ;;
             *) fail 'install stopped' ;;
         esac
     else
-        printf 'qrow: there is no terminal to ask. Continuing without the signature check.\n' >&2
+        printf 'qrow: no terminal to ask, continuing.\n' >&2
     fi
 }
 

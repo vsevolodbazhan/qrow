@@ -260,21 +260,21 @@ class WebsiteInstallScriptTest(unittest.TestCase):
         self.tool("openssl", "#!/bin/sh\necho 'Usage: pkeyutl [options]'\nexit 1\n")
         result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("neither minisign nor OpenSSL 3 is installed", result.stderr)
+        self.assertIn("cannot verify the release signature", result.stderr)
 
     def test_continues_without_a_terminal_when_no_tool_can_verify(self):
         self.without_signature_tools()
         result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("compares the archive only with the\nchecksum", result.stderr)
-        self.assertIn("no terminal to ask", result.stderr)
+        self.assertIn("The archive could be compromised.", result.stderr)
+        self.assertIn("no terminal to ask, continuing", result.stderr)
         self.assertEqual((self.prefix / "bin/qrow").read_bytes(), b"qrow x86_64")
 
     def test_asks_on_the_terminal_when_no_tool_can_verify(self):
         self.without_signature_tools()
         code, _, stderr, shown = self.install_on_terminal(b"n\n")
         self.assertNotEqual(code, 0)
-        self.assertIn("Continue without the signature check? [Y/n]", shown)
+        self.assertIn("Continue anyway? [Y/n]", shown)
         self.assertIn("install stopped", stderr)
         self.assertFalse(self.prefix.exists())
 
