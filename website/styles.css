@@ -131,7 +131,7 @@ code { font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color
 .command-label { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
 /* Keep the first line clear of the Copy button. */
 .command pre { margin: 0 52px 0 0; overflow-x: auto; }
-.command .copy { position: absolute; top: 6px; right: 6px; }
+.command .copy { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); }
 
 /* Status bar footer */
 .statusbar { margin-top: 96px; background: var(--chrome); border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
