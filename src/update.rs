@@ -9,6 +9,8 @@
 
 #[cfg(target_os = "linux")]
 pub mod archive;
+#[cfg(target_os = "macos")]
+pub mod bundle;
 pub mod feed;
 mod fetch;
 pub mod install;
@@ -126,7 +128,12 @@ impl Setup {
     /// True when this copy can install an update itself. Other copies only
     /// report it.
     pub fn installs_updates(&self) -> bool {
-        cfg!(target_os = "linux") && matches!(self.install, Install::Archive { .. })
+        match self.install {
+            Install::Archive { .. } => cfg!(target_os = "linux"),
+            Install::AppBundle { .. } => cfg!(target_os = "macos"),
+            Install::WindowsInstaller { .. } => cfg!(windows),
+            Install::Managed(_) => false,
+        }
     }
 
     /// The executable to start after an update, when it differs from the path
@@ -272,19 +279,77 @@ impl Updater {
     }
 }
 
-/// Installs a verified download. The new version starts at the next launch.
-pub fn apply(download: &Download, install: &Install) -> Result<()> {
+/// What Qrow does when it quits after [`apply`].
+#[derive(Debug)]
+pub enum Finish {
+    /// The new files are in place; start them.
+    Restart,
+    /// Run this installer, which replaces the files and starts Qrow.
+    Run(std::process::Command),
+}
+
+/// Installs a verified download, or prepares its installer. The new version
+/// starts after Qrow quits.
+pub fn apply(download: &Download, install: &Install) -> Result<Finish> {
     match install {
         #[cfg(target_os = "linux")]
-        Install::Archive { prefix } => archive::install(&download.path, prefix),
+        Install::Archive { prefix } => {
+            archive::install(&download.path, prefix)?;
+            Ok(Finish::Restart)
+        }
+        #[cfg(target_os = "macos")]
+        Install::AppBundle { app } => {
+            bundle::install(&download.path, app)?;
+            Ok(Finish::Restart)
+        }
+        #[cfg(windows)]
+        Install::WindowsInstaller { folder } => {
+            // The installer runs after Qrow quits, when the temporary download
+            // is gone, so it moves next to that folder. The next launch
+            // removes it.
+            let name = download
+                .path
+                .file_name()
+                .context("The installer has no name")?;
+            let kept = download
+                .path
+                .parent()
+                .and_then(Path::parent)
+                .context("The installer has no download folder")?
+                .join(name);
+            std::fs::copy(&download.path, &kept).context("Could not keep the installer")?;
+            let all_users = !install::writable(folder);
+            Ok(Finish::Run(installer_command(&kept, folder, all_users)))
+        }
         Install::Managed(_) => bail!("Another program updates this copy of Qrow"),
-        // Only Linux builds have an install path yet; elsewhere the download
-        // is not used.
+        // Only some platforms install this kind of copy; elsewhere the
+        // download is not used.
         _ => {
             let _ = download;
             bail!("Updates of this installation are not available yet")
         }
     }
+}
+
+/// The silent run of the Windows installer `setup` into `folder`.
+/// `/QROWRELAUNCH=1` makes it start Qrow when it is done. An install for all
+/// users asks Windows for administrator rights.
+pub fn installer_command(setup: &Path, folder: &Path, all_users: bool) -> std::process::Command {
+    let mut command = std::process::Command::new(setup);
+    command.args([
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        "/QROWRELAUNCH=1",
+        if all_users {
+            "/ALLUSERS"
+        } else {
+            "/CURRENTUSER"
+        },
+    ]);
+    command.arg(format!("/DIR={}", folder.display()));
+    command
 }
 
 fn block_on<T>(future: impl Future<Output = Result<T>>) -> Result<T> {

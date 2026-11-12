@@ -121,10 +121,12 @@ What happens next depends on how you installed Qrow:
 | Installation | Update |
 | --- | --- |
 | Linux archive in a folder that you can write, such as `~/.local` | Qrow downloads the new version in the background and shows **Restart to update**. |
+| macOS app from the DMG, in a folder that you can write, such as `/Applications` | Qrow downloads the new DMG in the background and shows **Restart to update**. The restart replaces the app. |
+| Windows installer | Qrow downloads the new installer in the background and shows **Restart to update**. Qrow quits, the installer runs without its dialogs, and Qrow starts again. An install for all users asks for administrator rights. |
 | Homebrew or Scoop | Qrow shows the command that updates it, for example `brew upgrade --cask qrow`. |
 | Flatpak or Snap | Qrow tells you to update it with that tool. |
-| macOS DMG, Windows installer, or Windows portable archive | Qrow shows the new version and a link to the release. Install it as in the sections above. |
-| Linux archive in a system folder, such as `/usr` | Qrow shows the new version and a link to the release. |
+| Windows portable archive | Qrow shows the new version and a link to the release. Download the new archive. |
+| Linux archive or macOS app in a folder that you cannot write, such as `/usr` | Qrow shows the new version and a link to the release. |
 
 Before Qrow installs an update, it verifies the signed checksums of the
 release, as in [Verify a download](#verify-a-download), and the checksum of

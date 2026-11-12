@@ -34,6 +34,8 @@ pub(super) struct Updates {
     announced: Option<Version>,
     /// Set while Qrow quits to start the installed version.
     pub(super) restarting: bool,
+    /// What to do at the exit after an install: restart or run an installer.
+    finish: Option<update::Finish>,
 }
 
 #[derive(Clone, Default)]
@@ -60,8 +62,14 @@ impl Updates {
                 .ok()
                 .map(Arc::new)
         });
+        let setup = updater.is_some().then_some(setup).flatten();
+        // Downloads of earlier runs, like a Windows installer that already
+        // ran, are not needed any more.
+        if let Some(setup) = &setup {
+            let _ = std::fs::remove_dir_all(&setup.downloads);
+        }
         Self {
-            setup: updater.is_some().then_some(setup).flatten(),
+            setup,
             updater,
             ..Self::default()
         }
@@ -416,12 +424,17 @@ impl Qrow {
                 cx.spawn_in(window, async move |weak, cx| {
                     let result = task.await;
                     let _ = weak.update_in(cx, |this, window, cx| match result {
-                        Ok(()) => {
-                            this.log_update(
-                                Severity::Info,
-                                format!("Installed Qrow {version}. It starts after the restart."),
-                                cx,
-                            );
+                        Ok(finish) => {
+                            let text = match finish {
+                                update::Finish::Restart => {
+                                    format!("Installed Qrow {version}. It starts after the restart.")
+                                }
+                                update::Finish::Run(_) => format!(
+                                    "Prepared the installer of Qrow {version}. It runs when Qrow quits."
+                                ),
+                            };
+                            this.log_update(Severity::Info, text, cx);
+                            this.updates.finish = Some(finish);
                             this.updates.status = Status::Installed(version);
                             this.quit_to_restart(window, cx);
                         }
@@ -471,10 +484,21 @@ impl Qrow {
     /// Ends the application: restarts into an installed update, or quits.
     pub(super) fn exit(&mut self, cx: &mut Context<Self>) {
         if self.updates.restarting {
-            if let Some(path) = self.updates.setup.as_ref().and_then(|s| s.restart_path()) {
-                cx.set_restart_path(path);
+            match self.updates.finish.take() {
+                // The installer closes nothing that is still open: Qrow quits
+                // right after it starts. It starts Qrow when it is done.
+                Some(update::Finish::Run(mut installer)) => {
+                    if let Err(error) = installer.spawn() {
+                        eprintln!("Could not start the update installer: {error}");
+                    }
+                }
+                _ => {
+                    if let Some(path) = self.updates.setup.as_ref().and_then(|s| s.restart_path()) {
+                        cx.set_restart_path(path);
+                    }
+                    cx.restart();
+                }
             }
-            cx.restart();
         }
         // The platform quits after it starts the new process. If it could not
         // start it, Qrow still quits; the new version starts at the next launch.

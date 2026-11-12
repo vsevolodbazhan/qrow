@@ -207,7 +207,7 @@ fn detect_windows(executable: &Path, folder: &Path) -> Install {
 }
 
 /// True when the current user can create files in `folder`.
-fn writable(folder: &Path) -> bool {
+pub(crate) fn writable(folder: &Path) -> bool {
     tempfile::Builder::new()
         .prefix(".qrow-write-check")
         .tempfile_in(folder)
