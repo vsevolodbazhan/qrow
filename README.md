@@ -68,14 +68,21 @@ You can also install Qrow with [Homebrew](https://brew.sh/) on macOS or
 [Scoop](https://scoop.sh/) on Windows. Then the package manager updates Qrow.
 
 ```sh
-brew install --cask vsevolodbazhan/qrow/qrow          # stable
-brew install --cask vsevolodbazhan/qrow/qrow@nightly  # nightly
+brew install --cask vsevolodbazhan/qrow/qrow
+```
+
+```sh
+brew install --cask vsevolodbazhan/qrow/qrow@nightly
 ```
 
 ```powershell
 scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
-scoop install qrow          # stable
-scoop install qrow-nightly  # nightly
+scoop install qrow
+```
+
+```powershell
+scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow-nightly
 ```
 
 ## Build
