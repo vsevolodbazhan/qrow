@@ -21,7 +21,7 @@ fail() {
 
 fetch() {
     if command -v curl >/dev/null 2>&1; then
-        curl --proto '=https,file' --tlsv1.2 -fsSL -o "$2" "$1"
+        curl --proto '=https,file' --tlsv1.2 --retry 3 -fsSL -o "$2" "$1"
     elif command -v wget >/dev/null 2>&1; then
         wget -q -O "$2" "$1"
     else
