@@ -242,19 +242,7 @@ publishes the latest stable release as `qrow` and the latest prerelease as
 `qrow@nightly`. A scheduled job in the tap checks the public GitHub releases
 every 15 minutes, downloads each new DMG, calculates its SHA-256 checksum, and
 updates the cask. The tap does not need a secret in this repository.
-
-Install the stable cask with:
-
-```sh
-brew tap vsevolodbazhan/qrow
-brew install --cask vsevolodbazhan/qrow/qrow
-```
-
-Install the nightly cask with:
-
-```sh
-brew install --cask vsevolodbazhan/qrow/qrow@nightly
-```
+[Installation](installation.md#package-managers) shows the install commands.
 
 The current release package uses ad hoc code signing. Homebrew can install the
 custom cask, but macOS Gatekeeper may warn until the app is signed and notarized

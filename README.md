@@ -41,43 +41,42 @@ and [Zed](https://zed.dev/).
 
 ## Installation
 
+Download the package for your system from the
+[latest release](https://github.com/vsevolodbazhan/qrow/releases/latest).
+Qrow then [updates itself](docs/installation.md#updates).
+
+| System | Package |
+| --- | --- |
+| macOS | `Qrow-VERSION-arm64.dmg` (Apple Silicon) or `Qrow-VERSION-x86_64.dmg` (Intel). Drag Qrow to Applications. |
+| Windows | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64). |
+| Linux | `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz`. Extract it into `~/.local`. |
+
+See [installation](docs/installation.md) for requirements and the first-open
+warnings.
+
 Qrow has two channels:
 
 - **Stable** for daily work. Choose it if you want fewer surprises.
 - **Nightly** for the latest features and fixes. Choose it if you want to try
   changes early and report problems.
 
-### macOS
+To change the channel, open **Settings → Updates → Release Channel**.
 
-Install with [Homebrew](https://brew.sh/).
+### Package managers
+
+You can also install Qrow with [Homebrew](https://brew.sh/) on macOS or
+[Scoop](https://scoop.sh/) on Windows. Then the package manager updates Qrow.
 
 ```sh
-brew install --cask vsevolodbazhan/qrow/qrow
-```
-
-```sh
-brew install --cask vsevolodbazhan/qrow/qrow@nightly
-```
-
-### Windows
-
-Install with [Scoop](https://scoop.sh/).
-
-```powershell
-scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
-scoop install qrow
+brew install --cask vsevolodbazhan/qrow/qrow          # stable
+brew install --cask vsevolodbazhan/qrow/qrow@nightly  # nightly
 ```
 
 ```powershell
 scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
-scoop install qrow-nightly
+scoop install qrow          # stable
+scoop install qrow-nightly  # nightly
 ```
-
-### Other options
-
-Download a package from [GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases).
-Nightly builds are the pre-releases. See [installation](docs/installation.md)
-for Linux and the first-open warnings.
 
 ## Build
 
