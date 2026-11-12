@@ -81,11 +81,15 @@ for Linux and the first-open warnings.
 
 ## Build
 
-Install the [prerequisites](docs/development.md#build-prerequisites), then:
+Install the [prerequisites](docs/development.md#build-prerequisites), then run a debug build with:
 
 ```sh
-cargo run --locked --bin qrow                # debug build
-cargo build --locked --release --bin qrow    # optimized build
+cargo run --locked --bin qrow
+```
+
+Add the `--release` flag to run an optimized release-like build:
+```sh
+cargo run --locked --release --bin qrow
 ```
 
 See [package the app](docs/development.md#package-the-app) for release packages.
