@@ -424,6 +424,23 @@ class WebsiteWorkflowTests(unittest.TestCase):
         for page in ("og:url", "og:image", "canonical"):
             self.assertRegex(read("website/index.html"), rf'"{page}"[^>]*"https://qrow\.dev/')
 
+    def test_website_downloads_name_the_release_files(self):
+        # The website links each data-asset suffix to Qrow-VERSION-SUFFIX of the latest release.
+        page = read("website/index.html")
+        suffixes = set(re.findall(r'data-asset="([^"]+)"', page))
+        workflow = read(".github/workflows/release.yml")
+        start = workflow.index('release create "$RELEASE_TAG"')
+        files = workflow[start:workflow.index("--repo", start)]
+        uploads = set(re.findall(r'"dist/Qrow-\$\{RELEASE_VERSION\}-([^"]+)"', files))
+        self.assertEqual(len(uploads), 8)
+        self.assertEqual(suffixes, uploads)
+        # The hero button uses the PRIMARY table of the script.
+        script = read("website/install.js")
+        start = script.index("const PRIMARY")
+        primary = re.findall(r'(?:arm|x86): "([^"]+)"', script[start:script.index("};", start)])
+        self.assertEqual(len(primary), 6)
+        self.assertLessEqual(set(primary), uploads)
+
 
 if __name__ == "__main__":
     unittest.main()

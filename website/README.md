@@ -1,8 +1,33 @@
 # Website
 
 This directory contains the Qrow landing page at <https://qrow.dev>: one
-static page that links to the GitHub repository. It has no build step and
-makes no requests to other sites.
+static page with the download links and the installation steps. It has no
+build step.
+
+## Downloads
+
+The page finds the system of the visitor and shows the **Download** button
+and the installation steps for that system. [install.js](install.js) asks the
+GitHub API for the latest stable release and links the buttons to its files.
+This is the only request to another site. Without the script, or if the
+request fails, the page shows all systems, and the buttons open the latest
+release page.
+
+The script finds the file of a button from its `data-asset` attribute: the
+release file is `Qrow-VERSION-` followed by that value. If you change the
+names of the release files, change these attributes in the same change. A
+test compares them with the files that the release workflow uploads.
+
+Limitations:
+
+- Browsers hide the processor architecture. On a Mac, the page shows the
+  Apple Silicon build, unless the browser shows an Intel or AMD graphics
+  processor. Safari always shows Apple Silicon. The other build is one click
+  away.
+- The GitHub API accepts 60 requests in an hour from one IP address without
+  sign-in. After that, the buttons open the latest release page.
+- Phones and tablets get no system. Their button goes to the installation
+  steps.
 
 ## Preview the page
 

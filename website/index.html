@@ -29,10 +29,15 @@
       <h1>Qrow</h1>
       <p class="lede">Desktop SQL workbench, written in Rust.</p>
       <div class="cta">
-        <a class="btn btn-primary btn-lg" href="https://github.com/vsevolodbazhan/qrow">
+        <a class="btn btn-primary btn-lg" id="download" href="#install">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          <span id="download-label">Download</span>
+        </a>
+        <a class="btn btn-secondary btn-lg" href="https://github.com/vsevolodbazhan/qrow">
           <span>View on GitHub</span>
         </a>
       </div>
+      <p class="cta-note" id="download-note">For macOS, Windows, and Linux</p>
     </section>
 
     <div class="stage">
@@ -41,6 +46,99 @@
              alt="Qrow with the schema catalog, a SQL query, its results, and the assistant panel">
       </figure>
     </div>
+
+    <section class="install" id="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install</h2>
+      <p class="install-lede">Download the package for your system. After you install it, Qrow updates itself.</p>
+
+      <div class="tabs" role="tablist" aria-label="Operating system" hidden>
+        <button class="tab" type="button" role="tab" id="tab-macos" aria-controls="panel-macos">macOS</button>
+        <button class="tab" type="button" role="tab" id="tab-windows" aria-controls="panel-windows">Windows</button>
+        <button class="tab" type="button" role="tab" id="tab-linux" aria-controls="panel-linux">Linux</button>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-macos" aria-labelledby="tab-macos">
+        <h3 class="panel-title">macOS</h3>
+        <div class="downloads">
+          <a class="btn btn-secondary" data-asset="arm64.dmg" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Apple Silicon</span></a>
+          <a class="btn btn-secondary" data-asset="x86_64.dmg" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Intel</span></a>
+        </div>
+        <ol class="steps">
+          <li>Open the DMG and drag Qrow to Applications.</li>
+          <li>Open Qrow. macOS shows a warning because Qrow is not notarized. Close the warning.</li>
+          <li>Open <b>System Settings → Privacy &amp; Security</b> and click <b>Open Anyway</b>.</li>
+        </ol>
+        <p class="note">Requires macOS 12 or later.</p>
+        <h4>Homebrew</h4>
+        <p class="note">Homebrew installs the Apple Silicon build. Then Homebrew updates Qrow.</p>
+        <div class="command">
+          <span class="command-label">Stable</span>
+          <pre><code>brew install --cask vsevolodbazhan/qrow/qrow</code></pre>
+          <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+        </div>
+        <div class="command">
+          <span class="command-label">Nightly</span>
+          <pre><code>brew install --cask vsevolodbazhan/qrow/qrow@nightly</code></pre>
+          <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+        </div>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-windows" aria-labelledby="tab-windows">
+        <h3 class="panel-title">Windows</h3>
+        <div class="downloads">
+          <a class="btn btn-secondary" data-asset="windows-x86_64-setup.exe" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>Intel/AMD</span></a>
+          <a class="btn btn-secondary" data-asset="windows-aarch64-setup.exe" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>ARM64</span></a>
+        </div>
+        <ol class="steps">
+          <li>Run the installer. It does not need administrator rights.</li>
+          <li>If Windows shows <b>Windows protected your PC</b>, select <b>More info</b>, then <b>Run anyway</b>.</li>
+        </ol>
+        <p class="note">Requires Windows 10 or later. Portable archives, which do not update themselves:
+          <a data-asset="windows-x86_64.zip" href="https://github.com/vsevolodbazhan/qrow/releases/latest">Intel/AMD</a>,
+          <a data-asset="windows-aarch64.zip" href="https://github.com/vsevolodbazhan/qrow/releases/latest">ARM64</a>.</p>
+        <h4>Scoop</h4>
+        <p class="note">Scoop installs the portable archive. Then Scoop updates Qrow.</p>
+        <div class="command">
+          <span class="command-label">Stable</span>
+          <pre><code>scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow</code></pre>
+          <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+        </div>
+        <div class="command">
+          <span class="command-label">Nightly</span>
+          <pre><code>scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow-nightly</code></pre>
+          <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+        </div>
+      </div>
+
+      <div class="panel" role="tabpanel" id="panel-linux" aria-labelledby="tab-linux">
+        <h3 class="panel-title">Linux</h3>
+        <div class="downloads">
+          <a class="btn btn-secondary" data-asset="linux-x86_64.tar.gz" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>x86-64</span></a>
+          <a class="btn btn-secondary" data-asset="linux-aarch64.tar.gz" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>ARM64</span></a>
+        </div>
+        <ol class="steps">
+          <li>Extract the archive into <code>~/.local</code>.</li>
+          <li>Make sure that <code>~/.local/bin</code> is in your <code>PATH</code>.</li>
+        </ol>
+        <div class="command">
+          <span class="command-label">Extract</span>
+          <pre><code>mkdir -p ~/.local
+tar -xzf <span id="linux-archive">Qrow-VERSION-linux-ARCH.tar.gz</span> -C ~/.local</code></pre>
+          <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+        </div>
+        <p class="note">Requires a Wayland or X11 desktop, Vulkan, and a Secret Service provider, such as GNOME Keyring.
+          Built on Ubuntu 24.04.</p>
+      </div>
+
+      <p class="install-more">
+        For nightly builds, select <b>Nightly</b> in <b>Settings → Updates</b>, or download a
+        <a href="https://github.com/vsevolodbazhan/qrow/releases">pre-release</a>.
+        To verify a download, see the
+        <a href="https://github.com/vsevolodbazhan/qrow/blob/main/docs/installation.md#verify-a-download">installation guide</a>.
+      </p>
+    </section>
   </main>
 
   <footer class="statusbar">
@@ -53,5 +151,6 @@
     </div>
   </footer>
 
+  <script src="install.js" defer></script>
 </body>
 </html>
