@@ -35,12 +35,14 @@ pub(super) fn error(
 }
 
 /// The column that holds the text of a toast. Errors and warnings are alerts.
+/// Its lines have the line height of other small text, not the taller
+/// default of the window.
 pub(super) fn body(kind: NotificationType, id: impl Into<ElementId>) -> Stateful<Div> {
     let role = match kind {
         NotificationType::Error | NotificationType::Warning => Role::Alert,
         NotificationType::Info | NotificationType::Success => Role::Status,
     };
-    v_flex().id(id).role(role).min_w_0()
+    v_flex().id(id).role(role).min_w_0().line_height(rems(1.25))
 }
 
 /// The bold first line that names the event.
