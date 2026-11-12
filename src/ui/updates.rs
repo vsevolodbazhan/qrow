@@ -9,6 +9,7 @@ use super::status_dot::DotStatus;
 use super::status_tooltip::StatusTooltip;
 use super::toast::{self, NotificationType};
 use super::*;
+use crate::logs::Severity;
 use crate::update::{self, Download, Manager, Setup, Updater, Version};
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::notification::Notification;
@@ -234,6 +235,11 @@ impl Qrow {
         match result {
             Ok(None) => {
                 self.updates.status = Status::UpToDate;
+                self.log_update(
+                    Severity::Info,
+                    format!("Qrow {} is up to date", setup.current),
+                    cx,
+                );
                 // The popover closes with its action, so a toast answers a
                 // check that the user asked for.
                 if manual {
@@ -250,6 +256,11 @@ impl Qrow {
             }
             Ok(Some(candidate)) if setup.installs_updates() => {
                 self.updates.status = Status::Downloading(candidate.version.clone());
+                self.log_update(
+                    Severity::Info,
+                    format!("Downloading Qrow {}", candidate.version),
+                    cx,
+                );
                 let download = cx.background_executor().spawn(async move {
                     updater.download(&candidate, &setup.install, &setup.arch, &setup.downloads)
                 });
@@ -264,6 +275,12 @@ impl Qrow {
             Ok(Some(candidate)) => {
                 let version = candidate.version;
                 self.updates.status = Status::Available(version.clone());
+                let instruction = self.updates.instruction().unwrap_or_default();
+                self.log_update(
+                    Severity::Info,
+                    format!("Qrow {version} is available. {instruction}"),
+                    cx,
+                );
                 if manual {
                     // Answer the request even if a toast already announced it.
                     self.updates.announced = None;
@@ -274,6 +291,18 @@ impl Qrow {
                 // An automatic check fails quietly, for example offline, and
                 // runs again at the next tick instead of the next day.
                 eprintln!("Update check failed: {error:#}");
+                // A failed automatic check is not an unseen error: offline,
+                // it would come back every hour.
+                let severity = if manual {
+                    Severity::Error
+                } else {
+                    Severity::Info
+                };
+                self.log_update(
+                    severity,
+                    format!("Could not check for updates: {error:#}"),
+                    cx,
+                );
                 self.updates.last_check = None;
                 self.updates.status = if manual {
                     window.push_notification(
@@ -302,6 +331,11 @@ impl Qrow {
         match result {
             Ok(download) => {
                 let version = download.version.clone();
+                self.log_update(
+                    Severity::Info,
+                    format!("Downloaded and verified Qrow {version}"),
+                    cx,
+                );
                 self.updates.status = Status::Ready(Arc::new(download));
                 if self.updates.announced.as_ref() != Some(&version) {
                     self.updates.announced = Some(version.clone());
@@ -310,6 +344,11 @@ impl Qrow {
             }
             Err(error) => {
                 eprintln!("Update download failed: {error:#}");
+                self.log_update(
+                    Severity::Error,
+                    format!("Could not download the update: {error:#}"),
+                    cx,
+                );
                 self.updates.last_check = None;
                 self.updates.status =
                     Status::Failed("Could not download the update. Try again later.".into());
@@ -378,12 +417,22 @@ impl Qrow {
                     let result = task.await;
                     let _ = weak.update_in(cx, |this, window, cx| match result {
                         Ok(()) => {
+                            this.log_update(
+                                Severity::Info,
+                                format!("Installed Qrow {version}. It starts after the restart."),
+                                cx,
+                            );
                             this.updates.status = Status::Installed(version);
                             this.quit_to_restart(window, cx);
                         }
                         Err(error) => {
                             let error = format!("{error:#}");
                             eprintln!("Update install failed: {error}");
+                            this.log_update(
+                                Severity::Error,
+                                format!("Could not install Qrow {version}: {error}"),
+                                cx,
+                            );
                             this.updates.status =
                                 Status::Failed("Could not install the update.".into());
                             window.push_notification(
@@ -411,6 +460,12 @@ impl Qrow {
         self.updates.restarting = true;
         self.request_quit(window, cx);
         cx.notify();
+    }
+
+    /// Writes an update event to the Application log of Activity.
+    fn log_update(&self, severity: Severity, text: String, cx: &mut Context<Self>) {
+        let entry = crate::activity::ActivityEntry::new(severity, text).with_source("Updates");
+        self.record_activity(crate::activity::APPLICATION, entry, cx);
     }
 
     /// Ends the application: restarts into an installed update, or quits.

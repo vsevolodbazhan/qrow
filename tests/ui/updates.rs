@@ -364,3 +364,48 @@ fn a_cancelled_restart_does_not_restart_a_later_quit(cx: &mut TestAppContext) {
         "A later Quit must not restart Qrow"
     );
 }
+
+#[gpui_kit::test]
+fn activity_shows_update_events_in_the_application_log(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    releases.publish("v0.6.0", "Qrow-0.6.0-x86_64.dmg", b"dmg");
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), releases.setup(homebrew()));
+    run_first_check(cx);
+    app.wait_for(cx, "update-available");
+    // Without connections, Activity opens on the application log.
+    app.dispatch(cx, qrow::ui::ToggleActivity);
+    app.wait_for(cx, "activity");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "activity-connection").as_deref(),
+            Some("Application")
+        );
+    });
+    let activity = app.copy_activity(cx);
+    assert!(
+        activity.contains("Qrow 0.6.0 is available. Run brew upgrade --cask qrow to update."),
+        "{activity}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_automatic_check_is_logged_without_an_unread_error(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    // No release list: the check fails.
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), releases.setup(homebrew()));
+    run_first_check(cx);
+    assert_eq!(releases.requests(), ["/releases"]);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "toggle-activity").as_deref(),
+            Some("Activity")
+        );
+    });
+    app.dispatch(cx, qrow::ui::ToggleActivity);
+    app.wait_for(cx, "activity");
+    let activity = app.copy_activity(cx);
+    assert!(
+        activity.contains("Could not check for updates"),
+        "{activity}"
+    );
+}
