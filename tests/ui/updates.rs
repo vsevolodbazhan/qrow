@@ -165,7 +165,8 @@ fn the_updates_button_checks_on_request_and_reports_an_up_to_date_copy(cx: &mut 
     app.click(cx, "update-button");
     app.wait_for(cx, "update-up-to-date");
     app.update(cx, |window, _| {
-        assert!(shows(window, "Qrow 0.5.0 is up to date"));
+        assert!(shows(window, "Up to date"));
+        assert!(shows(window, "Qrow 0.5.0 is the latest version."));
         assert!(labelled(window, "Updates, Qrow is up to date.").is_some());
     });
     assert_eq!(releases.requests(), ["/releases"]);
@@ -255,8 +256,11 @@ fn a_managed_copy_shows_the_command_that_updates_it(cx: &mut TestAppContext) {
     run_first_check(cx);
     app.wait_for(cx, "update-available");
     app.update(cx, |window, _| {
-        assert!(shows(window, "Qrow 0.6.0 is available"));
-        assert!(shows(window, "Run brew upgrade --cask qrow to update."));
+        assert!(shows(window, "Update available"));
+        assert!(shows(
+            window,
+            "Run brew upgrade --cask qrow to install Qrow 0.6.0."
+        ));
         assert!(present(window, &"update-copy-command".into()));
     });
     // Homebrew installs the package, so Qrow does not download it.
@@ -273,7 +277,10 @@ fn a_managed_copy_shows_the_command_that_updates_it(cx: &mut TestAppContext) {
     app.click(cx, "update-button");
     app.wait_for(cx, "update-copy-command");
     app.update(cx, |window, _| {
-        assert!(shows(window, "Run brew upgrade --cask qrow to update."));
+        assert!(shows(
+            window,
+            "Run brew upgrade --cask qrow to install Qrow 0.6.0."
+        ));
     });
     assert_eq!(releases.requests(), ["/releases"]);
 }
@@ -493,7 +500,7 @@ fn activity_shows_update_events_in_the_application_log(cx: &mut TestAppContext) 
     });
     let activity = app.copy_activity(cx);
     assert!(
-        activity.contains("Qrow 0.6.0 is available. Run brew upgrade --cask qrow to update."),
+        activity.contains("Update available. Run brew upgrade --cask qrow to install Qrow 0.6.0."),
         "{activity}"
     );
 }
@@ -618,6 +625,16 @@ fn a_switch_to_stable_waits_for_a_newer_stable_release(cx: &mut TestAppContext) 
             .iter()
             .any(|path| path.starts_with("/download/"))
     );
+    // A check on request says why nothing changes.
+    app.click(cx, "update-button");
+    app.wait_for(cx, "update-up-to-date");
+    app.update(cx, |window, _| {
+        assert!(shows(window, "Up to date"));
+        assert!(shows(
+            window,
+            "No Stable release is newer than Qrow 0.5.0-nightly.20261113.1 yet."
+        ));
+    });
 }
 
 #[gpui_kit::test]

@@ -123,20 +123,24 @@ impl Updates {
 
     /// How to install an available version on this copy.
     pub(super) fn instruction(&self) -> Option<String> {
-        let Status::Available(_) = self.status else {
+        let Status::Available(version) = &self.status else {
             return None;
         };
         let install = &self.setup.as_ref()?.install;
         Some(match install {
             update::Install::Managed(Manager::Homebrew { cask }) => {
-                format!("Run brew upgrade --cask {cask} to update.")
+                format!("Run brew upgrade --cask {cask} to install Qrow {version}.")
             }
             update::Install::Managed(Manager::Scoop { app }) => {
-                format!("Run scoop update {app} to update.")
+                format!("Run scoop update {app} to install Qrow {version}.")
             }
-            update::Install::Managed(Manager::Flatpak) => "Update it with Flatpak.".into(),
-            update::Install::Managed(Manager::Snap) => "Update it with Snap.".into(),
-            _ => "Download it from GitHub Releases.".into(),
+            update::Install::Managed(Manager::Flatpak) => {
+                format!("Update to Qrow {version} with Flatpak.")
+            }
+            update::Install::Managed(Manager::Snap) => {
+                format!("Update to Qrow {version} with Snap.")
+            }
+            _ => format!("Download Qrow {version} from GitHub Releases."),
         })
     }
 
@@ -346,12 +350,15 @@ impl Qrow {
                 };
                 // A toast answers a check that the user asked for.
                 if manual {
-                    let kind = match self.updates.waiting_for {
-                        Some(_) => NotificationType::Info,
-                        None => NotificationType::Success,
+                    let (kind, detail) = match self.updates.waiting_for {
+                        Some(_) => (NotificationType::Info, format!("{text}.")),
+                        None => (
+                            NotificationType::Success,
+                            format!("Qrow {} is the latest version.", setup.current),
+                        ),
                     };
                     window.push_notification(
-                        toast::notice(kind, "update-up-to-date", text.clone(), None)
+                        toast::notice(kind, "update-up-to-date", "Up to date", Some(detail.into()))
                             .id::<UpdateNotice>(),
                         cx,
                     );
@@ -361,18 +368,11 @@ impl Qrow {
             Ok(Some(candidate)) if setup.installs_updates() => {
                 self.updates.waiting_for = None;
                 self.updates.status = Status::Downloading(candidate.version.clone());
-                if manual {
-                    window.push_notification(
-                        toast::notice(
-                            NotificationType::Info,
-                            "update-progress",
-                            self.updates.status_line(),
-                            None,
-                        )
-                        .id::<UpdateNotice>()
-                        .autohide(true),
-                        cx,
-                    );
+                if let Some(toast) = manual
+                    .then(|| progress_toast(&self.updates.status))
+                    .flatten()
+                {
+                    window.push_notification(toast, cx);
                 }
                 self.log_update(
                     Severity::Info,
@@ -396,7 +396,7 @@ impl Qrow {
                 let instruction = self.updates.instruction().unwrap_or_default();
                 self.log_update(
                     Severity::Info,
-                    format!("Qrow {version} is available. {instruction}"),
+                    format!("Update available. {instruction}"),
                     cx,
                 );
                 if manual {
@@ -516,7 +516,7 @@ impl Qrow {
         let toast = toast::notice(
             NotificationType::Info,
             "update-available",
-            format!("Qrow {version} is available"),
+            "Update available",
             detail,
         );
         let toast = match self.updates.command() {
@@ -680,13 +680,9 @@ impl Qrow {
                 self.check_for_updates(true, window, cx)
             }
             Status::Checking | Status::Downloading(_) | Status::Installing(_) => {
-                let title = self.updates.status_line();
-                window.push_notification(
-                    toast::notice(NotificationType::Info, "update-progress", title, None)
-                        .id::<UpdateNotice>()
-                        .autohide(true),
-                    cx,
-                );
+                if let Some(toast) = progress_toast(&self.updates.status) {
+                    window.push_notification(toast, cx);
+                }
             }
             Status::Available(version) => {
                 self.updates.announced = None;
@@ -705,13 +701,37 @@ impl Qrow {
 /// The ID that all update toasts share: a new one replaces the one on screen.
 struct UpdateNotice;
 
+/// The toast of a check, a download, or an install that runs.
+fn progress_toast(status: &Status) -> Option<Notification> {
+    let (title, detail) = match status {
+        Status::Checking => ("Checking for updates", None),
+        Status::Downloading(version) => (
+            "Downloading update",
+            Some(format!(
+                "Qrow {version} is ready to install after the download."
+            )),
+        ),
+        Status::Installing(version) => (
+            "Installing update",
+            Some(format!("Qrow {version} starts after the install.")),
+        ),
+        _ => return None,
+    };
+    let detail = detail.map(SharedString::from);
+    Some(
+        toast::notice(NotificationType::Info, "update-progress", title, detail)
+            .id::<UpdateNotice>()
+            .autohide(true),
+    )
+}
+
 /// The toast of a downloaded update, with **Restart to update**.
 fn ready_toast(version: &Version, owner: WeakEntity<Qrow>) -> Notification {
     toast::notice(
         NotificationType::Info,
         "update-ready",
-        format!("Qrow {version} is ready"),
-        Some("Restart to start the new version.".into()),
+        "Update ready",
+        Some(format!("Qrow {version} starts after a restart.").into()),
     )
     .action(move |_, _, _| {
         let owner = owner.clone();
