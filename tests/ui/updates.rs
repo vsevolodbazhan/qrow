@@ -623,3 +623,25 @@ fn a_switch_drops_a_downloaded_update_of_the_other_channel(cx: &mut TestAppConte
         b"old qrow"
     );
 }
+
+#[gpui_kit::test]
+fn the_updates_tooltip_hides_while_the_popover_is_open(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), releases.setup(homebrew()));
+    let tooltip = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| label(window, "status-tooltip-title"))
+    };
+    app.hover(cx, "update-button");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    assert_eq!(tooltip(&app, cx).as_deref(), Some("Updates"));
+    app.click(cx, "update-button");
+    app.wait_for(cx, "update-panel-check");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    assert_eq!(
+        tooltip(&app, cx),
+        None,
+        "the tooltip covers the open popover"
+    );
+}
