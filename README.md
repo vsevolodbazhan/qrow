@@ -37,33 +37,19 @@ and [Zed](https://zed.dev/).
 
 ## Installation
 
-Download the package for your system from the
-[latest release](https://github.com/vsevolodbazhan/qrow/releases/latest).
-Qrow then [updates itself](docs/installation.md#updates).
-
-| System | Package |
-| --- | --- |
-| macOS | `Qrow-VERSION-arm64.dmg` (Apple Silicon) or `Qrow-VERSION-x86_64.dmg` (Intel). Drag Qrow to Applications. |
-| Windows | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64). |
-| Linux | Run `curl -fsSL https://qrow.dev/install.sh \| sh`, or extract `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz` into `~/.local`. |
-
-See [installation](docs/installation.md) for requirements and the first-open
+Go to [qrow.dev](https://qrow.dev/#install) to get Qrow for your system, or
+follow the steps below. After you install it, Qrow updates itself. See
+[installation](docs/installation.md) for requirements and the first-open
 warnings.
 
-Qrow has two channels:
+### macOS
 
-- **Stable** for daily work. Choose it if you want fewer surprises.
-- **Nightly** for the latest features and fixes. Choose it if you want to try
-  changes early and report problems.
+Download `Qrow-VERSION-arm64.dmg` (Apple Silicon) or
+`Qrow-VERSION-x86_64.dmg` (Intel) from the
+[latest release](https://github.com/vsevolodbazhan/qrow/releases/latest).
+Open it and drag Qrow to Applications.
 
-To change the channel, open **Settings → Updates → Release Channel**.
-
-### Package managers
-
-You can also install Qrow with [Homebrew](https://brew.sh/) on macOS or
-[Scoop](https://scoop.sh/) on Windows. Then the package manager updates Qrow.
-
-#### macOS
+Or install with [Homebrew](https://brew.sh/) (Apple Silicon only):
 
 ```sh
 brew install --cask vsevolodbazhan/qrow/qrow
@@ -73,7 +59,14 @@ brew install --cask vsevolodbazhan/qrow/qrow
 brew install --cask vsevolodbazhan/qrow/qrow@nightly
 ```
 
-#### Windows
+### Windows
+
+Download `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or
+`Qrow-VERSION-windows-aarch64-setup.exe` (ARM64) from the
+[latest release](https://github.com/vsevolodbazhan/qrow/releases/latest) and
+run it.
+
+Or install with [Scoop](https://scoop.sh/):
 
 ```powershell
 scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
@@ -84,6 +77,26 @@ scoop install qrow
 scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
 scoop install qrow-nightly
 ```
+
+### Linux
+
+```sh
+curl -fsSL https://qrow.dev/install.sh | sh
+```
+
+Or extract `Qrow-VERSION-linux-x86_64.tar.gz` or
+`Qrow-VERSION-linux-aarch64.tar.gz` from the
+[latest release](https://github.com/vsevolodbazhan/qrow/releases/latest) into
+`~/.local`.
+
+### Channels
+
+- **Stable** for daily work. Choose it if you want fewer surprises.
+- **Nightly** for the latest features and fixes. Choose it if you want to try
+  changes early and report problems.
+
+To change the channel, open **Settings → Updates → Release Channel**. A copy
+from Homebrew or Scoop keeps the channel of its package.
 
 ## Build
 
