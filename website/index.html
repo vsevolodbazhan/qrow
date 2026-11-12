@@ -104,22 +104,31 @@ scoop install qrow</code></pre>
 
       <div class="panel" role="tabpanel" id="panel-linux" aria-labelledby="tab-linux">
         <h3 class="panel-title">Linux</h3>
-        <div class="downloads">
-          <a class="btn btn-secondary" data-arch="x86" data-asset="linux-x86_64.tar.gz" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>x86-64</span></a>
-          <a class="btn btn-secondary" data-arch="arm" data-asset="linux-aarch64.tar.gz" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>ARM64</span></a>
-        </div>
-        <ol class="steps">
-          <li>Extract the archive into <code>~/.local</code>.</li>
-          <li>Make sure that <code>~/.local/bin</code> is in your <code>PATH</code>.</li>
-        </ol>
         <div class="command">
-          <span class="command-label">Extract</span>
-          <pre><code>mkdir -p ~/.local
-tar -xzf <span id="linux-archive">Qrow-VERSION-linux-ARCH.tar.gz</span> -C ~/.local</code></pre>
+          <span class="command-label">Stable</span>
+          <pre><code>curl -fsSL https://qrow.dev/install.sh | sh</code></pre>
           <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
         </div>
+        <p class="note">The script verifies the download and installs Qrow in <code>~/.local</code>.</p>
         <p class="note">Requires a Wayland or X11 desktop, Vulkan, and a Secret Service provider, such as GNOME Keyring.
           Built on Ubuntu 24.04.</p>
+        <details class="alternative">
+          <summary><svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>Or download the archive</summary>
+          <div class="downloads">
+            <a class="btn btn-secondary" data-arch="x86" data-asset="linux-x86_64.tar.gz" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>x86-64</span></a>
+            <a class="btn btn-secondary" data-arch="arm" data-asset="linux-aarch64.tar.gz" href="https://github.com/vsevolodbazhan/qrow/releases/latest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span>ARM64</span></a>
+          </div>
+          <ol class="steps">
+            <li>Extract the archive into <code>~/.local</code>.</li>
+            <li>Make sure that <code>~/.local/bin</code> is in your <code>PATH</code>.</li>
+          </ol>
+          <div class="command">
+            <span class="command-label">Extract</span>
+            <pre><code>mkdir -p ~/.local
+tar -xzf <span id="linux-archive">Qrow-VERSION-linux-ARCH.tar.gz</span> -C ~/.local</code></pre>
+            <button class="btn btn-ghost btn-sm copy" type="button" hidden>Copy</button>
+          </div>
+        </details>
       </div>
     </section>
   </main>

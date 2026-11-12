@@ -49,7 +49,7 @@ Qrow then [updates itself](docs/installation.md#updates).
 | --- | --- |
 | macOS | `Qrow-VERSION-arm64.dmg` (Apple Silicon) or `Qrow-VERSION-x86_64.dmg` (Intel). Drag Qrow to Applications. |
 | Windows | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64). |
-| Linux | `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz`. Extract it into `~/.local`. |
+| Linux | Run `curl -fsSL https://qrow.dev/install.sh \| sh`, or extract `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz` into `~/.local`. |
 
 See [installation](docs/installation.md) for requirements and the first-open
 warnings.

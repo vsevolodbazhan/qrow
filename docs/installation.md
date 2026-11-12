@@ -67,8 +67,23 @@ Windows can show **Windows protected your PC** when you run it. To continue:
 
 ## Linux
 
-Download the archive for your architecture. Extract it into `~/.local` and make
-sure that `~/.local/bin` is in your `PATH`:
+Run the install script:
+
+```sh
+curl -fsSL https://qrow.dev/install.sh | sh
+```
+
+The script downloads the archive of the latest stable release for your
+processor. It verifies the checksum of the archive. If
+[minisign](https://jedisct1.github.io/minisign/) is installed, it also
+verifies the signature of the checksums. Then it installs Qrow into
+`~/.local`. Set `QROW_PREFIX` to install into another folder that you can
+write. Make sure that `~/.local/bin` is in your `PATH`. The
+[script](../website/install.sh) is short. Read it before you run it if you
+prefer.
+
+To install without the script, download the archive for your architecture.
+Extract it into `~/.local`:
 
 ```sh
 mkdir -p ~/.local

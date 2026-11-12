@@ -217,7 +217,7 @@ def suites_for_platform(system):
             Suite("scripts", "ShellCheck, actionlint, Ruff, and automation unit tests.",
                   ("uv", "shellcheck", "actionlint"),
                   (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + "
-                               "&& shellcheck .githooks/* qtest tests/desktop/*.sh")),
+                               "&& shellcheck .githooks/* qtest tests/desktop/*.sh website/*.sh")),
                    # Name the files: hook snapshots have no Git repository to search.
                    Step(("sh", "-c", "actionlint .github/workflows/*.yml")),
                    Step((PYTHON, "-m", "ruff", "check", "scripts", "tests/desktop")),
@@ -359,9 +359,9 @@ CHANGE_RULES = (
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/policy\.py|\.github/(workflows|actions)/)",
      ("policy",)),
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml)", ("deps",)),
-    # The scripts suite also lints the Python and shell helpers of the desktop driver.
+    # The scripts suite also lints the Python and shell helpers of the desktop driver and the website scripts.
     (r"^(\.githooks/|\.github/(workflows|actions)/|pyproject\.toml$|uv\.lock$|scripts/|qtest(?:\.cmd)?$|docs/testing\.md$"
-     r"|tests/desktop/[^/]+\.(py|sh)$)",
+     r"|tests/desktop/[^/]+\.(py|sh)$|website/[^/]+\.sh$)",
      ("scripts",)),
     (r"^scripts/core/preflight\.sh$", (*RUST_SUITES, "policy")),
 )

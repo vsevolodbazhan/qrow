@@ -33,8 +33,8 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: website
-      # Publish the page and its files, not the maintenance files.
-      - run: rsync -a --exclude README.md --exclude '*.sh' website/ _site/
+      # Publish the page and its files, including install.sh, but not the maintenance files.
+      - run: rsync -a --exclude README.md --exclude make-og.sh --exclude optimize-media.sh website/ _site/
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site

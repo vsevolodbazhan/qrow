@@ -104,6 +104,8 @@ h2 { margin: 0; color: var(--fg-strong); font-size: 28px; font-weight: 600; line
 .has-script .panel-title { display: none; }
 .downloads { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .has-script .downloads { margin-top: 0; align-items: center; column-gap: 12px; }
+.has-script .panel-title + .command { margin-top: 0; }
+.alternative > .downloads { margin-top: 12px; }
 .file-name { min-width: 0; overflow-wrap: anywhere; font-size: 13px; color: var(--muted); }
 .steps { margin: 20px 0 0; padding-left: 22px; }
 .steps li + li { margin-top: 4px; }

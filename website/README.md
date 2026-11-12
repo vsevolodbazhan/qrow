@@ -33,6 +33,18 @@ Limitations:
   sign-in. After that, the buttons open the latest release page.
 - Phones and tablets get no system. The section shows macOS first.
 
+## Install script
+
+On Linux, the page shows `curl -fsSL https://qrow.dev/install.sh | sh`.
+[install.sh](install.sh) installs the latest stable release into `~/.local`,
+the same as the manual archive steps, so Qrow then updates itself. It reads
+`SHA256SUMS` from the `releases/latest/download` folder of GitHub Releases and
+does not use the GitHub API. It verifies the checksum of the archive, and the
+signature of `SHA256SUMS` when `minisign` is installed. It has the public
+release key. Change it when you change the release key.
+[test_website_install.py](../scripts/tests/test_website_install.py) runs the
+script against a synthetic release.
+
 ## Preview the page
 
 ```sh
@@ -110,8 +122,9 @@ touches `website/` or the workflow:
 - A push to `main` builds the site and deploys it to <https://qrow.dev>.
 - You can also start the workflow manually on `main`.
 
-The site is a copy of `website/` without `README.md` and the scripts. The deployment takes approximately one minute after the
-push. The repository settings (**Settings** > **Pages**) set the source to
+The site is a copy of `website/` without `README.md` and the maintenance
+scripts. It includes `install.sh`. The deployment takes approximately one
+minute after the push. The repository settings (**Settings** > **Pages**) set the source to
 **GitHub Actions** and the custom domain to `qrow.dev`.
 
 The domain uses these DNS records:
