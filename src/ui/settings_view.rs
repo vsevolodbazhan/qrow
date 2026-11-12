@@ -215,6 +215,8 @@ pub(super) struct SettingsForm {
     assistant_executable: Entity<InputState>,
     claude_executable: Entity<InputState>,
     copy_format: SettingSelect,
+    /// Stable or Nightly, for copies that install updates themselves.
+    update_channel: SettingSelect,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -472,6 +474,39 @@ impl Qrow {
                 }
             },
         ));
+        const CHANNELS: [crate::update::Channel; 2] = [
+            crate::update::Channel::Stable,
+            crate::update::Channel::Nightly,
+        ];
+        let current_channel = self.update_channel();
+        let update_channel = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    CHANNELS
+                        .map(|channel| super::updates::channel_name(channel).to_owned())
+                        .to_vec(),
+                ),
+                CHANNELS
+                    .iter()
+                    .position(|channel| *channel == current_channel)
+                    .map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &update_channel,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && let Some(channel) = CHANNELS
+                        .into_iter()
+                        .find(|channel| super::updates::channel_name(*channel) == value)
+                {
+                    this.set_update_channel(channel, cx);
+                }
+            },
+        ));
         self.settings_form = Some(SettingsForm {
             theme,
             numbers,
@@ -482,6 +517,7 @@ impl Qrow {
             assistant_executable: executable,
             claude_executable,
             copy_format,
+            update_channel,
             _subscriptions: subscriptions,
         });
     }
@@ -849,11 +885,19 @@ impl Qrow {
                 state.set_selected_value(&harness.to_owned(), window, cx)
             });
         }
+        let updates = self.updates.enabled().then(|| {
+            updates_page(
+                form,
+                cx.weak_entity(),
+                self.settings.check_for_updates,
+                self.can_switch_channel(),
+            )
+        });
         div()
             .size_full()
             .overflow_hidden()
-            .child(
-                settings_panel("settings", window, cx)
+            .child({
+                let panel = settings_panel("settings", window, cx)
                     .page(appearance_page(
                         form,
                         cx.entity().downgrade(),
@@ -888,8 +932,12 @@ impl Qrow {
                         cx.weak_entity(),
                         self.settings.assistant.enabled,
                         self.settings.assistant.web_search,
-                    )),
-            )
+                    ));
+                match updates {
+                    Some(page) => panel.page(page),
+                    None => panel,
+                }
+            })
             .into_any_element()
     }
 
@@ -935,6 +983,49 @@ impl Qrow {
             )
             .into_any_element()
     }
+}
+
+/// Update checks. Only release builds show this page.
+fn updates_page(
+    form: &SettingsForm,
+    owner: WeakEntity<Qrow>,
+    checked: bool,
+    can_switch: bool,
+) -> SettingPage {
+    let channel = select_field(&form.update_channel, "Release Channel");
+    // The page title names the topic; its one group needs no second title.
+    SettingPage::new("Updates").resettable(false).group(
+        SettingGroup::new()
+            .item(setting_item(
+                "Check Automatically",
+                "Look for a new version once a day.",
+                &["update", "version", "release", "download", "upgrade"],
+                move |_: &mut Window, _: &mut App| {
+                    let owner = owner.clone();
+                    Switch::new("check-for-updates")
+                        .checked(checked)
+                        .accessibility_label("Check Automatically")
+                        .on_click(move |next, _, cx| {
+                            let _ = owner.update(cx, |this, cx| {
+                                this.settings.check_for_updates = *next;
+                                this.changed(cx);
+                            });
+                        })
+                },
+            ))
+            .item(setting_item(
+                "Release Channel",
+                if can_switch {
+                    "Stable receives tested releases. Nightly receives changes earlier."
+                } else {
+                    "The package manager sets the channel of this copy."
+                },
+                &[
+                    "channel", "nightly", "stable", "update", "release", "upgrade",
+                ],
+                move |window: &mut Window, cx: &mut App| channel(window, cx).disabled(!can_switch),
+            )),
+    )
 }
 
 /// Appearance settings for the interface, assistant messages, editor, and logs.

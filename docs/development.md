@@ -324,6 +324,20 @@ build:
 QROW_COMMIT=dcc75d4fd874 cargo build --locked --release --bin qrow
 ```
 
+`QROW_RELEASE_VERSION` sets the release version, for example
+`0.5.0-nightly.20261112.42`. A build with this variable also gets an update
+channel: `nightly` for a nightly version, otherwise `stable`. Only such builds
+can check for updates. A build without the variable has no channel. The
+[update module](../src/update.rs) reads releases, verifies the signed
+checksums with [assets/release/minisign.pub](../assets/release/minisign.pub),
+and installs the Linux archive or the macOS DMG, or runs the Windows
+installer with `/QROWRELAUNCH=1`. The [installer script](../scripts/package/qrow.iss)
+starts Qrow after such a run. [Installation](installation.md#updates)
+describes the update behavior. UI tests give the window a local release
+server and a synthetic key, so they do not contact GitHub. Set
+`QROW_NO_UPDATES` to turn updates off in a release build. The desktop and
+launch performance suites set it.
+
 ## Bundled fonts
 
 Qrow includes the Regular, Medium, SemiBold, Bold, and Italic files of IBM Plex

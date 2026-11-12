@@ -197,6 +197,11 @@ pub struct Settings {
     pub copy_format: CopyFormat,
     /// Collapse the Results and Logs panel to its header in every tab.
     pub results_minimized: bool,
+    /// Check for new versions once a day. Only release builds check.
+    pub check_for_updates: bool,
+    /// The release channel that updates follow. `None` follows the channel
+    /// of the running build.
+    pub update_channel: Option<crate::update::Channel>,
 }
 
 impl Default for Settings {
@@ -226,6 +231,8 @@ impl Default for Settings {
             export_replay_limit_mib: 2048,
             copy_format: CopyFormat::default(),
             results_minimized: false,
+            check_for_updates: true,
+            update_channel: None,
         }
     }
 }

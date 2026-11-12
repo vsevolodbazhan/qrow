@@ -59,7 +59,7 @@ impl Render for SettingsWindow {
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 let _ = this
                     .qrow
-                    .update(cx, |qrow, cx| qrow.request_quit(window, cx));
+                    .update(cx, |qrow, cx| qrow.request_user_quit(window, cx));
             }))
             .size_full()
             .bg(cx.theme().background)

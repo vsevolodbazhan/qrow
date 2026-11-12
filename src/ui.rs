@@ -31,6 +31,7 @@ mod status_tooltip;
 mod tab_view;
 mod toast;
 mod unit_input;
+mod updates;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
@@ -790,6 +791,8 @@ pub struct Qrow {
     settings_window: Option<AnyWindowHandle>,
     /// The page that Settings shows when it opens.
     about_open: bool,
+    /// Update checks of a release build and their state.
+    updates: updates::Updates,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
     /// The schema catalogs that several connections share.
@@ -1075,6 +1078,7 @@ impl Qrow {
             settings_open: false,
             settings_window: None,
             about_open: false,
+            updates: updates::Updates::new(environment.updates(), &environment.trust()),
             settings_form: None,
             profiles: workspace.profiles,
             shared_catalogs: workspace.shared_catalogs,
@@ -1182,12 +1186,13 @@ impl Qrow {
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| {
-                this.request_quit(window, cx);
+                this.request_user_quit(window, cx);
             })
             .is_err()
         });
         // Native termination may bypass our Quit action and the window close guard.
         cx.on_release(|this, cx| this.finish(cx)).detach();
+        this.start_update_checks(window, cx);
         eprintln!(
             "Qrow GPUI initialized in {:.0} ms{}",
             started.elapsed().as_secs_f64() * 1000.,
@@ -1430,6 +1435,7 @@ impl Qrow {
                                     window.close_dialog(cx);
                                     let _ = keep_working.update(cx, |this, cx| {
                                         this.quit_warning_open = false;
+                                        this.updates.restarting = false;
                                         cx.notify();
                                     });
                                 }),
@@ -1453,6 +1459,13 @@ impl Qrow {
         cx.notify();
     }
 
+    /// Quit that the user asks for: the Quit command or closing the window.
+    /// It replaces an earlier Restart to update that did not finish.
+    pub(super) fn request_user_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.updates.restarting = false;
+        self.request_quit(window, cx);
+    }
+
     pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending_quit.is_some() || self.quit_confirmed || self.quit_warning_open {
             return;
@@ -1469,7 +1482,7 @@ impl Qrow {
         }
         if self.demo {
             self.quit_confirmed = true;
-            cx.quit();
+            self.exit(cx);
             return;
         }
         let snapshot = self.snapshot(cx);
@@ -1521,7 +1534,7 @@ impl Qrow {
                                 .on_click(move |_, _, cx| {
                                     let _ = discard.update(cx, |this, cx| {
                                         this.quit_confirmed = true;
-                                        cx.quit();
+                                        this.exit(cx);
                                     });
                                 }),
                         )
@@ -1532,6 +1545,7 @@ impl Qrow {
                                 // Ask again if work is still active on the next quit.
                                 let _ = keep_editing.update(cx, |this, cx| {
                                     this.quit_work_confirmed = false;
+                                    this.updates.restarting = false;
                                     cx.notify();
                                 });
                             },
@@ -2200,7 +2214,7 @@ impl Qrow {
                     && !self.form.as_ref().is_some_and(|f| f.saving.is_some()) =>
             {
                 self.quit_confirmed = true;
-                cx.quit();
+                self.exit(cx);
             }
             Ok(()) => self.request_quit(window, cx),
             Err(error) => self.quit_failed(error, window, cx),
