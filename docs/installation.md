@@ -74,10 +74,11 @@ curl -fsSL https://qrow.dev/install.sh | sh
 ```
 
 The script downloads the archive of the latest stable release for your
-processor. It verifies the checksum of the archive. If
-[minisign](https://jedisct1.github.io/minisign/) is installed, it also
-verifies the signature of the checksums. Then it installs Qrow into
-`~/.local`. Set `QROW_PREFIX` to install into another folder that you can
+processor. It verifies the signature of the release checksums with
+[minisign](https://jedisct1.github.io/minisign/) or OpenSSL 3, then the
+checksum of the archive. Then it installs Qrow into `~/.local`. If neither
+minisign nor OpenSSL 3 is installed, the script explains the risk and asks
+before it continues with the checksum only. Without a terminal, it continues. Set `QROW_PREFIX` to install into another folder that you can
 write. Make sure that `~/.local/bin` is in your `PATH`. The
 [script](../website/install.sh) is short. Read it before you run it if you
 prefer.

@@ -39,9 +39,12 @@ On Linux, the page shows `curl -fsSL https://qrow.dev/install.sh | sh`.
 [install.sh](install.sh) installs the latest stable release into `~/.local`,
 the same as the manual archive steps, so Qrow then updates itself. It reads
 `SHA256SUMS` from the `releases/latest/download` folder of GitHub Releases and
-does not use the GitHub API. It verifies the checksum of the archive, and the
-signature of `SHA256SUMS` when `minisign` is installed. It has the public
-release key. Change it when you change the release key.
+does not use the GitHub API. It verifies the signature of `SHA256SUMS` with
+`minisign`, or with OpenSSL 3 when `minisign` is not installed, and checks
+that the signed trusted comment names the release. Then it verifies the
+checksum of the archive. If neither tool can verify the signature, the script
+asks on the terminal before it continues with the checksum only. It has the
+public release key. Change it when you change the release key.
 [test_website_install.py](../scripts/tests/test_website_install.py) runs the
 script against a synthetic release.
 
