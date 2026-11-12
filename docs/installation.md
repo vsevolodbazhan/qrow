@@ -111,9 +111,10 @@ checks again when the last check is more than a day old. If a check fails,
 for example offline, Qrow tries again within an hour. To stop the automatic
 checks, turn off **Settings → Updates → Check Automatically**.
 
-To switch channels, use **Settings → Updates → Nightly Builds**. The next
-check, within a minute, follows the new channel. A switch to nightly builds
-takes the newest nightly release that was published after your version. A
+To switch channels, select **Stable** or **Nightly** in
+**Settings → Updates → Release Channel**. The next check, within a minute,
+follows the new channel. A switch to nightly builds takes the newest nightly
+release that was published after your version. A
 switch back to stable releases waits until a stable release is published
 after your nightly version, so Qrow never installs an older build. Until
 then, the **Updates** button says so. Copies that a package manager

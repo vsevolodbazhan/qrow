@@ -453,7 +453,7 @@ fn archive_copy(releases: &Releases, current: &str) -> (tempfile::TempDir, Setup
 
 #[cfg(target_os = "linux")]
 #[gpui_kit::test]
-fn the_nightly_switch_follows_nightly_releases_from_the_next_check(cx: &mut TestAppContext) {
+fn the_nightly_channel_follows_nightly_releases_from_the_next_check(cx: &mut TestAppContext) {
     let releases = Releases::start();
     releases.publish_at(
         "v0.5.0",
@@ -476,13 +476,19 @@ fn the_nightly_switch_follows_nightly_releases_from_the_next_check(cx: &mut Test
     });
     app.dispatch(cx, OpenSettings);
     app.fill_labelled(cx, "Search...", "nightly");
-    app.wait_for(cx, "update-channel-nightly");
-    app.click(cx, "update-channel-nightly");
+    app.wait_for(cx, "setting-release-channel");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "setting-release-channel").as_deref(),
+            Some("Stable")
+        );
+    });
+    app.select(cx, "setting-release-channel", "Nightly");
     app.wait_saved(cx, "nightly channel", |workspace| {
         workspace.settings.update_channel == Some(qrow::update::Channel::Nightly)
     });
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "update-channel-nightly");
+    app.wait_gone(cx, "setting-release-channel");
     cx.executor().advance_clock(Duration::from_secs(61));
     cx.run_until_parked();
     app.wait_for(cx, "update-ready");
@@ -550,11 +556,16 @@ fn a_package_manager_copy_keeps_the_channel_of_its_package(cx: &mut TestAppConte
     });
     app.dispatch(cx, OpenSettings);
     app.fill_labelled(cx, "Search...", "nightly");
-    app.wait_for(cx, "update-channel-nightly");
+    app.wait_for(cx, "setting-release-channel");
     app.update(cx, |window, _| {
         assert!(shows(
             window,
             "The package manager sets the channel of this copy."
         ));
+        // The package decides: the field shows the channel of this build.
+        assert_eq!(
+            value(window, "setting-release-channel").as_deref(),
+            Some("Stable")
+        );
     });
 }
