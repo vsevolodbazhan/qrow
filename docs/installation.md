@@ -123,10 +123,10 @@ example `qrow@nightly`, to switch.
 
 The **Updates** button in the status bar shows the state in its tooltip. A
 dot on it shows news: an available version, a download in progress, a
-version that is ready, or a failure. When there is no news, select the
-button to check for updates. A message shows the result. When there is news,
-select the button to show its message again, for example with **Restart to
-update**.
+version that is ready, or a failure. When there is no news, or after a
+failure, select the button to check for updates. A message shows the result.
+When there is news, select the button to show its message again, for example
+with **Restart to update**.
 
 What happens next depends on how you installed Qrow:
 

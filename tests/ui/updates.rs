@@ -200,6 +200,53 @@ fn a_failed_check_on_request_reports_the_failure_and_tries_again(cx: &mut TestAp
     assert_eq!(releases.requests(), ["/releases", "/releases"]);
 }
 
+/// An installation that downloads its updates itself on this system.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn self_updating(folder: &std::path::Path) -> Install {
+    if cfg!(target_os = "linux") {
+        Install::Archive {
+            prefix: folder.into(),
+        }
+    } else {
+        Install::AppBundle {
+            app: folder.join("Qrow.app"),
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[gpui_kit::test]
+fn a_failed_download_after_a_check_on_request_reports_the_failure(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    let folder = tempfile::tempdir().unwrap();
+    let install = self_updating(folder.path());
+    let name = install
+        .asset_name(&Version::parse("0.6.0").unwrap(), "x86_64")
+        .unwrap();
+    releases.publish("v0.6.0", &name, b"package");
+    // The release lists the package, but the server does not have it.
+    releases
+        .files
+        .lock()
+        .unwrap()
+        .remove(&format!("/download/v0.6.0/{name}"));
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), releases.setup(install));
+    app.click(cx, "update-button");
+    // The failure replaces the progress toast of the download.
+    app.wait_for(cx, "update-download-failed");
+    app.update(cx, |window, _| {
+        assert!(shows(window, "Could not download the update"));
+        assert!(!present(window, &"update-progress".into()));
+        assert!(
+            labelled(
+                window,
+                "Updates, Could not download the update. Try again later."
+            )
+            .is_some()
+        );
+    });
+}
+
 #[gpui_kit::test]
 fn a_managed_copy_shows_the_command_that_updates_it(cx: &mut TestAppContext) {
     let releases = Releases::start();

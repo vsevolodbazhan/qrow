@@ -385,7 +385,7 @@ impl Qrow {
                 cx.spawn_in(window, async move |weak, cx| {
                     let result = download.await;
                     let _ = weak.update_in(cx, |this, window, cx| {
-                        this.finish_update_download(result, window, cx)
+                        this.finish_update_download(result, manual, window, cx)
                     });
                 })
                 .detach();
@@ -442,9 +442,12 @@ impl Qrow {
         cx.notify();
     }
 
+    /// Ends a download. After a manual check, a toast replaces the progress
+    /// toast with the result.
     fn finish_update_download(
         &mut self,
         result: anyhow::Result<Download>,
+        manual: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -466,7 +469,7 @@ impl Qrow {
                     cx,
                 );
                 self.updates.status = Status::Ready(Arc::new(download));
-                if self.updates.announced.as_ref() != Some(&version) {
+                if manual || self.updates.announced.as_ref() != Some(&version) {
                     self.updates.announced = Some(version.clone());
                     window.push_notification(ready_toast(&version, cx.weak_entity()), cx);
                 }
@@ -482,6 +485,17 @@ impl Qrow {
                 self.updates.failed_since_check = true;
                 self.updates.status =
                     Status::Failed("Could not download the update. Try again later.".into());
+                if manual {
+                    window.push_notification(
+                        toast::error(
+                            "update-download-failed",
+                            "Could not download the update",
+                            "Check the network connection and try again.",
+                        )
+                        .id::<UpdateNotice>(),
+                        cx,
+                    );
+                }
             }
         }
         cx.notify();
@@ -570,6 +584,9 @@ impl Qrow {
                             );
                             this.updates.status =
                                 Status::Failed("Could not install the update.".into());
+                            // The next download of this version announces
+                            // it again.
+                            this.updates.announced = None;
                             window.push_notification(
                                 toast::error(
                                     "update-failed",
