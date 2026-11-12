@@ -3,7 +3,8 @@
 //! A release build checks once a day while **Check Automatically** is on.
 //! A copy that installs updates itself downloads and verifies the new
 //! version in the background, then offers a restart. Other copies show how
-//! to update them. The About dialog shows the state and checks on request.
+//! to update them. The Updates button of the status bar shows the state and
+//! checks on request.
 
 use super::status_dot::DotStatus;
 use super::status_tooltip::StatusTooltip;
@@ -12,9 +13,8 @@ use super::*;
 use crate::logs::Severity;
 use crate::update::{self, Download, Manager, Setup, Updater, Version};
 use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::component::Icon;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{Icon, h_flex, v_flex};
 
 /// The first automatic check waits until the window has settled.
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
@@ -44,8 +44,6 @@ pub(super) struct Updates {
     waiting_for: Option<update::Channel>,
     /// Set while Qrow quits to start the installed version.
     pub(super) restarting: bool,
-    /// The popover of the Updates button is open, so its tooltip hides.
-    popover_open: bool,
     /// What to do at the exit after an install: restart or run an installer.
     finish: Option<update::Finish>,
     /// The channel of the check that runs or ran last.
@@ -101,7 +99,7 @@ impl Updates {
         )
     }
 
-    /// The line that the About dialog shows, or `None` before any check.
+    /// The state after the last check, or `None` before any check.
     pub(super) fn summary(&self) -> Option<String> {
         Some(match &self.status {
             Status::Idle => return None,
@@ -170,7 +168,7 @@ impl Updates {
         }
     }
 
-    /// The status line of the tooltip and the popover.
+    /// The status line of the tooltip of the Updates button.
     pub(super) fn status_line(&self) -> String {
         self.summary().unwrap_or_else(|| match &self.setup {
             Some(setup) => format!("Qrow {} is installed.", setup.current),
@@ -271,8 +269,8 @@ impl Qrow {
         .detach();
     }
 
-    /// Looks for a newer release. A manual check reports its result in
-    /// About; an automatic check only shows a toast when there is news.
+    /// Looks for a newer release. A manual check reports its result in a
+    /// toast; an automatic check only shows a toast when there is news.
     pub(super) fn check_for_updates(
         &mut self,
         manual: bool,
@@ -346,24 +344,36 @@ impl Qrow {
                     ),
                     None => format!("Qrow {} is up to date", setup.current),
                 };
-                self.log_update(Severity::Info, text, cx);
-                // The popover closes with its action, so a toast answers a
-                // check that the user asked for.
+                // A toast answers a check that the user asked for.
                 if manual {
+                    let kind = match self.updates.waiting_for {
+                        Some(_) => NotificationType::Info,
+                        None => NotificationType::Success,
+                    };
                     window.push_notification(
-                        toast::notice(
-                            NotificationType::Success,
-                            "update-up-to-date",
-                            "Qrow is up to date",
-                            None,
-                        ),
+                        toast::notice(kind, "update-up-to-date", text.clone(), None)
+                            .id::<UpdateNotice>(),
                         cx,
                     );
                 }
+                self.log_update(Severity::Info, text, cx);
             }
             Ok(Some(candidate)) if setup.installs_updates() => {
                 self.updates.waiting_for = None;
                 self.updates.status = Status::Downloading(candidate.version.clone());
+                if manual {
+                    window.push_notification(
+                        toast::notice(
+                            NotificationType::Info,
+                            "update-progress",
+                            self.updates.status_line(),
+                            None,
+                        )
+                        .id::<UpdateNotice>()
+                        .autohide(true),
+                        cx,
+                    );
+                }
                 self.log_update(
                     Severity::Info,
                     format!("Downloading Qrow {}", candidate.version),
@@ -419,7 +429,8 @@ impl Qrow {
                             "update-check-failed",
                             "Could not check for updates",
                             "Check the network connection and try again.",
-                        ),
+                        )
+                        .id::<UpdateNotice>(),
                         cx,
                     );
                     Status::Failed("Could not check for updates. Try again later.".into())
@@ -514,7 +525,7 @@ impl Qrow {
             }
         };
         // An action keeps a toast open; update toasts hide like the others.
-        window.push_notification(toast.autohide(true), cx);
+        window.push_notification(toast.id::<UpdateNotice>().autohide(true), cx);
     }
 
     /// Installs a downloaded update and quits to start it.
@@ -564,7 +575,8 @@ impl Qrow {
                                     "update-failed",
                                     "Could not install the update",
                                     error,
-                                ),
+                                )
+                                .id::<UpdateNotice>(),
                                 cx,
                             );
                             cx.notify();
@@ -619,114 +631,62 @@ impl Qrow {
 
 impl Qrow {
     /// The Updates button of the status bar: a dot for news, the state in
-    /// its tooltip, and a popover with the action that fits the state.
+    /// its tooltip, and a toast with the action that fits the state on click.
     pub(super) fn update_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let owner = cx.entity().downgrade();
         let label = format!("Updates, {}", self.updates.status_line());
-        let popover = Popover::new("update-popover")
-            .anchor(Anchor::BottomRight)
-            .trigger(
-                Button::new("update-button")
-                    .ghost()
-                    .small()
-                    .icon(Icon::new(AssetIconName::CircleFadingArrowUp).small())
-                    .accessibility_label(label),
-            )
-            .content(move |_, _, cx| match owner.upgrade() {
-                Some(qrow) => qrow.update(cx, |qrow, cx| qrow.update_panel(cx)),
-                None => div().into_any_element(),
-            })
-            .on_open_change({
-                let owner = cx.entity().downgrade();
-                move |open, _, cx| {
-                    let _ = owner.update(cx, |this, cx| {
-                        this.updates.popover_open = *open;
-                        cx.notify();
-                    });
-                }
-            });
+        let button = Button::new("update-button")
+            .ghost()
+            .small()
+            .icon(Icon::new(AssetIconName::CircleFadingArrowUp).small())
+            .accessibility_label(label)
+            .on_click(cx.listener(|this, _, window, cx| this.show_update_state(window, cx)));
         div()
             .id("update-tooltip-trigger")
             .tooltip(StatusTooltip::live(
                 cx.entity().downgrade(),
                 None,
-                // The open popover shows the same state; a tooltip over it
-                // would cover it.
-                |qrow, _| {
-                    (!qrow.updates.popover_open)
-                        .then(|| StatusTooltip::new("Updates", qrow.updates.status_line()))
-                },
+                |qrow, _| Some(StatusTooltip::new("Updates", qrow.updates.status_line())),
             ))
-            .child(DotStatus::on_element(
-                self.updates.dot(),
-                popover.into_any_element(),
-                cx,
-            ))
+            .child(DotStatus::on_button(self.updates.dot(), button, cx))
             .into_any_element()
     }
 
-    /// The popover of the Updates button: the state, how to update, and one
-    /// action.
-    fn update_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let line = |id: &'static str, text: String, muted: bool| {
-            div()
-                .id(id)
-                .test_support()
-                .role(Role::Label)
-                .text_sm()
-                .when(muted, |line| line.text_color(cx.theme().muted_foreground))
-                .whitespace_normal()
-                .aria_label(text.clone())
-                .child(text)
+    /// Answers a click on the Updates button. Without news it checks, and a
+    /// toast reports the result. With news it shows the toast of the news
+    /// again, so its action is back after the toast hid.
+    fn show_update_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(setup) = self.updates.setup.clone() else {
+            return;
         };
-        let status = self.updates.status_line();
-        let action = if self.updates.can_restart() {
-            Button::new("update-panel-restart")
-                .primary()
-                .small()
-                .label("Restart to update")
-                .on_click(cx.listener(|this, _, window, cx| this.restart_to_update(window, cx)))
-        } else if let (Status::Available(version), Some(command)) =
-            (&self.updates.status, self.updates.command())
-        {
-            let _ = version;
-            Button::new("update-panel-copy")
-                .small()
-                .label("Copy command")
-                .on_click(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(command.clone()))
-                })
-        } else if let (Status::Available(version), Some(setup)) =
-            (&self.updates.status, &self.updates.setup)
-        {
-            let page = setup.release_page(version);
-            Button::new("update-panel-open")
-                .small()
-                .label("Open release")
-                .on_click(move |_, _, cx| cx.open_url(&page))
-        } else {
-            // The button stays enabled during a check: a disabled button
-            // loses the focus, which closes the popover. The status line
-            // shows the check, and a second click does nothing.
-            Button::new("update-panel-check")
-                .small()
-                .label("Check for updates")
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.check_for_updates(true, window, cx)),
-                )
-        };
-        v_flex()
-            .id("update-panel")
-            .w(self.ui_px(280.))
-            .gap_1()
-            .child(line("update-status", status, false))
-            .when_some(self.updates.instruction(), |panel, instruction| {
-                panel.child(line("update-instruction", instruction, true))
-            })
-            .child(h_flex().mt_2().justify_end().child(action))
-            .into_any_element()
+        match self.updates.status.clone() {
+            Status::Idle | Status::UpToDate | Status::Failed(_) => {
+                self.check_for_updates(true, window, cx)
+            }
+            Status::Checking | Status::Downloading(_) | Status::Installing(_) => {
+                let title = self.updates.status_line();
+                window.push_notification(
+                    toast::notice(NotificationType::Info, "update-progress", title, None)
+                        .id::<UpdateNotice>()
+                        .autohide(true),
+                    cx,
+                );
+            }
+            Status::Available(version) => {
+                self.updates.announced = None;
+                self.announce_update(&version, &setup, window, cx);
+            }
+            Status::Ready(download) => {
+                window.push_notification(ready_toast(&download.version, cx.weak_entity()), cx)
+            }
+            Status::Installed(version) => {
+                window.push_notification(ready_toast(&version, cx.weak_entity()), cx)
+            }
+        }
     }
 }
+
+/// The ID that all update toasts share: a new one replaces the one on screen.
+struct UpdateNotice;
 
 /// The toast of a downloaded update, with **Restart to update**.
 fn ready_toast(version: &Version, owner: WeakEntity<Qrow>) -> Notification {
@@ -745,5 +705,6 @@ fn ready_toast(version: &Version, owner: WeakEntity<Qrow>) -> Notification {
                 let _ = owner.update(cx, |this, cx| this.restart_to_update(window, cx));
             })
     })
+    .id::<UpdateNotice>()
     .autohide(true)
 }

@@ -121,10 +121,12 @@ then, the **Updates** button says so. Copies that a package manager
 installed keep the channel of their package: install the other package, for
 example `qrow@nightly`, to switch.
 
-The **Updates** button in the status bar shows the state. A dot on it shows
-news: an available version, a download in progress, a version that is ready,
-or a failure. Select the button to see the state and the action that fits
-it, for example **Check for updates** or **Restart to update**.
+The **Updates** button in the status bar shows the state in its tooltip. A
+dot on it shows news: an available version, a download in progress, a
+version that is ready, or a failure. When there is no news, select the
+button to check for updates. A message shows the result. When there is news,
+select the button to show its message again, for example with **Restart to
+update**.
 
 What happens next depends on how you installed Qrow:
 
