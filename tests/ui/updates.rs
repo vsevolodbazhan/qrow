@@ -408,6 +408,8 @@ fn a_downloaded_update_installs_and_restarts_into_the_new_version(cx: &mut TestA
     );
     app.update(cx, |window, _| {
         assert!(labelled(window, "Updates, Qrow 0.6.0 is ready to install.").is_some());
+        assert!(shows(window, "Update ready"));
+        assert!(shows(window, "Qrow 0.6.0 starts after a restart."));
     });
     // Nothing changes before the user asks for the restart.
     assert_eq!(
