@@ -17,6 +17,15 @@ fn main() {
         "cargo:rustc-env=QROW_RELEASE_VERSION={}",
         release_version.trim()
     );
+    // Only builds with an explicit release version, such as those of the
+    // release workflow, check for updates. They follow the channel of that
+    // version.
+    let update_channel = match std::env::var("QROW_RELEASE_VERSION") {
+        Ok(version) if version.trim().contains("-nightly.") => "nightly",
+        Ok(version) if !version.trim().is_empty() => "stable",
+        _ => "",
+    };
+    println!("cargo:rustc-env=QROW_UPDATE_CHANNEL={update_channel}");
     // Build scripts run on the host. Select by the target, so that a cross
     // build from Linux and a native Windows build both embed the resources.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
