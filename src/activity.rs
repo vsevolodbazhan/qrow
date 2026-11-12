@@ -12,6 +12,13 @@ use std::{
 };
 use uuid::Uuid;
 
+/// The key of the log of the application itself: updates, and later other
+/// events that belong to no connection. Connections have random version 4
+/// IDs, so the nil ID cannot be a connection.
+pub const APPLICATION: Uuid = Uuid::nil();
+/// The name of the application log in the source list.
+pub const APPLICATION_NAME: &str = "Application";
+
 /// The most text that the log of one connection keeps.
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
 /// The most entries that the log of one connection keeps.

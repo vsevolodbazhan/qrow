@@ -273,7 +273,13 @@ impl ActivityView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.connections = connections;
+        // The application log comes first and is always in the list.
+        self.connections = std::iter::once((
+            crate::activity::APPLICATION,
+            crate::activity::APPLICATION_NAME.to_owned(),
+        ))
+        .chain(connections)
+        .collect();
         if !self.open {
             self.previous_focus = window.focused(cx);
         }
@@ -439,8 +445,8 @@ impl ActivityView {
                     Select::new(&self.connection)
                         .id("activity-connection")
                         .small()
-                        .placeholder("No connection")
-                        .accessibility_label("Connection"),
+                        .placeholder("Choose a source")
+                        .accessibility_label("Source"),
                 ),
             )
             .child(button_pair(
@@ -705,7 +711,8 @@ impl Qrow {
                     .and_then(|tab| tab.worker_profile.or(tab.saved.profile))
             })
             .or_else(|| self.tabs.get(self.active).and_then(|tab| tab.saved.profile))
-            .or_else(|| self.profiles.first().map(|profile| profile.id));
+            .or_else(|| self.profiles.first().map(|profile| profile.id))
+            .or(Some(crate::activity::APPLICATION));
         let connections = self
             .profiles
             .iter()

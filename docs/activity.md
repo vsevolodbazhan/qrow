@@ -1,8 +1,10 @@
 # Activity
 
-Activity shows the background work of a connection in one log: schema
-refreshes, keep-alives, sessions, and the queries of its tabs. Use it to find
-why a refresh failed or when a session closed.
+Activity shows background work in logs. Each connection has a log of its
+schema refreshes, keep-alives, sessions, and the queries of its tabs. The
+**Application** log has the events of Qrow itself, such as
+[update checks](installation.md#updates). Use Activity to find why a refresh
+failed, when a session closed, or why an update did not arrive.
 
 ## Open Activity
 
@@ -21,7 +23,9 @@ to go back.
 The status bar opens the connection with the newest unseen refresh error.
 Otherwise, it opens a connection with an unread tab error, if one exists.
 If no connection has an unseen error, it opens the connection of the active tab.
-Use the connection list in the Activity header to show another connection.
+Without connections, it opens the **Application** log. Use the source list in
+the Activity header to show another log. **Application** is always first in
+the list.
 
 ## Read Activity
 
@@ -35,7 +39,8 @@ Each entry is a row with lanes, like an entry in the
 1. The time of the entry. The copied text also has the date.
 2. An error icon, if the entry is an error. Errors also use the error color.
 3. The source of the entry: the tab name, or **dbt**, **Schemas**, or
-   **Sign-in** for work without a tab. A long tab name ends in an ellipsis.
+   **Sign-in** for work without a tab, or **Updates** in the **Application**
+   log. A long tab name ends in an ellipsis.
    Point to it to see the full name in a tooltip. The tooltip shows only when
    the name is cut.
 4. The message. Messages and sources use the interface font. Times use the
@@ -48,6 +53,7 @@ Each entry is a row with lanes, like an entry in the
 | Keep-alive | The tab, the outcome, and the duration. A failed keep-alive tells that it closed the session. |
 | Session | Opened, closed, and idle disconnect, for each tab of the connection. |
 | Query | The tab submitted a query, then the query finished, failed, or was cancelled. |
+| Updates | In the **Application** log: the result of each check, the download, and the installation. A failed automatic check is not an error, so a computer that is offline does not show an unread error every hour. A failed manual check, download, or installation is an error. |
 
 Activity does not show SQL text or query errors. Point to the entry of a tab,
 or move the keyboard focus to it, to show the **Show tab** arrow. Click it to
