@@ -637,8 +637,17 @@ fn the_updates_tooltip_hides_while_the_popover_is_open(cx: &mut TestAppContext) 
     assert_eq!(tooltip(&app, cx).as_deref(), Some("Updates"));
     app.click(cx, "update-button");
     app.wait_for(cx, "update-panel-check");
+    // A click hides a tooltip, but the pointer is still over the button:
+    // its next move brings the tooltip back.
+    app.hover(cx, "update-button");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(
+            present(window, &"update-panel-check".into()),
+            "the popover closed"
+        );
+    });
     assert_eq!(
         tooltip(&app, cx),
         None,
