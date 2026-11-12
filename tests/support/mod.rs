@@ -805,6 +805,37 @@ impl TestApp {
         sign_ins: Option<SignIns>,
         updates: Option<qrow::update::Setup>,
     ) -> Self {
+        let file = workspace.map(|workspace| {
+            serde_json::to_value(Workspace {
+                version: WORKSPACE_VERSION,
+                ..workspace
+            })
+            .unwrap()
+        });
+        Self::open_file(cx, directory, file, credentials, sign_ins, updates)
+    }
+
+    /// Opens Qrow on a workspace file with this JSON, which can have fields
+    /// that the model does not know, like a file of a newer version.
+    pub fn launch_json(cx: &mut TestAppContext, file: serde_json::Value) -> Self {
+        Self::open_file(
+            cx,
+            tempfile::tempdir().unwrap(),
+            Some(file),
+            MemoryCredentials::default(),
+            None,
+            None,
+        )
+    }
+
+    fn open_file(
+        cx: &mut TestAppContext,
+        directory: TempDir,
+        file: Option<serde_json::Value>,
+        credentials: MemoryCredentials,
+        sign_ins: Option<SignIns>,
+        updates: Option<qrow::update::Setup>,
+    ) -> Self {
         // Worker and saver threads wake the UI. GPUI's deterministic
         // scheduler rejects wakes from other threads unless parking is allowed.
         cx.executor().allow_parking();
@@ -816,13 +847,9 @@ impl TestApp {
         });
         let path = directory.path().join("workspace.json");
         let credentials = Arc::new(credentials);
-        let environment = match workspace {
-            Some(workspace) => {
-                let workspace = Workspace {
-                    version: WORKSPACE_VERSION,
-                    ..workspace
-                };
-                std::fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
+        let environment = match file {
+            Some(file) => {
+                std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
                 let mut environment = Environment::isolated(path.clone(), credentials.clone());
                 if let Some(updates) = updates {
                     environment = environment.with_updates(updates);

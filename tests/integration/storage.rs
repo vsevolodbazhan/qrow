@@ -113,7 +113,10 @@ fn failed_final_save_is_acknowledged_and_can_retry_without_releasing_lock() {
     }));
     fs::remove_dir(&path).unwrap();
     saver.finish(state.clone()).unwrap();
-    assert_eq!(WorkspaceFile::acquire(path).unwrap().load().unwrap(), state);
+    assert_eq!(
+        WorkspaceFile::acquire(path).unwrap().load().unwrap().0,
+        state
+    );
 }
 
 #[test]
@@ -354,4 +357,69 @@ fn autosave_failure_wakes_ui_and_workspace_files_are_private() {
             );
         }
     }
+}
+
+/// A workspace that a newer Qrow saved, with fields that this build does
+/// not know at the top, in the settings, and in a connection.
+fn newer_workspace(path: &std::path::Path) -> serde_json::Value {
+    let mut workspace = Workspace::default();
+    workspace.profiles.push(Profile::default());
+    let mut value = serde_json::to_value(&workspace).unwrap();
+    value["written_by"] = "9.9.9".into();
+    value["future_panel"] = serde_json::json!({"open": true});
+    value["settings"]["future_option"] = 7.into();
+    value["profiles"][0]["future_timeout"] = 30.into();
+    fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    value
+}
+
+#[test]
+fn a_save_keeps_the_fields_of_a_newer_version_and_backs_up_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let original = newer_workspace(&path);
+    let original_text = fs::read(&path).unwrap();
+    let mut file = WorkspaceFile::acquire(path.clone()).unwrap();
+    let (mut workspace, newer) = file.load().unwrap();
+    let newer = newer.expect("the file has unknown fields");
+    assert_eq!(newer.written_by.as_deref(), Some("9.9.9"));
+    assert_eq!(newer.backup, dir.path().join("workspace.backup.json"));
+    assert_eq!(fs::read(&newer.backup).unwrap(), original_text);
+    assert!(newer.notice().contains("Qrow 9.9.9"));
+    workspace.settings.results_minimized = true;
+    file.save(&workspace).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["future_panel"], original["future_panel"]);
+    assert_eq!(saved["settings"]["future_option"], 7);
+    assert_eq!(saved["profiles"][0]["future_timeout"], 30);
+    assert_eq!(saved["settings"]["results_minimized"], true);
+    // The file now names this build as its last writer.
+    assert_eq!(saved["written_by"], qrow::build_info::RELEASE_VERSION);
+}
+
+#[test]
+fn a_file_of_this_version_has_no_backup_and_names_its_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let file = WorkspaceFile::acquire(path.clone()).unwrap();
+    file.save(&Workspace::default()).unwrap();
+    drop(file);
+    let mut file = WorkspaceFile::acquire(path.clone()).unwrap();
+    let (_, newer) = file.load().unwrap();
+    assert_eq!(newer, None);
+    assert!(!dir.path().join("workspace.backup.json").exists());
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["written_by"], qrow::build_info::RELEASE_VERSION);
+}
+
+#[test]
+fn the_saver_reports_the_data_of_a_newer_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    newer_workspace(&path);
+    let (workspace, mut saver) = Saver::open(path.clone(), || {}).unwrap();
+    assert!(saver.newer.is_some());
+    saver.finish(workspace).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["settings"]["future_option"], 7);
 }

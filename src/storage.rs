@@ -14,6 +14,13 @@ use std::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod unknown;
+use unknown::Unknown;
+
+/// The top-level key that names the Qrow version that last saved the
+/// workspace. It belongs to the file, not to the workspace model.
+const WRITTEN_BY: &str = "written_by";
+
 pub fn workspace_path() -> PathBuf {
     if let Some(path) = std::env::var_os("QROW_DATA_DIR") {
         return PathBuf::from(path).join("workspace.json");
@@ -160,15 +167,36 @@ fn linux_workspace_uses_absolute_xdg_data_home() {
 
 /// Read a snapshot without claiming write access, for the read-only probe.
 pub fn load(path: &Path) -> Result<Workspace> {
+    Ok(read(path)?.workspace)
+}
+
+/// A workspace file as read, with what this build does not know.
+struct Read {
+    workspace: Workspace,
+    unknown: Unknown,
+    /// The Qrow version that saved the file, if it recorded one.
+    written_by: Option<String>,
+    data: Vec<u8>,
+}
+
+fn read(path: &Path) -> Result<Read> {
     let data = match fs::read(path) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Workspace::default());
+            return Ok(Read {
+                workspace: Workspace::default(),
+                unknown: Unknown::default(),
+                written_by: None,
+                data: Vec::new(),
+            });
         }
         Err(error) => return Err(error).context("Could not read saved workspace"),
     };
-    let mut workspace: Workspace = serde_json::from_slice(&data)
+    let (mut workspace, unknown): (Workspace, Unknown) = Unknown::read(&data, &[WRITTEN_BY])
         .context("Saved workspace is invalid; the original file has been left untouched")?;
+    let written_by = serde_json::from_slice::<serde_json::Value>(&data)
+        .ok()
+        .and_then(|value| value.get(WRITTEN_BY)?.as_str().map(str::to_owned));
     anyhow::ensure!(
         (1..=WORKSPACE_VERSION).contains(&workspace.version),
         "Unsupported workspace version {}; the file has been left untouched",
@@ -180,13 +208,44 @@ pub fn load(path: &Path) -> Result<Workspace> {
     workspace.active_tab = workspace.active_tab.min(workspace.tabs.len() - 1);
     workspace.normalize();
     workspace.settings.sanitize();
-    Ok(workspace)
+    Ok(Read {
+        workspace,
+        unknown,
+        written_by,
+        data,
+    })
 }
 
 /// Exclusive write access. The OS releases the lock even if the process crashes.
 pub struct WorkspaceFile {
     path: PathBuf,
+    /// Fields of a newer Qrow that each save keeps.
+    unknown: Unknown,
     _lock: fs::File,
+}
+
+/// What a workspace file held that this build does not know.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewerData {
+    /// The Qrow version that saved the file, if it recorded one.
+    pub written_by: Option<String>,
+    /// The copy of the file before this build saved it.
+    pub backup: PathBuf,
+}
+
+impl NewerData {
+    /// A short notice for the window.
+    pub fn notice(&self) -> String {
+        let writer = match &self.written_by {
+            Some(version) => format!("Qrow {version}"),
+            None => "a newer version of Qrow".into(),
+        };
+        format!(
+            "This workspace has settings from {writer} that this version does not use. \
+             Qrow keeps them when it saves. A copy of the file is at {}.",
+            self.backup.display()
+        )
+    }
 }
 
 impl WorkspaceFile {
@@ -214,15 +273,37 @@ impl WorkspaceFile {
             Err(error) => return Err(error).context("Could not lock workspace"),
         }
         // Never unlink the lock file: another process could lock a different inode.
-        Ok(Self { path, _lock: lock })
+        Ok(Self {
+            path,
+            unknown: Unknown::default(),
+            _lock: lock,
+        })
     }
 
-    pub fn load(&self) -> Result<Workspace> {
-        load(&self.path)
+    /// Reads the workspace. When it has fields that this build does not
+    /// know, saves a backup of the file and reports it.
+    pub fn load(&mut self) -> Result<(Workspace, Option<NewerData>)> {
+        let read = read(&self.path)?;
+        let newer = if read.unknown.is_empty() {
+            None
+        } else {
+            Some(NewerData {
+                written_by: read.written_by,
+                backup: unknown::back_up(&self.path, &read.data)?,
+            })
+        };
+        self.unknown = read.unknown;
+        Ok((read.workspace, newer))
     }
 
+    /// Writes `workspace` with the kept fields and the version of this build.
     pub fn save(&self, workspace: &Workspace) -> Result<()> {
-        write_atomically(&self.path, &serde_json::to_vec_pretty(workspace)?)
+        let mut value = serde_json::to_value(workspace)?;
+        self.unknown.restore(&mut value);
+        if let Some(object) = value.as_object_mut() {
+            object.insert(WRITTEN_BY.into(), crate::build_info::RELEASE_VERSION.into());
+        }
+        write_atomically(&self.path, &serde_json::to_vec_pretty(&value)?)
     }
 }
 
@@ -305,14 +386,16 @@ enum SaveCommand {
 pub struct Saver {
     tx: mpsc::Sender<SaveCommand>,
     pub errors: mpsc::Receiver<String>,
+    /// Set when the file has fields of a newer Qrow.
+    pub newer: Option<NewerData>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
 impl Saver {
     /// Lock before reading so the initial snapshot cannot come from another writer.
     pub fn open(path: PathBuf, wake: impl Fn() + Send + 'static) -> Result<(Workspace, Self)> {
-        let file = WorkspaceFile::acquire(path)?;
-        let workspace = file.load()?;
+        let mut file = WorkspaceFile::acquire(path)?;
+        let (workspace, newer) = file.load()?;
         let (tx, rx) = mpsc::channel();
         let (errors_tx, errors) = mpsc::channel();
         let handle = thread::spawn(move || {
@@ -351,6 +434,7 @@ impl Saver {
             Self {
                 tx,
                 errors,
+                newer,
                 handle: Some(handle),
             },
         ))

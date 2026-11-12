@@ -239,6 +239,24 @@ shows **Work is still running**. Select **Keep working** to leave Qrow open.
 Select **Quit anyway** to stop the active work. Qrow still saves the workspace
 before it exits.
 
+## Newer and older versions
+
+Stable and nightly builds, and different versions of Qrow, can use the same
+workspace. A newer version can save settings that an older version does not
+know. When an older version opens such a workspace, it keeps those settings
+when it saves. It also saves a copy of the file as `workspace.backup.json`
+next to the workspace, and shows a notice that names the version that saved
+the file. Each save records the version of Qrow that wrote the file.
+
+A setting of an item that you delete, such as a connection or a tab, goes
+with the item. New settings inside the sign-in method or the schema refresh
+mode of a connection are not kept; the backup copy has them. Versions before
+this behavior do not keep unknown settings and do not make a backup.
+
+A version that does not know a kind of value, such as a new connection type,
+cannot read the workspace. It then disables saving, as
+[Load and save failures](#load-and-save-failures) describes.
+
 ## Load and save failures
 
 If the workspace is corrupt, unreadable, or uses an unsupported version, Qrow
@@ -276,8 +294,9 @@ file. It removes this file when the window closes.
 The [workspace model](../src/model.rs) holds saved data separately from live
 sessions, results, and Logs history. [Storage](../src/storage.rs) writes
 through a background saver. Storage claims an operating-system lock before it
-loads a writable workspace. It holds that lock until the saver stops. Each save
-uses a unique temporary file. Storage flushes the file, replaces the workspace,
+loads a writable workspace. It holds that lock until the saver stops. Storage records the paths of workspace fields that the model does not
+know, and puts them back into each save; list items are matched by `id`.
+Each save uses a unique temporary file. Storage flushes the file, replaces the workspace,
 and flushes the parent directory before it confirms success. This avoids a
 partially written workspace after a normal write failure.
 

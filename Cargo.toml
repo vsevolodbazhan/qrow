@@ -44,6 +44,8 @@ serde = { version = "1", features = ["derive", "rc"] }
 # GPUI turns this on for the app; the core library must not depend on it.
 serde_json = { version = "1", features = ["preserve_order", "raw_value", "arbitrary_precision"] }
 sqlformat = "0.5"
+# Reports the workspace fields that this build does not know, so a save keeps them.
+serde_ignored = "0.1"
 tempfile = "3"
 thrift = { version = "0.24", default-features = false }
 url = "2"
