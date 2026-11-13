@@ -382,7 +382,7 @@ impl AssistantPane {
                             .line_height(rems(1.25))
                             .text_center()
                             .text_color(cx.theme().muted_foreground)
-                            .child("The assistant reads the catalog and writes SQL for this tab."),
+                            .child("The assistant reads metadata and writes SQL for this tab."),
                     ),
             )
     }

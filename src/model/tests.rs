@@ -1257,7 +1257,7 @@ fn normalize_repairs_shared_catalogs_and_drops_stale_references() {
     assert_eq!(workspace.shared_catalogs.len(), 1);
     let repaired = &workspace.shared_catalogs[0];
     assert_eq!(repaired.id, used.id);
-    assert_eq!(repaired.name, "Shared catalog");
+    assert_eq!(repaired.name, "Shared metadata");
     // A shared catalog always browses, and invalid bounds get defaults.
     assert_eq!(repaired.settings.refresh, CatalogRefresh::Manual);
     assert_eq!(

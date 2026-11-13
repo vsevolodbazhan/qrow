@@ -148,7 +148,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         &app,
         cx,
         "connection-dbt-matches",
-        "10 of 16 dbt resources matched the catalog",
+        "10 of 16 dbt resources matched cached tables",
     );
     // The bar and the numbers share the leading edge of the field, and the
     // percentage ends with the bar.
@@ -176,7 +176,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         &app,
         cx,
         "connection-dbt-matches",
-        "0 of 16 dbt resources matched the catalog",
+        "0 of 16 dbt resources matched cached tables",
     );
     app.click(cx, "cancel-profile");
     app.wait_gone(cx, "save-profile");
@@ -1144,7 +1144,7 @@ fn the_demo_opens_a_catalog_and_a_complete_dbt_project(cx: &mut TestAppContext) 
         &app,
         cx,
         "connection-dbt-matches",
-        "4 of 4 dbt resources matched the catalog",
+        "4 of 4 dbt resources matched cached tables",
     );
     app.scroll_to(cx, "connection-dbt-refresh-now");
     app.click(cx, "connection-dbt-refresh-now");

@@ -336,7 +336,7 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                     Duration::from_secs(10),
                     |window, _| {
                         label(window, status.clone())
-                            .is_some_and(|text| text.contains("schema refresh error"))
+                            .is_some_and(|text| text.contains("refresh error"))
                     },
                 );
                 app.update(cx, |window, cx| {
@@ -354,9 +354,9 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                     assert_eq!(
                         label(window, status.clone()).as_deref(),
                         Some(if depth == 1 {
-                            "finance, schema refresh error, show Activity"
+                            "finance, refresh error, show Activity"
                         } else {
-                            "daily, schema refresh error, show Activity"
+                            "daily, refresh error, show Activity"
                         })
                     );
                 });
@@ -371,7 +371,7 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                 app.click(cx, status.clone());
                 app.wait_for(cx, "activity");
                 let activity = app.copy_activity(cx);
-                assert!(activity.contains("Schema refresh failed"), "{activity}");
+                assert!(activity.contains("Metadata refresh failed"), "{activity}");
                 assert!(
                     activity.contains(if depth == 1 {
                         "finance"
@@ -522,7 +522,7 @@ fn a_schema_failure_is_read_when_activity_is_already_open(cx: &mut TestAppContex
                 == 2
         },
     );
-    assert!(app.copy_activity(cx).contains("Schema refresh failed"));
+    assert!(app.copy_activity(cx).contains("Metadata refresh failed"));
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
     app.wait_for(cx, format!("{parent}\u{1f}detail"));
@@ -1225,7 +1225,7 @@ fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut Te
         Duration::from_secs(20),
         |window, _| {
             label(window, connection_row(profile.id)).as_deref()
-                == Some("Unreachable, unread error, schema refresh error")
+                == Some("Unreachable, unread error, refresh error")
         },
     );
     app.update(cx, |window, cx| {
@@ -1249,7 +1249,7 @@ fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut Te
     app.click(cx, format!("connection-status-{}", profile.id));
     app.wait_for(cx, "activity");
     let activity = app.copy_activity(cx);
-    assert!(activity.contains("Schema refresh failed"), "{activity}");
+    assert!(activity.contains("Metadata refresh failed"), "{activity}");
     assert!(activity.contains("refused"), "{activity}");
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
@@ -1305,7 +1305,7 @@ fn hidden_schemas_leave_the_tree_when_the_connection_is_saved(cx: &mut TestAppCo
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
-    app.connection_page(cx, "Catalog");
+    app.connection_page(cx, "Metadata");
     app.scroll_to(cx, "connection-hide-schemas");
     app.fill(cx, "connection-hide-schemas", "fin*, scratch");
     app.click(cx, "save-profile");
@@ -1640,7 +1640,7 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
         Duration::from_secs(10),
         |window, _| label(window, "toggle-activity").as_deref() == Some("Activity, 1 unseen error"),
     );
-    assert!(!app.logs(cx).contains("schema refresh"));
+    assert!(!app.logs(cx).contains("metadata refresh"));
 
     // The status bar opens the connection with the newest unseen error.
     // Showing its Activity marks its errors as seen.
@@ -1648,10 +1648,10 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
     app.wait_for(cx, "activity");
     let activity = app.copy_activity(cx);
     assert!(
-        activity.contains("Started a schema refresh of the connection"),
+        activity.contains("Started a metadata refresh of the connection"),
         "{activity}"
     );
-    assert!(activity.contains("Schema refresh failed"), "{activity}");
+    assert!(activity.contains("Metadata refresh failed"), "{activity}");
     app.wait_until(
         cx,
         "the seen error",
@@ -1682,8 +1682,8 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
     app.press(cx, "secondary--");
     app.click(cx, "activity-errors");
     let errors = app.copy_activity(cx);
-    assert!(!errors.contains("Started a schema refresh"), "{errors}");
-    assert!(errors.contains("Schema refresh failed"), "{errors}");
+    assert!(!errors.contains("Started a metadata refresh"), "{errors}");
+    assert!(errors.contains("Metadata refresh failed"), "{errors}");
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
     // ⇧⌘U opens and closes Activity too.
@@ -1700,7 +1700,7 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
         Duration::from_secs(10),
         |window, _| {
             label(window, connection_row(profile.id)).as_deref()
-                == Some("Unreachable, schema refresh error")
+                == Some("Unreachable, refresh error")
         },
     );
     // The unread dot clears, while the last refresh error stays in the row.
@@ -1714,7 +1714,7 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
-    assert!(app.copy_activity(cx).contains("Schema refresh failed"));
+    assert!(app.copy_activity(cx).contains("Metadata refresh failed"));
 }
 
 #[gpui_kit::test]
@@ -1850,12 +1850,12 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit");
         app.wait_for(cx, "connection-name");
-        app.connection_page(cx, "Catalog");
+        app.connection_page(cx, "Metadata");
         app.scroll_to(cx, "connection-schema-refresh");
     };
     let saved = |app: &TestApp| app.saved().profiles[0].catalog.clone();
 
-    // Manual: Schema refresh comes first, with no refresh period.
+    // Manual: Metadata refresh comes first, with no refresh period.
     edit(cx);
     app.update(cx, |window, _| {
         assert_eq!(
@@ -1878,7 +1878,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert_eq!(
             value(window, "connection-column-reads").as_deref(),
-            Some("One relation at a time")
+            Some("One table at a time")
         );
         assert_eq!(
             bounds_of(window, "connection-column-reads").left(),
@@ -1976,7 +1976,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     // A new connection does not browse schemas.
     app.click(cx, "add-connection");
     app.wait_for(cx, "connection-name");
-    app.connection_page(cx, "Catalog");
+    app.connection_page(cx, "Metadata");
     app.scroll_to(cx, "connection-schema-refresh");
     app.update(cx, |window, _| {
         assert_eq!(
@@ -2001,7 +2001,7 @@ fn turning_schema_browsing_off_and_on_shows_the_cache_again(cx: &mut TestAppCont
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit");
         app.wait_for(cx, "connection-name");
-        app.connection_page(cx, "Catalog");
+        app.connection_page(cx, "Metadata");
         app.scroll_to(cx, "connection-schema-refresh");
         app.select(cx, "connection-schema-refresh", mode);
         app.click(cx, "save-profile");
@@ -2121,7 +2121,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
         |window, _| {
             label(window, "status-tooltip-status").as_deref() == Some("Unread error")
                 && label(window, connection_row(profile.id)).as_deref()
-                    == Some("Closing, unread error, schema refresh error")
+                    == Some("Closing, unread error, refresh error")
         },
     );
     app.update(cx, |window, _| {
@@ -2131,7 +2131,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
         );
         assert_eq!(
             label(window, connection_row(profile.id)).as_deref(),
-            Some("Closing, unread error, schema refresh error")
+            Some("Closing, unread error, refresh error")
         );
         assert!(window.try_find("status-tooltip-error").is_none());
         assert_eq!(
@@ -2140,7 +2140,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
         );
     });
     app.click(cx, format!("connection-status-{}", profile.id));
-    assert!(app.copy_activity(cx).contains("Schema refresh failed"));
+    assert!(app.copy_activity(cx).contains("Metadata refresh failed"));
 }
 
 #[gpui_kit::test]
@@ -2167,7 +2167,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit");
         app.wait_for(cx, "connection-name");
-        app.connection_page(cx, "Catalog");
+        app.connection_page(cx, "Metadata");
         app.scroll_to(cx, "connection-schema-catalog");
     };
 
@@ -2176,7 +2176,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     app.update(cx, |window, _| {
         assert_eq!(
             value(window, "connection-schema-catalog").as_deref(),
-            Some("This connection")
+            Some("Not shared")
         );
         assert!(window.try_find("connection-shared-catalog-name").is_none());
     });
@@ -2189,7 +2189,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     app.update(cx, |window, _| {
         assert_eq!(
             value(window, "connection-schema-catalog").as_deref(),
-            Some("New shared catalog")
+            Some("New shared metadata")
         );
     });
     app.wait_until(
@@ -2201,7 +2201,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     // One save makes at most one shared catalog, so the command goes away.
     app.click(cx, "connection-schema-catalog");
     app.wait_until(cx, "the open list", Duration::from_secs(10), |window, _| {
-        labelled(window, "Search catalogs…").is_some()
+        labelled(window, "Search shared metadata…").is_some()
     });
     app.update(cx, |window, _| {
         assert!(window.try_find("connection-new-shared-catalog").is_none());
@@ -2211,10 +2211,10 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
         cx,
         "the closed list",
         Duration::from_secs(10),
-        |window, _| labelled(window, "Search catalogs…").is_none(),
+        |window, _| labelled(window, "Search shared metadata…").is_none(),
     );
     // Another choice drops the new shared catalog, and the command comes back.
-    choose_catalog(&app, cx, "This connection");
+    choose_catalog(&app, cx, "Not shared");
     app.wait_gone(cx, "connection-shared-catalog-name");
     app.click(cx, "connection-schema-catalog");
     app.wait_for(cx, "connection-new-shared-catalog");
@@ -2229,7 +2229,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
         Duration::from_secs(10),
         |window, _| {
             label(window, "connection-form-error-accessibility").as_deref()
-                == Some("Give the shared catalog a name.")
+                == Some("Give the shared metadata a name.")
         },
     );
     app.scroll_to(cx, "connection-shared-catalog-name");
@@ -2279,7 +2279,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
 
     // The catalog stays while one connection uses it.
     edit(cx, &first);
-    choose_catalog(&app, cx, "This connection");
+    choose_catalog(&app, cx, "Not shared");
     app.wait_gone(cx, "connection-shared-catalog-name");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "save-profile");
@@ -2291,7 +2291,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
 
     // The last connection that leaves deletes the catalog and its cache.
     edit(cx, &second);
-    choose_catalog(&app, cx, "This connection");
+    choose_catalog(&app, cx, "Not shared");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "no shared catalog", Duration::from_secs(10), |_, _| {
@@ -2337,7 +2337,7 @@ fn saving_a_member_keeps_the_shared_preference_and_hidden_period(cx: &mut TestAp
         app.context_menu(cx, connection_row(edited.id));
         app.choose(cx, "popup-menu", "Edit");
         app.wait_for(cx, "connection-name");
-        app.connection_page(cx, "Catalog");
+        app.connection_page(cx, "Metadata");
         app.scroll_to(cx, "connection-preferred-catalog-connection");
     };
     let preferred = |app: &TestApp| app.saved().shared_catalogs[0].preferred;

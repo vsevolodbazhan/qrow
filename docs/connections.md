@@ -35,7 +35,7 @@ The tooltip shows the connection name, with a short status below it. The status
 uses secondary text.
 Host and User show on compact labeled rows below the status. **Unread error**
 identifies an unread error. No dot means that no session, work, or
-unread outcome needs an indicator. A schema refresh uses its own temporary
+unread outcome needs an indicator. A metadata refresh uses its own temporary
 session. That session does not give the connection a dim blue dot.
 
 Click the dot to open [Activity](activity.md). Viewing Activity reads refresh
@@ -45,7 +45,7 @@ last selected tab. The other tabs keep their unread outcomes.
 
 ## Create a profile
 
-Connection Settings has pages in a sidebar: **General**, **Catalog**, **dbt**,
+Connection Settings has pages in a sidebar: **General**, **Metadata**, **dbt**,
 and **Assistant**. The **Assistant** page shows only while the
 [assistant](assistant.md) is on. Click a page to show its fields. Type in the
 search field above the pages to find a field.
@@ -64,7 +64,7 @@ search field above the pages to find a field.
 6. Enter the initial database. For Trino, enter the initial catalog and optional schema.
 7. Enter session parameters as a JSON object with string values.
 8. Optional: To [browse the schemas](#browse-schemas) of the connection, go
-   to the **Catalog** page and set **Schema Refresh** to **Manual** or **While
+   to the **Metadata** page and set **Refresh** to **Manual** or **While
    connected**. Then you can enter [schema patterns](#show-or-hide-schemas).
 9. Optional: On the **dbt** page, attach a
    [dbt project](#attach-a-dbt-project).
@@ -360,12 +360,12 @@ client ID, client secret, local callback listener, or saved sign-in.
    **TLS**, then save.
 3. Select the connection in **Connections**. Selection does not start sign-in.
 4. Run a query. If Trino requires authentication, complete sign-in in the browser.
-   A schema refresh also starts sign-in when necessary.
+   A metadata refresh also starts sign-in when necessary.
 
 Other connection types cannot use **External**.
 
 The query toolbar shows **Waiting for Trino authentication…** while a query
-or schema refresh waits for sign-in. Queries show **Waiting for browser sign-in…**.
+or metadata refresh waits for sign-in. Queries show **Waiting for browser sign-in…**.
 Click **Cancel** to stop the active query's wait, even before a query cursor exists;
 other requests for the connection can continue their shared authentication.
 A red connection dot opens Activity for that connection when authentication fails.
@@ -756,7 +756,7 @@ source.
 
 Saving an edit keeps live sessions that use the profile when you change only the
 name, **Response Timeout**, **Idle Behavior**, the idle and keep-alive fields, the
-fields of the **Catalog** page, the dbt project, or the assistant notes. The worker applies the new lifecycle
+fields of the **Metadata** page, the dbt project, or the assistant notes. The worker applies the new lifecycle
 policy after active query, fetch, or keep-alive work finishes. The idle timer
 and the keep-alive interval of these sessions then start again from the policy
 update.
@@ -790,8 +790,8 @@ The text contains the settings of all pages of **Connection Settings**,
 including the username, the session parameters, and the assistant notes.
 Remove secrets from the session parameters before you share a connection.
 The text does not contain the password, the identifier, the dbt project, or
-the shared catalog. A member of a shared catalog gives the settings of the
-shared catalog as its own schema settings. A connection with a sign-in
+the shared metadata. A connection that shares metadata gives the settings of
+the shared metadata as its own settings. A connection with a sign-in
 includes the sign-in settings, but not your account or your tokens.
 
 The pasted settings can be partial. For example, remove the `username` line
@@ -821,19 +821,19 @@ fit beside the full name. The columns of one table show their types all
 together or not at all.
 
 Schema browsing is off for a new connection. To turn it on, open the
-connection settings and set **Schema Refresh**, the first field of the
-**Catalog** page:
+connection settings and set **Refresh**, the first field of the
+**Metadata** page:
 
 - **Disabled**: Qrow does not read or show the schemas of the connection. The
   connection row has no arrow, and its menu has no **Schemas** section. The
-  other fields of the **Catalog** page do not show, and they keep their
+  other fields of the **Metadata** page do not show, and they keep their
   values. Qrow keeps
   the copy of the schemas on your computer, so the tree shows it again when
   you turn browsing on.
 - **Manual**: Qrow reads the schemas when you select **Refresh**, or when you
   expand an unread row while a tab of the connection is connected.
 - **While connected**: as **Manual**, and Qrow also
-  [refreshes the schemas automatically](#refresh-schemas-automatically).
+  [refreshes the schemas automatically](#refresh-metadata-automatically).
 
 To use the tree:
 
@@ -863,12 +863,12 @@ To use the tree:
 
 Qrow keeps a copy of the schemas of each connection on your computer. The tree
 shows this copy, also when the connection has no session. Connections that
-read the same metastore can [share one copy](#share-schemas). The [assistant](assistant.md#look-up-tables-and-columns)
+read the same metastore can [share one copy](#share-metadata). The [assistant](assistant.md#look-up-tables-and-columns)
 can read this copy to find table and column names. Qrow reads the copy
 when you first expand the connection, search the tree, or connect a tab of
 the connection. Qrow does not read the copy or open a session at startup.
 
-### Refresh schemas
+### Refresh metadata
 
 A refresh reads the schemas from the server again. Qrow opens a separate
 session for the refresh and closes it when the refresh ends. This session does
@@ -885,18 +885,18 @@ not change the idle timer, the keep-alive, or the results of a tab.
   Refresh**. The tree keeps the schemas that it had before the refresh.
 
 A connection refresh reads one schema at a time: first its tables, then their
-columns. By default, **Column Reads** is **One relation at a time**. Qrow reads
+columns. By default, **Column Reads** is **One table at a time**. Qrow reads
 the columns of each table or view in a separate request. Each request ends
 before the next starts. This reduces the column result that the Spark driver
 holds in memory.
 
 For fewer requests, set **Column Reads** to **Whole schema** on the
-**Catalog** page of the connection settings. This reads all columns of a schema in one
+**Metadata** page of the connection settings. This reads all columns of a schema in one
 request. Large schemas can exhaust the memory of a small driver. If a request
 fails and the session stays available, Qrow reads each table separately.
 Per-relation reads can take longer because they send more requests. The same
 **Refresh Timeout** applies to both choices. Connections saved before this
-setting was added also use **One relation at a time**.
+setting was added also use **One table at a time**.
 
 A connection refresh starts with the schemas that Qrow read longest ago.
 The progress row shows the number of schemas that are done. The row is removed
@@ -956,9 +956,9 @@ had before the refresh. The error shows on the row of the refreshed part:
 the same red dot for an unread query error. If Qrow cannot connect, it stops the
 refreshes that wait for that connection.
 
-### Refresh schemas automatically
+### Refresh metadata automatically
 
-When **Schema Refresh** is **While connected**, Qrow refreshes the schemas of
+When **Refresh** is **While connected**, Qrow refreshes the schemas of
 the connection after each refresh period, but only while a tab of the
 connection has a live session. The refresh then uses
 the engine that the tab already started. Qrow never opens a session for an
@@ -981,12 +981,13 @@ automatic refresh on a connection without one.
   An idle disconnection waits for an active refresh to finish. An explicit
   disconnection does not wait.
 
-For a [shared catalog](#share-schemas), the period and the timeout belong to
-the shared catalog. An unfinished refresh starts again when the first
-member connects after all members disconnected. Another member that
-connects while the catalog stays connected does not start a new attempt.
+For [shared metadata](#share-metadata), the period and the timeout belong to
+the shared metadata. An unfinished refresh starts again when the first
+connection that shares it connects after all of them disconnected. Another
+connection that connects while one stays connected does not start a new
+attempt.
 
-Set these fields on the **Catalog** page of the connection settings:
+Set these fields on the **Metadata** page of the connection settings:
 
 - **Refresh Period**: the minutes between automatic refreshes, from 5 to
   10,080 (7 days). The default is 60. This field shows only for **While
@@ -994,35 +995,36 @@ Set these fields on the **Catalog** page of the connection settings:
 - **Refresh Timeout**: the longest time of one refresh, manual or automatic,
   from 1 to 1,440 minutes (1 day). The default is 30.
 
-### Share schemas
+### Share metadata
 
-Connections that read the same database catalog, for example through different
-users, can share one schema catalog. Qrow then keeps one
+Connections that read the same database, for example through different
+users, can share their metadata. Qrow then keeps one
 copy of the schemas for all of them, and a refresh of one connection fills the
 tree of each connection.
 
-To share a catalog:
+To share metadata:
 
 1. Open the settings of a connection that browses schemas.
-2. Open the **Schema Catalog** list, then select **New shared catalog…** below
-   the list. The connection brings its copy of the schemas to the new
-   catalog before an automatic refresh can start.
-3. Enter a **Shared Catalog Name**, then select **Save**.
-4. Open the settings of each other connection, select the shared catalog in
-   **Schema Catalog**, then select **Save**.
+2. Open the **Shared Metadata** list, then select **New shared metadata…**
+   below the list. The connection brings its copy of the schemas to the new
+   shared metadata before an automatic refresh can start.
+3. Enter a **Shared Metadata Name**, then select **Save**.
+4. Open the settings of each other connection, select the shared metadata in
+   **Shared Metadata**, then select **Save**.
 
-The connections of a shared catalog must use the same connection type and read
+The connections that share metadata must use the same connection type and read
 the same schemas with the same permissions. Kyuubi connections must also use
 the same metastore and Spark catalog. Qrow cannot check this.
 
-For a connection that uses a shared catalog:
+For a connection that shares metadata:
 
-- **Schema Refresh**, **Refresh Period**, **Visible Schemas**, **Hidden Schemas**,
-  and **Refresh Timeout** belong to the shared catalog. A change in the
-  settings of one connection applies to all connections of the catalog. When
-  you select a catalog in **Schema Catalog**, the fields show its settings.
-- **Schema Refresh** set to **Disabled** turns schema browsing off only for
-  this connection. The connection stays in the shared catalog.
+- **Refresh**, **Refresh Period**, **Visible Schemas**, **Hidden Schemas**,
+  and **Refresh Timeout** belong to the shared metadata. A change in the
+  settings of one connection applies to all connections that share it. When
+  you select shared metadata in **Shared Metadata**, the fields show its
+  settings.
+- **Refresh** set to **Disabled** turns schema browsing off only for
+  this connection. The connection continues to share the metadata.
 - **Preferred Connection** selects the connection that automatic refreshes
   use while one of its tabs has a live session. Otherwise, Qrow uses the
   first connection in the sidebar that has a live session. The default is
@@ -1031,17 +1033,17 @@ For a connection that uses a shared catalog:
   the connection that runs it. Different clusters can use different choices.
 
 Each refresh uses the session, the user, and the cluster of the connection
-that asked for it. Qrow runs one refresh of a shared catalog at a time. A
+that asked for it. Qrow runs one refresh of shared metadata at a time. A
 refresh that a running or waiting refresh includes does not wait again.
 Only the connection that runs a refresh shows its progress and its errors.
 This includes the errors of schemas, tables, and views. A connection whose
 refresh waits shows **Waiting…**. **Stop refresh** stops only the refreshes of its
 connection.
 
-To stop sharing, select **This connection** in **Schema Catalog**. The
+To stop sharing, select **Not shared** in **Shared Metadata**. The
 connection then starts with an empty copy of the schemas. When the last
-connection leaves a shared catalog, or you delete it, Qrow deletes the shared
-catalog and its copy of the schemas.
+connection stops sharing, or you delete it, Qrow deletes the shared
+metadata and its copy of the schemas.
 
 ### Search the tree
 
@@ -1105,10 +1107,10 @@ backticks.
 
 [Activity](activity.md) records each refresh of the connection: its start,
 the session that it opens, each request with its duration and count, and its
-result. For example, `List columns of all relations in sales: 769 columns` is
+result. For example, `List columns of all tables and views in sales: 769 columns` is
 one request for the columns of all tables and views in the schema `sales`. If
-some schemas or tables could not be read, the result tells how many. For a
-shared catalog, the entries go to the Activity of the connection that ran the
+some schemas or tables could not be read, the result tells how many. For
+shared metadata, the entries go to the Activity of the connection that ran the
 refresh.
 
 Refreshes do not go to the Logs of the tabs. A failed refresh gives its
@@ -1117,8 +1119,8 @@ connection a red dot and counts as an unseen error in the status bar.
 ### Show or hide schemas
 
 Use **Visible Schemas** and **Hidden Schemas** in the connection settings to select
-which schemas the tree shows. For a [shared catalog](#share-schemas), the
-patterns apply to all its connections. Each field takes glob patterns separated by
+which schemas the tree shows. For [shared metadata](#share-metadata), the
+patterns apply to all connections that share it. Each field takes glob patterns separated by
 commas. `*` matches any text, and `?` matches one character. Letter case does
 not matter.
 
@@ -1134,7 +1136,7 @@ add to **Visible Schemas** shows after the next connection refresh. A connection
 with many schemas refreshes faster when you hide the schemas that you do not
 use.
 
-### Schema limitations
+### Metadata limitations
 
 - With the Kyuubi share level `CONNECTION`, each refresh session starts its own
   Spark engine, also for an automatic refresh. The default share level,
@@ -1147,17 +1149,17 @@ use.
 - For Kyuubi, Qrow cannot stop a refresh while it opens its session or sends a request to
   the server. A wait for a server answer uses the connection's **Response
   Timeout**. Thus, a refresh can take longer than its **Refresh Timeout**.
-- One Kyuubi catalog request can return at most 200,000 rows or 64 MB. If a schema
-  exceeds this limit with **Whole schema**, use **One relation at a time**.
+- One Kyuubi metadata request can return at most 200,000 rows or 64 MB. If a schema
+  exceeds this limit with **Whole schema**, use **One table at a time**.
   The limit still applies to each table request. These limits apply after
   the server creates its result. They do not limit Spark driver memory.
-- A Postgres catalog request uses the [Postgres result limits](#postgres-limits).
-  If a request exceeds a limit, the refresh fails and keeps the previous catalog.
+- A Postgres metadata request uses the [Postgres result limits](#postgres-limits).
+  If a request exceeds a limit, the refresh fails and keeps the previous metadata.
 - Per-relation reads reduce the column result size. For Kyuubi, the table list still reads a
   whole schema. Server patterns can also match extra names, for example when
   a name contains `_`. Thus, a refresh can still exhaust driver memory.
-- The keyboard cannot reach **New shared catalog…** below the **Schema
-  catalog** list. Use the pointer. In the list, **Enter** selects a catalog
+- The keyboard cannot reach **New shared metadata…** below the **Shared
+  Metadata** list. Use the pointer. In the list, **Enter** selects an item
   and **Escape** closes the list.
 
 ## Sessions and idle behavior
@@ -1181,12 +1183,12 @@ The idle timer and the keep-alive interval start again when a query, a fetch
 of more rows from the server, a policy update, or a keep-alive finishes.
 Paging through downloaded rows and editing SQL do not reset them.
 
-A schema refresh uses a separate session. While a refresh runs, the tabs of
+A metadata refresh uses a separate session. While a refresh runs, the tabs of
 the connection that runs it do not disconnect because of idle time. The
 refresh does not reset their idle timers. If the idle time has passed, the
 tabs disconnect after the refresh finishes, fails, or stops. The **Refresh
 timeout** still applies. A later refresh does not extend an idle time that
-has already passed. Other connections of a shared catalog keep their
+has already passed. Other connections that share the metadata keep their
 own idle behavior.
 
 Use a lightweight, read-only statement for keep-alive query. Qrow checks that the

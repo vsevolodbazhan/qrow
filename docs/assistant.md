@@ -211,7 +211,7 @@ tool call cards.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, the SQL of its tab, query status, and requested result rows and
-Logs of query tabs. It cannot read [Activity](activity.md). It can also read the [schema catalog](#look-up-tables-and-columns) that
+Logs of query tabs. It cannot read [Activity](activity.md). It can also read the [metadata](#look-up-tables-and-columns) that
 Qrow keeps for each connection, and the [notes](#connection-notes) of the
 connection of its tab.
 Each message includes the SQL of the tab of the conversation. If this SQL is
@@ -323,10 +323,10 @@ does not guess the names. It uses these tools:
   with the type and comment of each column.
 
 Each result tells when Qrow read the data, and whether it is older than the
-**Refresh Period** of the connection. The tools read the catalog of any
-connection that browses schemas, also a [shared
-catalog](connections.md#share-schemas). They do not read the catalog of a
-connection with **Schema Refresh** set to **Disabled**. A result includes
+**Refresh Period** of the connection. The tools read the metadata of any
+connection that browses schemas, also [shared
+metadata](connections.md#share-metadata). They do not read the metadata of a
+connection with **Refresh** set to **Disabled**. A result includes
 only the errors of the refreshes that its connection ran, as the sidebar
 does.
 
@@ -458,7 +458,7 @@ reasoning level.
 
 When the connection has a [dbt project](connections.md#attach-a-dbt-project),
 the assistant reads the meaning of tables and columns from the manifest that
-Qrow keeps on your computer. These tools do not need the schema catalog or a
+Qrow keeps on your computer. These tools do not need the metadata or a
 session:
 
 - **Search dbt models**: the models, seeds, snapshots, and sources whose name,
