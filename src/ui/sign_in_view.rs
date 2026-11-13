@@ -3,6 +3,7 @@
 //! sessions that use them.
 use super::environment::Browser;
 use super::*;
+use crate::sync::LockExt as _;
 use crate::{
     model::{
         Authentication, BASE_SCOPES, Identity, SignIn, SignInProvider, extra_scopes,
@@ -11,7 +12,6 @@ use crate::{
     oidc::{self, Failure, Status},
 };
 use gpui_kit::assets::IconName as AssetIconName;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     ColorName, Icon,
     alert::Alert,
@@ -75,25 +75,25 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 6] = [
     (
         "sign-in-issuer",
         "Issuer",
-        "The issuer URL of the provider, for example a Keycloak realm URL.",
+        "Issuer URL of the provider, like a Keycloak realm URL.",
         "https://id.example.com/realms/data",
     ),
     (
         "sign-in-client-id",
         "Client ID",
-        "The ID of the public client at the provider. No client secret is necessary.",
+        "ID of the public client. No client secret is needed.",
         "desktop-app",
     ),
     (
         "sign-in-scopes",
         "Scopes",
-        "Optional. Other scopes that the provider requires, separated by spaces.",
+        "Optional. Extra scopes, separated by spaces.",
         "offline_access",
     ),
     (
         "sign-in-resource",
         "Resource",
-        "Optional. The resource URI, if the provider requires one.",
+        "Optional. The resource URI, if the provider needs one.",
         "https://db.example.com",
     ),
     (
@@ -339,7 +339,7 @@ impl Qrow {
         self.sign_in_ui.errors.insert(id, message.clone());
         self.record_activity(
             connection,
-            crate::activity::ActivityEntry::new(Severity::Error, message),
+            crate::activity::ActivityEntry::new(Severity::Error, message).with_source("Sign-in"),
             cx,
         );
     }
@@ -376,7 +376,7 @@ impl Qrow {
                     )
                     .into());
                 }
-                *authorization_url.lock().unwrap() = Some(url.to_owned());
+                *authorization_url.lock_unpoisoned() = Some(url.to_owned());
                 match &browser {
                     Some(browser) => browser(url),
                     None => {
@@ -410,7 +410,7 @@ impl Qrow {
         if pending.cancel.load(Ordering::SeqCst) {
             return;
         }
-        let Some(url) = pending.url.lock().unwrap().clone() else {
+        let Some(url) = pending.url.lock_unpoisoned().clone() else {
             return;
         };
         match &self.sign_in_ui.browser {
@@ -941,46 +941,42 @@ impl Qrow {
 
     /// The Sign-ins sidebar: its header and one row for each sign-in.
     pub(super) fn sign_ins_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let group_action_size = self.ui_px(24.);
+        let group_action_size = self.ui_px(workspace_view::SIDEBAR_HEADER_ACTION_SIZE);
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
-                self.sidebar_header("Sign-Ins", cx)
-                    // The header actions are compact and touch, so they read
-                    // as one group.
-                    .child(
-                        h_flex()
-                            .flex_shrink_0()
-                            .child(
-                                Button::new("paste-sign-in")
-                                    .ghost()
-                                    .small()
-                                    .w(group_action_size)
-                                    .h(group_action_size)
-                                    .icon(AssetIconName::ClipboardPaste)
-                                    .disabled(self.demo)
-                                    .accessibility_label("Paste sign-in")
-                                    .tooltip("Paste sign-in…")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.paste_sign_in(window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("add-sign-in")
-                                    .ghost()
-                                    .small()
-                                    .w(group_action_size)
-                                    .h(group_action_size)
-                                    .icon(IconName::Plus)
-                                    .disabled(self.demo)
-                                    .accessibility_label("New sign-in")
-                                    .tooltip("New sign-in…")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_sign_in_editor(None, false, window, cx)
-                                    })),
-                            ),
-                    ),
+                self.sidebar_header("Sign-Ins", cx).child(
+                    self.sidebar_header_actions()
+                        .child(
+                            Button::new("paste-sign-in")
+                                .ghost()
+                                .small()
+                                .w(group_action_size)
+                                .h(group_action_size)
+                                .icon(AssetIconName::ClipboardPaste)
+                                .disabled(self.demo)
+                                .accessibility_label("Paste sign-in")
+                                .tooltip("Paste sign-in")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.paste_sign_in(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("add-sign-in")
+                                .ghost()
+                                .small()
+                                .w(group_action_size)
+                                .h(group_action_size)
+                                .icon(IconName::Plus)
+                                .disabled(self.demo)
+                                .accessibility_label("New sign-in")
+                                .tooltip("New sign-in")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_sign_in_editor(None, false, window, cx)
+                                })),
+                        ),
+                ),
             )
             .when(!self.sign_ins.is_empty(), |el| {
                 el.child(
@@ -1159,7 +1155,7 @@ impl Qrow {
             )
     }
 
-    /// The menu of a sign-in row: the account actions, Edit, Copy Settings,
+    /// The menu of a sign-in row: the account actions, Edit, Copy settings,
     /// and Delete.
     fn open_sign_in_menu(
         &mut self,
@@ -1255,28 +1251,13 @@ impl Qrow {
                 self.show_sign_in_editor(sign_in, None, false, true, window, cx);
             }
             Err(error) => {
-                let message = error.to_string();
-                window.open_alert_dialog(cx, move |alert, _, _| {
-                    alert
-                        .width(px(360.))
-                        .title("Cannot paste the sign-in")
-                        .description(
-                            div()
-                                .id("paste-sign-in-error")
-                                .test_support()
-                                .role(Role::Label)
-                                .aria_label(message.clone())
-                                .child(message.clone()),
-                        )
-                        .footer(
-                            DialogFooter::new().justify_end().child(
-                                Button::new("close-paste-sign-in-error")
-                                    .primary()
-                                    .label("OK")
-                                    .on_click(|_, window, cx| window.close_dialog(cx)),
-                            ),
-                        )
-                });
+                error_alert(
+                    "paste-sign-in-error",
+                    "Cannot paste the sign-in",
+                    error.to_string(),
+                    window,
+                    cx,
+                );
                 cx.notify();
             }
         }
@@ -1294,7 +1275,7 @@ impl Qrow {
         let description = if sign_in.provider == SignInProvider::TrinoExternal {
             "This signs out, deletes the sign-in, and clears its tokens from memory. This cannot be undone."
         } else {
-            "This signs out, deletes the sign-in, and removes its tokens from Keychain. This cannot be undone."
+            "This signs out, deletes the sign-in, and removes its stored tokens. This cannot be undone."
         };
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
@@ -1360,9 +1341,14 @@ impl Qrow {
                 )
             })
             .unwrap_or_default();
-        let choices = connection_form::sign_in_choices(&self.sign_ins, database_type);
-        let list =
-            connection_form::sign_in_combobox(&choices, &self.sign_ins, selected, window, cx);
+        let sign_ins = self.offered_sign_ins(
+            self.form
+                .as_ref()
+                .and_then(|form| form.pasted.as_ref())
+                .and_then(|pasted| pasted.sign_in.as_ref()),
+        );
+        let choices = connection_form::sign_in_choices(&sign_ins, database_type);
+        let list = connection_form::sign_in_combobox(&choices, &sign_ins, selected, window, cx);
         let subscription = Self::subscribe_sign_in_list(&list, window, cx);
         if let Some(form) = &mut self.form {
             form.sign_in_choices = choices;
@@ -1620,7 +1606,6 @@ impl Qrow {
                             Input::new(input)
                                 .id("sign-in-account")
                                 .aria_label("Account")
-                                .focus_ring(false)
                                 .readonly(true)
                                 .disabled(true)
                                 .flex_1()
@@ -1688,7 +1673,6 @@ impl Qrow {
             let (id, label, description, _) = field;
             Field::new().label(label).description(description).child(
                 Input::new(&editor.fields[index])
-                    .focus_ring(false)
                     .id(id)
                     .w_full()
                     .disabled(signed_in && TOKEN_FIELDS.contains(&index))
@@ -1830,7 +1814,6 @@ impl Qrow {
             .child(
                 h_flex()
                     .gap_2()
-                    .pt_3()
                     .child(div().flex_1())
                     .child(
                         Button::new("cancel-sign-in-editor")
@@ -1843,7 +1826,11 @@ impl Qrow {
                         Button::new("save-sign-in-editor")
                             .primary()
                             .label("Save")
-                            .tooltip("Save sign-in · ⌘Enter")
+                            .tooltip(if cfg!(target_os = "macos") {
+                                "Save sign-in · ⌘Enter"
+                            } else {
+                                "Save sign-in · Ctrl+Enter"
+                            })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.save_sign_in_editor(window, cx)
                             })),
@@ -1909,6 +1896,38 @@ impl SignInAction {
             Self::Retry => "retry",
         }
     }
+}
+
+/// An alert with `message` and an OK button. `id` names the message, and
+/// `close-{id}` the button.
+fn error_alert(
+    id: &'static str,
+    title: &'static str,
+    message: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        alert
+            .width(px(360.))
+            .title(title)
+            .description(
+                div()
+                    .id(id)
+                    .test_support()
+                    .role(Role::Label)
+                    .aria_label(message.clone())
+                    .child(message.clone()),
+            )
+            .footer(
+                DialogFooter::new().justify_end().child(
+                    Button::new(SharedString::from(format!("close-{id}")))
+                        .primary()
+                        .label("OK")
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                ),
+            )
+    });
 }
 
 #[cfg(test)]

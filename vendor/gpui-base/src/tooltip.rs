@@ -2,8 +2,9 @@ use std::{rc::Rc, time::Duration};
 
 use gpui::{
     AnyElement, AnyView, App, Bounds, Context, Div, ElementId, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, RenderOnce, Role, Stateful, StatefulInteractiveElement, Styled,
-    Task, Window, deferred, div, prelude::FluentBuilder as _, px,
+    KeyDownEvent, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Render, RenderOnce, Role,
+    ScrollWheelEvent, Size, Stateful, StatefulInteractiveElement, Styled, Task, Window, canvas,
+    deferred, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::{Placement, Positioner};
@@ -105,6 +106,8 @@ pub struct TooltipOverlay {
     show_task: Option<Task<()>>,
     hide_task: Option<Task<()>>,
     renderer: TooltipRenderer,
+    /// The window size when the tooltip showed. A resize hides it.
+    shown_viewport: Option<Size<Pixels>>,
 }
 
 impl TooltipOverlay {
@@ -120,6 +123,7 @@ impl TooltipOverlay {
             show_task: None,
             hide_task: None,
             renderer: Rc::new(|view, _, _, _| div().child(view).into_any_element()),
+            shown_viewport: None,
         }
     }
 
@@ -172,6 +176,8 @@ impl TooltipOverlay {
                 }
             });
         }));
+        // Render the pending state, which cancels the tooltip on a press.
+        cx.notify();
     }
 
     pub fn request_hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -206,6 +212,7 @@ impl TooltipOverlay {
         self.is_switching = false;
         self.show_task = None;
         self.hide_task = None;
+        self.shown_viewport = None;
         if changed {
             cx.notify();
         }
@@ -220,9 +227,70 @@ impl Default for TooltipOverlay {
 
 impl Render for TooltipOverlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.content.is_none() {
+            self.shown_viewport = None;
+            // A press before the delay ends cancels the tooltip, so it does
+            // not show over the menu or dialog that the press opens.
+            if self.show_task.is_none() {
+                return div().into_any_element();
+            }
+            let overlay = cx.entity().downgrade();
+            return canvas(
+                |_, _, _| (),
+                move |_, _, window, _| {
+                    let overlay = overlay.clone();
+                    window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                        if phase.capture() {
+                            let _ = overlay.update(cx, |tooltip, cx| tooltip.hide(cx));
+                        }
+                    });
+                },
+            )
+            .into_any_element();
+        }
+        // A trigger reports hover-out only while it is painted, so the
+        // overlay also hides the tooltip on its own: when the window resizes,
+        // when the pointer leaves the trigger, and on a key press.
+        let viewport = window.viewport_size();
+        if *self.shown_viewport.get_or_insert(viewport) != viewport {
+            self.hide(cx);
+            return div().into_any_element();
+        }
         let Some(content) = self.content.as_ref() else {
             return div().into_any_element();
         };
+        let trigger = content.trigger_bounds;
+        let overlay = cx.entity().downgrade();
+        let dismiss = canvas(
+            |_, _, _| (),
+            move |_, _, window, _| {
+                let moves = overlay.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase.bubble() && !trigger.contains(&event.position) {
+                        let _ = moves.update(cx, |tooltip, cx| tooltip.request_hide(window, cx));
+                    }
+                });
+                let keys = overlay.clone();
+                window.on_key_event(move |_: &KeyDownEvent, phase, _, cx| {
+                    if phase.bubble() {
+                        let _ = keys.update(cx, |tooltip, cx| tooltip.hide(cx));
+                    }
+                });
+                let presses = overlay.clone();
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                    if phase.capture() {
+                        let _ = presses.update(cx, |tooltip, cx| tooltip.hide(cx));
+                    }
+                });
+                // Scrolling moves the trigger away from the tooltip.
+                let scrolls = overlay.clone();
+                window.on_mouse_event(move |_: &ScrollWheelEvent, phase, _, cx| {
+                    if phase.capture() {
+                        let _ = scrolls.update(cx, |tooltip, cx| tooltip.hide(cx));
+                    }
+                });
+            },
+        );
         let view = (content.build)(window, cx);
         let transition = match (self.is_switching, self.previous_bounds) {
             (true, Some(previous)) => TooltipTransition::Switch {
@@ -235,15 +303,19 @@ impl Render for TooltipOverlay {
             },
         };
         let rendered = (self.renderer)(view, transition, window, cx);
-        deferred(
-            TooltipPositioner::new(content.trigger_bounds)
-                .when_some(content.preferred_placement, |this, placement| {
-                    this.placement(placement)
-                })
-                .child(rendered),
-        )
-        .with_priority(TOOLTIP_PRIORITY)
-        .into_any_element()
+        div()
+            .child(dismiss)
+            .child(
+                deferred(
+                    TooltipPositioner::new(content.trigger_bounds)
+                        .when_some(content.preferred_placement, |this, placement| {
+                            this.placement(placement)
+                        })
+                        .child(rendered),
+                )
+                .with_priority(TOOLTIP_PRIORITY),
+            )
+            .into_any_element()
     }
 }
 

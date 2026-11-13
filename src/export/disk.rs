@@ -1,12 +1,29 @@
 //! Spools and final outputs share reservations on each filesystem.
+use crate::sync::LockExt as _;
 use std::{
     collections::HashMap,
     fs::File,
     io::{self, Write},
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
+fn volume_id(directory: &Path) -> io::Result<u64> {
+    #[cfg(unix)]
+    {
+        Ok(directory.metadata()?.dev())
+    }
+    #[cfg(windows)]
+    {
+        // Conservatively reserve across all Windows volumes. Free-space checks
+        // still use the actual output directory.
+        directory.metadata()?;
+        Ok(0)
+    }
+}
 
 const FLOOR: u64 = 1024 * 1024 * 1024;
 const CHUNK: usize = 8 * 1024 * 1024;
@@ -29,7 +46,7 @@ impl Reservations {
         available: impl FnOnce() -> io::Result<u64>,
         floor: u64,
     ) -> io::Result<Reservation> {
-        let mut counts = self.0.lock().unwrap();
+        let mut counts = self.0.lock_unpoisoned();
         let reserved = counts.get(&volume).copied().unwrap_or(0);
         let total = reserved
             .checked_add(bytes)
@@ -52,7 +69,7 @@ impl Reservations {
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        let mut counts = self.owner.0.lock().unwrap();
+        let mut counts = self.owner.0.lock_unpoisoned();
         let count = counts.get_mut(&self.volume).unwrap();
         *count -= self.bytes;
         if *count == 0 {
@@ -74,7 +91,7 @@ impl<W> DiskWriter<W> {
         Ok(Self {
             inner,
             directory: directory.to_path_buf(),
-            volume: directory.metadata()?.dev(),
+            volume: volume_id(directory)?,
             reservations: VOLUMES.clone(),
         })
     }

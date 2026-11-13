@@ -5,27 +5,80 @@ to a database until you run SQL.
 
 ## Appearance and layout
 
-Open **Qrow → Settings…** to change the appearance. The Appearance page shows
-the **Interface**, **Assistant**, **Editor**, and **Logs** sections. Interface
-has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant have
-**Font Family**, **Font Size**, and **Line Height**. The interface font applies
-to controls and results. Editor also has **Tab Size**, the number of spaces for
-each indent level. The default is 2. The Tab key and SQL that Qrow formats for
-the assistant and **Format** use this size. The editor indents with spaces. **SQL Keyword
-Case** is the last Editor setting. It applies to **Format** and SQL that
-the [assistant](assistant.md) writes.
+Press **⌘,** or select **Qrow → Settings…** to open the Settings window. If
+the window is open, ⌘, brings it to the front. Press **⌘W** or **Escape**, or
+click the close button, to close it. Each change applies immediately and is
+saved with the workspace, so the window has no **Done** button. A number that
+you type applies when it is complete. The window has a fixed size. You can
+minimize it, but you cannot zoom it or use it in full screen.
+
+The Appearance page shows the **Interface**, **Conversations**, **Editor**, and
+**Logs** sections. Interface has **Theme**, **Scale**, and **Font Family**.
+Conversations, Editor, and Logs have **Font Family**, **Font Size**, and **Line
+Height**. The interface font applies to controls and results. Editor also has
+**Tab Size**, the number of spaces for each indent level. The default is 2. The
+Tab key and SQL that Qrow formats for the assistant and **Format** use this
+size. The editor indents with spaces. **SQL Keyword Case** is the last Editor
+setting. It applies to **Format** and SQL that the [assistant](assistant.md)
+writes.
+Find and Replace buttons show tooltips with their available shortcuts.
+
+**Smooth Caret** is off by default. Enable it in the Editor section to animate
+short horizontal caret movements in the editor, its Find and Replace fields,
+and the connection and conversation search fields. Text appears immediately. Mouse clicks,
+line changes, selections, scrolling, and large jumps keep immediate caret
+movement. The system reduced-motion setting disables the animation.
+
+**Smooth Scrolling** is also off by default. Enable it in the Editor section
+to smooth discrete mouse-wheel steps. Trackpad gestures, caret navigation,
+and scrollbar dragging keep their immediate response. Typing, a mouse click,
+or a direct scroll change stops pending wheel movement.
+
+**Smooth Transitions** is in the Interface section and is off by default.
+Enable it for short transitions when query tabs, result tabs, and sidebar
+panels change. Collapsing and expanding results also uses this option. The
+previous split returns on expansion, and a second toggle reverses the motion.
+Assistant maximize and restore also use this option. Sidebars expand and
+collapse without changing the width of
+their contents during the transition. Controls leave the sidebar when it
+starts to close. A second toggle reverses the motion.
+Content changes keep text visible. Editor text stays in position when tabs
+change. Typing stops the editor fade at once.
+Your messages fade in as a whole, without sliding. Each new part of an
+assistant reply fades as it arrives.
+New tool-call cards also fade in. Their status and result updates stay immediate.
+Window and splitter resizing stay immediate. Activity slides in from the right
+and closes toward the right. Its contents keep their full width during motion.
+These options follow the system reduced-motion setting.
+
+**Smooth Composer Caret** and **Smooth Composer Resize** are in the
+Conversations section. Both are off by default. The caret option animates
+short horizontal movements while text appears immediately. The resize option
+animates message-field growth and shrinkage, including after Send. Window and
+splitter resizing stay immediate. Both options follow reduced motion.
+
+**Buffered Replies** is also in Conversations and is off by default. Enable
+it to wait for complete assistant messages and then fade them in at their
+full height. Reduced motion removes this fade. See
+[assistant replies](assistant.md#work-with-sql) for the wait and interruption behavior.
+
 Editor settings apply to SQL. Logs settings apply to log entries.
-Assistant settings apply to conversation messages. Code in messages keeps
+Conversations settings apply to assistant messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the
-Editor, Logs, and Assistant font sizes.
-Each font picker has a **System Font** option. This option uses the macOS
-interface font.
+Editor, Logs, and Conversations font sizes.
+
+Qrow includes two fonts. **IBM Plex Sans** is the default font of the interface
+and of conversations. **JetBrains Mono** is the default font of the editor, the
+Logs, and code in assistant messages. JetBrains Mono shows its ligatures, for
+example `>=` shows as one sign. Each font picker also has a **System Font**
+option. This option uses the macOS interface font.
 
 The theme defaults to **System**. System follows the macOS appearance and uses
 GPUI Kit's default light or dark theme. The selector also includes One Dark,
 CM Twilight, and the themes bundled from GPUI Kit. CM Twilight is darker than
 One Dark. It uses the navy and orange colors of twilight in Chiang Mai. A
-selected theme takes effect immediately.
+selected theme takes effect immediately. The title bar of each Qrow window
+follows the theme.
 
 The Export page has the **Copy** and **Replay** sections. See
 [Select and copy cells](results.md#select-and-copy-cells) for Copy Format and
@@ -34,26 +87,30 @@ The Export page has the **Copy** and **Replay** sections. See
 The Assistant page has the **General**, **Codex**, and **Claude Code** sections. See
 [AI assistant](assistant.md#set-up-the-assistant) for these settings.
 
-Select a page or section in the list at the left. Use the search box above the
+Select a page or section in the list at the left. A selected section scrolls to
+the top of the page, as far as the content allows. Use the search box above the
 list to show only settings that match a word in their name or description.
 Each setting shows a description below its name. A long description wraps, and
 the controls stay aligned at the right.
 
-Changes appear immediately and are saved with the workspace. **Restore defaults**
-restores the defaults of all appearance settings, including the System theme,
-the system interface font, and SQL Keyword Case. It does not change the
-Assistant page. If a saved font or theme is unavailable, Qrow uses a default and
-reports the substitution.
+**Restore defaults** restores the defaults of all appearance settings,
+including the System theme, the default fonts, and SQL Keyword Case. It does
+not change the Assistant page. If a saved font or theme is unavailable, Qrow
+uses a default and reports the substitution.
 
 The sidebar at the left of the window shows
 [Connections](connections.md) or [Sign-Ins](connections.md#sign-in-with-openid-connect).
 The two buttons at the left end of the status bar choose the sidebar. Click the
-button of the visible sidebar to hide it. Press **⌘B** to show or hide the
+button of the visible sidebar to hide it. After these buttons, the status bar
+shows the connection of the active tab, which **Run** uses. The toolbar of the
+editor does not show the connection. The right end of the status bar shows the
+save state of the workspace. Press **⌘B** to show or hide the
 Connections sidebar. **View → Toggle sidebar** hides or shows the sidebar that
 was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. When the focused part of
 the workspace closes, for example the result table after a failed query, the
 SQL editor gets the focus. Thus shortcuts like **⌘B** continue to operate. Drag the sidebar divider
-to change its width. Drag the divider above Results or Logs to change the
+to change its width. In a narrow window, the sidebar gets narrower only when the
+work area would be narrower than 560 points. Drag the divider above Results or Logs to change the
 editor height.
 These two divider positions are not saved in the workspace. Qrow saves the
 optional [assistant pane](assistant.md) width.
@@ -68,14 +125,38 @@ identifiers, the harness of each conversation, conversation titles, query
 execution modes, and the query tab of each conversation. The workspace does not contain assistant messages, tool
 arguments, tool results, result rows, Logs history, or harness credentials.
 Assistant messages and tool results are in separate files, described below. Its
-default path is:
+default path on macOS is:
 
 ```text
 ~/Library/Application Support/Qrow/workspace.json
 ```
 
+On Linux, the path is `$XDG_DATA_HOME/qrow/workspace.json`. If
+`XDG_DATA_HOME` is not set to an absolute path, Qrow uses
+`~/.local/share/qrow/workspace.json`.
+
+On Windows, the path is `%APPDATA%\Qrow\workspace.json`, in the roaming
+profile. If `APPDATA` is not set to an absolute path, Qrow uses
+`AppData\Roaming\Qrow\workspace.json` in the home directory. Home directory
+lookups use `HOME`, then `USERPROFILE` if `HOME` is empty or absent.
+
+`QROW_DATA_DIR` changes the workspace directory on all platforms.
+
+Qrow keeps the schema copies, the dbt copies, and the assistant conversation
+copies in the local data directory. These files are caches or are specific to
+the computer, and they can be large. On macOS and Linux, and with
+`QROW_DATA_DIR`, the local data directory is the workspace directory. On
+Windows, it is `%LOCALAPPDATA%\Qrow`, in the local profile, so these files do
+not roam with the workspace. If `LOCALAPPDATA` is not set to an absolute path,
+Qrow uses `AppData\Local\Qrow` in the home directory. The workspace lock also
+protects the local data directory.
+When a Windows workspace roams to another computer, that computer has no
+schema copies and no dbt copies until a refresh or a manifest load makes
+them. The assistant conversations show in the list, but their saved copies
+stay on the first computer.
+
 Qrow keeps the [schema copy](connections.md#browse-schemas) of each connection
-in a separate file, in the `catalog` folder next to the workspace file. The
+in a separate file, in the `catalog` folder of the local data directory. The
 file name is the profile identifier. A [shared catalog](connections.md#share-schemas)
 has one file, with the identifier of the shared catalog as its name. A schema
 copy contains schema, table, view, and column names, their types, and their
@@ -88,19 +169,19 @@ clear a shared catalog. If Qrow cannot open the workspace, it does not write
 schema copies.
 
 Qrow keeps a compact copy of each [dbt manifest](connections.md#attach-a-dbt-project)
-in the `dbt` folder next to the workspace file. The copy has the names,
+in the `dbt` folder of the local data directory. The copy has the names,
 descriptions, tests, and lineage of the manifest, and the positions of its SQL
 texts, but not the SQL. Qrow deletes a copy when no connection uses its
 manifest. If Qrow cannot open the workspace, it keeps the copies only in
 memory.
 
 Qrow keeps a [copy of each assistant conversation](assistant.md#saved-conversations)
-in the `assistant/transcripts` folder next to the workspace file. A copy has
+in the `assistant/transcripts` folder of the local data directory. A copy has
 the messages, replies, errors, and tool call cards of the conversation,
 including tool arguments and results. Qrow deletes a copy when you delete its
 conversation. If Qrow cannot open the workspace, it does not save copies.
 
-Passwords and sign-in tokens remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
+Passwords and sign-in tokens remain in the [system secret store](connections.md#authentication-and-connection-failures).
 Passwords, tokens, and result sets are not written to the workspace file. The
 workspace keeps each [sign-in](connections.md#sign-in-with-openid-connect)
 configuration and the issuer, subject, name, and email of its account. SQL text is
@@ -158,6 +239,24 @@ shows **Work is still running**. Select **Keep working** to leave Qrow open.
 Select **Quit anyway** to stop the active work. Qrow still saves the workspace
 before it exits.
 
+## Newer and older versions
+
+Stable and nightly builds, and different versions of Qrow, can use the same
+workspace. A newer version can save settings that an older version does not
+know. When an older version opens such a workspace, it keeps those settings
+when it saves. It also saves a copy of the file as `workspace.backup.json`
+next to the workspace, and shows a notice that names the version that saved
+the file. Each save records the version of Qrow that wrote the file.
+
+A setting of an item that you delete, such as a connection or a tab, goes
+with the item. New settings inside the sign-in method or the schema refresh
+mode of a connection are not kept; the backup copy has them. Versions before
+this behavior do not keep unknown settings and do not make a backup.
+
+A version that does not know a kind of value, such as a new connection type,
+cannot read the workspace. It then disables saving, as
+[Load and save failures](#load-and-save-failures) describes.
+
 ## Load and save failures
 
 If the workspace is corrupt, unreadable, or uses an unsupported version, Qrow
@@ -183,11 +282,11 @@ save confirmation. A force quit or system crash can lose edits that are not yet
 saved.
 
 For isolated development, see [Development](development.md#check-the-native-ui).
-`QROW_DATA_DIR` changes the workspace directory, but does not isolate Keychain.
+`QROW_DATA_DIR` changes the workspace directory, but does not isolate the secret store.
 Passwords and sign-in tokens are keyed by profile and sign-in identifiers, so
 a copy of a workspace shares them with the original.
 The [demo](../README.md#preview) uses an in-memory workspace and does not access
-databases or Keychain. The demo writes its synthetic dbt manifest to a temporary
+databases or the secret store. The demo writes its synthetic dbt manifest to a temporary
 file. It removes this file when the window closes.
 
 ## Design
@@ -195,13 +294,14 @@ file. It removes this file when the window closes.
 The [workspace model](../src/model.rs) holds saved data separately from live
 sessions, results, and Logs history. [Storage](../src/storage.rs) writes
 through a background saver. Storage claims an operating-system lock before it
-loads a writable workspace. It holds that lock until the saver stops. Each save
-uses a unique temporary file. Storage flushes the file, replaces the workspace,
+loads a writable workspace. It holds that lock until the saver stops. Storage records the paths of workspace fields that the model does not
+know, and puts them back into each save; list items are matched by `id`.
+Each save uses a unique temporary file. Storage flushes the file, replaces the workspace,
 and flushes the parent directory before it confirms success. This avoids a
 partially written workspace after a normal write failure.
 
 The [UI](../src/ui.rs) schedules saves after edits and flushes the latest state
-before confirmed quit. Existing workspace versions, profile UUIDs, and Keychain service
+before confirmed quit. Existing workspace versions, profile UUIDs, and secret-store service
 identifiers must remain compatible.
 
 Native focus, window dragging, double-click behavior, appearance changes, and

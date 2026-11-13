@@ -1,0 +1,70 @@
+name: CI tools and native libraries
+description: Set up the pinned Python environment and required host libraries.
+inputs:
+  app:
+    description: Install application build and runtime libraries on Linux.
+    default: "false"
+  static:
+    description: Install script linters on Linux.
+    default: "false"
+  java:
+    description: Select Java 17 for native macOS fixtures.
+    default: "false"
+  rust-target:
+    description: Install the standard library of another Rust target for a cross build.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      with:
+        version: "0.12.10"
+    - shell: bash
+      run: rustup show
+    - if: inputs.rust-target != ''
+      shell: bash
+      env:
+        RUST_TARGET: ${{ inputs.rust-target }}
+      run: rustup target add "$RUST_TARGET"
+    - if: runner.os == 'Linux' && inputs.app == 'true'
+      shell: bash
+      run: |
+        sh scripts/ci/linux-build-deps.sh
+        sudo apt-get install --yes xvfb xdotool mesa-vulkan-drivers dbus-daemon gnome-keyring
+    - if: inputs.static == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes shellcheck
+        go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+    - if: runner.os == 'macOS' && inputs.java == 'true'
+      shell: bash
+      run: |
+        qrow_java_home="$(/usr/libexec/java_home -v 17)"
+        echo "JAVA_HOME=$qrow_java_home" >> "$GITHUB_ENV"
+        echo "$qrow_java_home/bin" >> "$GITHUB_PATH"
+    - if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $clang = Join-Path $env:ProgramFiles 'LLVM/bin'
+        if (Test-Path (Join-Path $clang 'clang.exe')) {
+          $clang | Out-File -FilePath $env:GITHUB_PATH -Append
+          $env:PATH = "$clang;$env:PATH"
+        }
+        if (-not (Get-Command clang.exe -ErrorAction SilentlyContinue)) {
+          throw 'The Windows build needs clang from LLVM for ring.'
+        }
+        clang.exe --version
+        $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+        $architectures = if ($env:RUNNER_ARCH -eq 'ARM64') { @('arm64', 'x64') } else { @('x64') }
+        $fxc = $null
+        foreach ($sdk in (Get-ChildItem $sdkBin -Directory | Sort-Object Name -Descending)) {
+          foreach ($architecture in $architectures) {
+            $candidate = Join-Path $sdk.FullName "$architecture/fxc.exe"
+            if (Test-Path $candidate) { $fxc = $candidate; break }
+          }
+          if ($fxc) { break }
+        }
+        if (-not $fxc) { throw 'The Windows build needs the SDK shader compiler fxc.exe.' }
+        "GPUI_FXC_PATH=$fxc" | Out-File -FilePath $env:GITHUB_ENV -Append

@@ -1,6 +1,6 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::{
-    TestApp, assert_catalog_error_dot, assert_catalog_icon, assert_connection_highlight, bounds_of,
+    TestApp, assert_catalog_error_dot, assert_catalog_icon, assert_connection_highlight,
     connection_row, labelled, selected_tree_rows,
 };
 use gpui_kit::component::ActiveTheme as _;
@@ -21,6 +21,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+/// The accessibility label of the Connections search field.
+const SEARCH: &str = "Search connections and relations";
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
@@ -58,7 +61,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
             );
         }
         storage::save_catalog(
-            &storage::catalog_path(&directory.path().join("workspace.json"), profile.id),
+            &storage::catalog_cache_path(directory.path(), profile.id),
             &catalog,
         )
         .unwrap();
@@ -334,10 +337,12 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     let schema = format!("qrow_search_{}", uuid::Uuid::new_v4().simple());
     let (mut workspace, credentials) =
         kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    workspace.settings.editor_smooth_caret = true;
     workspace.profiles[0].catalog.include = vec![schema.clone()];
     workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
     let profile = workspace.profiles[0].clone();
     let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.update(|cx| cx.set_reduce_motion(false));
     app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
     app.run_complete(
         cx,
@@ -347,9 +352,6 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.toggle_connection(cx, profile.id);
     app.wait_until(cx, "the schema", QUERY_TIMEOUT, |window, _| {
         labelled(window, &schema).is_some()
-    });
-    let connection_left = app.update(cx, |window, _| {
-        bounds_of(window, &format!("c\u{1f}{}\u{1f}label", profile.id)).left()
     });
     app.click_labelled(cx, &schema);
     app.wait_until(cx, "the catalog to load", QUERY_TIMEOUT, |window, _| {
@@ -363,7 +365,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
         |window, _| labelled(window, &schema).is_none(),
     );
 
-    app.fill_labelled(cx, "Search relations", &format!("{schema}.bookings"));
+    app.fill_labelled(cx, SEARCH, &format!("{schema}.bookings"));
     app.wait_until(cx, "the qualified match", QUERY_TIMEOUT, |window, _| {
         labelled(window, "bookings").is_some() && labelled(window, "daily").is_none()
     });
@@ -371,7 +373,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.choose(cx, "popup-menu", "Copy qualified name");
     let name = cx.read_from_clipboard().unwrap().text().unwrap();
     assert_eq!(name, format!("`{schema}`.`bookings`"));
-    app.fill_labelled(cx, "Search relations", &name);
+    app.fill_labelled(cx, SEARCH, &name);
     app.wait_until(
         cx,
         "the copied name to match",
@@ -379,26 +381,14 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
         |window, _| labelled(window, "bookings").is_some() && labelled(window, "daily").is_none(),
     );
 
-    app.fill_labelled(cx, "Search relations", &format!("{schema}.missing"));
-    app.toggle_connection(cx, profile.id);
+    // Without a match, the search hides the connection and shows one notice.
+    app.fill_labelled(cx, SEARCH, &format!("{schema}.missing"));
     app.wait_until(cx, "the empty search notice", QUERY_TIMEOUT, |window, _| {
-        labelled(window, "No matches").is_some() && labelled(window, "bookings").is_none()
+        labelled(window, "No matches").is_some()
+            && labelled(window, "bookings").is_none()
+            && window.try_find(connection_row(profile.id)).is_none()
     });
-    app.update(cx, |window, _| {
-        let notice = bounds_of(
-            window,
-            &format!("c\u{1f}{}\u{1f}notice\u{1f}label", profile.id),
-        );
-        assert_eq!(notice.left(), connection_left);
-    });
-    app.toggle_connection(cx, profile.id);
-    app.wait_until(
-        cx,
-        "the connection to collapse",
-        QUERY_TIMEOUT,
-        |window, _| labelled(window, "No matches").is_none(),
-    );
-    app.fill_labelled(cx, "Search relations", &name);
+    app.fill_labelled(cx, SEARCH, &name);
     app.wait_until(cx, "the table to return", QUERY_TIMEOUT, |window, _| {
         labelled(window, "bookings").is_some() && labelled(window, "No matches").is_none()
     });
@@ -534,9 +524,9 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
         });
     }
     app.click_labelled(cx, "id bigint");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_gone(cx, "add-connection");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_for(cx, "add-connection");
     app.click(cx, "connections-list");
     app.settle(cx);
@@ -560,7 +550,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
     let profile = workspace.profiles[0].clone();
     assert_eq!(profile.catalog_column_reads, CatalogColumnReads::Table);
     let directory = tempfile::tempdir().unwrap();
-    let catalog_path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let catalog_path = storage::catalog_cache_path(directory.path(), profile.id);
     let app = TestApp::launch_in(cx, directory, workspace, credentials);
     let scroll_tree = |cx: &mut TestAppContext, pixels: f32| {
         app.update(cx, |window, cx| {
@@ -649,7 +639,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
                 })
             },
         );
-        app.fill_labelled(cx, "Search relations", &format!("{schema}.fourth"));
+        app.fill_labelled(cx, SEARCH, &format!("{schema}.fourth"));
         app.wait_until(cx, "the refreshed table", QUERY_TIMEOUT, |window, _| {
             labelled(window, "fourth").is_some()
         });
@@ -669,7 +659,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
         app.wait_until(cx, "the table to collapse", QUERY_TIMEOUT, |window, _| {
             labelled(window, "c0 int").is_none()
         });
-        app.fill_labelled(cx, "Search relations", "");
+        app.fill_labelled(cx, SEARCH, "");
     }
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }
@@ -762,7 +752,7 @@ fn a_live_shared_connection_resumes_an_unfinished_cache_before_its_period(cx: &m
     workspace.shared_catalogs.push(shared.clone());
 
     let directory = tempfile::tempdir().unwrap();
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), shared.id);
+    let path = storage::catalog_cache_path(directory.path(), shared.id);
     let at = qrow::catalog::now();
     let mut catalog = Catalog::empty(shared.id, None);
     catalog.apply_schemas(vec![done.clone(), pending.clone()], &settings, at);
@@ -899,8 +889,8 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
     workspace.profiles[0].catalog.include = vec![schema.clone()];
     let profile = workspace.profiles[0].clone();
     let directory = tempfile::tempdir().unwrap();
-    let workspace_file = directory.path().join("workspace.json");
-    let private = storage::catalog_path(&workspace_file, profile.id);
+    let local = directory.path().to_path_buf();
+    let private = storage::catalog_cache_path(&local, profile.id);
     let at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -955,7 +945,7 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
         let Some(shared) = saved.shared_catalogs.first() else {
             return false;
         };
-        storage::load_catalog(&storage::catalog_path(&workspace_file, shared.id)).is_some_and(
+        storage::load_catalog(&storage::catalog_cache_path(&local, shared.id)).is_some_and(
             |cache| {
                 cache
                     .relation(&schema, "cached_orders")

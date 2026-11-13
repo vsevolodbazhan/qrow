@@ -4,7 +4,7 @@
 use crate::support::{
     MemoryCredentials, SignIns, TestApp, assert_sign_in_dot,
     assistant::editor_text,
-    click_element, find_in, label, offline_profile,
+    bounds_of, click_element, find_in, label, offline_profile,
     oidc::{Provider, subject, trust},
     present, value,
 };
@@ -107,7 +107,7 @@ fn type_fields(app: &TestApp, cx: &mut TestAppContext, values: &[&str]) {
             app.press(cx, "tab");
         }
         app.update(cx, |window, cx| {
-            window.press("cmd-a", cx);
+            window.press("secondary-a", cx);
             if value.is_empty() {
                 window.press("backspace", cx);
             } else {
@@ -177,6 +177,44 @@ fn the_status_bar_buttons_choose_and_hide_the_sidebar_panel(cx: &mut TestAppCont
     });
 }
 
+/// The size of a header action, the distance between the centers of the two
+/// header actions of a sidebar, and the center of the last action.
+fn header_actions(
+    app: &TestApp,
+    cx: &mut TestAppContext,
+    paste: &str,
+    add: &str,
+) -> (f32, f32, f32) {
+    app.update(cx, |window, _| {
+        let paste = bounds_of(window, paste);
+        let add = bounds_of(window, add);
+        assert_eq!(paste.size, add.size);
+        (
+            f32::from(add.size.width),
+            f32::from(add.center().x - paste.center().x),
+            f32::from(add.center().x),
+        )
+    })
+}
+
+#[gpui_kit::test]
+fn the_connections_and_sign_ins_headers_place_their_actions_the_same(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, _) = workspace(&provider, false);
+    let app = launch(cx, &provider, workspace);
+    app.wait_for(cx, "add-connection");
+    let connections = header_actions(&app, cx, "Paste connection", "New connection");
+    // New connection stays centered over the search scope button below it.
+    app.update(cx, |window, _| {
+        let add = bounds_of(window, "New connection");
+        let scope = bounds_of(window, "search-scope");
+        assert!((f32::from(add.center().x - scope.center().x)).abs() < 0.01);
+    });
+    open_sign_ins(&app, cx);
+    let sign_ins = header_actions(&app, cx, "Paste sign-in", "New sign-in");
+    assert_eq!(connections, sign_ins);
+}
+
 #[gpui_kit::test]
 fn command_b_hides_and_shows_the_connections_from_the_sidebar(cx: &mut TestAppContext) {
     let provider = Provider::start();
@@ -185,13 +223,13 @@ fn command_b_hides_and_shows_the_connections_from_the_sidebar(cx: &mut TestAppCo
     app.wait_for(cx, "add-connection");
     // The focus is in the sidebar when it closes.
     app.click(cx, "connections-list");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_gone(cx, "add-connection");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_for(cx, "add-connection");
     // From the Sign-ins sidebar, ⌘B shows the Connections.
     open_sign_ins(&app, cx);
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_for(cx, "add-connection");
 }
 
@@ -206,13 +244,13 @@ fn the_sql_editor_takes_the_focus_after_the_focused_result_table_closes(cx: &mut
     // The Logs panel takes the place of the focused result table, like after
     // a failed query.
     app.click(cx, "output-panel-tab");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_gone(cx, "add-connection");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     app.wait_for(cx, "add-connection");
     // The keys go to the SQL editor.
     app.update(cx, |window, cx| {
-        window.press("cmd-a", cx);
+        window.press("secondary-a", cx);
         window.input("SELECT 2", cx);
     });
     app.wait_until(cx, "the typed SQL", WAIT, |window, _| {
@@ -227,7 +265,7 @@ fn command_b_with_activity_open_keeps_the_activity_focus(cx: &mut TestAppContext
     let app = launch(cx, &provider, workspace);
     app.dispatch(cx, ToggleActivity);
     app.wait_for(cx, "activity");
-    app.press(cx, "cmd-b");
+    app.press(cx, "secondary-b");
     // Escape still reaches Activity, so its focus stayed.
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");

@@ -8,11 +8,15 @@ import platform
 import re
 
 MACOS = platform.system() == "Darwin"
+LINUX_HOST = platform.system() == "Linux"
+# The operating system of this computer, as the `platforms` of a suite name it.
+HOST = "macos" if MACOS else "linux" if LINUX_HOST else "windows" if platform.system() == "Windows" else None
+PLATFORM_NAMES = {"macos": "macOS", "linux": "Linux", "windows": "Windows"}
 
 
 def host_platform():
     """The platform of the prebuilt tool archives for this computer, like `macos-aarch64`, or None."""
-    system = {"Darwin": "macos", "Linux": "linux"}.get(platform.system())
+    system = {"Darwin": "macos", "Linux": "linux", "Windows": "windows"}.get(platform.system())
     machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(), platform.machine().lower())
     return f"{system}-{machine}" if system else None
 
@@ -23,7 +27,7 @@ class Archive:
     platform: str
     url: str
     sha256: str
-    # The path of the executable in the archive.
+    # The path of the executable in the archive. Its file name is the installed name.
     member: str
 
 
@@ -51,7 +55,7 @@ def github_archives(repository, tag, member, platforms):
 
 
 # The digests are the SHA-256 digests of the release assets, calculated from
-# the downloaded files. CI uses Linux x86_64 and macOS ARM64 and x86_64.
+# the downloaded files. Native validation uses Linux, macOS, and Windows on both architectures.
 NEXTEST_MACOS = ("cargo-nextest-0.9.146-universal-apple-darwin.tar.gz",
                  "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8")
 LLVM_COV_MACOS = ("cargo-llvm-cov-universal-apple-darwin.tar.gz",
@@ -68,6 +72,11 @@ TOOLS = {
                                   "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428"),
                  "linux-aarch64": ("cargo-nextest-0.9.146-aarch64-unknown-linux-gnu.tar.gz",
                                    "b2e33d7c72de7ade0ff7b3a948ac37516b24f8a836b7a8870c1f634a94be9de9"),
+             }) + github_archives("nextest-rs/nextest", "cargo-nextest-0.9.146", "cargo-nextest.exe", {
+                 "windows-x86_64": ("cargo-nextest-0.9.146-x86_64-pc-windows-msvc.tar.gz",
+                                    "809b01f2c94d031ab6cf5f4d4a4f477c8f51b69c96ab3cb2fe4db7ecb222d0d3"),
+                 "windows-aarch64": ("cargo-nextest-0.9.146-aarch64-pc-windows-msvc.tar.gz",
+                                     "c94029615d05072af35429d9d66e0f83ba59886bb4e13163a191134e5f0ad47c"),
              })),
         Tool("cargo-deny", "0.20.2", ("cargo", "deny", "--version"), "cargo-deny 0.20.2",
              (("cargo", "install", "--locked", "cargo-deny", "--version", "0.20.2"),),
@@ -94,6 +103,24 @@ TOOLS = {
                                   "b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a"),
              }),
              setup=(("rustup", "component", "add", "llvm-tools-preview"),)),
+        # Not a suite requirement: qtest uses it as a build cache when it is installed.
+        Tool("sccache", "0.19.0", ("sccache", "--version"), "sccache 0.19.0",
+             (("cargo", "install", "--locked", "sccache", "--version", "0.19.0"),),
+             github_archives("mozilla/sccache", "v0.19.0", "{asset}/sccache", {
+                 "macos-aarch64": ("sccache-v0.19.0-aarch64-apple-darwin.tar.gz",
+                                   "a35a0b7d622618774bc1bb8102d72562dfb21e619f88b153b370d7f89bc286af"),
+                 "macos-x86_64": ("sccache-v0.19.0-x86_64-apple-darwin.tar.gz",
+                                  "2db7344bb96de350df79cd9f0124dd4e9baa47b3de2fac1e63e1346b66b20684"),
+                 "linux-x86_64": ("sccache-v0.19.0-x86_64-unknown-linux-musl.tar.gz",
+                                  "aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd"),
+                 "linux-aarch64": ("sccache-v0.19.0-aarch64-unknown-linux-musl.tar.gz",
+                                   "3e47fc4a71b1ddd1b4294a0de9d34498922fdf41e3cd0bda5df3954e3d6deb9d"),
+             }) + github_archives("mozilla/sccache", "v0.19.0", "{asset}/sccache.exe", {
+                 "windows-x86_64": ("sccache-v0.19.0-x86_64-pc-windows-msvc.tar.gz",
+                                    "130e4f8eb672e76590e9993c2ab890c4763b88238577bb11d8062158c7698353"),
+                 "windows-aarch64": ("sccache-v0.19.0-aarch64-pc-windows-msvc.tar.gz",
+                                     "a680e8e6058b033cd6ff56d56b2219ca13f1c1a45f50fb3b04f4ed80851f5c2b"),
+             })),
     ]
 }
 
@@ -113,7 +140,9 @@ class Suite:
     summary: str
     requires: tuple[str, ...]
     steps: tuple[Step, ...]
-    macos_only: bool = False
+    # The operating systems that the suite runs on. A group skips the suite
+    # on other systems. Selected by name, it reports a missing prerequisite.
+    platforms: tuple[str, ...] = ("macos", "linux")
     # Suites that start disposable servers or take over the desktop run only
     # when you select them by name.
     explicit_only: bool = False
@@ -124,6 +153,9 @@ class Suite:
     prepare: tuple[Step, ...] = ()
     # Steps that run after the suite, also when it failed.
     cleanup: tuple[Step, ...] = ()
+    # Nextest commands used by fixture adapters; prepared together before servers.
+    builds: tuple[tuple[str, ...], ...] = ()
+    test_runs: int = 0
 
     @property
     def filterable(self):
@@ -137,195 +169,249 @@ def nextest(expression, *arguments):
 PYTHON = "{python}"  # Replaced with the interpreter that runs qtest.
 
 CLIPPY_CORE = Step(("cargo", "clippy", "--locked", "--no-default-features", "--all-targets", "--", "-D", "warnings"))
-CLIPPY_APP = Step(("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"))
+# On Linux, the GPUI test support of the UI tests is behind the ui-test feature.
+UI_TEST_FEATURE = ("--features", "ui-test") if LINUX_HOST else ()
+CLIPPY_APP = Step(("cargo", "clippy", "--locked", *UI_TEST_FEATURE, "--all-targets", "--", "-D", "warnings"))
 # The e2e and perf-e2e suites use the same test binary. A run builds it once.
-E2E_BUILD = Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e"))
+E2E_BUILD = Step(("cargo", "test", "--locked", *UI_TEST_FEATURE, "--no-run", "--test", "e2e"))
 TRANSFER_PERF_BUILD = Step(("cargo", "test", "--locked", "--profile", "perf", "--no-default-features", "--test", "integration", "--no-run"))
 
-_UNIT = (
-    (nextest("not binary(ui)"), Step(("cargo", "test", "--locked", "--doc")))
-    if MACOS else
-    (nextest("all()", "--no-default-features"),
-     Step(("cargo", "test", "--locked", "--no-default-features", "--doc")))
-)
+MACOS_ONLY = ("macos",)
+# The application build needs the Linux desktop libraries. On macOS, this
+# requirement always holds.
+APP = ("cargo", "linux-app-libs")
 
-SUITES = {
-    suite.name: suite
-    for suite in [
-        Suite("fmt", "Rust formatting.", ("cargo",),
-              (Step(("cargo", "fmt", "--all", "--", "--check")),)),
-        Suite("clippy", "Clippy for the core library and, on macOS, the application.", ("cargo",),
-              (CLIPPY_CORE, *((CLIPPY_APP,) if MACOS else ()))),
-        # The ui CI job lints the application. The static job lints the core library.
-        Suite("clippy-app", "Clippy for the application with all features.", ("cargo", "macos"),
-              (CLIPPY_APP,), macos_only=True),
-        Suite("rustdoc", "Rust API documentation without warnings.", ("cargo",),
-              (Step(("cargo", "doc", "--locked", "--no-default-features", "--no-deps"),
-                    env=(("RUSTDOCFLAGS", "-D warnings"),)),)),
-        Suite("unit", "Rust unit and integration tests that need no UI and no servers.",
-              ("cargo", "cargo-nextest"), _UNIT),
-        Suite("ui", "Headless tests of the real Qrow window, without servers.",
-              ("cargo", "cargo-nextest", "macos"),
-              (nextest("binary(ui)"),
-               Step(("cargo", "run", "--locked", "--example", "tooltip-layout")),
-               Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos", "--lib",
-                     "--features", "gpui-kit/test-support", "software_renderer::tests"))), macos_only=True),
-        Suite("coverage", "Core line coverage with an 80% floor.", ("cargo", "cargo-llvm-cov"),
-              (Step(("mkdir", "-p", "{target}/coverage")),
-               Step(("cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
-                     "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
-                     "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov"),
-                    env=(("RUST_TEST_THREADS", "1"),)),)),
-        Suite("perf", "SQL, dbt, and export benchmarks with enforced budgets.", ("cargo",),
-              (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql")),
-               Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "dbt")),
-               Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "export")))),
-        Suite("scripts", "ShellCheck, actionlint, Ruff, and automation unit tests.",
-              ("uv", "shellcheck", "actionlint"),
-              (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + "
-                           "&& shellcheck .githooks/* qtest tests/desktop/*.sh")),
-               # Name the files: hook snapshots have no Git repository to search.
-               Step(("sh", "-c", "actionlint .github/workflows/*.yml")),
-               Step((PYTHON, "-m", "ruff", "check", "scripts", "tests/desktop")),
-               Step((PYTHON, "-m", "unittest", "discover", "-s", "scripts/tests")))),
-        Suite("policy", "Dependency waiver dates and pinned CI actions.", ("uv",),
-              (Step((PYTHON, "scripts/core/policy.py")),)),
-        Suite("deps", "Dependency policy, unused dependencies, advisories, licenses, and sources.",
-              ("uv", "cargo", "cargo-machete", "cargo-deny"),
-              (Step((PYTHON, "scripts/core/policy.py")),
-               Step(("cargo", "machete")),
-               Step(("cargo", "deny", "--locked", "check")))),
-        Suite("postgres", "Postgres connector and real-window tests with a disposable server.",
-              ("cargo", "cargo-nextest", "docker"),
-              (Step((PYTHON, "scripts/e2e/postgres.py")),), explicit_only=True),
-        Suite("trino", "Trino connector and real-window tests with a disposable server.",
-              ("cargo", "cargo-nextest", "docker"),
-              (Step((PYTHON, "scripts/e2e/trino.py")),), explicit_only=True),
-        Suite("backend", "Connector and worker against the real servers, without the UI.",
-              ("cargo", "cargo-nextest", "fixture-runtime"),
-              (nextest("binary(integration) & test(/^backend::/)", "--no-default-features", "--run-ignored", "only"),),
-              explicit_only=True, fixture="docker",
-              prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "integration")),)),
-        Suite("e2e", "The real Qrow window, headless, against the real servers.",
-              ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              # `--test e2e` builds only the binary of the prepare step.
-              (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/) & not test(/^trino::/)",
-                       "--test", "e2e", "--run-ignored", "only"),),
-              macos_only=True, explicit_only=True, fixture="any",
-              prepare=(E2E_BUILD,)),
-        Suite("perf-ui", "Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build.",
-              ("cargo", "cargo-nextest", "macos"),
-              (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
-              macos_only=True, explicit_only=True),
-        Suite("perf-e2e", "Window query latency against the real servers.",
-              ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              (nextest("binary(e2e) & test(/^perf::/)", "--test", "e2e", "--run-ignored", "only", "--no-capture"),),
-              macos_only=True, explicit_only=True, fixture="any",
-              prepare=(E2E_BUILD,)),
-        Suite("perf-kyuubi", "Kyuubi export transfer measurements against the real servers.",
-              ("cargo", "cargo-nextest", "fixture-runtime"),
-              (nextest("binary(integration) & test(/^transfer_perf::kyuubi$/)", "--cargo-profile", "perf",
-                       "--no-default-features", "--test", "integration", "--run-ignored", "only", "--no-capture"),),
-              explicit_only=True, fixture="any", prepare=(TRANSFER_PERF_BUILD,)),
-        Suite("perf-postgres", "Postgres export transfer and COPY measurements against a disposable server.",
-              ("cargo", "cargo-nextest", "docker"),
-              (Step((PYTHON, "scripts/e2e/postgres.py", "--perf")),), explicit_only=True),
-        Suite("perf-trino", "Trino export transfer measurements against a disposable coordinator.",
-              ("cargo", "cargo-nextest", "docker"),
-              (Step((PYTHON, "scripts/e2e/trino.py", "--perf")),), explicit_only=True),
-        Suite("perf-app", "Launch time, idle memory, and idle CPU of the release app on the desktop.",
-              ("cargo", "uv", "macos"),
-              (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
-               Step((PYTHON, "scripts/perf/app.py"))),
-              macos_only=True, explicit_only=True),
-        # perf-app on a package from another job, without a release build.
-        Suite("perf-package", "Launch time, idle memory, and idle CPU of the packaged app on the desktop.",
-              ("macos",),
-              (Step((PYTHON, "scripts/perf/app.py", "--package")),),
-              macos_only=True, explicit_only=True),
-        Suite("package", "The release app package, built in the target directory, and its size budget.",
-              ("cargo", "uv", "macos", "xcode"),
-              (Step(("sh", "scripts/package/macos.sh"), env=(("QROW_DIST_DIR", "{target}/package"),), timeout=40 * 60),
-               Step((PYTHON, "scripts/core/size.py"), env=(("QROW_DIST_DIR", "{target}/package"),))),
-              macos_only=True, explicit_only=True),
-        Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
-              ("uv", "cargo", "macos", "xcode", "desktop", "fixture-runtime"),
-              (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
-              macos_only=True, explicit_only=True, fixture="any",
-              prepare=(Step(("sh", "scripts/e2e/driver.sh", "--prepare"), timeout=30 * 60),),
-              # The driver removes its synthetic Keychain items on exit. This
-              # step also removes them when a time limit stopped the driver.
-              cleanup=(Step((PYTHON, "scripts/e2e/keychain.py")),)),
-        Suite("software-ui", "CPU rendering of the real editor and results on the desktop, with synthetic demo data.",
-              ("uv", "cargo", "macos", "xcode", "desktop"),
-              (Step(("sh", "scripts/package/macos.sh"),
-                    env=(("QROW_DIST_DIR", "{artifacts}/software-ui/package"), ("QROW_BUILD_PROFILE", "release"),
-                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
-               Step(("sh", "scripts/e2e/software.sh"),
-                    env=(("QROW_E2E_ARTIFACTS", "{artifacts}/software-ui"),)),),
-              macos_only=True, explicit_only=True),
-        Suite("opengl-unit", "OpenGL scene/atlas/limit and shared renderer startup-policy tests without a GPU.",
-              ("cargo", "macos"),
-              (Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos",
-                     "--features", "gpui-kit/test-support", "--lib", "opengl_renderer::", "--", "--skip", "opengl_renderer::tests::",
-                     "--skip", "hardware_capability_probe")),
-               Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos",
-                     "--features", "gpui-kit/test-support", "--lib", "renderer::tests::", "--",
-                     "--skip", "opengl_renderer::", "--skip", "software_renderer::"))),
-              macos_only=True, explicit_only=True),
-        Suite("opengl-renderer", "Hardware OpenGL shader, atlas, and pixel regression tests.",
-              ("cargo", "macos"),
-              (Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos", "--lib",
-                     "--features", "gpui-kit/test-support", "opengl_renderer::")),
-               Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos", "--lib",
-                     "--features", "gpui-kit/test-support", "renderer_preference_is_validated"))),
-              macos_only=True, explicit_only=True),
-        Suite("opengl-ui", "Hardware OpenGL rendering and native input in a separate demo package.",
-              ("uv", "cargo", "macos", "xcode", "desktop"),
-              (Step(("sh", "scripts/package/macos.sh"),
-                    env=(("QROW_DIST_DIR", "{artifacts}/opengl-ui/package"), ("QROW_BUILD_PROFILE", "release"),
-                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
-               Step((PYTHON, "scripts/core/size.py"),
-                    env=(("QROW_DIST_DIR", "{artifacts}/opengl-ui/package"),)),
-               Step(("sh", "scripts/e2e/software.sh"),
-                    env=(("QROW_E2E_ARTIFACTS", "{artifacts}/opengl-ui/core"), ("QROW_E2E_RENDERER", "opengl"),
-                         ("QROW_E2E_BUNDLE", "{artifacts}/opengl-ui/package/Qrow.app")))),
-              macos_only=True, explicit_only=True),
-        Suite("perf-renderers", "Compare native release CPU and hardware OpenGL composition and scrolling.",
-              ("uv", "cargo", "macos", "xcode", "desktop"),
-              (Step(("sh", "scripts/package/macos.sh"),
-                    env=(("QROW_DIST_DIR", "{artifacts}/perf-renderers/package"), ("QROW_BUILD_PROFILE", "release"),
-                         ("QROW_PACKAGE_PREBUILT", "false")), timeout=40 * 60),
-               Step((PYTHON, "scripts/core/size.py"),
-                    env=(("QROW_DIST_DIR", "{artifacts}/perf-renderers/package"),)),
-               Step((PYTHON, "scripts/perf/renderers.py"),
-                    env=(("QROW_E2E_ARTIFACTS", "{artifacts}/perf-renderers"),), timeout=15 * 60)),
-              macos_only=True, explicit_only=True),
-    ]
-}
+RENDERER_FLAGS = ("--package", "qrow", "--package", "gpui-pre-macos",
+                  "--features", "gpui-kit/test-support", "--lib")
+RENDERER_UNITS = ("binary(gpui_macos) & ((test(/^opengl_renderer::/) & "
+                  "not test(/^opengl_renderer::tests::/) & not test(hardware_capability_probe)) | "
+                  "test(/^renderer::tests::/) | test(/^software_renderer::tests::/))")
+
+
+def suites_for_platform(system):
+    """Resolve suite commands from the requested OS, independently of this host."""
+    linux = system == "linux"
+    ui_feature = ("--features", "ui-test") if linux else ()
+    clippy_app = Step(("cargo", "clippy", "--locked", *ui_feature, "--all-targets", "--", "-D", "warnings"))
+    e2e_build = Step(("cargo", "test", "--locked", *ui_feature, "--no-run", "--test", "e2e"))
+    return {
+        suite.name: suite
+        for suite in [
+            Suite("opengl-unit", "GPU-independent OpenGL limits, atlas, scene, CPU composition and startup policy.",
+                  ("cargo", "cargo-nextest"), (nextest(RENDERER_UNITS, *RENDERER_FLAGS),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("opengl-renderer", "Strict hardware Core OpenGL shader and pixel checks.",
+                  ("cargo", "cargo-nextest"),
+                  (nextest("binary(gpui_macos) & test(/^opengl_renderer::/)", *RENDERER_FLAGS),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("software-ui", "CPU rendering and native input in an isolated packaged demo.",
+                  ("cargo", "uv", "xcode", "desktop"),
+                  (Step(("sh", "scripts/e2e/software.sh"),
+                        env=(("QROW_E2E_ARTIFACTS", "{artifacts}/software-ui"),)),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("opengl-ui", "Strict hardware Core OpenGL rendering and native input.",
+                  ("cargo", "uv", "xcode", "desktop"),
+                  (Step(("sh", "scripts/e2e/software.sh"),
+                        env=(("QROW_E2E_ARTIFACTS", "{artifacts}/opengl-ui"),
+                             ("QROW_E2E_RENDERER", "opengl"))),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("perf-renderers", "Native release CPU/OpenGL composition and scrolling measurements.",
+                  ("cargo", "uv", "xcode", "desktop"),
+                  (Step(("sh", "scripts/e2e/software.sh", "--prepare"),
+                        env=(("QROW_E2E_ARTIFACTS", "{artifacts}/perf-renderers"),)),
+                   Step((PYTHON, "scripts/perf/renderers.py"),
+                        env=(("QROW_E2E_ARTIFACTS", "{artifacts}/perf-renderers"),), timeout=15 * 60)),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("windows-unit", "Portable core tests on Windows; server E2E needs Linux Docker.",
+                  ("cargo", "cargo-nextest"),
+                  (nextest("kind(lib)", "--no-default-features", "--lib"),),
+                  platforms=("windows",), explicit_only=True),
+            Suite("windows-storage", "Synthetic Windows Credential Manager round trip.",
+                  ("cargo", "cargo-nextest"),
+                  (nextest("test(credential_round_trip)", "--no-default-features", "--lib", "--run-ignored", "only"),),
+                  platforms=("windows",), explicit_only=True),
+            Suite("windows-package", "Build a native unsigned Windows installer.",
+                  ("cargo", "uv"),
+                  (Step((PYTHON, "scripts/package/windows.py"), timeout=60 * 60),),
+                  platforms=("windows",), explicit_only=True),
+            Suite("fmt", "Rust formatting.", ("cargo",),
+                  (Step(("cargo", "fmt", "--all", "--", "--check")),), platforms=("macos", "linux", "windows")),
+            # The static job lints the core library. The ui CI jobs lint the
+            # application on each platform.
+            Suite("clippy", "Clippy for the core library.", ("cargo",), (CLIPPY_CORE,)),
+            Suite("clippy-app", "Clippy for the application with all features.", APP, (clippy_app,)),
+            Suite("rustdoc", "Rust API documentation without warnings.", ("cargo",),
+                  (Step(("cargo", "doc", "--locked", "--no-default-features", "--no-deps"),
+                        env=(("RUSTDOCFLAGS", "-D warnings"),)),)),
+            Suite("app-unit", "Application unit tests and doctests; portable core tests run in coverage.",
+                  (*APP, "cargo-nextest"),
+                  (nextest("kind(lib) & test(/^(ui|assets|themes)::/)", *ui_feature, "--lib"),
+                   Step(("cargo", "test", "--locked", *ui_feature, "--doc")))),
+            Suite("clippy-native", "Clippy for the production application on this target.", APP,
+                  (Step(("cargo", "clippy", "--locked", *(("--bin", "qrow", "--lib") if system in ("linux", "windows") else ("--all-targets",)), "--", "-D", "warnings")),), platforms=("macos", "linux", "windows")),
+            Suite("unit", "Rust unit and integration tests that need no UI and no servers.",
+                  (*APP, "cargo-nextest"),
+                  (nextest("not binary(ui)", *ui_feature), Step(("cargo", "test", "--locked", *ui_feature, "--doc")))),
+            Suite("ui", "Headless tests of the real Qrow window, without servers.",
+                  (*APP, "cargo-nextest"),
+                  (nextest("binary(ui)", *ui_feature, "--test", "ui"),)),
+            Suite("coverage", "Core line coverage with an 80% floor.", ("cargo", "cargo-llvm-cov"),
+                  (Step(("mkdir", "-p", "{target}/coverage")),
+                   Step(("cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
+                         "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
+                         "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov"),
+                        env=(("RUST_TEST_THREADS", "1"),)),
+                  )),
+            Suite("perf", "SQL, dbt, and export benchmarks with enforced budgets.", ("cargo",),
+                  (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql", "--bench", "dbt", "--bench", "export")),)),
+            Suite("scripts", "ShellCheck, actionlint, Ruff, and automation unit tests.",
+                  ("uv", "shellcheck", "actionlint"),
+                  (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + "
+                               "&& shellcheck .githooks/* qtest tests/desktop/*.sh website/*.sh")),
+                   # Name the files: hook snapshots have no Git repository to search.
+                   Step(("sh", "-c", "actionlint .github/workflows/*.yml")),
+                   Step((PYTHON, "-m", "ruff", "check", "scripts", "tests/desktop")),
+                   Step((PYTHON, "-m", "unittest", "discover", "-s", "scripts/tests")))),
+            Suite("policy", "Dependency waiver dates and pinned CI actions.", ("uv",),
+                  (Step((PYTHON, "scripts/core/policy.py")),)),
+            Suite("deps", "Dependency policy, unused dependencies, advisories, licenses, and sources.",
+                  ("uv", "cargo", "cargo-machete", "cargo-deny"),
+                  (Step((PYTHON, "scripts/core/policy.py")),
+                   Step(("cargo", "machete")),
+                   Step(("cargo", "deny", "--locked", "check")))),
+            Suite("native-storage", "OS-specific credential tests with synthetic data.",
+                  ("cargo", "cargo-nextest", *(("dbus-run-session", "dbus-send", "gnome-keyring-daemon") if linux else ())),
+                  (Step(("sh", "scripts/testing/linux-secret-service.sh")),) if linux else
+                  (Step((PYTHON, "scripts/testing/macos-keychain.py")),),
+                  explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--lib"),) +
+                         ((("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),) if not linux else ()),
+                  test_runs=1 if linux else 2),
+            Suite("native-font", "macOS font and tooltip layout on the native main thread.", APP,
+                  (Step(("cargo", "run", "--locked", "--example", "tooltip-layout")),), platforms=MACOS_ONLY, explicit_only=True),
+            Suite("native-ui", "macOS branches of headless application assertions.", (*APP, "cargo-nextest"),
+                  (nextest("binary(ui) & (test(=metadata::shortcuts_and_connection_fields_use_tooltip_parts) | test(=queries::activity_tooltips_keep_the_shortcut_above_unread_status) | test(=assistant_sql::appended_sql_keeps_earlier_queries_and_titles_the_conversation))", "--test", "ui"),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("native-assistant", "macOS branch of the assistant server interaction.", (*APP, "cargo-nextest", "fixture-runtime"),
+                  (nextest("binary(e2e) & test(=assistant::assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs)", "--test", "e2e", "--run-ignored", "only"),),
+                  platforms=MACOS_ONLY, explicit_only=True, fixture="any"),
+            Suite("postgres-core", "Postgres connector tests without GPUI.", ("cargo", "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/postgres.py", "--layer", "core")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),), test_runs=1),
+            Suite("trino-core", "Trino connector tests without GPUI.", ("cargo", "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/trino.py", "--layer", "core")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),), test_runs=2),
+            Suite("postgres-ui", "Postgres headless window scenarios.", (*APP, "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/postgres.py", "--layer", "ui")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", *ui_feature, "--test", "e2e"),), test_runs=1),
+            Suite("trino-ui", "Trino headless window scenarios.", (*APP, "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/trino.py", "--layer", "ui")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", *ui_feature, "--test", "e2e"),), test_runs=2),
+            Suite("postgres", "Postgres connector and real-window tests with a disposable server.",
+                  (*APP, "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/postgres.py")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),
+                          ("cargo", "nextest", "run", *ui_feature, "--test", "e2e")), test_runs=2),
+            Suite("trino", "Trino connector and real-window tests with a disposable server.",
+                  (*APP, "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/trino.py")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--test", "integration"),
+                          ("cargo", "nextest", "run", *ui_feature, "--test", "e2e")), test_runs=4),
+            Suite("backend", "Connector and worker against the real servers, without the UI.",
+                  ("cargo", "cargo-nextest", "fixture-runtime"),
+                  (nextest("binary(integration) & test(/^backend::/)", "--no-default-features", "--test", "integration", "--run-ignored", "only"),),
+                  explicit_only=True, fixture="docker",
+                  prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "integration")),)),
+            Suite("e2e", "The real Qrow window, headless, against the real servers.",
+                  (*APP, "cargo-nextest", "fixture-runtime"),
+                  # `--test e2e` builds only the binary of the prepare step.
+                  (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/) & not test(/^trino::/)",
+                           *ui_feature, "--test", "e2e", "--run-ignored", "only"),),
+                  explicit_only=True, fixture="docker" if linux else "any",
+                  prepare=(e2e_build,)),
+            Suite("perf-ui", "Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build.",
+                  ("cargo", "cargo-nextest"),
+                  (nextest("binary(perf)", "--cargo-profile", "perf", "--test", "perf", "--run-ignored", "only", "--no-capture"),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("perf-e2e", "Window query latency against the real servers.",
+                  ("cargo", "cargo-nextest", "fixture-runtime"),
+                  (nextest("binary(e2e) & test(/^perf::/)", "--test", "e2e", "--run-ignored", "only", "--no-capture"),),
+                  platforms=MACOS_ONLY, explicit_only=True, fixture="any",
+                  prepare=(e2e_build,)),
+            Suite("perf-kyuubi", "Kyuubi export transfer measurements against the real servers.",
+                  ("cargo", "cargo-nextest", "fixture-runtime"),
+                  (nextest("binary(integration) & test(/^transfer_perf::kyuubi$/)", "--cargo-profile", "perf",
+                           "--no-default-features", "--test", "integration", "--run-ignored", "only", "--no-capture"),),
+                  explicit_only=True, fixture="any", prepare=(TRANSFER_PERF_BUILD,)),
+            Suite("perf-postgres", "Postgres export transfer and COPY measurements against a disposable server.",
+                  ("cargo", "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/postgres.py", "--perf")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--cargo-profile", "perf", "--test", "integration"),), test_runs=1),
+            Suite("perf-trino", "Trino export transfer measurements against a disposable coordinator.",
+                  ("cargo", "cargo-nextest", "docker"),
+                  (Step((PYTHON, "scripts/e2e/trino.py", "--perf")),), explicit_only=True,
+                  builds=(("cargo", "nextest", "run", "--no-default-features", "--cargo-profile", "perf", "--test", "integration"),), test_runs=1),
+            Suite("perf-app", "Launch time, idle memory, and idle CPU of the release app on the desktop.",
+                  ("cargo", "uv"),
+                  (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
+                   Step((PYTHON, "scripts/perf/app.py"))),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            # perf-app on a package from another job, without a release build.
+            Suite("perf-package", "Launch time, idle memory, and idle CPU of the packaged app on the desktop.",
+                  (),
+                  (Step((PYTHON, "scripts/perf/app.py", "--package")),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("package", "The release app package, built in the target directory, and its size budget.",
+                  ("cargo", "uv", "xcode"),
+                  (Step(("sh", "scripts/package/macos.sh"), env=(("QROW_DIST_DIR", "{target}/package"),), timeout=40 * 60),
+                   Step((PYTHON, "scripts/core/size.py"), env=(("QROW_DIST_DIR", "{target}/package"),))),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("linux-package", "Build the native Linux archive in target/package.",
+                  (*APP, "uv"),
+                  (Step(("sh", "scripts/package/linux.sh"), env=(("QROW_DIST_DIR", "{target}/package"),), timeout=60 * 60),),
+                  platforms=("linux",), explicit_only=True),
+            Suite("package-smoke", "Inspect and launch the extracted native package.",
+                  ("uv", *(("xvfb-run", "xdotool") if linux else ())),
+                  (Step((PYTHON, "scripts/package/qualify.py", "{target}/package", "--receipt", "{target}/platform/receipt.json")),),
+                  platforms=("macos", "linux", "windows"), explicit_only=True),
+            Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
+                  ("uv", "cargo", "xcode", "desktop", "fixture-runtime"),
+                  (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
+                  platforms=MACOS_ONLY, explicit_only=True, fixture="any",
+                  prepare=(Step(("sh", "scripts/e2e/driver.sh", "--prepare"), timeout=30 * 60),),
+                  # The driver removes its synthetic Keychain items on exit. This
+                  # step also removes them when a time limit stopped the driver.
+                  cleanup=(Step((PYTHON, "scripts/e2e/keychain.py")),)),
+        ]
+    }
+
+
+# Compatibility view for existing local commands and hooks. New plans resolve
+# against an explicit target, using suites_for_platform.
+SUITES = suites_for_platform(HOST)
 
 # `./qtest compare` runs these suites when you name none. They need no servers.
 COMPARE_SUITES = ("perf", "perf-ui", "perf-app")
 
 GROUPS = {
     "default": ("Fast local checks. Runs when you give no selector.",
-                ("fmt", "clippy", "unit", "ui")),
+                ("fmt", "clippy", "clippy-app", "unit", "ui")),
     "all": ("Every local suite without servers. CI runs these suites and the suites with servers.",
-            ("scripts", "deps", "fmt", "clippy", "rustdoc", "unit", "ui", "perf", "coverage")),
+            ("scripts", "deps", "fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui", "perf", "coverage")),
 }
 
 # Changed paths select suites for `qtest run --changed` and the hooks.
 RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|tests/(?!fixture/)|benches/|vendor/"
               r"|\.cargo/config\.toml$|themes/|assets/(app-icons|connection-type-icons)/|\.config/nextest\.toml$)")
-RUST_SUITES = ("fmt", "clippy", "rustdoc", "unit", "ui")
+RUST_SUITES = ("fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui")
 CHANGE_RULES = (
     (RUST_PATHS, RUST_SUITES),
-    (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/policy\.py|\.github/workflows/)",
+    (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/policy\.py|\.github/(workflows|actions)/)",
      ("policy",)),
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml)", ("deps",)),
-    # The scripts suite also lints the Python and shell helpers of the desktop driver.
-    (r"^(\.githooks/|\.github/workflows/|pyproject\.toml$|uv\.lock$|scripts/|qtest$|docs/testing\.md$"
-     r"|tests/desktop/[^/]+\.(py|sh)$)",
+    # The scripts suite also lints the Python and shell helpers of the desktop driver and the website scripts.
+    (r"^(\.githooks/|\.github/(workflows|actions)/|pyproject\.toml$|uv\.lock$|scripts/|qtest(?:\.cmd)?$|docs/testing\.md$"
+     r"|tests/desktop/[^/]+\.(py|sh)$|website/[^/]+\.sh$)",
      ("scripts",)),
     (r"^scripts/core/preflight\.sh$", (*RUST_SUITES, "policy")),
 )
@@ -334,9 +420,9 @@ CHANGE_RULES = (
 # those of the hook. A commit gets the checks that take seconds. A push also
 # gets the tests. CI runs everything, including `perf` and `coverage`.
 HOOKS = {
-    "pre-commit": ("Static checks of the staged files.", ("scripts", "policy", "fmt", "clippy")),
+    "pre-commit": ("Static checks of the staged files.", ("scripts", "policy", "fmt", "clippy", "clippy-app")),
     "pre-push": ("Static checks and tests of the pushed changes.",
-                 ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc", "unit", "ui")),
+                 ("scripts", "policy", "deps", "fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui")),
 }
 
 
@@ -355,108 +441,18 @@ def suites_for_hook(hook, paths):
     return [name for name in suites_for_changes(paths) if name in HOOKS[hook][1]]
 
 
-# The events that start a CI job. Each scope includes the events of the scopes
-# before it: a push runs the pull request jobs too.
-SCOPES = ("pull_request", "push", "manual")
-
-
-@dataclass(frozen=True)
-class CiJob:
-    """One job of the checks workflow. `./qtest ci NAME` runs its suites."""
-    name: str
-    runner: str
-    suites: tuple[str, ...]
-    # The minutes that the suites of the job may take, without the runner
-    # setup. A slower run shows a warning. Most jobs stay under 10 minutes.
-    budget: int
-    # Suites that measure and do not fail the job. They run only when the run
-    # measures: on pushes, manual runs, and releases. Pull request measurements
-    # are not kept, so pull requests skip them.
-    report_only: tuple[str, ...] = ()
-    # Jobs whose output this job uses. The other jobs start at once.
-    needs: tuple[str, ...] = ()
-    # A pull request runs the job when it changes a path that matches.
-    paths: str = r"^"
-    # "pull_request": every run. "push": pushes, manual runs, and releases.
-    # "manual": manual runs and releases.
-    scope: str = "pull_request"
-    runtime: str = "auto"
-    # Environment variables of the job, like CARGO_BUILD_TARGET for a cross build.
-    env: tuple[tuple[str, str], ...] = ()
-    # Only a known missing CGL hardware pixel format permits a CI GPU-suite skip.
-    probe_opengl: bool = False
-
-
-LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
-E2E_PATHS = r"^(tests/fixture/|scripts/e2e/)"
-# The desktop suite of the e2e job tests a debug app with the executable that
-# the E2E test build makes, so that the job does not wait for the release
-# package. The desktop-package job tests the release package.
-DEBUG_APP = (("QROW_BUILD_PROFILE", "debug"), ("QROW_PACKAGE_PREBUILT", "true"))
-CI_JOBS = {
-    job.name: job
-    for job in [
-        CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc"), budget=3),
-        CiJob("core", LINUX, ("coverage",), budget=5, paths=RUST_PATHS),
-        CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), budget=7, paths=RUST_PATHS),
-        CiJob("package", MACOS_RUNNER, ("package",), budget=8, report_only=("perf-app",),
-              paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
-        CiJob("backend", LINUX, ("backend", "postgres", "trino"), budget=8, paths=rf"{RUST_PATHS}|{E2E_PATHS}",
-              runtime="docker"),
-        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), budget=8, report_only=("perf-e2e",),
-              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/|^scripts/package/", runtime="native",
-              env=DEBUG_APP, probe_opengl=True),
-        # The benchmarks need no Mac, and Linux runners are not limited to a few at a time.
-        CiJob("perf", LINUX, ("perf",), budget=5, paths=RUST_PATHS),
-        CiJob("perf-ui", MACOS_RUNNER, (), budget=8, report_only=("perf-ui", "perf-renderers"), scope="push",
-              probe_opengl=True),
-        CiJob("perf-backend", LINUX, (), budget=14, report_only=("perf-postgres", "perf-trino", "perf-kyuubi"),
-              scope="push", runtime="docker"),
-        CiJob("desktop-package", MACOS_RUNNER, ("desktop",), budget=5, needs=("package",), scope="manual",
-              runtime="native"),
-        # The Intel runners are slow, and the account runs few macOS jobs at a
-        # time, so only releases and manual runs start the Intel jobs.
-        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), budget=15, scope="manual"),
-        # An ARM64 runner builds the Intel package in about half the time.
-        CiJob("package-intel", MACOS_RUNNER, ("package",), budget=10, scope="manual",
-              env=(("CARGO_BUILD_TARGET", "x86_64-apple-darwin"),)),
-        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), budget=15, report_only=("perf-e2e", "perf-package"),
-              needs=("package-intel",), runtime="native", scope="manual", probe_opengl=True),
-    ]
-}
-# A change to these paths can change any job, so it runs all of them.
-CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest$|scripts/core/|pyproject\.toml$|uv\.lock$)"
-
-
-def ci_jobs_for_event(event):
-    """Return the jobs that an event starts: "pull_request" (all paths), "push", or "manual"."""
-    events = SCOPES[:SCOPES.index(event) + 1]
-    return [name for name, job in CI_JOBS.items() if job.scope in events]
-
-
-def ci_jobs_for_changes(paths):
-    """Return the pull request jobs for the changed paths, with the jobs that they wait for."""
-    jobs = {name: CI_JOBS[name] for name in ci_jobs_for_event("pull_request")}
-    selected = {"static"}
-    for path in paths:
-        if re.search(CI_ALL_PATHS, path):
-            return list(jobs)
-        selected.update(name for name, job in jobs.items() if re.search(job.paths, path))
-    pending = list(selected)
-    while pending:
-        for need in CI_JOBS[pending.pop()].needs:
-            if need not in selected:
-                selected.add(need)
-                pending.append(need)
-    return [name for name in CI_JOBS if name in selected]
-
-
 REQUIREMENTS = {
+    "dbus-run-session": "Install D-Bus to run the isolated secret-store test.",
+    "dbus-send": "Install the D-Bus tools to run the isolated secret-store test.",
+    "gnome-keyring-daemon": "Install GNOME Keyring to run the isolated secret-store test.",
+    "xvfb-run": "Install Xvfb for isolated Linux package smoke checks.",
+    "xdotool": "Install xdotool to observe the packaged Linux window.",
     "cargo": "Install Rust with rustup. rust-toolchain.toml selects the toolchain.",
     "uv": "Install uv: https://docs.astral.sh/uv/getting-started/installation/",
     "shellcheck": "Install ShellCheck, for example `brew install shellcheck`.",
     "actionlint": "Install actionlint, for example `brew install actionlint`.",
-    "macos": "Run this suite on macOS.",
+    "linux-app-libs": "Install the Linux desktop libraries of the application build. "
+                      "On Ubuntu, run `sh scripts/ci/linux-build-deps.sh`.",
     "xcode": "Install the Xcode command-line tools with `xcode-select --install`.",
     "docker": "Install Docker with Compose v2.",
     "docker-running": "Docker is installed but not running. Start Docker Desktop, then run again.",

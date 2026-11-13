@@ -350,7 +350,7 @@ pub enum AssistantEvent {
 /// process forked while a test holds a write descriptor for a script inherits
 /// it, and running the script then fails with ETXTBSY. So only a short-lived
 /// child process writes the executable file.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn write_test_executable(path: &std::path::Path, script: &str) {
     let source = path.with_extension("source");
     std::fs::write(&source, script).unwrap();

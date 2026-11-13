@@ -218,7 +218,11 @@ fn parse_paragraph(
             // so a CRLF document still carries its carriage return here. Take
             // the CR with the newline: dropping only the newline would strand
             // the CR in the middle of the reflowed line.
-            text = val.value.replace("\r\n", " ").replace(['\n', '\r'], " ");
+            text = if cx.markdown_extensions.keeps_line_breaks() {
+                val.value.replace("\r\n", "\n").replace('\r', "\n")
+            } else {
+                val.value.replace("\r\n", " ").replace(['\n', '\r'], " ")
+            };
             paragraph.push_str(&text)
         }
         Node::Emphasis(val) => {

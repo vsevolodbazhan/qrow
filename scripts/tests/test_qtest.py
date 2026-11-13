@@ -3,7 +3,7 @@ import contextlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import tempfile
@@ -29,37 +29,23 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("/tmp/evidence", output.getvalue())
 
 
+class ExecuteTests(unittest.TestCase):
+    def test_a_failed_output_write_does_not_stop_reading_the_step(self):
+        # A Windows console without UTF-8 rejects some test output. The step
+        # must still finish: an unread pipe would block it until its time limit.
+        class Rejecting:
+            def stream(self, line):
+                raise UnicodeEncodeError("charmap", line, 0, 1, "synthetic")
+
+        script = "import sys\nfor _ in range(4000): sys.stdout.write('\u2500' * 40 + '\\n')\n"
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "step.log"
+            code = runner.execute([sys.executable, "-c", script], os.environ.copy(), 60, log, Rejecting())
+            self.assertEqual(code, 0)
+            self.assertIn("\u2500" * 40, log.read_text(encoding="utf-8"))
+
+
 class CatalogTests(unittest.TestCase):
-    def test_hosted_renderer_jobs_probe_hardware_and_keep_units_required(self):
-        for name in ("e2e", "e2e-intel"):
-            job = catalog.CI_JOBS[name]
-            self.assertTrue(job.probe_opengl)
-            self.assertIn("opengl-unit", job.suites)
-            self.assertIn("software-ui", job.suites)
-            self.assertNotIn("opengl-unit", job.report_only)
-        self.assertTrue(catalog.CI_JOBS["perf-ui"].probe_opengl)
-        self.assertIn("perf-renderers", catalog.CI_JOBS["perf-ui"].report_only)
-        self.assertFalse(catalog.CI_JOBS["perf"].probe_opengl)
-        self.assertEqual(catalog.CI_JOBS["perf"].runner, catalog.LINUX)
-        self.assertEqual(runner.opengl.HARDWARE_SUITES,
-                         {"opengl-renderer", "opengl-ui", "perf-renderers"})
-
-    def test_gpu_independent_suite_excludes_substring_matches_in_other_renderers(self):
-        scene, startup = catalog.SUITES["opengl-unit"].steps
-        self.assertIn("hardware_capability_probe", scene.command)
-        self.assertIn("opengl_renderer::tests::", scene.command)
-        for module in ("opengl_renderer::", "software_renderer::"):
-            index = startup.command.index(module)
-            self.assertEqual(startup.command[index - 1], "--skip")
-
-    def test_preparation_steps_require_a_fixture(self):
-        # The runner executes preparation only before starting a server fixture.
-        # Desktop suites without a fixture must build their app in normal steps.
-        for suite in catalog.SUITES.values():
-            with self.subTest(suite=suite.name):
-                if suite.prepare:
-                    self.assertIsNotNone(suite.fixture)
-
     def test_groups_name_existing_suites_without_server_suites(self):
         for name, (_, members) in catalog.GROUPS.items():
             for member in members:
@@ -85,14 +71,37 @@ class CatalogTests(unittest.TestCase):
                 marked = f"| `{suite.name}` * |" in GUIDE
                 self.assertEqual(marked, suite.filterable)
 
-    def test_clippy_app_is_the_application_pass_of_clippy(self):
+    def test_clippy_lints_the_core_and_clippy_app_the_application_on_each_platform(self):
         clippy, app = catalog.SUITES["clippy"], catalog.SUITES["clippy-app"]
+        self.assertEqual(clippy.steps, (catalog.CLIPPY_CORE,))
         self.assertEqual(app.steps, (catalog.CLIPPY_APP,))
-        self.assertTrue(app.macos_only)
-        self.assertEqual(clippy.steps, (catalog.CLIPPY_CORE, catalog.CLIPPY_APP) if catalog.MACOS
-                         else (catalog.CLIPPY_CORE,))
+        self.assertEqual(app.platforms, ("macos", "linux"))
+        # Without ui-test, the UI test targets do not build on Linux.
+        self.assertEqual("ui-test" in catalog.CLIPPY_APP.command, catalog.LINUX_HOST)
         self.assertIn("--no-default-features", catalog.CLIPPY_CORE.command)
         self.assertNotIn("--no-default-features", catalog.CLIPPY_APP.command)
+        for name in ("default", "all"):
+            self.assertIn("clippy-app", catalog.GROUPS[name][1])
+
+    def test_the_application_suites_are_the_same_on_each_platform(self):
+        # unit tests the application too, so Linux runs its unit tests and doctests.
+        unit = catalog.SUITES["unit"]
+        self.assertEqual(unit.steps[0].nextest_filter, "not binary(ui)")
+        for step in unit.steps:
+            self.assertNotIn("--no-default-features", step.command)
+            self.assertEqual("ui-test" in step.command, catalog.LINUX_HOST)
+        for name in ("clippy-app", "unit", "ui", "e2e"):
+            with self.subTest(suite=name):
+                self.assertIn("linux-app-libs", catalog.SUITES[name].requires)
+                self.assertEqual(catalog.SUITES[name].platforms, ("macos", "linux"))
+
+    def test_platforms_replace_a_macos_requirement(self):
+        for suite in catalog.SUITES.values():
+            with self.subTest(suite=suite.name):
+                self.assertNotIn("macos", suite.requires)
+                self.assertTrue(set(suite.platforms) <= set(catalog.PLATFORM_NAMES))
+        macos = [name for name, suite in catalog.SUITES.items() if suite.platforms == ("macos",)]
+        self.assertEqual(macos, ["opengl-unit", "opengl-renderer", "software-ui", "opengl-ui", "perf-renderers", "native-font", "native-ui", "native-assistant", "perf-ui", "perf-e2e", "perf-app", "perf-package", "package", "desktop"])
 
     def test_coverage_serializes_shared_budget_tests_without_changing_selection(self):
         coverage = catalog.SUITES["coverage"]
@@ -113,25 +122,24 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(postgres.explicit_only)
         self.assertIn("docker", postgres.requires)
         self.assertIsNone(postgres.fixture)
-        self.assertIn("postgres", catalog.CI_JOBS["backend"].suites)
+        self.assertIn("--layer", catalog.SUITES["postgres-core"].steps[0].command)
 
     def test_trino_has_its_own_docker_suite_and_backend_ci_job(self):
         trino = catalog.SUITES["trino"]
         self.assertTrue(trino.explicit_only)
         self.assertIn("docker", trino.requires)
         self.assertIsNone(trino.fixture)
-        self.assertIn("trino", catalog.CI_JOBS["backend"].suites)
+        self.assertIn("--layer", catalog.SUITES["trino-core"].steps[0].command)
 
     def test_transfer_probes_run_in_the_perf_backend_job(self):
         kyuubi = catalog.SUITES["perf-kyuubi"]
         # Either runtime works on a computer. The perf-backend job uses Docker.
         self.assertEqual(kyuubi.fixture, "any")
-        self.assertFalse(kyuubi.macos_only)
+        self.assertEqual(kyuubi.platforms, ("macos", "linux"))
         self.assertNotIn("docker", kyuubi.requires)
         self.assertIn("transfer_perf::kyuubi", kyuubi.steps[0].nextest_filter)
         self.assertEqual(kyuubi.prepare, (catalog.TRANSFER_PERF_BUILD,))
-        self.assertIn("perf-kyuubi", catalog.CI_JOBS["perf-backend"].report_only)
-        self.assertEqual(catalog.CI_JOBS["perf-backend"].runtime, "docker")
+        self.assertIn("--no-default-features", kyuubi.steps[0].command)
         # The macOS E2E jobs do not build the integration tests with the perf profile.
         for step in (*catalog.SUITES["perf-e2e"].steps, *catalog.SUITES["perf-e2e"].prepare):
             self.assertNotIn("integration", step.command)
@@ -141,8 +149,8 @@ class CatalogTests(unittest.TestCase):
             self.assertTrue(suite.explicit_only)
             self.assertIn("docker", suite.requires)
             self.assertIn("--perf", suite.steps[0].command)
-            self.assertIn(name, catalog.CI_JOBS["perf-backend"].report_only)
-            self.assertNotIn(name, catalog.CI_JOBS["e2e"].report_only)
+            self.assertEqual(suite.test_runs, 1)
+            self.assertIn("perf", suite.builds[0])
 
     def test_guide_topics_that_the_cli_names_exist(self):
         topics = cli.guide_sections()
@@ -154,7 +162,7 @@ class CatalogTests(unittest.TestCase):
 
 class ChangeRuleTests(unittest.TestCase):
     def test_paths_select_suites(self):
-        rust = ["fmt", "clippy", "rustdoc", "unit", "ui"]
+        rust = ["fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui"]
         cases = {
             "src/ui.rs": rust,
             "tests/ui/support.rs": rust,
@@ -163,6 +171,7 @@ class ChangeRuleTests(unittest.TestCase):
             "deny.toml": ["policy", "deps"],
             "Cargo.lock": [*rust, "policy", "deps"],
             ".github/workflows/test.yml": ["scripts", "policy"],
+            ".github/actions/ci-setup/action.yml": ["scripts", "policy"],
             "scripts/e2e/fixture.py": ["scripts"],
             "qtest": ["scripts"],
             "docs/testing.md": ["scripts"],
@@ -179,10 +188,10 @@ class ChangeRuleTests(unittest.TestCase):
 
     def test_hooks_run_only_their_suites(self):
         cases = {
-            ("pre-commit", "src/lib.rs"): ["fmt", "clippy"],
-            ("pre-push", "src/lib.rs"): ["fmt", "clippy", "rustdoc", "unit", "ui"],
-            ("pre-commit", "Cargo.lock"): ["fmt", "clippy", "policy"],
-            ("pre-push", "Cargo.lock"): ["fmt", "clippy", "rustdoc", "unit", "ui", "policy", "deps"],
+            ("pre-commit", "src/lib.rs"): ["fmt", "clippy", "clippy-app"],
+            ("pre-push", "src/lib.rs"): ["fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui"],
+            ("pre-commit", "Cargo.lock"): ["fmt", "clippy", "clippy-app", "policy"],
+            ("pre-push", "Cargo.lock"): ["fmt", "clippy", "clippy-app", "rustdoc", "unit", "ui", "policy", "deps"],
             ("pre-push", "scripts/qtest/cli.py"): ["scripts"],
             ("pre-push", "docs/queries.md"): [],
         }
@@ -326,141 +335,6 @@ class RunTests(unittest.TestCase):
         self.assertEqual((summary["status"], summary["exit_code"]), ("missing", runner.EXIT_MISSING))
         self.assertEqual([suite["status"] for suite in summary["suites"]], ["skipped", "missing"])
 
-    def test_ci_capability_skip_keeps_renderer_units_required_and_records_evidence(self):
-        capability = {"available": False, "reason": "no hardware pixel format"}
-        selected = [runner.Selected(fake_suite("opengl-unit", "exit 0")),
-                    runner.Selected(fake_suite("opengl-renderer", "exit 7"))]
-        summary = runner.run(selected, {"repeat": 1, "ci_opengl_capability": capability}, [],
-                             runner.Output(quiet=True), require_all=True)
-        self.assertEqual(summary["exit_code"], 0)
-        self.assertEqual([x["status"] for x in summary["suites"]], ["passed", "skipped"])
-        evidence = Path(summary["artifacts"]) / "opengl-capability.json"
-        self.assertEqual(json.loads(evidence.read_text()), capability)
-        self.assertIn("no hardware pixel format", summary["suites"][1]["reason"])
-
-    def test_explicit_hardware_suite_is_strict_even_in_ci_environment(self):
-        with patch.dict(os.environ, {"CI": "true"}):
-            summary = self.run_suites(fake_suite("opengl-renderer", "exit 7"))
-        self.assertEqual(summary["exit_code"], runner.EXIT_FAILED)
-        self.assertEqual(summary["suites"][0]["status"], "failed")
-
-    def test_unavailable_gpu_does_not_skip_other_missing_prerequisites(self):
-        suite = fake_suite("software-ui", "exit 0", requires=("desktop",))
-        with patch.object(runner, "check_requirement", return_value="Grant Accessibility."):
-            result = runner.precheck(runner.Selected(suite), {
-                "ci_opengl_capability": {"available": False, "reason": "no hardware"}})
-        self.assertEqual(result.status, "missing")
-
-    def test_ci_probe_errors_persist_and_fail_even_when_hardware_measurements_are_report_only(self):
-        capability = {"available": None, "error": "probe compile failed", "output": "compiler diagnostic"}
-        selected = [runner.Selected(fake_suite("perf", "exit 0")),
-                    runner.Selected(fake_suite("perf-renderers", "exit 0"))]
-        summary = runner.run(selected, {"repeat": 1, "ci_opengl_capability": capability}, [],
-                             runner.Output(quiet=True), report_only=("perf-renderers",), require_all=True)
-        self.assertEqual(summary["exit_code"], runner.EXIT_FAILED)
-        self.assertEqual(summary["suites"][0]["name"], "opengl-capability")
-        self.assertEqual(summary["suites"][0]["status"], "failed")
-        self.assertEqual(summary["suites"][0]["reason"], "probe compile failed")
-        evidence = Path(summary["artifacts"]) / "opengl-capability.json"
-        self.assertEqual(json.loads(evidence.read_text()), capability)
-        self.assertTrue((Path(summary["artifacts"]) / "summary.json").exists())
-        self.assertEqual([r["status"] for r in summary["suites"][1:]], ["skipped", "skipped"])
-
-    def test_ci_missing_prerequisites_do_not_build_the_capability_probe(self):
-        missing = runner.SuiteResult("software-ui", "missing", reason="Grant Accessibility.")
-        with patch.object(runner, "precheck", return_value=missing), patch.object(cli.opengl, "probe") as probe, \
-                patch.object(runner, "run", return_value={"exit_code": runner.EXIT_MISSING}) as run, \
-                patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
-            code = cli.main(["ci", "e2e"])
-        self.assertEqual(code, runner.EXIT_MISSING)
-        probe.assert_not_called()
-        self.assertNotIn("ci_opengl_capability", run.call_args.args[1])
-        self.assertTrue(run.call_args.kwargs["require_all"])
-
-    def test_ci_jobs_stop_before_they_build_when_a_prerequisite_is_missing(self):
-        with patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
-                patch.object(cli, "print_summary"), patch.object(cli.opengl, "probe", return_value={"available": True}), \
-                patch.object(runner, "precheck", return_value=None), contextlib.redirect_stderr(io.StringIO()):
-            cli.main(["ci", "e2e"])
-        self.assertTrue(run.call_args.kwargs["require_all"])
-
-    def test_renderer_packages_build_release_even_with_a_prebuilt_debug_job(self):
-        # Apply the real runner's precedence: process, job, then step settings.
-        for name in ("software-ui", "opengl-ui", "perf-renderers"):
-            with self.subTest(suite=name):
-                environment = dict(catalog.DEBUG_APP)
-                environment.update(catalog.SUITES[name].steps[0].env)
-                self.assertEqual(environment["QROW_BUILD_PROFILE"], "release")
-                self.assertEqual(environment["QROW_PACKAGE_PREBUILT"], "false")
-
-    def test_the_job_list_shows_the_scope_of_each_job(self):
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            cli.main(["ci"])
-        lines = {line.split()[0]: line for line in output.getvalue().splitlines()}
-        for name, job in catalog.CI_JOBS.items():
-            with self.subTest(job=name):
-                self.assertTrue(lines[name].endswith(cli.SCOPE_NOTES[job.scope]) if job.scope != "pull_request"
-                                else not lines[name].endswith(("requests", "only")))
-
-    def test_plans_of_pushes_and_manual_runs(self):
-        for flag, expected in (("--push", catalog.ci_jobs_for_event("push")), ("--all", list(catalog.CI_JOBS))):
-            output = io.StringIO()
-            with self.subTest(flag=flag), contextlib.redirect_stdout(output):
-                cli.main(["ci", "plan", flag])
-                plan = json.loads(output.getvalue())
-                self.assertEqual([name for name, selected in plan.items() if selected], expected)
-
-    def run_ci(self, *arguments, env=None):
-        with patch.dict(os.environ, env or {}), patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
-                patch.object(cli, "print_summary"), patch.object(runner, "precheck", return_value=None), \
-                patch.object(cli.opengl, "probe", return_value={"available": True}), \
-                contextlib.redirect_stderr(io.StringIO()):
-            os.environ.pop("QROW_CI_MEASURE", None) if env is None else None
-            cli.main(["ci", *arguments])
-            environment = dict(os.environ)
-        return run, environment
-
-    def test_report_only_suites_run_only_when_the_run_measures(self):
-        run, _ = self.run_ci("package")
-        self.assertEqual([item.suite.name for item in run.call_args.args[0]], ["package"])
-        self.assertEqual(run.call_args.kwargs["report_only"], ())
-        for arguments, env in ((("package", "--measure"), None), (("package",), {"QROW_CI_MEASURE": "true"})):
-            with self.subTest(arguments=arguments):
-                run, _ = self.run_ci(*arguments, env=env)
-                self.assertEqual([item.suite.name for item in run.call_args.args[0]], ["package", "perf-app"])
-                self.assertEqual(run.call_args.kwargs["report_only"], ("perf-app",))
-
-    def test_a_measurement_job_does_nothing_when_the_run_does_not_measure(self):
-        run, _ = self.run_ci("perf-ui")
-        run.assert_not_called()
-
-    def test_the_e2e_job_packages_the_executable_of_its_test_build(self):
-        _, environment = self.run_ci("e2e")
-        self.assertEqual(environment["QROW_PACKAGE_PREBUILT"], "true")
-        self.assertEqual(environment["QROW_BUILD_PROFILE"], "debug")
-
-    def test_a_slow_ci_job_warns_about_its_budget(self):
-        job = catalog.CI_JOBS["ui"]
-        for actions, expected in (("true", "::warning title=CI budget::"), ("", "[qtest]")):
-            output, errors = io.StringIO(), io.StringIO()
-            with self.subTest(actions=actions), patch.dict(os.environ, {"GITHUB_ACTIONS": actions}), \
-                    contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
-                cli.report_budget(job, job.budget + 0.5)
-                cli.report_budget(job, job.budget - 0.5)
-                self.assertEqual((output.getvalue() + errors.getvalue()).count(expected), 1)
-
-    def test_a_ci_job_sets_its_environment_and_installs_its_rust_target(self):
-        commands = []
-        with patch.dict(os.environ, {}), patch.object(runner, "run", return_value={"exit_code": 0}), \
-                patch.object(cli, "install_tools", return_value=0), patch.object(cli, "print_summary"), \
-                patch.object(cli.subprocess, "run", side_effect=lambda command, **_: commands.append(command)
-                             or subprocess.CompletedProcess(command, 0)), \
-                contextlib.redirect_stderr(io.StringIO()):
-            cli.main(["ci", "package-intel", "--install"])
-            self.assertEqual(os.environ["CARGO_BUILD_TARGET"], "x86_64-apple-darwin")
-        self.assertEqual(commands, [("rustup", "target", "add", "x86_64-apple-darwin")])
-
     def test_a_nextest_step_that_writes_no_report_does_not_report_old_failures(self):
         report = runner.junit_report()
         report.parent.mkdir(parents=True)
@@ -485,13 +359,6 @@ class RunTests(unittest.TestCase):
         summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))
         self.assertIn(f"dir={os.environ['CARGO_TARGET_DIR']}/package", Path(summary["suites"][0]["log"]).read_text())
 
-    def test_step_environment_names_the_current_run_artifact_directory(self):
-        step = catalog.Step(("sh", "-c", 'echo "dir=$QROW_E2E_ARTIFACTS"'),
-                            env=(("QROW_E2E_ARTIFACTS", "{artifacts}/software-ui"),))
-        summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))
-        log = Path(summary["suites"][0]["log"])
-        self.assertIn(f"dir={log.parent.parent}/software-ui", log.read_text())
-
     def test_a_suite_stops_at_its_first_failed_step(self):
         summary = self.run_suites(fake_suite("steps", "exit 1", "echo second"))
         self.assertNotIn("second", Path(summary["suites"][0]["log"]).read_text().replace("echo second", ""))
@@ -511,6 +378,26 @@ class RunTests(unittest.TestCase):
         script = f'n=$(cat {marker} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {marker}; [ $n -lt 3 ]'
         summary = self.run_suites(fake_suite("flaky", script), repeat=5)
         self.assertIn("Iteration 3 of 5", summary["suites"][0]["reason"])
+
+    def test_a_group_skips_a_suite_of_another_platform_and_a_name_reports_it_missing(self):
+        other = "linux" if catalog.HOST == "macos" else "macos"
+        suite = catalog.Suite("elsewhere", "Fake suite.", (), (), platforms=(other,))
+        skipped = runner.precheck(runner.Selected(suite, explicit=False), {})
+        self.assertEqual(skipped.status, "skipped")
+        self.assertEqual(skipped.reason, f"Requires {catalog.PLATFORM_NAMES[other]}.")
+        missing = runner.precheck(runner.Selected(suite, explicit=True), {})
+        self.assertEqual(missing.status, "missing")
+        self.assertEqual(missing.reason, f"Run this suite on {catalog.PLATFORM_NAMES[other]}.")
+
+    def test_the_linux_libraries_are_found_with_pkg_config(self):
+        with patch.object(runner.catalog, "LINUX_HOST", True), \
+                patch.object(runner, "_succeeds", return_value=False) as succeeds:
+            self.assertEqual(runner.check_requirement("linux-app-libs", {}), catalog.REQUIREMENTS["linux-app-libs"])
+        self.assertEqual(succeeds.call_args.args[0][:2], ["pkg-config", "--exists"])
+        self.assertIn("xkbcommon-x11", succeeds.call_args.args[0])
+        self.assertIn("scripts/ci/linux-build-deps.sh", catalog.REQUIREMENTS["linux-app-libs"])
+        with patch.object(runner.catalog, "LINUX_HOST", False):
+            self.assertIsNone(runner.check_requirement("linux-app-libs", {}))
 
     def test_docker_runtime_needs_docker_instead_of_java(self):
         with patch.object(runner.shutil, "which", return_value=None):
@@ -680,7 +567,7 @@ class ToolArchiveTests(unittest.TestCase):
                 with self.subTest(tool=tool.name, platform=archive.platform):
                     self.assertTrue(archive.url.startswith("https://github.com/"))
                     self.assertIn(tool.version, archive.url)
-                    self.assertTrue(archive.member.endswith(tool.name))
+                    self.assertEqual(PurePosixPath(archive.member).name.removesuffix(".exe"), tool.name)
                     self.assertRegex(archive.sha256, r"^[0-9a-f]{64}$")
             platforms = [archive.platform for archive in tool.archives]
             self.assertEqual(len(platforms), len(set(platforms)), tool.name)
@@ -694,7 +581,8 @@ class ToolArchiveTests(unittest.TestCase):
     def test_host_platform_names_the_system_and_the_processor(self):
         cases = {("Darwin", "arm64"): "macos-aarch64", ("Darwin", "x86_64"): "macos-x86_64",
                  ("Linux", "x86_64"): "linux-x86_64", ("Linux", "aarch64"): "linux-aarch64",
-                 ("Linux", "AMD64"): "linux-x86_64", ("Windows", "AMD64"): None}
+                 ("Linux", "AMD64"): "linux-x86_64", ("Windows", "AMD64"): "windows-x86_64",
+                 ("Windows", "ARM64"): "windows-aarch64", ("FreeBSD", "amd64"): None}
         for (system, machine), expected in cases.items():
             with self.subTest(system=system, machine=machine), \
                     patch.object(catalog.platform, "system", return_value=system), \
@@ -728,6 +616,23 @@ class ToolArchiveTests(unittest.TestCase):
             self.assertTrue(os.access(root / "home/bin/cargo-deny", os.X_OK))
             self.assertEqual(sorted(item.name for item in (root / "home/bin").iterdir()), ["cargo-deny"])
 
+    def test_a_windows_archive_installs_the_executable_under_its_own_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path, digest = self.make_archive(root, "cargo-nextest.exe")
+            tool = catalog.TOOLS["cargo-nextest"]
+            archive = catalog.Archive("windows-x86_64", path.as_uri(), digest, "cargo-nextest.exe")
+            with patch.dict(os.environ, {"CARGO_HOME": str(root / "home")}), contextlib.redirect_stderr(io.StringIO()):
+                self.assertTrue(cli.install_archive(tool, archive))
+            self.assertEqual(sorted(item.name for item in (root / "home/bin").iterdir()), ["cargo-nextest.exe"])
+
+    def test_cargo_nextest_has_an_archive_for_every_native_ci_runner(self):
+        platforms = [archive.platform for archive in catalog.TOOLS["cargo-nextest"].archives]
+        for platform in ("macos-aarch64", "macos-x86_64", "linux-x86_64", "linux-aarch64",
+                         "windows-x86_64", "windows-aarch64"):
+            with self.subTest(platform=platform):
+                self.assertIn(platform, platforms)
+
     def run_install(self, tool, installs, checks):
         """Run install_tools for one fake tool. Returns the commands that it ran."""
         commands = []
@@ -753,6 +658,81 @@ class ToolArchiveTests(unittest.TestCase):
         self.assertEqual(self.run_install(tool, True, [None]), [])
 
 
+class BuildCacheTests(unittest.TestCase):
+    def environment(self, environ, version="sccache 0.19.0", path="/tools/sccache", configured=False):
+        with patch.object(runner, "find_executable", return_value=path), \
+                patch.object(runner, "_tool_version", return_value=version), \
+                patch.object(runner.contract, "cargo_config_paths", return_value={}):
+            if configured:
+                return runner.build_cache_environment(environ)
+            with patch.object(runner, "configured_wrapper", return_value="RUSTC_WRAPPER" in environ):
+                return runner.build_cache_environment(environ)
+
+    def test_a_wrapper_in_the_cargo_configuration_wins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.toml"
+            config.write_text('[build]\nrustc-wrapper = "/usr/bin/ccache"\n')
+            with patch.object(runner.contract, "cargo_config_paths", return_value={"cargo-home/config.toml": config}):
+                self.assertTrue(runner.configured_wrapper({}))
+            config.write_text('[build]\njobs = 2\n')
+            with patch.object(runner.contract, "cargo_config_paths", return_value={"cargo-home/config.toml": config}):
+                self.assertFalse(runner.configured_wrapper({}))
+        with patch.object(runner.contract, "cargo_config_paths", return_value={}):
+            self.assertTrue(runner.configured_wrapper({"CARGO_BUILD_RUSTC_WRAPPER": "ccache"}))
+        self.assertEqual(self.environment({"CARGO_BUILD_RUSTC_WRAPPER": "ccache"}, configured=True), {})
+
+    def test_a_newer_sccache_counts_as_installed(self):
+        with patch.object(runner, "find_executable", return_value="/tools/sccache"), \
+                patch.object(runner, "_tool_version", return_value="sccache 0.21.0"):
+            self.assertIsNone(runner.check_requirement("sccache", {}))
+        with patch.object(runner, "find_executable", return_value=None):
+            self.assertEqual(runner.check_requirement("sccache", {}), catalog.REQUIREMENTS["sccache"])
+
+    def test_only_started_processes_get_the_build_cache(self):
+        # Plans record the environment of qtest. The cache must not change it.
+        script = "import os; print(os.environ.get('RUSTC_WRAPPER'))"
+        environ = {key: value for key, value in os.environ.items()
+                   if key not in ("CI", "RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER")}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(runner, "usable_sccache", return_value="/tools/sccache"), \
+                patch.object(runner, "configured_wrapper", return_value=False), \
+                patch.dict(os.environ, environ, clear=True):
+            log = Path(directory) / "step.log"
+            self.assertEqual(runner.execute([sys.executable, "-c", script], dict(os.environ), 60, log,
+                                            runner.Output(quiet=True)), 0)
+            self.assertIn("/tools/sccache", log.read_text(encoding="utf-8"))
+            self.assertNotIn("RUSTC_WRAPPER", os.environ)
+
+    def test_a_tool_outside_path_is_found_in_the_cargo_bin_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tool = Path(directory) / "bin" / "fake-tool"
+            tool.parent.mkdir()
+            tool.write_text("#!/bin/sh\n")
+            tool.chmod(0o755)
+            with patch.dict(os.environ, {"CARGO_HOME": directory, "PATH": ""}):
+                self.assertEqual(runner.find_executable("fake-tool"), str(tool))
+                self.assertIsNone(runner.find_executable("missing-tool"))
+
+    def test_an_installed_sccache_becomes_the_rustc_wrapper_in_client_side_mode(self):
+        self.assertEqual(self.environment({}), {"RUSTC_WRAPPER": "/tools/sccache", "SCCACHE_CLIENT_SIDE": "1",
+                                                "SCCACHE_IGNORE_SERVER_IO_ERROR": "1"})
+        self.assertEqual(self.environment({}, version="sccache 0.21.3")["RUSTC_WRAPPER"], "/tools/sccache")
+
+    def test_sccache_settings_of_the_user_win(self):
+        self.assertEqual(self.environment({"SCCACHE_CLIENT_SIDE": "0"}),
+                         {"RUSTC_WRAPPER": "/tools/sccache", "SCCACHE_IGNORE_SERVER_IO_ERROR": "1"})
+
+    def test_no_build_cache_without_a_usable_sccache(self):
+        self.assertEqual(self.environment({}, version=None, path=None), {})
+        self.assertEqual(self.environment({}, version="sccache 0.18.2"), {})
+        self.assertEqual(self.environment({}, version="not a version"), {})
+
+    def test_ci_and_a_rustc_wrapper_of_the_user_turn_the_build_cache_off(self):
+        self.assertEqual(self.environment({"CI": "true"}), {})
+        self.assertEqual(self.environment({"RUSTC_WRAPPER": ""}), {})
+        self.assertEqual(self.environment({"RUSTC_WRAPPER": "/usr/bin/ccache"}), {})
+
+
 class CommandLineTests(unittest.TestCase):
     def call(self, *argv):
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -762,6 +742,15 @@ class CommandLineTests(unittest.TestCase):
             except SystemExit as exit:
                 code = exit.code
         return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_doctor_reports_a_suite_of_another_platform(self):
+        other = "linux" if catalog.HOST == "macos" else "macos"
+        suite = catalog.Suite("elsewhere", "Fake suite.", (), (), platforms=(other,))
+        with patch.dict(catalog.SUITES, {"elsewhere": suite}):
+            code, out, _ = self.call("doctor", "--json", "elsewhere")
+        self.assertEqual(code, runner.EXIT_MISSING)
+        self.assertEqual(json.loads(out), [{"requirement": "platform", "ok": False, "suites": ["elsewhere"],
+                                            "fix": f"Run this suite on {catalog.PLATFORM_NAMES[other]}."}])
 
     def test_usage_errors_exit_with_two(self):
         self.assertEqual(self.call("run", "nosuch")[0], runner.EXIT_USAGE)

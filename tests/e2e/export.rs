@@ -463,7 +463,8 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
     app.update(cx, |window, _| {
         let heading = window.find("export-notification-filename");
         let actions = window.find("export-progress-actions");
-        assert!(actions.bounds().top() >= heading.bounds().bottom());
+        // Cancel is the only action, so it shares the row with the text.
+        assert!(actions.bounds().left() >= heading.bounds().right());
     });
     app.click_labelled(cx, "Cancel");
     gate.resume();
@@ -595,7 +596,7 @@ fn kyuubi_run_export_keeps_session_state_and_all_preview_pages(cx: &mut TestAppC
         assert_eq!(&row[0], expected.to_string());
     }
     app.wait_until(cx, "the export preview", QUERY_TIMEOUT, |window, _| {
-        window.find("result-loaded").label() == Some("2123 loaded")
+        window.find("result-loaded").label() == Some("2,123 loaded")
     });
     app.wait_cell(cx, 0, 1, "0");
     app.wait_status(cx, "Preview: Export download complete");
@@ -647,7 +648,7 @@ fn kyuubi_run_export_again_uses_result_sql_after_disconnect_without_session_warn
         );
     }
     app.wait_until(cx, "the rerun preview", QUERY_TIMEOUT, |window, _| {
-        window.find("result-loaded").label() == Some("2123 loaded")
+        window.find("result-loaded").label() == Some("2,123 loaded")
     });
     app.wait_status(cx, "Preview: Export download complete");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
@@ -738,6 +739,11 @@ fn kyuubi_run_export_explicit_rerun_refreshes_preview_and_retry_survives_tab_clo
     cx.simulate_new_path_selection(|_| Some(blocked.clone()));
     app.wait_gone(cx, "export-save");
     app.wait_label(cx, "Retry…");
+    app.wait_until(cx, "the rerun preview", QUERY_TIMEOUT, |window, _| {
+        find_in(window, ("row", 0usize), ("cell", 1usize))
+            .is_some_and(|cell| cell.label().is_some())
+    });
+    // A result selects the Results panel, so read Logs after the preview.
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
     let fresh = app.update(cx, |window, _| {
         find_in(window, ("row", 0usize), ("cell", 1usize))

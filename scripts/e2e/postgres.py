@@ -7,27 +7,49 @@ import subprocess
 import tempfile
 import time
 import uuid
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/qtest"))
+import builds  # noqa: E402
+
 IMAGE = "postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24"
 
 
+# The real-window tests run on macOS and Linux. On Linux, GPUI's test support
+# is behind the ui-test feature.
+UI_TEST_FEATURE = ("--features", "ui-test") if platform.system() == "Linux" else ()
+
+
 def command(*args, **kwargs):
+    if args[:3] == ("cargo", "nextest", "run"):
+        # A layer selects scenarios, not different fixture behavior.
+        layer = os.environ.get("QROW_CONNECTOR_LAYER", "all")
+        core = "--no-default-features" in args
+        if layer != "all" and core != (layer == "core"):
+            return None
+        return builds.run(list(args), kwargs.get("env"))
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--perf", action="store_true", help="Measure export transfer in an optimized build.")
+    parser.add_argument("--layer", choices=("all", "core", "ui"), default="all")
     options = parser.parse_args()
+    if options.perf and options.layer == "ui":
+        parser.error("--perf requires core tests")
+    os.environ["QROW_CONNECTOR_LAYER"] = options.layer
     name = "qrow-e2e-postgres-" + uuid.uuid4().hex[:12]
     env = os.environ.copy()
     profile = "ci" if env.get("CI") else "default"
     # Compile before starting the server, so builds do not consume its resources.
     build = ("--profile", "perf") if options.perf else ()
-    command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
-    if not options.perf and platform.system() == "Darwin":
-        command("cargo", "test", "--locked", "--test", "e2e", "--no-run")
+    if not os.environ.get("QROW_NEXTEST_RUNTIME"):
+        if options.layer != "ui":
+            command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
+        if not options.perf and options.layer != "core":
+            command("cargo", "test", "--locked", *UI_TEST_FEATURE, "--test", "e2e", "--no-run")
     target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     fixture_root = target / "qtest" / "postgres"
     fixture_root.mkdir(parents=True, exist_ok=True)
@@ -35,12 +57,18 @@ def main():
         path = Path(temporary)
         # Synthetic certificates identify only this local fixture.
         quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        # An explicit configuration gives OpenSSL and LibreSSL the same CA. Python
+        # 3.13 verifies X.509 strictly and needs both key identifiers.
+        (path / "ca.cnf").write_text("[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n[dn]\nCN=Qrow Postgres test CA\n"
+                                     "[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n"
+                                     "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n")
         command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                "-subj", "/CN=Qrow Postgres test CA", "-keyout", str(path / "ca.key"),
+                "-config", str(path / "ca.cnf"), "-keyout", str(path / "ca.key"),
                 "-out", str(path / "ca.crt"), **quiet)
         command("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
                 "-keyout", str(path / "server.key"), "-out", str(path / "server.csr"), **quiet)
-        (path / "extensions").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n")
+        (path / "extensions").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n"
+                                           "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
         command("openssl", "x509", "-req", "-in", str(path / "server.csr"), "-CA", str(path / "ca.crt"),
                 "-CAkey", str(path / "ca.key"), "-CAcreateserial", "-days", "1", "-extfile", str(path / "extensions"),
                 "-out", str(path / "server.crt"), **quiet)
@@ -82,9 +110,8 @@ def main():
                 return
             command("cargo", "nextest", "run", "--locked", "--profile", profile, "--no-default-features", "--test", "integration",
                     "--run-ignored", "ignored-only", "-E", "test(/^postgres::/)", env=env)
-            if platform.system() == "Darwin":
-                command("cargo", "nextest", "run", "--locked", "--profile", profile, "--test", "e2e", "--run-ignored", "ignored-only",
-                        "-E", "test(/^postgres::/)", env=env)
+            command("cargo", "nextest", "run", "--locked", "--profile", profile, *UI_TEST_FEATURE, "--test", "e2e", "--run-ignored", "ignored-only",
+                    "-E", "test(/^postgres::/)", env=env)
         finally:
             subprocess.run(["docker", "logs", name], check=False)
             if started:

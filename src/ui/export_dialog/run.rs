@@ -12,7 +12,7 @@ pub(super) struct Intent {
 impl Qrow {
     pub(in crate::ui) fn open_run_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let index = self.active;
-        if self.tabs[index].busy || self.form.is_some() || self.settings_open {
+        if self.tabs[index].busy || self.form.is_some() {
             return;
         }
         let Some(profile) = self
@@ -22,7 +22,11 @@ impl Qrow {
             .cloned()
         else {
             window.push_notification(
-                Notification::error("Choose a connection before running SQL."),
+                toast::error(
+                    "export-error-toast",
+                    "Could not export results",
+                    "Choose a connection before running SQL.",
+                ),
                 cx,
             );
             return;
@@ -30,14 +34,24 @@ impl Qrow {
         let sql = match self.selected_tab_sql(index, window, cx) {
             Ok(sql) => sql,
             Err(message) => {
-                window.push_notification(Notification::error(message), cx);
+                window.push_notification(
+                    toast::error("export-error-toast", "Could not export results", message),
+                    cx,
+                );
                 return;
             }
         };
         if let Err(error) = crate::sql::validate_single_for(&sql, profile.database_type)
             .and_then(|_| profile.validate())
         {
-            window.push_notification(Notification::error(error.to_string()), cx);
+            window.push_notification(
+                toast::error(
+                    "export-error-toast",
+                    "Could not export results",
+                    error.to_string(),
+                ),
+                cx,
+            );
             return;
         }
         let tab = &self.tabs[index];
@@ -57,7 +71,14 @@ impl Qrow {
         } {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                window.push_notification(Notification::error(error.to_string()), cx);
+                window.push_notification(
+                    toast::error(
+                        "export-error-toast",
+                        "Could not export results",
+                        error.to_string(),
+                    ),
+                    cx,
+                );
                 return;
             }
         };

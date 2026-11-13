@@ -14,9 +14,11 @@ pub mod oidc;
 pub mod pagination;
 pub mod sql;
 pub mod storage;
+mod sync;
 #[cfg(feature = "ui")]
 mod themes;
 pub mod tls;
 #[cfg(feature = "ui")]
 pub mod ui;
+pub mod update;
 pub mod worker;

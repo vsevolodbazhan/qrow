@@ -1,19 +1,29 @@
 [package]
 name = "qrow"
-version = "0.4.0"
+version = "0.5.1"
 edition = "2024"
-description = "An SQL workbench for macOS."
+description = "Desktop SQL workbench, written in Rust."
 license = "MIT"
+homepage = "https://qrow.dev"
+repository = "https://github.com/vsevolodbazhan/qrow"
+# Qrow ships as release packages. crates.io ignores the patches in vendor/.
+publish = false
 default-run = "qrow"
 
 [features]
 default = ["ui"]
 ui = ["dep:gpui-kit", "dep:tree-sitter-sequel", "dep:async-channel"]
+ui-test = ["ui", "gpui-kit/test-support"]
 
 [[bin]]
 name = "qrow"
 path = "src/main.rs"
 required-features = ["ui"]
+
+# Embeds the icon and version resources of the Windows executable. Build
+# scripts compile for the host, so this is not limited to Windows hosts.
+[build-dependencies]
+embed-resource = "=3.0.11"
 
 [dependencies]
 anyhow = "1"
@@ -34,6 +44,8 @@ serde = { version = "1", features = ["derive", "rc"] }
 # GPUI turns this on for the app; the core library must not depend on it.
 serde_json = { version = "1", features = ["preserve_order", "raw_value", "arbitrary_precision"] }
 sqlformat = "0.5"
+# Reports the workspace fields that this build does not know, so a save keeps them.
+serde_ignored = "0.1"
 tempfile = "3"
 thrift = { version = "0.24", default-features = false }
 url = "2"
@@ -51,17 +63,33 @@ unicode-segmentation = "=1.13.3"
 parquet = { version = "=60.0.0", default-features = false, features = ["snap", "flate2", "flate2-rust_backend"] }
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 chrono-tz = { version = "=0.10.4", default-features = false, features = ["std"] }
+# Verifies the minisign signature of release checksums before an update.
+minisign-verify = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
+open = { version = "=5.4.4", features = ["shellexecute-on-windows"] }
+rustls-platform-verifier = "=0.7.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Unpack the Linux release archive during an update.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
+oo7 = { version = "0.6", default-features = false, features = ["async-std", "native_crypto"] }
+futures-lite = "2"
+
 [dev-dependencies]
+# Signs synthetic release checksums with synthetic keys in update tests.
+minisign = "0.7"
 csv = "1"
 proptest = "=1.11.0"
 
-# Headless UI integration tests of the real Qrow window. The UI builds only on
-# macOS; keep the version and source equal to the normal dependency.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Headless UI integration tests of the real Qrow window. Keep the version and
+# source equal to the normal dependency.
+[target.'cfg(any(target_os = "macos", windows))'.dev-dependencies]
 gpui-kit = { version = "=0.6.6", features = ["tree-sitter", "test-support"] }
 
 [[test]]

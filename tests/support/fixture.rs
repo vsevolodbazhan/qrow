@@ -1,7 +1,8 @@
 //! The disposable servers that `./qtest run e2e` provides. A test fails, and
 //! does not skip, when it runs without them.
-use super::{MemoryCredentials, TestApp, cell, connection_row, label};
-use gpui_kit::TestAppContext;
+use super::{MemoryCredentials, TestApp, cell, connection_row, label, present};
+use gpui_kit::test::TestWindowExt;
+use gpui_kit::{ElementId, TestAppContext};
 use qrow::{
     model::{Profile, SavedTab, Workspace},
     storage::Credentials,
@@ -120,7 +121,7 @@ impl TestApp {
     /// Replaces the SQL of the active tab and runs it.
     pub fn run_sql(&self, cx: &mut TestAppContext, sql: &str) {
         self.type_sql(cx, sql);
-        self.click(cx, "run");
+        self.click_ready(cx, "run");
     }
 
     /// Waits until the status of the active tab starts with `prefix`, like
@@ -159,11 +160,24 @@ impl TestApp {
         });
     }
 
-    /// The text of Logs, through Copy All Logs.
+    /// The text of Logs, through Copy All Logs. A query result selects the
+    /// Results panel, so a result that arrives after the click on the Logs
+    /// tab hides Logs again. Select Logs until Copy All shows.
     pub fn logs(&self, cx: &mut TestAppContext) -> String {
-        self.click(cx, "output-panel-tab");
-        self.wait_for(cx, "output-copy-all");
-        self.click(cx, "output-copy-all");
+        let copy_all = ElementId::Name("output-copy-all".into());
+        self.wait_until(
+            cx,
+            "Logs with Copy All",
+            Duration::from_secs(10),
+            |window, cx| {
+                if present(window, &copy_all) {
+                    return true;
+                }
+                window.click(ElementId::Name("output-panel-tab".into()), cx);
+                false
+            },
+        );
+        self.click(cx, copy_all);
         self.settle(cx);
         let text = cx
             .read_from_clipboard()

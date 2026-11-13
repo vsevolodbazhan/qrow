@@ -19,7 +19,9 @@ qrow_target_dir="${CARGO_TARGET_DIR:-target}"
 qrow_tools="$qrow_target_dir/e2e-tools"
 qrow_driver="$qrow_tools/native-driver"
 mkdir -p "$qrow_tools"
-if [ ! -x "$qrow_driver" ] || [ -n "$(find tests/desktop/Driver.swift -newer "$qrow_driver" -print)" ]; then
+if [ "${QROW_NATIVE_PREPARED:-false}" = true ]; then
+    test -x "$qrow_driver" || { echo "Missing prepared native driver." >&2; exit 1; }
+elif [ ! -x "$qrow_driver" ] || [ -n "$(find tests/desktop/Driver.swift -newer "$qrow_driver" -print)" ]; then
     swiftc -warnings-as-errors tests/desktop/Driver.swift -o "$qrow_driver"
 fi
 # Only this mode runs the permission check. In the other modes, the driver
@@ -32,6 +34,8 @@ if [ "${1:-}" = --preflight ]; then
     exit 0
 fi
 export QROW_DATA_DIR="$QROW_E2E_ARTIFACTS/workspace"
+# A packaged release build must not check GitHub for updates during tests.
+export QROW_NO_UPDATES=1
 export QROW_DIST_DIR="$QROW_E2E_ARTIFACTS/package"
 export QROW_E2E_BUNDLE="$QROW_DIST_DIR/Qrow.app"
 QROW_E2E_REUSE_MACOS_PACKAGE="${QROW_E2E_REUSE_MACOS_PACKAGE:-false}"

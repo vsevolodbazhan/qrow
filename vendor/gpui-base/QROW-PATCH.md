@@ -5,6 +5,11 @@ has an Apache 2.0 license. See `LICENSE-APACHE`.
 
 Qrow changes these files:
 
+- `src/test_support.rs`: snapshots expose the native click action through
+  `is_clickable`. Enabled buttons do not expose an explicit disabled flag in
+  this GPUI version. The test harness checks the click action before input.
+  `tests/ui/timing.rs` covers enabled and disabled production Run buttons.
+
 - `src/input/base/element.rs`: the active line paint now covers the editor's
   right padding.
 - `src/text/inline_flow.rs`: a Markdown line with inline code keeps one line at
@@ -73,5 +78,38 @@ Qrow changes these files:
   memory, and the tint shows most of the time. The Qrow UI test
   `the_editor_tints_the_statement_that_run_uses` is the regression test.
 
+- `src/tree.rs`: `TreeState` implements `Focusable`, so a context menu of a
+  tree row can show the shortcuts that the tree binds.
+- `src/tooltip.rs`: a scroll wheel event hides the managed tooltip, as it
+  already hid on a key press, a mouse press, and a pointer move off the
+  trigger. Before, a tooltip stayed on the screen while its trigger scrolled
+  away.
+- `src/input/base/element.rs`: the placeholder of an empty multi-line input
+  wraps at its spaces to the text width. Before, a narrow SQL editor cut its
+  placeholder off at the right edge. GPUI tests do not shape real text, so
+  this change has no test.
+- `src/input/base/state.rs`: `set_auto_grow` fits the row count to the
+  current text at once. Before, the new limit set the row count to the
+  minimum until the next edit, so a field that held a long message shrank.
+  Qrow changes the limit of the message field when the window height changes.
+  The Qrow UI test `the_message_field_grows_with_its_text_up_to_a_limit` is
+  the regression test.
+- `src/text/markdown_ext.rs`, `src/text/format/markdown.rs`, and
+  `src/text/text_view.rs`: `MarkdownExtensions::line_breaks` and
+  `TextView::markdown_line_breaks` show each line ending in a paragraph as a
+  line break. CommonMark joins the lines with spaces. Qrow uses the option for
+  the messages that you send, so a message with SQL keeps its lines. The Qrow
+  UI test `a_message_keeps_its_line_breaks` is the regression test.
+
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.
+
+- Input paint can interpolate short horizontal caret movements with the existing motion engine. The styled layer supplies the duration. Logical input and popup geometry stay immediate. Mouse placement, selection, IME, scrolling, layout changes, and large jumps disable interpolation. Reduced motion remains immediate.
+
+- Discrete input wheel events can use a caller-supplied transition duration. Targets accumulate and stay within the viewport limits. Pixel gestures, typing, mouse placement, and direct viewport changes cancel pending travel. Frame requests stop when the target is reached.
+
+- `InputEditorStyle::auto_grow_transition` opts into content-driven height
+  transitions for auto-grow inputs. The default is zero. Direct window, width,
+  and line-height changes snap to their new size. Reduced motion and zero
+  duration settle immediately. Keyed transitions reverse from their current
+  height and stop requesting frames when settled.

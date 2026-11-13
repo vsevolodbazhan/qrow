@@ -12,7 +12,6 @@ use crate::{
     },
     model::{DbtProject, DbtRefresh, parse_schema_rules},
 };
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IndexPath, Sizable as _,
     button::Button,
@@ -38,6 +37,9 @@ use uuid::Uuid;
 const AUTOMATIC: &str = "Automatic";
 const MANUAL: &str = "Manual";
 
+/// A dbt lookup with the project and the match mode that made it.
+type CachedLookup = (DbtProject, bool, Rc<DbtLookup>);
+
 /// The dbt worker and the state of each manifest.
 pub(super) struct DbtProjects {
     worker: DbtWorker,
@@ -49,6 +51,10 @@ pub(super) struct DbtProjects {
     configured: Vec<(Uuid, String, bool)>,
     /// The schema tree shows dbt data of projects that changed.
     tree_stale: bool,
+    /// The last lookup of each connection, with the project and the match
+    /// mode that made it. A tree rebuild uses it again while its index,
+    /// project, and mode stay the same.
+    lookups: std::cell::RefCell<HashMap<Uuid, CachedLookup>>,
 }
 
 impl DbtProjects {
@@ -73,6 +79,7 @@ impl DbtProjects {
             keys: HashMap::new(),
             configured: Vec::new(),
             tree_stale: false,
+            lookups: Default::default(),
         }
     }
 
@@ -160,7 +167,10 @@ impl Qrow {
                 } => {
                     for (profile, key) in &self.dbt.keys {
                         if *key == manifest {
-                            activity.push((*profile, ActivityEntry::new(severity, text.clone())));
+                            activity.push((
+                                *profile,
+                                ActivityEntry::new(severity, text.clone()).with_source("dbt"),
+                            ));
                         }
                     }
                 }
@@ -211,39 +221,31 @@ impl Qrow {
     }
 
     /// The dbt resources of the tables of each connection with a dbt index.
-    pub(super) fn dbt_lookups(&self) -> HashMap<Uuid, DbtLookup> {
-        self.profiles
+    /// A lookup is made again only when its index, project, or match mode
+    /// changes.
+    pub(super) fn dbt_lookups(&self) -> HashMap<Uuid, Rc<DbtLookup>> {
+        let mut cache = self.dbt.lookups.borrow_mut();
+        let lookups: HashMap<Uuid, Rc<DbtLookup>> = self
+            .profiles
             .iter()
             .filter_map(|profile| {
                 let project = profile.dbt.as_ref()?;
                 let index = self.dbt.state(profile.id)?.index.clone()?;
-                let mut relations = matching::relations(&index, project);
                 let exact = profile.database_type == crate::model::DatabaseType::Postgres;
-                if exact {
-                    relations = relations
-                        .into_values()
-                        .map(|position| {
-                            let entry = index.entry(position);
-                            (
-                                (
-                                    matching::mapped_schema(&index, entry, project),
-                                    entry.identifier.to_string(),
-                                ),
-                                position,
-                            )
-                        })
-                        .collect();
+                if let Some((cached_project, cached_exact, lookup)) = cache.get(&profile.id)
+                    && cached_project == project
+                    && *cached_exact == exact
+                    && Arc::ptr_eq(&lookup.index, &index)
+                {
+                    return Some((profile.id, lookup.clone()));
                 }
-                Some((
-                    profile.id,
-                    DbtLookup {
-                        index,
-                        relations,
-                        exact,
-                    },
-                ))
+                let lookup = Rc::new(DbtLookup::new(index, project, exact));
+                cache.insert(profile.id, (project.clone(), exact, lookup.clone()));
+                Some((profile.id, lookup))
             })
-            .collect()
+            .collect();
+        cache.retain(|id, _| lookups.contains_key(id));
+        lookups
     }
 
     /// Whether Qrow parses the manifest of `profile` now.
@@ -271,6 +273,7 @@ impl Qrow {
                     form.dbt.manifest.update(cx, |input, cx| {
                         input.set_value(path.to_string_lossy().into_owned(), window, cx)
                     });
+                    show_path_end(&form.dbt.manifest, cx);
                 }
                 cx.notify();
             });
@@ -351,7 +354,6 @@ impl Qrow {
                 false,
                 |_, form, _, _| {
                     Select::new(&form.dbt.refresh)
-                        .focus_ring(false)
                         .id("connection-dbt-refresh")
                         .w_full()
                         .disabled(form.saving.is_some())
@@ -380,7 +382,6 @@ impl Qrow {
                                 .w_full()
                                 .child(
                                     Textarea::new(&form.dbt.rules)
-                                        .focus_ring(false)
                                         .w_full()
                                         .disabled(form.saving.is_some())
                                         .font_family("Menlo")
@@ -412,14 +413,27 @@ impl Qrow {
                 h_flex()
                     .w_full()
                     .gap_2()
-                    .child(
-                        Input::new(&form.dbt.manifest)
-                            .focus_ring(false)
-                            .id("connection-dbt-manifest")
+                    .child({
+                        // The field may cut a long path; the tooltip has all of it.
+                        let path = form.dbt.manifest.read(cx).value().to_string();
+                        div()
+                            .id("connection-dbt-manifest-path")
                             .flex_1()
-                            .disabled(saving)
-                            .aria_label("Manifest"),
-                    )
+                            .min_w_0()
+                            .when(!path.is_empty(), |el| {
+                                el.tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(path.clone())
+                                        .build(window, cx)
+                                })
+                            })
+                            .child(
+                                Input::new(&form.dbt.manifest)
+                                    .id("connection-dbt-manifest")
+                                    .w_full()
+                                    .disabled(saving)
+                                    .aria_label("Manifest"),
+                            )
+                    })
                     .child(
                         Button::new("connection-dbt-choose")
                             .label("Choose…")
@@ -440,16 +454,18 @@ impl Qrow {
                         )
                     }),
             )
-            .child(
-                div()
-                    .id("connection-dbt-status")
-                    .test_support()
-                    .role(Role::Status)
-                    .aria_label(view.status.clone())
-                    .text_sm()
-                    .text_color(muted)
-                    .child(view.status.clone()),
-            )
+            .when(!view.status.is_empty(), |el| {
+                el.child(
+                    div()
+                        .id("connection-dbt-status")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(view.status.clone())
+                        .text_sm()
+                        .text_color(muted)
+                        .child(view.status.clone()),
+                )
+            })
             .into_any_element()
     }
 
@@ -610,6 +626,30 @@ pub(super) struct DbtLookup {
 }
 
 impl DbtLookup {
+    fn new(index: Arc<Index>, project: &DbtProject, exact: bool) -> Self {
+        let mut relations = matching::relations(&index, project);
+        if exact {
+            relations = relations
+                .into_values()
+                .map(|position| {
+                    let entry = index.entry(position);
+                    (
+                        (
+                            matching::mapped_schema(&index, entry, project),
+                            entry.identifier.to_string(),
+                        ),
+                        position,
+                    )
+                })
+                .collect();
+        }
+        Self {
+            index,
+            relations,
+            exact,
+        }
+    }
+
     /// The badge of the table `relation` in `schema`, which has the catalog
     /// comment `comment`.
     pub(super) fn badge(
@@ -809,6 +849,7 @@ impl DbtForm {
                 .placeholder("/path/to/project/target/manifest.json")
                 .default_value(project.map(|p| p.manifest.clone()).unwrap_or_default())
         });
+        show_path_end(&manifest, cx);
         let refresh = project.map_or(DbtRefresh::Automatic, |project| project.refresh);
         let refresh = cx.new(|cx| {
             SelectState::new(
@@ -879,9 +920,18 @@ fn refresh_choice(select: &connection_form::ChoiceSelect, cx: &App) -> DbtRefres
     }
 }
 
+/// Put the cursor of the path field at the end, so that a long path shows
+/// its file name rather than its first folders.
+fn show_path_end(input: &Entity<InputState>, cx: &mut App) {
+    input.update(cx, |input, cx| {
+        let end = input.value().len();
+        input.set_selected_range(end..end, cx);
+    });
+}
+
 /// Replace a leading `~/` with the home folder.
 fn expand_home(path: &str) -> String {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+    match (path.strip_prefix("~/"), crate::storage::home_dir()) {
         (Some(rest), Some(home)) => Path::new(&home).join(rest).to_string_lossy().into_owned(),
         _ => path.to_owned(),
     }
@@ -889,9 +939,9 @@ fn expand_home(path: &str) -> String {
 
 /// The line below the manifest field.
 fn manifest_status(typed: &str, saved: bool, state: Option<&ManifestState>) -> String {
+    // The help of the field already says what to enter.
     if typed.is_empty() {
-        return "The manifest.json file that dbt writes in the target folder of the project."
-            .into();
+        return String::new();
     }
     if !saved {
         return "Read after you save.".into();
@@ -956,7 +1006,7 @@ mod tests {
 
     #[test]
     fn the_status_follows_the_field_and_the_manifest() {
-        assert!(manifest_status("", false, None).starts_with("The manifest.json file"));
+        assert!(manifest_status("", false, None).is_empty());
         assert_eq!(
             manifest_status("/m.json", false, None),
             "Read after you save."

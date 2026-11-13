@@ -1,4 +1,4 @@
-use crate::support::{MemoryCredentials, TestApp, cell, connection_row, header};
+use crate::support::{MemoryCredentials, REVEAL_LABEL, TestApp, cell, connection_row, header};
 use gpui_kit::{TestAppContext, test::TestWindowExt};
 use qrow::{
     model::{DatabaseType, PostgresSslMode, Profile, SavedTab, Workspace},
@@ -66,7 +66,7 @@ fn command_c_copies_postgres_selection_as_pretty_markdown(cx: &mut TestAppContex
     app.press(cx, "shift-right");
     app.press(cx, "shift-down");
     cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.wait_until(
         cx,
         "Markdown selection",
@@ -246,7 +246,7 @@ fn run_export_keeps_temp_tables_uncommitted_rows_and_exact_values(cx: &mut TestA
     app.wait_status(cx, "Preview: Export download complete");
     app.wait_cell(cx, 0, 1, "1");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("result-loaded").label(), Some("100000 loaded"))
+        assert_eq!(window.find("result-loaded").label(), Some("100,000 loaded"))
     });
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 4);
     assert_eq!(app.logs(cx).matches("Connected to").count(), 1);
@@ -565,23 +565,106 @@ fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
     let (workspace, credentials) = workspace(sql);
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "formatted SQL",
         std::time::Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql.starts_with("SELECT"),
     );
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "日本語😀; select");
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(
         cx,
         "format undo",
         std::time::Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql == sql,
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn imported_sql_file_runs_and_saves_as_a_query_tab(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace("SELECT 1");
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("imported.sql");
+    let output = directory.path().join("saved.sql");
+    let sql = "SELECT 42 AS imported_value";
+    std::fs::write(&input, sql).unwrap();
+    app.press(cx, "secondary-o");
+    cx.simulate_path_prompt_response(|_| Some(vec![input]));
+    app.wait_until(
+        cx,
+        "imported tab",
+        std::time::Duration::from_secs(10),
+        |_, _| {
+            app.saved()
+                .tabs
+                .iter()
+                .any(|tab| tab.title == "imported" && tab.sql == sql)
+        },
+    );
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "42");
+    app.press(cx, "secondary-shift-s");
+    cx.simulate_new_path_selection(|_| Some(output.clone()));
+    app.wait_until(
+        cx,
+        "saved SQL",
+        std::time::Duration::from_secs(10),
+        |_, _| std::fs::read_to_string(&output).ok().as_deref() == Some(sql),
+    );
+    app.wait_for(cx, "sql-file-saved-detail");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("sql-file-saved-filename").label(),
+            Some("saved.sql")
+        );
+        assert_eq!(window.find("reveal-sql-file").label(), Some(REVEAL_LABEL));
+        assert!(window.find("reveal-sql-file").visible());
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn logged_query_actions_remain_inside_code_after_execution(cx: &mut TestAppContext) {
+    use crate::support::{bounds_of, elements};
+    let sql = format!(
+        "SELECT\n'{}' AS value\nFROM\n(\nSELECT 1\n) AS source",
+        "東京".repeat(300)
+    );
+    let (workspace, credentials) = workspace(&sql);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.click(cx, "output-panel-tab");
+    app.update(cx, |window, _| {
+        let block = bounds_of(window, "sql");
+        let text = bounds_of(window, "sql-text");
+        for name in ["output-copy-query", "output-expand"] {
+            let button = elements(window).into_iter().find(|element| {
+                element.path().iter().any(|id| matches!(id, gpui_kit::ElementId::NamedInteger(id, _) if id.as_ref() == name))
+            }).expect("query action").bounds();
+            assert!(button.top() >= block.top() && button.bottom() <= block.bottom());
+            assert!(button.right() <= block.right() && button.left() >= text.right());
+        }
+    });
+    app.click_labelled(cx, "Copy query");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(sql)
+    );
+    app.click_labelled(cx, "Expand query");
+    app.wait_until(
+        cx,
+        "expanded SQL",
+        std::time::Duration::from_secs(10),
+        |window, _| crate::support::labelled(window, "Collapse query").is_some(),
     );
 }

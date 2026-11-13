@@ -39,6 +39,20 @@ use crate::input::{
 };
 use crate::{AutoScroll, StepAction};
 
+#[cfg(not(target_family = "wasm"))]
+use std::time::Instant as MotionInstant;
+#[cfg(target_family = "wasm")]
+use web_time::Instant as MotionInstant;
+
+#[derive(Clone, Copy)]
+struct WheelScroll {
+    from: Point<Pixels>,
+    target: Point<Pixels>,
+    last: Point<Pixels>,
+    started_at: MotionInstant,
+    epoch: u64,
+}
+
 /// Vertical clearance to retain when revealing a text position.
 pub(crate) enum ScrollPadding {
     Minimal,
@@ -407,6 +421,10 @@ pub struct InputBaseState<M: InputModeKind> {
     /// is rebuilt at the top of every render, which is what keeps it current
     /// when the palette changes after the state was built.
     pub(super) editor_style: InputEditorStyle,
+    pub(super) caret_snapshot: Cell<Option<(Bounds<Pixels>, Point<Pixels>, Bounds<Pixels>)>>,
+    pub(super) caret_presentation: Cell<Option<Bounds<Pixels>>>,
+    wheel_scroll: Option<WheelScroll>,
+    wheel_scroll_epoch: u64,
     /// What a consumer projected, kept verbatim so that resolution never
     /// consumes its own output: resolving in place would fill the unset
     /// colours once and then never see them as unset again, which is the same
@@ -537,6 +555,12 @@ impl<M: InputModeKind> InputBaseState<M> {
         Some((layout.cursor_bounds?, layout.line_height))
     }
 
+    /// Last painted primary caret in window coordinates. Logical input and popup
+    /// geometry continue to use `cursor_layout`, even during a transition.
+    pub fn caret_presentation_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.caret_presentation.get()
+    }
+
     pub fn input_bounds(&self) -> Bounds<Pixels> {
         self.input_bounds
     }
@@ -649,6 +673,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         let blink_cursor = cx.new(|_| BlinkCursor::new());
         let undo_manager = UndoManager::new();
 
+        let input = cx.weak_entity();
         let _subscriptions = vec![
             // Key bindings can consume events before on_key_down. Observe input
             // before action dispatch so every keystroke resets the blink delay.
@@ -657,6 +682,7 @@ impl<M: InputModeKind> InputBaseState<M> {
                 let blink_cursor = blink_cursor.downgrade();
                 move |_, window, cx| {
                     if focus_handle.is_focused(window) {
+                        let _ = input.update(cx, |input, _| input.wheel_scroll = None);
                         _ = blink_cursor.update(cx, |cursor, cx| cursor.pause(cx));
                     }
                 }
@@ -730,6 +756,10 @@ impl<M: InputModeKind> InputBaseState<M> {
             mask_pattern: MaskPattern::default(),
             mask_pattern_set: false,
             editor_style: InputEditorStyle::default(),
+            caret_snapshot: Cell::new(None),
+            caret_presentation: Cell::new(None),
+            wheel_scroll: None,
+            wheel_scroll_epoch: 0,
             projected_editor_style: InputEditorStyle::default(),
             diagnostic_popover: None,
             context_menu_handler: None,
@@ -2247,6 +2277,8 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.caret_snapshot.set(None);
+        self.wheel_scroll = None;
         self.undo_manager.break_transaction_coalescing();
         // Input has its own text selection; suppress the window-level text
         // selection (Root) so it does not start a drag from here.
@@ -2407,10 +2439,50 @@ impl<M: InputModeKind> InputBaseState<M> {
         let delta = event.delta.pixel_delta(line_height);
 
         let old_offset = self.scroll_handle.offset();
-        self.update_scroll_offset(Some(old_offset + delta), cx);
+        let smooth = matches!(event.delta, gpui::ScrollDelta::Lines(_))
+            && !self.editor_style.scroll_transition.is_zero()
+            && !cx.reduce_motion();
+        let target = if smooth {
+            let previous_target = self
+                .wheel_scroll
+                .filter(|motion| motion.last == old_offset)
+                .map_or(old_offset, |motion| motion.target);
+            // Reversing an axis discards its queued distance so the next step
+            // follows the wheel immediately, rather than continuing the old way.
+            let axis_target = |current: Pixels, target: Pixels, step: Pixels| {
+                let remaining = target - current;
+                let reversed =
+                    (remaining < px(0.) && step > px(0.)) || (remaining > px(0.) && step < px(0.));
+                if reversed {
+                    current + step
+                } else {
+                    target + step
+                }
+            };
+            self.clamped_scroll_offset(point(
+                axis_target(old_offset.x, previous_target.x, delta.x),
+                axis_target(old_offset.y, previous_target.y, delta.y),
+            ))
+        } else {
+            self.clamped_scroll_offset(old_offset + delta)
+        };
+        self.wheel_scroll = None;
+        if smooth && target != old_offset {
+            self.wheel_scroll_epoch = self.wheel_scroll_epoch.wrapping_add(1);
+            let epoch = self.wheel_scroll_epoch;
+            self.wheel_scroll = Some(WheelScroll {
+                from: old_offset,
+                target,
+                last: old_offset,
+                started_at: cx.background_executor().now(),
+                epoch,
+            });
+            self.schedule_wheel_scroll(epoch, window, cx);
+        } else {
+            self.update_scroll_offset(Some(target), cx);
+        }
 
-        // Only stop propagation if the offset actually changed
-        if self.scroll_handle.offset() != old_offset {
+        if target != old_offset {
             cx.stop_propagation();
         }
 
@@ -2422,12 +2494,60 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.edit_menu_on_scroll(event.touch_phase, cx);
     }
 
+    fn schedule_wheel_scroll(&self, epoch: u64, window: &mut Window, cx: &Context<Self>) {
+        let input = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            let _ = input.update(cx, |state, cx| {
+                let Some(motion) = state.wheel_scroll.filter(|motion| motion.epoch == epoch) else {
+                    return;
+                };
+                // A scrollbar drag or another scroll owner wins over the animation.
+                if state.scroll_handle.offset() != motion.last {
+                    state.wheel_scroll = None;
+                    return;
+                }
+                let duration = state.editor_style.scroll_transition;
+                let progress = if duration.is_zero() || cx.reduce_motion() {
+                    1.
+                } else {
+                    (cx.background_executor()
+                        .now()
+                        .saturating_duration_since(motion.started_at)
+                        .as_secs_f32()
+                        / duration.as_secs_f32())
+                    .min(1.)
+                };
+                let eased = 1. - (1. - progress).powi(3);
+                let target = state.clamped_scroll_offset(motion.target);
+                let offset = if progress >= 1. {
+                    target
+                } else {
+                    motion.from + (target - motion.from) * eased
+                };
+                state.update_scroll_offset(Some(offset), cx);
+                if progress < 1. && state.scroll_handle.offset() != target {
+                    state.wheel_scroll.as_mut().unwrap().last = state.scroll_handle.offset();
+                    state.schedule_wheel_scroll(epoch, window, cx);
+                } else {
+                    state.wheel_scroll = None;
+                }
+            });
+        });
+    }
+
     pub(super) fn update_scroll_offset(
         &mut self,
         offset: Option<Point<Pixels>>,
         cx: &mut Context<Self>,
     ) {
-        let mut offset = offset.unwrap_or(self.scroll_handle.offset());
+        let offset = self.clamped_scroll_offset(offset.unwrap_or(self.scroll_handle.offset()));
+        if self.scroll_handle.offset() != offset {
+            self.scroll_handle.set_offset(offset);
+            cx.notify();
+        }
+    }
+
+    fn clamped_scroll_offset(&self, mut offset: Point<Pixels>) -> Point<Pixels> {
         // In addition to left alignment, a cursor position will be reserved on the right side
         let safe_x_offset = if self.text_align == TextAlign::Left {
             px(0.)
@@ -2446,10 +2566,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             offset.y.clamp(safe_y_range.start, safe_y_range.end)
         };
         offset.x = offset.x.clamp(safe_x_range.start, safe_x_range.end);
-        if self.scroll_handle.offset() != offset {
-            self.scroll_handle.set_offset(offset);
-            cx.notify();
-        }
+        offset
     }
 
     /// Scroll to make the given offset visible.
@@ -2833,6 +2950,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     ///
     /// The offset will be clamped to the valid range, and applied after the next layout.
     pub fn set_scroll_offset(&mut self, offset: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        self.wheel_scroll = None;
         self.deferred_scroll_offset = Some(offset);
         cx.notify();
     }
@@ -9185,8 +9303,13 @@ impl InputBaseState<crate::input::TextareaMode> {
         Self::new_in_mode(window, cx)
     }
 
+    /// Grow with the content from `min_rows` through `max_rows`.
+    ///
+    /// The row count fits the current text at once, not only after the next
+    /// edit, so a new limit does not shrink a field that holds text.
     pub fn set_auto_grow(&mut self, min_rows: usize, max_rows: usize, cx: &mut Context<Self>) {
         self.mode = LayoutMode::auto_grow(min_rows, max_rows.max(min_rows));
+        self.mode.update_auto_grow(&self.display_map);
         cx.notify();
     }
 

@@ -108,7 +108,7 @@ fn run_export_keeps_settings_prepared_statements_and_the_transaction(cx: &mut Te
         cx,
         "the bounded preview",
         std::time::Duration::from_secs(5),
-        |window, _| window.find("result-loaded").label() == Some("100000 loaded"),
+        |window, _| window.find("result-loaded").label() == Some("100,000 loaded"),
     );
     app.wait_cell(cx, 0, 1, "1");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 5);
@@ -338,6 +338,21 @@ fn cancel_a_query_and_reuse_its_tab(cx: &mut TestAppContext) {
     let app = launch(cx, "SELECT count(*) FROM tpch.sf1000.lineitem");
     app.click(cx, "run");
     app.wait_status(cx, "Executing");
+    // Executing starts before the POST returns. Session reuse requires the
+    // query cursor; cancellation during submission can close the session.
+    app.click(cx, "output-panel-tab");
+    app.wait_until(
+        cx,
+        "Trino to accept SQL and return its cancellation cursor",
+        crate::support::fixture::QUERY_TIMEOUT,
+        |window, cx| {
+            window.click("output-copy-all", cx);
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text.contains("SQL accepted by the server"))
+        },
+    );
+    app.click(cx, "results-panel-tab");
     app.click(cx, "cancel");
     app.wait_status(cx, "Cancelled");
     app.run_complete(cx, "SELECT 42 AS value");
@@ -605,8 +620,8 @@ fn format_real_cost_queries_and_execute(cx: &mut TestAppContext) {
         .join("\n\n");
     let app = launch(cx, &sql);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "formatted cost queries",
@@ -614,7 +629,7 @@ fn format_real_cost_queries_and_execute(cx: &mut TestAppContext) {
         |_, _| app.saved().tabs[0].sql.matches("SELECT").count() == 3,
     );
     let formatted = app.saved().tabs[0].sql.clone();
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(
         cx,
         "format undo",
@@ -640,19 +655,19 @@ fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
     let sql = r#"select '日本語😀; path\' as "Mixed Case""#;
     let app = launch(cx, sql);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "formatted SQL",
         std::time::Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql.starts_with("SELECT"),
     );
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, r"日本語😀; path\");
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(
         cx,
         "format undo",

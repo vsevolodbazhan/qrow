@@ -122,7 +122,7 @@ fn fingerprint(entries: &[TranscriptEntry], older_cursor: Option<&String>) -> u6
     for entry in entries {
         entry.id.hash(&mut hasher);
         (entry.speaker as u8).hash(&mut hasher);
-        entry.text().as_str().hash(&mut hasher);
+        entry.text().hash(&mut hasher);
         entry.turn_id.hash(&mut hasher);
         entry.detail.hash(&mut hasher);
         if let Some(tool) = &entry.tool {
@@ -290,6 +290,13 @@ impl Qrow {
         }));
     }
 
+    /// Save the changed transcripts now, like the save timer. Performance
+    /// probes measure the save through this.
+    #[doc(hidden)]
+    pub fn save_assistant_transcripts(&mut self) {
+        self.save_transcripts(None);
+    }
+
     /// Saves the transcripts that changed since Qrow last saved them: all
     /// conversations, or only `thread_id`.
     pub(in crate::ui) fn save_transcripts(&mut self, thread_id: Option<&str>) {
@@ -342,11 +349,10 @@ impl Qrow {
     }
 }
 
-/// The transcript store of a window with a saved workspace.
-pub(in crate::ui) fn transcript_store(
-    workspace: Option<&std::path::Path>,
-) -> Option<TranscriptStore> {
-    let directory = crate::storage::assistant_transcripts_directory(workspace?);
+/// The transcript store of a window with a saved workspace, in its local
+/// data directory.
+pub(in crate::ui) fn transcript_store(local: Option<&std::path::Path>) -> Option<TranscriptStore> {
+    let directory = crate::storage::transcripts_directory(local?);
     TranscriptStore::new(directory)
         .map_err(|error| eprintln!("Could not start the transcript writer: {error}"))
         .ok()
@@ -355,6 +361,32 @@ pub(in crate::ui) fn transcript_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn saved_messages_do_not_replay_their_appearance_fade() {
+        let now = std::time::Instant::now();
+        for speaker in [Speaker::User, Speaker::Assistant] {
+            let entry = TranscriptEntry::new(speaker, "A live message", Some("turn-1".into()))
+                .appearing(now);
+            assert_eq!(entry.appearance_started(), Some(now));
+            let restored = TranscriptEntry::from_stored(entry.stored());
+            assert_eq!(restored.appearance_started(), None);
+            assert_eq!(restored.text(), entry.text());
+        }
+        let card = TranscriptEntry::tool(
+            ToolActivity {
+                kind: ToolKind::Workspace,
+                target: None,
+                state: ToolState::Done(None),
+            },
+            "turn-1".into(),
+        )
+        .appearing(now);
+        assert_eq!(
+            TranscriptEntry::from_stored(card.stored()).appearance_started(),
+            None
+        );
+    }
 
     #[::core::prelude::v1::test]
     fn stored_entries_show_as_they_did_live() {

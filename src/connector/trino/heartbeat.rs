@@ -3,6 +3,7 @@ use super::{
     protocol::{Http, SessionHeaders},
     transport::Transport,
 };
+use crate::sync::LockExt as _;
 use anyhow::Result;
 use std::{
     sync::{Arc, Condvar, Mutex},
@@ -37,7 +38,7 @@ impl Heartbeat {
             .spawn(move || {
                 let (mutex, changed) = &*shared;
                 loop {
-                    let mut state = mutex.lock().unwrap();
+                    let mut state = mutex.lock_unpoisoned();
                     if state.stopped {
                         break;
                     }
@@ -64,7 +65,7 @@ impl Heartbeat {
                     if response
                         .is_ok_and(|response| matches!(response.status().as_u16(), 404 | 405))
                     {
-                        mutex.lock().unwrap().disabled = true;
+                        mutex.lock_unpoisoned().disabled = true;
                     }
                 }
             })?;
@@ -77,17 +78,17 @@ impl Heartbeat {
 
     /// Publish only after an executing GET established the server-side Query.
     pub fn update(&self, uri: Url, headers: &SessionHeaders) {
-        let mut state = self.state.0.lock().unwrap();
+        let mut state = self.state.0.lock_unpoisoned();
         if !state.stopped && !state.disabled {
             state.route = Some((uri, headers.clone()));
         }
     }
 
     pub fn stop(&self) {
-        self.state.0.lock().unwrap().stopped = true;
+        self.state.0.lock_unpoisoned().stopped = true;
         self.transport.close();
         self.state.1.notify_all();
-        if let Some(thread) = self.thread.lock().unwrap().take() {
+        if let Some(thread) = self.thread.lock_unpoisoned().take() {
             thread.join().expect("Trino heartbeat thread stopped");
         }
     }

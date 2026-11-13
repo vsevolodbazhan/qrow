@@ -7,8 +7,6 @@ use gpui_kit::component::{
 
 /// The height of the Logs and result tabs at 100% UI scale.
 pub(super) const RESULT_TAB_BAR_HEIGHT: f32 = 30.;
-/// The longest part of the query that a result tab tooltip shows.
-const TOOLTIP_SQL_CHARS: usize = 120;
 
 /// The name field of a result tab that the user renames.
 pub(super) struct ResultEditor {
@@ -20,7 +18,8 @@ pub(super) struct ResultEditor {
 
 pub(super) const RESULT_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "result",
-    label: "Result Name",
+    title: "Rename Result",
+    label: "Name",
     tooltip: "Rename result",
     form: |this| {
         this.result_form
@@ -31,21 +30,11 @@ pub(super) const RESULT_RENAME: tab_view::RenameDialog = tab_view::RenameDialog 
     clear: |this| this.result_form = None,
 };
 
-/// The query on one line, for a tooltip.
-fn sql_summary(sql: &str) -> String {
-    let line = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-    if line.chars().count() <= TOOLTIP_SQL_CHARS {
-        return line;
-    }
-    let mut short: String = line.chars().take(TOOLTIP_SQL_CHARS).collect();
-    short.push('…');
-    short
-}
-
 impl Qrow {
     /// Logs and the result tabs of the active query tab.
     pub(super) fn result_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let height = self.ui_px(RESULT_TAB_BAR_HEIGHT);
+        let menu_open = self.menu.is_some();
         let tab = &self.tabs[self.active];
         let selected = match tab.panel.selected {
             Panel::Output => 0,
@@ -58,6 +47,8 @@ impl Qrow {
             }
         };
         let tab_id = tab.saved.id;
+        // The query shows in the font of the SQL blocks in Logs.
+        let code_font = SharedString::from(self.settings.logs_font_family.clone());
         let logs = PanelTab::new()
             .min_h(height)
             .max_h(height)
@@ -86,7 +77,7 @@ impl Qrow {
                 let tooltip =
                     StatusTooltip::new(title.clone(), if result.pinned { "Pinned" } else { "" })
                         .when_some(result.sql.as_deref(), |tooltip, sql| {
-                            tooltip.detail(sql_summary(sql))
+                            tooltip.code(sql, code_font.clone())
                         });
                 // Tests find the result that Results shows by a stable ID, also
                 // while Logs is selected.
@@ -107,10 +98,13 @@ impl Qrow {
                         "{title}{}",
                         if result.pinned { ", pinned" } else { "" }
                     ))
+                    // The tooltip would cover the context menu of the tab.
                     .map(|mut panel_tab| {
-                        panel_tab
-                            .interactivity()
-                            .tooltip(move |window, cx| tooltip.build(None, window, cx));
+                        if !menu_open {
+                            panel_tab
+                                .interactivity()
+                                .tooltip(move |window, cx| tooltip.build(None, window, cx));
+                        }
                         panel_tab
                     })
                     .on_mouse_down(

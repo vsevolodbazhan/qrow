@@ -1,0 +1,27 @@
+name: maintenance
+on:
+  workflow_run:
+    workflows: [test]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cache-cleanup:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Use trusted default-branch code, not source from the triggering run.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - run: python3 scripts/ci/rust_caches.py
+        env:
+          GH_TOKEN: ${{ github.token }}

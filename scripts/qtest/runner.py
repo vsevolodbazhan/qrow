@@ -5,23 +5,27 @@ import datetime
 import json
 import os
 from pathlib import Path
+import re
 import shutil
-import signal
 import subprocess
 import sys
 import threading
 import time
+import tomllib
+import uuid
 import xml.etree.ElementTree as ElementTree
 
 import catalog
+import contract
+from process import lease, spawn_options, stop_tree
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/core"))
 sys.path.insert(0, str(ROOT / "scripts/e2e"))
 import environment  # noqa: E402
-import opengl  # noqa: E402
 from environment import target_dir  # noqa: E402
 import fixture  # noqa: E402
+import opengl  # noqa: E402
 
 # Exit codes are part of the CLI contract; docs/testing.md lists them.
 EXIT_PASSED = 0
@@ -44,21 +48,85 @@ def _succeeds(command, timeout=20):
         return False
 
 
+def cargo_bin():
+    """The directory where `qtest install` puts tools."""
+    return Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
+
+
+def find_executable(name):
+    """An executable on PATH, else in the Cargo bin directory, which is not always on PATH."""
+    return shutil.which(name) or shutil.which(name, path=str(cargo_bin()))
+
+
 def _tool_version(tool):
+    program, *arguments = tool.version_command
     try:
-        result = subprocess.run(tool.version_command, cwd=ROOT, capture_output=True, text=True, timeout=30)
+        result = subprocess.run([find_executable(program) or program, *arguments], cwd=ROOT,
+                                capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _version_numbers(text):
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def usable_sccache():
+    """The path of an installed sccache at the pinned version or newer, else None."""
+    tool = catalog.TOOLS["sccache"]
+    path = find_executable("sccache")
+    version = _version_numbers(_tool_version(tool)) if path else None
+    return path if version and version >= _version_numbers(tool.version) else None
+
+
+def configured_wrapper(environ):
+    """Whether the user chose a rustc wrapper, in the environment or in a Cargo configuration file."""
+    if "RUSTC_WRAPPER" in environ or "CARGO_BUILD_RUSTC_WRAPPER" in environ:
+        return True
+    for path in contract.cargo_config_paths(ROOT).values():
+        try:
+            configuration = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+            continue
+        if "rustc-wrapper" in configuration.get("build", {}):
+            return True
+    return False
+
+
+def build_cache_environment(environ):
+    """The variables that make Cargo reuse compiled crates through sccache, or {} when it must not.
+
+    Only the processes that qtest starts get them. Plans and prepared builds
+    record the environment of qtest itself, so the cache does not change their
+    identity. Builds in CI run without a build cache. A wrapper that the user
+    chose wins, and an empty RUSTC_WRAPPER turns the cache off. Client-side
+    mode compiles in the process that Cargo starts, so memory limits on a build
+    apply to it. A broken sccache server makes sccache compile without the cache.
+    """
+    if environ.get("CI") or configured_wrapper(environ):
+        return {}
+    path = usable_sccache()
+    if path is None:
+        return {}
+    defaults = {"SCCACHE_CLIENT_SIDE": "1", "SCCACHE_IGNORE_SERVER_IO_ERROR": "1"}
+    return {"RUSTC_WRAPPER": path, **{key: value for key, value in defaults.items() if key not in environ}}
+
+
+LINUX_APP_LIBS = ("xcb", "fontconfig", "freetype2", "xkbcommon", "xkbcommon-x11")
+
+
 def check_requirement(name, options):
     """Return None when the requirement holds, else a fix for the user."""
     fixes = catalog.REQUIREMENTS
-    if name in ("cargo", "uv", "shellcheck", "actionlint"):
+    if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "dbus-send", "gnome-keyring-daemon", "xvfb-run", "xdotool"):
         return None if shutil.which(name) else fixes[name]
-    if name == "macos":
-        return None if catalog.MACOS else fixes[name]
+    if name == "linux-app-libs":
+        # The pkg-config names of the libraries that the application links.
+        if not catalog.LINUX_HOST:
+            return None
+        return None if _succeeds(["pkg-config", "--exists", *LINUX_APP_LIBS]) else fixes[name]
     if name == "xcode":
         return None if shutil.which("xcode-select") and _succeeds(["xcode-select", "-p"]) else fixes[name]
     if name == "docker":
@@ -66,6 +134,9 @@ def check_requirement(name, options):
         if status == "missing":
             return fixes["docker"]
         return None if status == "running" else fixes["docker-running"]
+    if name == "sccache":
+        # The build cache uses a newer sccache too, so a newer one counts as installed.
+        return None if usable_sccache() else fixes[name]
     if name in catalog.TOOLS:
         tool = catalog.TOOLS[name]
         version = _tool_version(tool)
@@ -172,6 +243,7 @@ class SuiteResult:
     missing: list = field(default_factory=list)
     failures: list = field(default_factory=list)
     metrics: list = field(default_factory=list)
+    tests: list = field(default_factory=list)
 
 
 class Output:
@@ -221,31 +293,37 @@ def junit_report():
 
 def execute(command, env, timeout, log, output):
     """Run one command in its own process group. Returns the exit code, or None on timeout."""
-    with log.open("a") as sink:
+    env = {**env, **build_cache_environment(env)}
+    with log.open("a", encoding="utf-8") as sink:
         sink.write(f"$ {subprocess.list2cmdline(command)}\n")
         sink.flush()
         process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                   start_new_session=True)
+                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                                   bufsize=1, **spawn_options())
 
         def forward():
+            # Keep reading after a failed write. Otherwise the pipe fills and
+            # the step blocks until its time limit.
             for line in iter(process.stdout.readline, ""):
-                sink.write(line)
-                sink.flush()
-                output.stream(line)
+                try:
+                    sink.write(line)
+                    sink.flush()
+                    output.stream(line)
+                except (OSError, UnicodeError):
+                    pass
 
         reader = threading.Thread(target=forward, daemon=True)
         reader.start()
         try:
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            stop_tree(process)
             code = None
         except BaseException:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            stop_tree(process)
             raise
+        finally:
+            stop_tree(process)
         reader.join(timeout=5)
         process.stdout.close()
         if code is None:
@@ -277,13 +355,15 @@ def junit_failures(path):
 def precheck(item, options):
     """A skipped or missing result, or None when the suite can run."""
     suite = item.suite
-    # Only command_ci supplies this result. Explicit local hardware suites
-    # stay strict; all non-hardware suites retain their prerequisites.
     capability = options.get("ci_opengl_capability")
     if capability is not None and capability["available"] is False and suite.name in opengl.HARDWARE_SUITES:
         return SuiteResult(suite.name, "skipped", reason="Hardware OpenGL unavailable: " + capability["reason"])
-    if suite.macos_only and not catalog.MACOS and not item.explicit:
-        return SuiteResult(suite.name, "skipped", reason="Requires macOS.")
+    if catalog.HOST not in suite.platforms:
+        systems = " or ".join(catalog.PLATFORM_NAMES[name] for name in suite.platforms)
+        if not item.explicit:
+            return SuiteResult(suite.name, "skipped", reason=f"Requires {systems}.")
+        fix = f"Run this suite on {systems}."
+        return SuiteResult(suite.name, "missing", missing=[{"requirement": "platform", "fix": fix}], reason=fix)
     missing = []
     for requirement in suite.requires:
         fix = check_requirement(requirement, dict(options, fixture=suite.fixture))
@@ -309,12 +389,51 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if item.test_filter and step in suite.steps and step.nextest_filter is None:
             continue
         command = render_command(step, options, item.test_filter, extra)
+        prepared = options.get("prepared")
+        if prepared and step.command[:2] == ("cargo", "test") and "--no-run" in step.command:
+            continue
+        if prepared and suite.name == "native-font":
+            command = [str(target_dir() / "native-tools/tooltip-layout")]
+        elif prepared and step.nextest_filter is not None:
+            command = prepared.command(command)
         step_env = {key: value.replace("{target}", str(target_dir())).replace("{artifacts}", str(run_dir))
                     for key, value in step.env}
-        if step.nextest_filter is not None:
+        if step.nextest_filter is not None and not options.get("isolated_reports"):
             # A step that fails before nextest writes a report must not report old failures.
             junit_report().unlink(missing_ok=True)
-        code = execute(command, dict(os.environ, **env, **step_env), step.timeout, log, output)
+        report = junit_report()
+        if step.nextest_filter is not None and options.get("isolated_reports"):
+            store = run_dir / "nextest" / suite.name / uuid.uuid4().hex
+            store.mkdir(parents=True)
+            config = store / "config.toml"
+            config.write_text('[store]\ndir = ' + json.dumps(str(store)) + '\n' +
+                              (ROOT / ".config/nextest.toml").read_text(encoding="utf-8"))
+            command += ["--config-file", str(config)]
+            report = store / nextest_profile() / "junit.xml"
+        adapter_env = {"QROW_PYTHON": sys.executable}
+        if prepared:
+            adapter_env["QROW_NEXTEST_RUNTIME"] = prepared.runtime
+        evidence = None
+        if suite.test_runs and step in suite.steps and options.get("isolated_reports"):
+            evidence = run_dir / "adapters" / suite.name / uuid.uuid4().hex
+            evidence.mkdir(parents=True)
+            adapter_env["QROW_NEXTEST_EVIDENCE"] = str(evidence)
+        code = execute(command, dict(os.environ, **options.get("env", {}), **env, **step_env, **adapter_env), step.timeout, log, output)
+        if evidence:
+            reports = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(evidence.rglob("evidence.json"))]
+            options.setdefault("test_evidence", []).extend(reports)
+            if len(reports) != suite.test_runs:
+                code = 1
+        if step.nextest_filter is not None and options.get("isolated_reports") and report.exists():
+            try:
+                cases = list(ElementTree.parse(report).getroot().iter("testcase"))
+                options.setdefault("test_evidence", []).append({
+                    "count": sum(case.find("skipped") is None for case in cases),
+                    "failures": sum(case.find("failure") is not None or case.find("error") is not None for case in cases),
+                    "report": str(report),
+                })
+            except ElementTree.ParseError:
+                code = 1
         if code == 0:
             continue
         result = SuiteResult(suite.name, "failed", time.monotonic() - started, str(log),
@@ -323,7 +442,7 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if iteration:
             result.reason += f" Iteration {iteration[0]} of {iteration[1]}."
         if step.nextest_filter is not None:
-            junit = junit_report()
+            junit = report
             if junit.exists():
                 saved = run_dir / "junit" / f"{suite.name}.xml"
                 saved.parent.mkdir(parents=True, exist_ok=True)
@@ -341,7 +460,7 @@ def metrics_in(log):
     if not log.exists():
         return []
     found = []
-    for line in log.read_text().splitlines():
+    for line in log.read_text(encoding="utf-8").splitlines():
         if METRIC_PREFIX in line:
             try:
                 found.append(json.loads(line.split(METRIC_PREFIX, 1)[1]))
@@ -351,8 +470,10 @@ def metrics_in(log):
 
 
 def run_suite(item, options, extra, run_dir, output, env=None):
+    options = dict(options, test_evidence=[])
     result = run_suite_steps(item, options, extra, run_dir, output, env)
     result.metrics = metrics_in(suite_log(run_dir, item.suite))
+    result.tests = options["test_evidence"]
     return result
 
 
@@ -418,43 +539,67 @@ class FixtureSession:
                 "QROW_FIXTURE_STATE": str(self.state)}
 
     def release(self):
-        if self.fixture is None:
+        fixture = self.fixture
+        self.fixture = None
+        if fixture is None:
             return
         try:
-            self.fixture.collect(self.run_dir / "fixture")
+            fixture.collect(self.run_dir / "fixture")
         finally:
             if self.owned:
-                self.fixture.stop()
+                fixture.stop()
 
 
 def new_run_dir():
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = runs_dir() / f"{stamp}-{os.getpid()}"
+    path = runs_dir() / f"{stamp}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     path.mkdir(parents=True)
     latest = runs_dir() / "latest"
-    if latest.is_symlink() or latest.exists():
-        latest.unlink()
-    latest.symlink_to(path.name)
+    from contract import atomic_json
+    atomic_json(runs_dir() / "latest.json", {"run": path.name})
+    if os.name != "nt":
+        temporary = runs_dir() / f".latest-{uuid.uuid4().hex}"
+        temporary.symlink_to(path.name)
+        os.replace(temporary, latest)
     return path
 
 
-def run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False, run_dir=None):
+def run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False):
+    from contract import source_sha
+    options = dict(options, env=dict(options.get("env", {})))
+    # Give each run an immutable build identity. build.rs otherwise watches all
+    # Git refs, which background fetches in another worktree can change.
+    if not options["env"].get("QROW_COMMIT") and not os.environ.get("QROW_COMMIT"):
+        sha = source_sha(ROOT)
+        if sha:
+            options["env"]["QROW_COMMIT"] = sha[:12]
+    resources = ([f"cargo:{target_dir().resolve()}"]
+                 if any("cargo" in item.suite.requires or item.suite.name == "package-smoke" for item in selected) else [])
+    if any(item.suite.fixture for item in selected):
+        resources.append(f"fixture:{fixture.state_path().resolve()}")
+    if any("desktop" in item.suite.requires or item.suite.name in ("desktop", "perf-app", "perf-package")
+           for item in selected):
+        resources.append("desktop")
+    with lease(resources):
+        return _run(selected, options, extra, output, fail_fast, report_only, require_all)
+
+
+def _run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False):
     """Run the selected suites. A failure of a `report_only` suite does not fail the run.
 
     With `require_all`, a missing prerequisite of a suite that is not
     report-only stops the run before any suite, build, or server starts.
     """
-    run_dir = run_dir or new_run_dir()
-    if "ci_opengl_capability" in options:
-        (run_dir / "opengl-capability.json").write_text(json.dumps(options["ci_opengl_capability"], indent=2) + "\n")
+    run_dir = new_run_dir()
     results = [None] * len(selected)
+    blocked = [precheck(item, options) for item in selected]
     capability = options.get("ci_opengl_capability", {})
+    if capability:
+        (run_dir / "opengl-capability.json").write_text(json.dumps(capability, indent=2) + "\n")
     probe_error = capability.get("error")
     if probe_error:
         blocked = [SuiteResult(item.suite.name, "skipped", reason="The OpenGL capability probe failed.")
                    for item in selected]
-    else:
-        blocked = [precheck(item, options) for item in selected]
     if require_all and any(result and result.status == "missing" and result.name not in report_only
                            for result in blocked):
         blocked = [result or SuiteResult(item.suite.name, "skipped", reason="A prerequisite of the run is missing.")
@@ -463,7 +608,24 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
     session = FixtureSession(options, run_dir, output,
                              any(selected[index].suite.fixture == "docker" for index in served)) if served else None
     prepared = False
+    prepared_suites = set()
+    finalized = set()
+    interrupted = False
+    cleanup_errors = []
+    events = run_dir / "events.jsonl"
+
+    def event(kind, **data):
+        with events.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"event": kind, "time": time.monotonic(), **data}) + "\n")
+
+    event("started", suites=[item.suite.name for item in selected])
     try:
+        if options.get("reuse_builds") and any(result is None for result in blocked):
+            import builds
+            from contract import plan
+            from targets import host_target
+            value = plan(ROOT, host_target().name, list(dict.fromkeys(item.suite.name for item in selected)), options.get("runtime", "auto"))
+            options = dict(options, prepared=builds.Prepared(options["reuse_builds"], value, ROOT, run_dir / "prepared", output))
         for index, item in enumerate(selected):
             name = item.suite.name
             if fail_fast and any(result and result.status in ("failed", "missing")
@@ -477,6 +639,7 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
                 done = {}
                 for other in served:
                     suite = selected[other].suite
+                    prepared_suites.add(other)
                     failure = None
                     for step in suite.prepare:
                         if step not in done:
@@ -497,19 +660,52 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
             elif item.suite.fixture and session.error:
                 results[index] = SuiteResult(name, "failed", reason=session.error)
             elif item.suite.fixture:
+                finalized.add(index)
                 results[index] = run_suite(item, options, extra, run_dir, output, session.env(item.suite))
             else:
+                finalized.add(index)
                 results[index] = run_suite(item, options, extra, run_dir, output)
+            if session and index == served[-1]:
+                try:
+                    session.release()
+                except Exception as error:
+                    cleanup_errors.append(str(error))
+                    event("cleanup_failed", reason=str(error))
             result = results[index]
+            event("suite_finished", name=result.name, status=result.status, reason=result.reason)
             output.note(f"{result.name}: {result.status}" + (f" ({result.reason})" if result.reason else ""))
+    except (Exception, KeyboardInterrupt) as error:
+        interrupted = isinstance(error, KeyboardInterrupt)
+        for index, result in enumerate(results):
+            if result is None:
+                results[index] = SuiteResult(selected[index].suite.name, "failed",
+                                             reason="Cancelled." if interrupted else f"Execution error: {error}")
+        if not interrupted:
+            cleanup_errors.append(str(error))
+        event("interrupted" if interrupted else "execution_error", reason=str(error))
     finally:
+        for index in sorted(prepared_suites - finalized):
+            item = selected[index]
+            try:
+                cleanup = run_steps(item, item.suite.cleanup, options, extra,
+                                    {"QROW_E2E_ARTIFACTS": str(run_dir / item.suite.name)},
+                                    run_dir, output, time.monotonic())
+                if cleanup:
+                    cleanup_errors.append(cleanup.reason)
+            except Exception as error:
+                cleanup_errors.append(str(error))
         if session:
-            session.release()
+            try:
+                session.release()
+            except Exception as error:
+                cleanup_errors.append(str(error))
+                event("cleanup_failed", reason=str(error))
     if probe_error:
-        results.insert(0, SuiteResult("opengl-capability", "failed", log=capability.get("log"),
-                                      reason=probe_error))
+        results.insert(0, SuiteResult("opengl-capability", "failed", log=capability.get("log"), reason=probe_error))
     statuses = {result.status for result in results if result.name not in report_only}
-    if "failed" in statuses:
+    if interrupted:
+        status, code = "cancelled", 130
+    elif "failed" in statuses or cleanup_errors:
         status, code = "failed", EXIT_FAILED
     elif "missing" in statuses:
         status, code = "missing", EXIT_MISSING
@@ -524,8 +720,12 @@ def run(selected, options, extra, output, fail_fast=False, report_only=(), requi
                     **({"report_only": True} if result.name in report_only else {})}
                    for result in results],
     }
-    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    if cleanup_errors:
+        summary["cleanup_errors"] = cleanup_errors
+    from contract import atomic_json
+    atomic_json(run_dir / "summary.json", summary)
+    event("finished", status=status, exit_code=code)
     measured = [metric for result in results for metric in result.metrics]
     if measured:
-        (run_dir / "perf.json").write_text(json.dumps(measured, indent=2) + "\n")
+        (run_dir / "perf.json").write_text(json.dumps(measured, indent=2) + "\n", encoding="utf-8")
     return summary

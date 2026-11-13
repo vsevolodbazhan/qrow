@@ -4,313 +4,144 @@
 
 # Qrow
 
-A native (no JVM, no Electron) SQL workbench for macOS. Built with Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
+Desktop SQL workbench, written in Rust.
 
-![Qrow demo with the schema catalog](assets/screenshots/demo.png)
+![Qrow demo with the schema catalog and assistant](assets/screenshots/demo.png)
 
-## Why
+## Overview
 
-I'm a data engineer. I run SQL every day, and for years my tool of choice was
-[DataGrip](https://www.jetbrains.com/datagrip/). It worked well until it didn't: slow startup times, a heavy memory
-footprint, regular freezing, and all the usual quirks that come from running on the JVM.
-I went looking for an alternative and found none suited to me.
-
-Building a whole new SQL client from scratch on top of a
-full-time job wasn't realistic for me — until AI models got good enough, that is.
-
-I'm not a Rust developer, so practically every line of code here is written by one
-model or the other. I bring in my direction, general coding expertise, and product sense.
-
-## Inspiration
-
-Qrow is heavily inspired by DataGrip and [Zed](https://zed.dev/). It's built using [GPUI](https://gpui.rs/), which is a UI framework by Zed's creators.
+Qrow is a SQL client for data engineers and analysts. It is written in Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit). With no Electron and no JVM, it starts quickly and stays responsive. Qrow is inspired by [DataGrip](https://www.jetbrains.com/datagrip/)
+and [Zed](https://zed.dev/).
 
 ## Features
 
-### Connections
-
-Qrow connects directly to Kyuubi (Spark), Postgres, and Trino. It does not need
-a JVM, an ODBC driver, or a separately installed database driver.
-
-- **Kyuubi** uses HiveServer2 over SASL PLAIN, with a password or an OpenID
-  Connect access token.
-- **Postgres** uses password authentication with TLS encryption and optional
-  certificate verification.
-- **Trino** uses HTTP or HTTPS with a username, a password, or the browser
-  sign-in of the coordinator.
-
-Qrow keeps passwords in macOS Keychain. One OpenID Connect sign-in can
-authenticate several connections, and you can copy its settings to share them
-with a colleague. Drag connections to change their order. See
-[connections](docs/connections.md).
-
-### Queries and Results
-
-Each connection has its own query tabs, and each tab has its own session.
-Tabs run queries at the same time, also when you select another connection.
-Press **⌘Enter** to run the statement at the cursor or the selected SQL. A light tint shows the statement that runs. A
-status dot on each tab and connection shows work, unread results, and errors.
-
-Results show in pages of 1,000 rows as they arrive. Copy a cell or a row with
-its full value. The Logs panel of each tab shows the SQL, the session events,
-and the errors. **Activity** (**⇧⌘U**) shows the background work of each
-connection: schema refreshes, keep-alives, sessions, and queries. See
-[queries](docs/queries.md), [results](docs/results.md), and
-[activity](docs/activity.md).
-
-### Schema Catalog
-
-The Connections sidebar is a tree of schemas, tables, views, and columns.
-Qrow keeps a copy of the catalog on your computer, so the tree shows it also
-when the connection has no session.
-
-- **Refresh** a connection, a schema, or a table manually, or automatically
-  after a period while the connection is connected. A refresh uses its own
-  session. The next refresh continues a refresh that stopped.
-- **Share** one catalog between connections that read the same database catalog.
-  A refresh of one connection fills the tree of all of them.
-- **Show or hide** schemas with glob patterns, for example `sales_*`.
-- **Search** tables and views in all connections, and copy or insert their
-  quoted names into the editor.
-
-See [browse schemas](docs/connections.md#browse-schemas).
-
-### Integrations with dbt
-
-Attach a dbt project to a connection. Qrow reads the `manifest.json` that dbt
-writes, and can read it again each time dbt changes it. Qrow does not run dbt.
-
-- Tables that dbt builds show their dbt kind in the schema tree, and their
-  description in a tooltip.
-- **Show dbt details** opens the description, columns, tests, lineage, and
-  the compiled and raw SQL of a model. Click a parent or a child to follow the
-  lineage.
-- A schema mapping, for example `dbt_dev_* = *`, matches development schemas
-  with catalog schemas. The form shows how many models match tables.
-
-See [attach a dbt project](docs/connections.md#attach-a-dbt-project).
-
-### Assistant
-
-Qrow can open an AI assistant beside your query tab. It runs on a separately
-installed Codex or Claude Code executable with your own sign-in, so you can
-use your OpenAI or Claude subscription. The assistant is off by default.
-Enable it in **Qrow → Settings… → Assistant**, then press **⌘R**.
-
-- Each conversation writes SQL in its own query tab, so you can work on it
-  together. Several conversations can work at the same time.
-- The assistant looks up tables and columns in the schema catalog, and reads
-  descriptions, tests, lineage, and model SQL from the dbt project.
-- Write **Assistant Notes** for a connection to give the assistant facts
-  about its data.
-- Qrow asks before an assistant query runs, or runs assistant queries
-  automatically. You select the mode for each conversation.
-- Qrow keeps a copy of each conversation on your computer. You can read
-  earlier conversations before the harness starts.
-
-See [assistant](docs/assistant.md) for setup, data sharing, and query safety.
-
-### Workspace
-
-Qrow saves your connections, tabs, and SQL automatically. Restored tabs do
-not connect until you run SQL. Select the theme, the interface scale, and the
-fonts of the interface, the editor, the Logs, and the assistant. See
-[workspace](docs/workspace.md).
-
-## Metrics
-
-Measured on MacBook Air M3 (macOS 15.7.7).
-
-| Metric | Qrow | DataGrip 2026.2.5 |
-| --- | ---: | ---: |
-| Time to first window | 0.52 s | 1.84 s |
-| Idle memory usage | 152 MB | 1,302 MB |
-| App size on disk | 27 MB | 2.6 GB |
+- **[Connections](docs/connections.md):** Spark (HiveServer2), Postgres, and
+  Trino. Passwords stay in the system secret store.
+- **[Queries](docs/queries.md):** query tabs that run at the same time, each
+  with its own session.
+- **[Results](docs/results.md):** paged results and export to CSV, TSV,
+  Markdown, JSON, or Parquet.
+- **[Schema catalog](docs/connections.md#browse-schemas):** a searchable tree
+  of schemas, tables, and columns that is available offline.
+- **[dbt](docs/connections.md#attach-a-dbt-project):** model descriptions,
+  tests, lineage, and SQL from your dbt project.
+- **[Assistant](docs/assistant.md):** an optional AI assistant that runs on
+  your own Codex or Claude Code.
 
 ## Limitations
 
-Qrow is a personal tool, tailored to my setup and my needs, so:
-
-- **Kyuubi/Spark, Postgres, and Trino.** Kyuubi uses HiveServer2 over SASL PLAIN.
-  Postgres uses password authentication, with TLS encryption and optional
-  certificate verification. Trino uses HTTP or HTTPS with a username, a password,
-  or an OpenID Connect access token. DuckDB is planned. See
-  [connections](docs/connections.md) for connector limits.
-- **macOS 12 or later.** Qrow uses Metal when a compatible GPU is available.
-  On Macs without Metal, it uses hardware OpenGL when available and falls back
-  to CPU rendering if OpenGL cannot start. Set `QROW_RENDERER=software` to
-  choose CPU rendering directly.
-  CPU rendering uses more CPU time during scrolling and window resizing.
-  Shadows can differ from Metal rendering. CPU curves and gradients can also
-  differ. CPU and OpenGL modes do not support video surfaces; Qrow does not
-  use these surfaces. OpenGL uses grayscale text antialiasing and limits its
-  texture atlas to 128 MiB. An image must fit a 2046 by 2046 pixel atlas tile.
-  The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
-  Other operating systems are not supported.
-- **Bring your own assistant.** The assistant needs a separately installed Codex
-  or Claude Code executable and your own subscription or API key.
-- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap and GitHub releases, and macOS may show a Gatekeeper warning on first launch.
+- Spark (HiveServer2), Postgres, and Trino only.
+- The packages are not code-signed, so macOS and Windows show a warning on
+  first open.
+- macOS first. Windows and Linux are supported but can have rough edges.
+- macOS 12+ selects Metal when a device is available, hardware Core OpenGL 3.3+
+  otherwise, and CPU rendering if OpenGL initialization fails. No legacy
+  OpenGL 2.1 context is used. `QROW_RENDERER=software` selects CPU rendering.
+  OpenGL uses grayscale text antialiasing and a 128 MiB texture atlas; images
+  must fit a 2046×2046 tile. Fallback renderers do not support video surfaces.
+  CPU gradients use sRGB interpolation, including Oklab requests.
 
 ## Installation
 
-### Homebrew
+Go to [qrow.dev](https://qrow.dev/#install) to get Qrow for your system, or
+follow the steps below. After you install it, Qrow updates itself. See
+[installation](docs/installation.md) for requirements and the first-open
+warnings.
 
-Qrow is available from the custom [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
+### macOS
+
+Download `Qrow-VERSION-arm64.dmg` (Apple Silicon) or
+`Qrow-VERSION-x86_64.dmg` (Intel) from the
+[latest release](https://github.com/vsevolodbazhan/qrow/releases/latest).
+Open it and drag Qrow to Applications.
+
+Or install with [Homebrew](https://brew.sh/) (Apple Silicon only):
 
 ```sh
-brew tap vsevolodbazhan/qrow
 brew install --cask vsevolodbazhan/qrow/qrow
 ```
-
-To install the latest nightly build, use the separate cask:
 
 ```sh
 brew install --cask vsevolodbazhan/qrow/qrow@nightly
 ```
 
-### GitHub Releases
+### Windows
 
-Alternatively, head over to the [GH releases page](https://github.com/vsevolodbazhan/qrow/releases), download the DMG, and drag it to Applications.
+Download `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or
+`Qrow-VERSION-windows-aarch64-setup.exe` (ARM64) from the
+[latest release](https://github.com/vsevolodbazhan/qrow/releases/latest) and
+run it.
 
-## Gatekeeper
+Or install with [Scoop](https://scoop.sh/):
 
-<img src="assets/screenshots/gatekeeper/warning.png" alt="Gatekeeper Warning" width="384" height="384">
+```powershell
+scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow
+```
 
-The current release package uses ad hoc code signing. Homebrew can install the
-custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
-with Apple Developer ID. To bypass the Gatekeeper:
+```powershell
+scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow-nightly
+```
 
-1. Open the app. You'll see the warning.
-2. Head over to "Settings", open "Privacy & Security", click "Open Anyway".
+### Linux
 
-![Gatekeeper Settings](assets/screenshots/gatekeeper/settings.png)
+```sh
+curl -fsSL https://qrow.dev/install.sh | sh
+```
+
+Or extract `Qrow-VERSION-linux-x86_64.tar.gz` or
+`Qrow-VERSION-linux-aarch64.tar.gz` from the
+[latest release](https://github.com/vsevolodbazhan/qrow/releases/latest) into
+`~/.local`.
+
+### Channels
+
+- **Stable** for daily work. Choose it if you want fewer surprises.
+- **Nightly** for the latest features and fixes. Choose it if you want to try
+  changes early and report problems.
+
+To change the channel, open **Settings → Updates → Release Channel**. A copy
+from Homebrew or Scoop keeps the channel of its package.
 
 ## Build
 
-### Prerequisites
-
-- Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the pinned toolchain.
-- Xcode command-line tools. Install them with `xcode-select --install` if needed.
-- [uv](https://docs.astral.sh/uv/), which provisions the pinned Python 3.11+
-  toolchain used by `./qtest` and by the packaging, dependency-license, and
-  code-generation scripts. A separately installed Python is not required.
-
-Check your tools:
-
-```sh
-rustc --version
-cargo --version
-xcode-select -p
-uv --version
-```
-
-Java, ODBC drivers, and the Thrift compiler are not required to build or run Qrow. GPUI is built with runtime Metal
-shader compilation, so the separate Xcode Metal compiler is not required either.
-
-### Debug
-
-For development, compile and launch the debug build in one command:
+Install the [prerequisites](docs/development.md#build-prerequisites), then run a debug build with:
 
 ```sh
 cargo run --locked --bin qrow
 ```
 
-To build an optimized executable without creating an app bundle:
-
+Add the `--release` flag to run an optimized release-like build:
 ```sh
-cargo build --locked --release --bin qrow
-./target/release/qrow
+cargo run --locked --release --bin qrow
 ```
 
-Use the release build when checking startup time and responsiveness. Running
-the executable from a terminal also shows startup timing and diagnostic output.
-
-### Release
-
-For normal use, build the optimized application bundle and launch it:
-
-```sh
-sh scripts/package/macos.sh
-open dist/Qrow.app
-```
-The script builds for the current Mac's architecture and produces `dist/Qrow.app`,
-`dist/Qrow-macos.zip`, and the installer image `dist/Qrow-VERSION-ARCH.dmg`.
-Open the DMG and drag the app to Applications.
-
-You can also double-click `dist/Qrow.app` in Finder or copy it to Applications.
-After changing the source, quit Qrow, rerun the packaging script, and reopen the
-app. The packaged app does not update automatically when you run `cargo build`.
-
-The minimum macOS version is 12.0. [`.cargo/config.toml`](.cargo/config.toml)
-sets the build baseline, and packaging uses it for the app bundle. A higher
-`MACOSX_DEPLOYMENT_TARGET` raises both values. A lower value stops packaging.
-Do not use `target-cpu=native` for a package that you share with older Macs.
-
-To build for another Mac architecture, install its Rust target and set
-`CARGO_BUILD_TARGET` to `x86_64-apple-darwin` or `aarch64-apple-darwin`.
-Packaging reads the executable from the target's subdirectory and checks its
-architecture. The package includes license notices for the selected target.
-GitHub releases contain `Qrow-VERSION-arm64.dmg` for Apple
-Silicon and `Qrow-VERSION-x86_64.dmg` for Intel. Choose the file for your Mac.
-CI tests both builds on macOS 15. It does not test every macOS 12 driver.
-The file without an architecture suffix remains an ARM64 alias for older tap
-updaters. Until the tap update and a new release are published, use a local
-Intel build. Existing Homebrew releases contain only the ARM64 app.
+See [package the app](docs/development.md#package-the-app) for release packages.
 
 ## Preview
 
-Launch the demo to inspect the SQL editor, results, schema catalog, and dbt
-details. The first connection opens with the columns of `avia.bookings`.
-Expand other tables or use **Search relations…** to inspect the catalog.
-In either Rivendell connection, right-click a table and select **Show dbt
-details** to read its description, columns, tests, lineage, and SQL.
-
-The demo uses synthetic data. It does not connect to a server, access Keychain,
-or change the saved workspace. It writes a temporary dbt manifest and removes
-the file when the window closes:
+Try Qrow with synthetic data, without a database server or access to your
+workspace:
 
 ```sh
 cargo run --locked --bin qrow -- --demo
 ```
 
-Or, after building the release executable:
-
-```sh
-./target/release/qrow --demo
-```
-
-To select a renderer for the demo, set `QROW_RENDERER`:
-
-```sh
-QROW_RENDERER=opengl ./target/release/qrow --demo
-QROW_RENDERER=software ./target/release/qrow --demo
-```
-
-The default, `auto`, selects Metal when available and OpenGL otherwise. It
-falls back to CPU rendering if OpenGL cannot start.
-OpenGL requires a hardware Core Profile with OpenGL 3.3+, GLSL 3.30, and
-instanced drawing. It does not create legacy OpenGL contexts.
-Fallback is limited to initialization; a later drawing error is reported
-and does not switch the renderer.
-`metal` and `opengl` require the selected GPU backend and stop with a diagnostic
-if initialization fails. An invalid value also stops the application.
-`QROW_SOFTWARE_RENDERER=1` selects CPU rendering when `QROW_RENDERER` is unset.
-In CPU mode, gradients use sRGB interpolation, including gradients that request
-Oklab interpolation.
-
-![dbt details in the demo](assets/screenshots/demo-dbt.png)
+On macOS, `QROW_RENDERER=auto|metal|opengl|software` selects the renderer.
+An explicit GPU choice reports initialization failures. Automatic fallback
+applies at startup; drawing failures do not switch the backend.
+`QROW_SOFTWARE_RENDERER=1` selects CPU rendering if `QROW_RENDERER` is unset.
 
 ## Documentation
 
-See the [documentation index](docs/README.md) for application behavior,
-architecture, development, and end-to-end testing.
+See the [documentation index](docs/README.md).
 
 ## Contributions
 
-Issues and discussion are welcome, but the project isn't set up for external pull requests right now.
-You are free to fork it, though.
+Issues are welcome. The project does not accept external pull requests right
+now, but you are free to fork it.
 
 ## License
 
-Qrow uses the [MIT License](LICENSE).
-Third-party code retains its original licenses. See [NOTICE](NOTICE).
+[MIT](LICENSE). Third-party code keeps its original licenses. See [NOTICE](NOTICE).

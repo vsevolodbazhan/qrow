@@ -7,7 +7,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.form.is_some() || self.settings_open {
+        if self.form.is_some() || self.assistant_covers_workspace(cx) {
             return;
         }
         let Some(tab) = self.tabs.get(self.active) else {
@@ -24,6 +24,7 @@ impl Qrow {
         };
         let Some(range) = range else {
             format_notice(
+                "Nothing to format",
                 "Move the cursor into a SQL statement or select SQL to format.",
                 window,
                 cx,
@@ -61,7 +62,12 @@ impl Qrow {
             // A selection can begin inside a quoted token. Check the surrounding
             // document too, so formatting cannot change a literal or identifier.
             if !sql::same_tokens_for(&text, &formatted, database_type) {
-                format_notice("Some SQL could not be formatted safely.", window, cx);
+                format_notice(
+                    "Could not format SQL",
+                    "Some SQL could not be formatted safely.",
+                    window,
+                    cx,
+                );
                 return;
             }
             editor.update(cx, |editor, cx| {
@@ -77,9 +83,15 @@ impl Qrow {
             });
         }
         if rejected {
-            format_notice("Some SQL could not be formatted safely.", window, cx);
+            format_notice(
+                "Could not format all SQL",
+                "Some SQL could not be formatted safely.",
+                window,
+                cx,
+            );
         } else if unsupported {
             format_notice(
+                "Could not format all SQL",
                 "Some SQL statements are not supported by the formatter.",
                 window,
                 cx,
@@ -88,22 +100,16 @@ impl Qrow {
     }
 }
 
-fn format_notice(message: &'static str, window: &mut Window, cx: &mut App) {
-    use gpui_kit::component::notification::{Notification, NotificationType};
+fn format_notice(title: &'static str, message: &'static str, window: &mut Window, cx: &mut App) {
+    use gpui_kit::component::notification::NotificationType;
     window.push_notification(
-        Notification::new()
-            .with_type(NotificationType::Warning)
-            .id::<FormatSql>()
-            .content(move |_, _, _| {
-                div()
-                    .id("format-sql-notice")
-                    .test_support()
-                    .role(Role::Alert)
-                    .aria_label(message)
-                    .text_sm()
-                    .child(message)
-                    .into_any_element()
-            }),
+        super::toast::notice(
+            NotificationType::Warning,
+            "format-sql-notice",
+            title,
+            Some(message.into()),
+        )
+        .id::<FormatSql>(),
         cx,
     );
 }
@@ -127,6 +133,7 @@ pub(super) fn editor_menu(
             MenuItem::action("Show Code Actions", ToggleCodeActions)
                 .disabled(!(editable && capabilities.has_code_actions())),
             MenuItem::action("Format", FormatSql).disabled(!editable),
+            MenuItem::action("Toggle line comment", ToggleComment).disabled(!editable),
             MenuItem::separator(),
             MenuItem::action("Cut", Cut).disabled(!(editable && capabilities.is_copyable())),
             MenuItem::action("Copy", Copy).disabled(!capabilities.is_copyable()),
@@ -184,6 +191,7 @@ mod tests {
                     "Go to Definition",
                     "Show Code Actions",
                     "Format",
+                    "Toggle line comment",
                     "---",
                     "Cut",
                     "Copy",
@@ -192,14 +200,19 @@ mod tests {
                     "Select All"
                 ]
             );
+            assert_eq!(entries[2].1, expected[0]);
             assert_eq!(
-                [entries[2].1, entries[4].1, entries[5].1, entries[6].1],
+                [entries[3].1, entries[5].1, entries[6].1, entries[7].1],
                 expected
             );
             let MenuItem::Action { action, .. } = &menu.items[2] else {
                 unreachable!()
             };
             assert!(action.as_any().is::<crate::ui::FormatSql>());
+            let MenuItem::Action { action, .. } = &menu.items[3] else {
+                unreachable!()
+            };
+            assert!(action.as_any().is::<crate::ui::ToggleComment>());
         }
     }
 }

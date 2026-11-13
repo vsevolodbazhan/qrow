@@ -24,6 +24,20 @@ class PolicyTests(unittest.TestCase):
         errors = self.run_policy('{id="RUSTSEC-0000-0000",reason="review-by: 2026-09-10"}', 'actions/checkout@' + 'a'*40)
         self.assertTrue(any("expired" in error for error in errors))
 
+    def test_local_composite_actions_also_require_pinned_external_actions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "deny.toml").write_text('[advisories]\nignore=[]\n')
+            (root / ".github/workflows").mkdir(parents=True)
+            (root / ".github/workflows/check.yml").write_text('- uses: ./.github/actions/ci-setup\n')
+            action = root / ".github/actions/ci-setup/action.yml"
+            action.parent.mkdir(parents=True)
+            with patch.object(policy, "ROOT", root):
+                action.write_text('- uses: astral-sh/setup-uv@v6\n')
+                self.assertTrue(any("setup-uv@v6" in error for error in policy.check()))
+                action.write_text('- uses: astral-sh/setup-uv@' + 'a' * 40 + '\n')
+                self.assertEqual(policy.check(), [])
+
     def test_bare_waiver_and_moving_action_tag_fail(self):
         errors = self.run_policy('"RUSTSEC-0000-0000"', 'actions/checkout@v4')
         self.assertEqual(len(errors), 2)

@@ -1,5 +1,5 @@
 [graph]
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+targets = ["aarch64-pc-windows-msvc", "x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 
 [advisories]
 # These inherited maintenance advisories have no compatible fixed releases.
@@ -9,6 +9,9 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste in GPUI Component and Metal bindings. Requires upstream macro migration. review-by: 2026-12-11" },
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz via GPUI SVG rendering. Requires upstream usvg migration. review-by: 2026-12-11" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser via GPUI SVG font parsing. Requires upstream font stack migration. review-by: 2026-12-11" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5 via the Linux D-Bus stack. Unmaintained; migrate with upstream to zbus 6. review-by: 2026-12-11" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 via the Linux D-Bus stack. Unmaintained; migrate with upstream to zbus 6. review-by: 2026-12-11" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 via the Linux D-Bus stack. Unmaintained; migrate with upstream to zbus 6. review-by: 2026-12-11" },
 ]
 
 [licenses]

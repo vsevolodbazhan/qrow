@@ -6,6 +6,7 @@ use super::{
     value::{self, Kind, Value},
 };
 use crate::model::{Column, Row};
+use crate::sync::LockExt as _;
 use serde::{
     Deserialize, Serialize,
     ser::{Error as _, SerializeSeq},
@@ -13,10 +14,54 @@ use serde::{
 use std::{
     fs::File,
     io::{self, BufWriter, Write},
-    os::unix::fs::FileExt,
     sync::{Arc, Condvar, Mutex, atomic::AtomicBool},
     time::Duration,
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
+
+#[cfg(windows)]
+trait PositionedFile {
+    fn read_exact_at(&self, bytes: &mut [u8], offset: u64) -> io::Result<()>;
+    #[cfg(test)]
+    fn write_all_at(&self, bytes: &[u8], offset: u64) -> io::Result<()>;
+}
+
+#[cfg(windows)]
+impl PositionedFile for File {
+    fn read_exact_at(&self, mut bytes: &mut [u8], mut offset: u64) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+        while !bytes.is_empty() {
+            match self.seek_read(bytes, offset) {
+                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Ok(count) => {
+                    offset += count as u64;
+                    bytes = &mut bytes[count..];
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+    #[cfg(test)]
+    fn write_all_at(&self, mut bytes: &[u8], mut offset: u64) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+        while !bytes.is_empty() {
+            match self.seek_write(bytes, offset) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(count) => {
+                    offset += count as u64;
+                    bytes = &bytes[count..];
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+}
 
 const MAGIC: &[u8; 8] = b"QROWSP\0\x01";
 const MAX_COLUMNS: usize = 4096;
@@ -136,8 +181,20 @@ impl Spool {
         });
         let metadata = budget.acquire(metadata_bytes + context_bytes + 512)?;
         let buffer = memory.acquire(8192)?;
-        let file = tempfile::tempfile()?;
-        let mut out = BufWriter::new(DiskWriter::new(file.try_clone()?, &std::env::temp_dir())?);
+        #[cfg(unix)]
+        let (file, writer) = {
+            let file = tempfile::tempfile()?;
+            let writer = file.try_clone()?;
+            (file, writer)
+        };
+        #[cfg(windows)]
+        let (file, writer) = {
+            // Reopen gives the producer a separate cursor. A Windows
+            // positioned read can change its handle's current offset.
+            let temporary = tempfile::NamedTempFile::new()?;
+            (temporary.reopen()?, temporary.into_file())
+        };
+        let mut out = BufWriter::new(DiskWriter::new(writer, &std::env::temp_dir())?);
         out.write_all(MAGIC)?;
         let header = Header {
             columns,
@@ -186,18 +243,18 @@ impl Spool {
         &self.context
     }
     pub fn status(&self) -> Status {
-        self.commit.lock().unwrap().status.clone()
+        self.commit.lock_unpoisoned().status.clone()
     }
     pub fn bytes(&self) -> u64 {
-        self.commit.lock().unwrap().offset
+        self.commit.lock_unpoisoned().offset
     }
     pub fn row_count(&self) -> u64 {
-        self.commit.lock().unwrap().rows
+        self.commit.lock_unpoisoned().rows
     }
 
     /// Wait for a download to finish without reading its batches.
     pub fn wait_complete(&self, cancel: &AtomicBool) -> io::Result<()> {
-        let mut commit = self.commit.lock().unwrap();
+        let mut commit = self.commit.lock_unpoisoned();
         loop {
             check_cancelled(cancel)?;
             match &commit.status {
@@ -223,7 +280,7 @@ impl Spool {
     }
 
     fn stop(&self, status: Status) {
-        let mut commit = self.commit.lock().unwrap();
+        let mut commit = self.commit.lock_unpoisoned();
         // A complete download belongs to writers and replay. A late writer
         // error cannot change its state or cancel a later query.
         if commit.status == Status::Downloading {
@@ -385,11 +442,11 @@ impl Producer {
         before_commit: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<()> {
         check_cancelled(cancel)?;
-        ensure_downloading(&self.spool.commit.lock().unwrap().status)?;
+        ensure_downloading(&self.spool.commit.lock_unpoisoned().status)?;
         self.out.write_all(&(bytes.len() as u32).to_le_bytes())?;
         self.out.write_all(bytes)?;
         self.out.flush()?;
-        let mut commit = self.spool.commit.lock().unwrap();
+        let mut commit = self.spool.commit.lock_unpoisoned();
         check_cancelled(cancel)?;
         ensure_downloading(&commit.status)?;
         let offset = commit
@@ -420,7 +477,7 @@ impl Reader {
             return Ok(None);
         }
         let end = {
-            let mut commit = self.spool.commit.lock().unwrap();
+            let mut commit = self.spool.commit.lock_unpoisoned();
             loop {
                 check_cancelled(cancel)?;
                 match &commit.status {
@@ -529,7 +586,7 @@ impl Reader {
             }
             1 => {
                 let (rows, rest) = postcard::take_from_bytes::<u64>(remaining).map_err(codec)?;
-                let commit = self.spool.commit.lock().unwrap();
+                let commit = self.spool.commit.lock_unpoisoned();
                 if !rest.is_empty()
                     || rows != self.rows
                     || commit.status != (Status::Complete { rows })

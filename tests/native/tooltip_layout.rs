@@ -10,8 +10,8 @@ fn main() {
     use std::time::Duration;
     use support::{
         MemoryCredentials, TestApp, assert_tooltip_header_center, assert_tooltip_metadata_rows,
-        assert_workspace_divider_alignment, assert_workspace_header_alignment,
-        assistant::FakeCodex, bounds_of, label, offline_profile,
+        assert_tooltip_status_below, assert_workspace_divider_alignment,
+        assert_workspace_header_alignment, assistant::FakeCodex, bounds_of, label, offline_profile,
     };
 
     let text_system = gpui_kit::platform::current_platform(true).text_system();
@@ -72,7 +72,11 @@ fn main() {
                             label(window, "status-tooltip-title").as_deref(),
                             Some(title)
                         );
-                        assert_tooltip_header_center(window, cx, secondary);
+                        if secondary == "status-tooltip-status" {
+                            assert_tooltip_status_below(window);
+                        } else {
+                            assert_tooltip_header_center(window, cx, secondary);
+                        }
                         if title == name {
                             assert_tooltip_metadata_rows(window);
                         }

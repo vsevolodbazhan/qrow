@@ -1,6 +1,7 @@
 use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::component::tooltip::ManagedTooltipExt as _;
 use gpui_kit::component::{
     Icon, Selectable as _, TitleBar,
     alert::Alert,
@@ -13,6 +14,15 @@ use gpui_kit::component::{
 };
 
 pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
+/// The width and height of a sidebar header action button.
+pub(super) const SIDEBAR_HEADER_ACTION_SIZE: f32 = 24.;
+
+/// The left padding of the Linux title bar, in rems. It aligns the ink of the
+/// application menu icon with the sidebar title: the 0.75 rem title inset,
+/// less the 0.3125 rem between a small icon button and its 0.875 rem icon,
+/// less the blank 3/24 at the left of the menu icon.
+#[cfg(not(target_os = "macos"))]
+const APPLICATION_MENU_INSET_REMS: f32 = 0.75 - 0.3125 - 0.875 * 3. / 24.;
 
 fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
     id.and_then(|id| profiles.iter().find(|profile| profile.id == id))
@@ -32,6 +42,105 @@ fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static s
 }
 
 impl Qrow {
+    #[cfg(not(target_os = "macos"))]
+    fn open_application_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let assistant_enabled = self.settings.assistant.enabled;
+        let catalog_focused = self.catalog_has_focus(window, cx);
+        let focus = window
+            .focused(cx)
+            .unwrap_or_else(|| self.tabs[self.active].input.read(cx).focus_handle(cx));
+        let file_focus = focus.clone();
+        let edit_focus = focus.clone();
+        let view_focus = focus.clone();
+        self.open_context_menu_from(
+            // Under the menu button, below the 34 px title bar.
+            point(window.rem_size() * APPLICATION_MENU_INSET_REMS, px(34.)),
+            Some(focus),
+            move |menu, window, cx| {
+                menu.item(PopupMenuItem::new("About Qrow").action(Box::new(OpenAbout)))
+                    .item(PopupMenuItem::new("Settings…").action(Box::new(OpenSettings)))
+                    .separator()
+                    .submenu("File", window, cx, move |menu, _, _| {
+                        menu.action_context(file_focus.clone())
+                            .item(PopupMenuItem::new("New query tab").action(Box::new(NewTab)))
+                            .item(
+                                PopupMenuItem::new("Import SQL file…")
+                                    .action(Box::new(ImportSqlFile)),
+                            )
+                            .item(PopupMenuItem::new("Close tab").action(Box::new(CloseTab)))
+                            .separator()
+                            .item(
+                                PopupMenuItem::new("Paste connection")
+                                    .action(Box::new(PasteConnection)),
+                            )
+                    })
+                    .submenu("Edit", window, cx, move |menu, _, _| {
+                        use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+                        let copy: Box<dyn Action> = if catalog_focused {
+                            Box::new(CopyCatalogName)
+                        } else {
+                            Box::new(Copy)
+                        };
+                        menu.action_context(edit_focus.clone())
+                            .item(PopupMenuItem::new("Undo").action(Box::new(Undo)))
+                            .item(PopupMenuItem::new("Redo").action(Box::new(Redo)))
+                            .separator()
+                            .item(PopupMenuItem::new("Cut").action(Box::new(Cut)))
+                            .item(PopupMenuItem::new("Copy").action(copy))
+                            .item(PopupMenuItem::new("Paste").action(Box::new(Paste)))
+                            .item(PopupMenuItem::new("Select all").action(Box::new(SelectAll)))
+                    })
+                    .submenu("View", window, cx, move |menu, _, _| {
+                        let menu = menu
+                            .action_context(view_focus.clone())
+                            .item(
+                                PopupMenuItem::new("Connections").action(Box::new(ShowConnections)),
+                            )
+                            .item(PopupMenuItem::new("Sign-Ins").action(Box::new(ShowSignIns)))
+                            .item(
+                                PopupMenuItem::new("Toggle sidebar")
+                                    .action(Box::new(ToggleSidebar)),
+                            )
+                            .item(
+                                PopupMenuItem::new("Toggle results")
+                                    .action(Box::new(ToggleResults)),
+                            );
+                        let menu = if assistant_enabled {
+                            menu.item(
+                                PopupMenuItem::new("Toggle assistant")
+                                    .action(Box::new(ToggleAssistant)),
+                            )
+                            .item(
+                                PopupMenuItem::new("Maximize assistant")
+                                    .action(Box::new(MaximizeAssistant)),
+                            )
+                            .item(
+                                PopupMenuItem::new("Minimize assistant")
+                                    .action(Box::new(MinimizeAssistant)),
+                            )
+                        } else {
+                            menu
+                        };
+                        menu.item(PopupMenuItem::new("Activity").action(Box::new(ToggleActivity)))
+                    })
+                    .separator()
+                    .item(PopupMenuItem::new("Quit Qrow").action(Box::new(Quit)))
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// The group of action buttons at the end of a sidebar header. The
+    /// buttons touch, so they read as one group. The inset centers the last
+    /// button over the status slots of the Connections tree, in every
+    /// sidebar, so the actions do not move when the panel changes.
+    pub(super) fn sidebar_header_actions(&self) -> Div {
+        h_flex()
+            .flex_shrink_0()
+            .mr(self.ui_px((catalog_tree::STATUS_SLOT_WIDTH - SIDEBAR_HEADER_ACTION_SIZE) / 2.))
+    }
+
     pub(super) fn sidebar_header(
         &self,
         title: &'static str,
@@ -68,11 +177,68 @@ impl Qrow {
             )
     }
 
-    fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn query_tabs(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
+        // Tabs keep at least 10.5 rems, so a short title shows whole, and
+        // the selected tab keeps its whole title. When the other tabs
+        // overflow the strip but 8.5 rems each would not, they shrink to
+        // share the rest of the strip instead, so a few tabs never scroll.
+        // The strip width is from the last frame; the bar draws again when
+        // it changes.
+        let rem = cx.theme().font_size;
+        let room = self.tab_scroll.bounds().size.width - rem * 0.75;
+        let selected = visible.iter().position(|index| *index == self.active);
+        let others = visible
+            .len()
+            .saturating_sub(usize::from(selected.is_some())) as f32;
+        let shared_width = room / visible.len().max(1) as f32;
+        let inactive_room = (room - rem * 8.5 * others).max(px(0.));
+        // Measure natural titles, not fitted bounds from the last frame. The
+        // latter feed the fitted width back into its own next minimum.
+        let reserved_width = visible
+            .iter()
+            .enumerate()
+            .map(|(position, index)| {
+                let tab = &self.tabs[*index];
+                let title: SharedString = tab.saved.title.clone().into();
+                let style = window.text_style();
+                let title_width = window
+                    .text_system()
+                    .shape_line(title.clone(), rem, &[style.to_run(title.len())], None)
+                    .width;
+                // Match Kit's large tab padding and borders, its gap_1, and
+                // our small close button (size_6) plus suffix pr_2. The first
+                // tab has no leading border.
+                let chrome = px(32. + if position == 0 { 1. } else { 2. }) + rem * 2.25;
+                let status = if tab.dot_status().is_some() {
+                    rem * 0.625
+                } else {
+                    px(0.)
+                };
+                let natural = title_width + chrome + status;
+                if *index == self.active {
+                    natural
+                } else {
+                    natural
+                        .min(self.ui_px(MAX_QUERY_TAB_WIDTH))
+                        .min(inactive_room)
+                }
+            })
+            .max()
+            .unwrap_or(px(0.))
+            .max(shared_width);
+        let fit = (others > 0. && room > px(0.) && rem * 10.5 * others + reserved_width > room)
+            .then(|| (room - reserved_width) / others)
+            .filter(|&width| width >= rem * 8.5);
         TabBar::new("query-tabs")
             .track_scroll(&self.tab_scroll)
+            // The selected tab shows its whole title, up to the visible strip.
+            .grow_selected(true)
+            .fit_width(fit)
+            // Long titles end in an ellipsis, and a short bar shrinks the
+            // titles before it scrolls, so a tab keeps its close button whole.
+            .max_width(self.ui_px(MAX_QUERY_TAB_WIDTH))
             .selected_index(
                 visible
                     .iter()
@@ -83,10 +249,24 @@ impl Qrow {
             .h(tab_height)
             .min_h(tab_height)
             .max_h(tab_height)
-            .children(visible.iter().map(|index| {
+            .children(visible.iter().enumerate().map(|(position, index)| {
                 let index = *index;
                 let tab = &self.tabs[index];
                 let id = tab.saved.id;
+                // The close button has a tooltip of its own, which the tab
+                // tooltip must not replace when the pointer enters both.
+                let over_close = std::rc::Rc::new(std::cell::Cell::new(false));
+                // A tab that an edge of the strip cuts hides its dot and close
+                // button, so no lone "×" shows at the edge. A click on it
+                // selects it, which scrolls it into view.
+                let cut = self
+                    .tab_scroll
+                    .bounds_for_item(position)
+                    .is_some_and(|item| {
+                        let (view, offset) = (self.tab_scroll.bounds(), self.tab_scroll.offset().x);
+                        item.left() + offset < view.left() - px(0.5)
+                            || item.right() + offset > view.right() + px(0.5)
+                    });
                 let assistant_busy = self.settings.assistant.enabled && self.assistant_tab_busy(id);
                 let title_generating =
                     self.assistant
@@ -100,22 +280,21 @@ impl Qrow {
                     // Constrain it to the same scaled height as the bar and its tools.
                     .min_h(tab_height)
                     .max_h(tab_height)
-                    // A tab without a dot shows its status on the tab itself.
-                    .when(tab.dot_status().is_none(), |query_tab| {
-                        query_tab.map(|mut query_tab| {
-                            query_tab.interactivity().tooltip(StatusTooltip::live(
-                                cx.entity().downgrade(),
-                                None,
-                                move |qrow, _| {
-                                    qrow.tabs
-                                        .iter()
-                                        .find(|tab| tab.saved.id == id)
-                                        .map(Tab::status_tooltip)
-                                },
-                            ));
-                            query_tab
-                        })
-                    })
+                    // Every tab shows its full title and its status in a tooltip,
+                    // so a cut title can be read. Tab tooltips use the managed
+                    // overlay, which hides them when the strip scrolls.
+                    .managed_tooltip_when(
+                        {
+                            let over_close = over_close.clone();
+                            move || !over_close.get()
+                        },
+                        StatusTooltip::live(cx.entity().downgrade(), None, move |qrow, _| {
+                            qrow.tabs
+                                .iter()
+                                .find(|tab| tab.saved.id == id)
+                                .map(Tab::status_tooltip)
+                        }),
+                    )
                     // Right click does not activate the tab; the menu names its target.
                     .on_mouse_down(
                         MouseButton::Right,
@@ -161,6 +340,7 @@ impl Qrow {
                         h_flex()
                             .gap_1()
                             .pr_2()
+                            .when(cut, |el| el.invisible())
                             .when_some(tab.dot_status(), |el, status| {
                                 let label = format!("{}{}", tab.saved.title, tab.status_suffix());
                                 let tooltip = StatusTooltip::live(
@@ -179,33 +359,42 @@ impl Qrow {
                                         .test_support()
                                         .role(Role::Status)
                                         .aria_label(label)
-                                        .tooltip(tooltip)
+                                        .managed_tooltip(tooltip)
                                         .child(status.dot(cx)),
                                 )
                             })
                             .child(
-                                Button::new(SharedString::from(format!(
-                                    "close-tab-{}",
-                                    tab.saved.id
-                                )))
-                                .ghost()
-                                .small()
-                                .icon(IconName::Close)
-                                .accessibility_label(format!("Close {}", tab.saved.title))
-                                .map(|mut button| {
-                                    button.interactivity().tooltip(
-                                        StatusTooltip::new("Close tab", "")
-                                            .for_action(&CloseTab, None),
-                                    );
-                                    button
-                                })
-                                .disabled(tab.busy || assistant_busy)
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        cx.stop_propagation();
-                                        this.close_tab(index, window, cx);
-                                    },
-                                )),
+                                div()
+                                    .id(SharedString::from(format!("close-tab-hover-{id}")))
+                                    .on_hover(move |hovered, _, _| over_close.set(*hovered))
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!("close-tab-tip-{id}")))
+                                            .managed_tooltip(
+                                                StatusTooltip::new("Close tab", "")
+                                                    .for_action(&CloseTab, None),
+                                            )
+                                            .child(
+                                                Button::new(SharedString::from(format!(
+                                                    "close-tab-{}",
+                                                    tab.saved.id
+                                                )))
+                                                .ghost()
+                                                .small()
+                                                .icon(IconName::Close)
+                                                .accessibility_label(format!(
+                                                    "Close {}",
+                                                    tab.saved.title
+                                                ))
+                                                .disabled(tab.busy || assistant_busy)
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.close_tab(index, window, cx);
+                                                    },
+                                                )),
+                                            ),
+                                    ),
                             ),
                     )
             }))
@@ -253,7 +442,6 @@ impl Qrow {
                 let button = Button::new("run")
                     .primary()
                     .small()
-                    .icon(IconName::ArrowRight)
                     .label("Run")
                     .map(|mut button| {
                         button.interactivity().tooltip(
@@ -280,14 +468,17 @@ impl Qrow {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
-            .child(
-                Button::new("disconnect")
-                    .ghost()
-                    .small()
-                    .label("Disconnect")
-                    .disabled(!tab.can_disconnect())
-                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
-            )
+            // Hidden, not disabled, without an open session: a gray label
+            // beside Run reads as a broken control.
+            .when(tab.can_disconnect(), |el| {
+                el.child(
+                    Button::new("disconnect")
+                        .ghost()
+                        .small()
+                        .label("Disconnect")
+                        .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+                )
+            })
             .when(authenticating, |el| {
                 el.child(
                     div()
@@ -303,13 +494,23 @@ impl Qrow {
             .child(div().flex_1())
     }
 
-    fn toggle_results(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
+            return;
+        }
+        // Under the maximized assistant, the results are out of view: show them.
+        if self.assistant_covers_workspace(cx) {
+            self.settings.results_minimized = false;
+            self.set_assistant_maximized(false, window, cx);
+            self.changed(cx);
             return;
         }
         self.settings.results_minimized = !self.settings.results_minimized;
         self.resize = None;
-        if !self.settings.results_minimized {
+        if !self.settings.results_minimized
+            && !self.assistant_maximized()
+            && !self.activity.read(cx).is_open()
+        {
             self.tabs[self.active].panel.content_visible();
         }
         self.changed(cx);
@@ -324,7 +525,11 @@ impl Qrow {
 
     pub(super) fn results_toggle_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let minimized = self.settings.results_minimized;
-        let label = if minimized { "Expand" } else { "Collapse" };
+        let label = if minimized {
+            "Expand results"
+        } else {
+            "Collapse results"
+        };
         Button::new("toggle-results")
             .ghost()
             .small()
@@ -343,34 +548,71 @@ impl Qrow {
             .on_click(cx.listener(|this, _, window, cx| this.toggle_results(window, cx)))
     }
 
-    fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn query_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.settings.results_minimized {
             return self.result_tabs(cx).into_any_element();
         }
         let content = if self.tabs[self.active].panel.selected == Panel::Output {
+            // Logs rows register their selectable text in each render, which
+            // notifies the view that renders them. Logs thus stays in Qrow,
+            // not in a view of its own.
             self.output_panel(cx)
         } else {
-            let table = &self.tabs[self.active].shown_result().table;
-            results::selection_boundary(table)
-                .size_full()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .child(self.result_toolbar(cx))
-                .child(div().flex_1().min_h_0().min_w_0().child(results::view(
-                    table,
-                    self.dialog_open(),
-                    self.settings.ui_scale,
-                    cx,
-                )))
-                .into_any_element()
+            changed_view(self.results_view.clone().into(), window)
         };
         v_flex()
             .size_full()
             .min_h_0()
             .overflow_hidden()
             .child(self.result_tabs(cx))
-            .child(div().flex_1().min_h_0().min_w_0().child(content))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .opacity(
+                        motion::content(
+                            "query-panel",
+                            format!(
+                                "{}-{:?}-{}",
+                                self.tabs[self.active].saved.id,
+                                self.tabs[self.active].panel.selected,
+                                if self.tabs[self.active].panel.selected == Panel::Results {
+                                    self.tabs[self.active].shown_result().id
+                                } else {
+                                    0
+                                }
+                            ),
+                            0,
+                            self.settings.smooth_transitions,
+                            window,
+                            cx,
+                        )
+                        .opacity(),
+                    )
+                    .child(content),
+            )
+            .into_any_element()
+    }
+
+    /// The result toolbar and the result table of the active tab.
+    pub(super) fn results_content(&self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let table = &self.tabs[self.active].shown_result().table;
+        // Without a result set the toolbar has nothing to count, export,
+        // or pin.
+        let has_result = !table.read(cx).delegate().columns.is_empty();
+        results::selection_boundary(table)
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .when(has_result, |el| el.child(self.result_toolbar(cx)))
+            .child(div().flex_1().min_h_0().min_w_0().child(results::view(
+                table,
+                self.dialog_open(),
+                self.settings.ui_scale,
+                cx,
+            )))
             .into_any_element()
     }
 
@@ -498,7 +740,10 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let shown = !(self.sidebar && self.sidebar_panel == panel);
+        // Under the maximized assistant, the sidebar is out of view: show it.
+        let shown =
+            !(self.sidebar && self.sidebar_panel == panel) || self.assistant_covers_workspace(cx);
+        self.uncover_workspace(window, cx);
         if self.sidebar_panel != panel {
             self.catalog
                 .state
@@ -606,26 +851,32 @@ impl Qrow {
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
-        // Equal-width columns keep the connection name at the window center.
-        // StatusBar centers its middle region only between the left and right
-        // items, so labels of different widths would move it off center.
+        // One line of information: the sidebar panels and the connection of
+        // the tab on the left, the workspace state and tools on the right.
+        let connected = tab.connected.then_some(DotStatus::Connected);
         StatusBar::new()
             .flex_shrink_0()
             // The default padding is a quarter rem, 3.5 pixels, which rounds
             // to an uneven space above and below the Activity button.
             .py(self.ui_px(4.))
-            .child(h_flex().flex_1().min_w_0().child(self.sidebar_buttons(cx)))
             .child(
-                div()
-                    .id("current-connection")
-                    .test_support()
-                    .role(Role::Label)
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_center()
-                    .aria_label(format!("Current connection: {connection_name}"))
-                    .child(connection_name.to_owned()),
+                    .gap_2()
+                    .child(self.sidebar_buttons(cx))
+                    .child(div().w_px().h_4().flex_shrink_0().bg(cx.theme().border))
+                    .child(
+                        h_flex()
+                            .id("current-connection")
+                            .test_support()
+                            .role(Role::Label)
+                            .min_w_0()
+                            .gap_1p5()
+                            .aria_label(format!("Current connection: {connection_name}"))
+                            .when_some(connected, |el, status| el.child(status.dot(cx)))
+                            .child(div().min_w_0().truncate().child(connection_name.to_owned())),
+                    ),
             )
             .child(
                 h_flex()
@@ -647,6 +898,9 @@ impl Qrow {
                         h_flex()
                             .flex_shrink_0()
                             .gap_1()
+                            .when(self.updates.enabled(), |el| {
+                                el.child(self.update_button(cx))
+                            })
                             .when(self.settings.assistant.enabled, |el| {
                                 el.child(self.assistant_button(cx))
                             })
@@ -678,12 +932,12 @@ impl Qrow {
             })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     this.resize = Some((
                         horizontal,
                         e.position,
                         if horizontal {
-                            this.sidebar_width
+                            this.shown_sidebar_width(window.viewport_size().width)
                         } else {
                             this.editor_height
                         },
@@ -717,6 +971,7 @@ impl Qrow {
     fn assistant_splitter(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("assistant-splitter")
+            .test_support()
             .relative()
             .flex_shrink_0()
             .w(self.ui_px(5.))
@@ -780,13 +1035,56 @@ fn changed_view(view: AnyView, window: &Window) -> AnyElement {
     }
 }
 
+/// The widest query tab, in points of the 100% scale.
+const MAX_QUERY_TAB_WIDTH: f32 = 240.;
+
+/// The least width that the assistant pane leaves to the editor and the
+/// results. Below it, the pane narrows, which also collapses its
+/// conversation list.
+const MIN_WORK_AREA_WIDTH: f32 = 560.;
+/// The width of the work area that a narrow window keeps before the sidebar
+/// keeps its own width.
+const SIDEBAR_YIELDS_TO_WIDTH: f32 = 560.;
+
 impl Qrow {
+    /// The width of the sidebar in a window that is `viewport` wide. A
+    /// narrow window narrows the sidebar, down to its least width, before
+    /// the work area gets narrower than [`SIDEBAR_YIELDS_TO_WIDTH`].
+    pub(super) fn shown_sidebar_width(&self, viewport: Pixels) -> Pixels {
+        let least = self.ui_px(180.);
+        self.sidebar_width
+            .min((viewport - self.ui_px(SIDEBAR_YIELDS_TO_WIDTH)).max(least))
+    }
+
+    pub(super) fn assistant_maximized(&self) -> bool {
+        self.settings.assistant.enabled
+            && self.assistant_state.open
+            && self.assistant_state.maximized
+    }
+
+    /// Whether the maximized assistant covers the workspace on screen.
+    /// Shortcuts of the workspace then act on what the pane shows.
+    pub(super) fn assistant_covers_workspace(&self, cx: &App) -> bool {
+        self.assistant_maximized() && !self.activity.read(cx).is_open()
+    }
+
+    /// Returns from the maximized assistant to the side pane, so that a
+    /// workspace command shows its result.
+    pub(super) fn uncover_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.assistant_covers_workspace(cx) {
+            self.set_assistant_maximized(false, window, cx);
+        }
+    }
+
     /// The width of the assistant pane in a window that is `viewport` wide.
     pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
+        if self.assistant_state.maximized {
+            return viewport;
+        }
         let available = viewport
-            - self.ui_px(420.)
+            - self.ui_px(MIN_WORK_AREA_WIDTH)
             - if self.sidebar {
-                self.sidebar_width
+                self.shown_sidebar_width(viewport)
             } else {
                 px(0.)
             };
@@ -805,28 +1103,78 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let assistant_width = self.assistant_width(window.viewport_size().width);
+        let assistant_shown = self.settings.assistant.enabled && self.assistant_state.open;
+        let animated_assistant_width = motion::panel_extent(
+            "assistant-sidebar",
+            assistant_shown,
+            assistant_width,
+            self.settings.smooth_transitions && self.settings.assistant.enabled,
+            self.assistant_state.resizing.is_some(),
+            window,
+            cx,
+        );
+        // Opening keeps fixed-width content; maximize/restore follows the
+        // presented width so controls and wrapping stay inside the moving pane.
+        let assistant_content_width =
+            if self.assistant_maximized() || animated_assistant_width > assistant_width {
+                animated_assistant_width.max(px(1.))
+            } else {
+                assistant_width
+            };
+        if assistant_shown {
+            self.assistant_pane.update(cx, |pane, cx| {
+                pane.set_layout_width(assistant_content_width, cx)
+            });
+        }
         let activity_open = self.activity.read(cx).is_open();
+        let activity_width = self.workspace_body_size.get().width;
+        let animated_activity_width = motion::panel_extent(
+            "activity-panel",
+            activity_open,
+            activity_width,
+            self.settings.smooth_transitions,
+            false,
+            window,
+            cx,
+        );
         v_flex()
             .relative()
             .size_full()
-            .key_context("Qrow")
+            .key_context(if self.assistant_maximized() {
+                "Qrow AssistantMaximized"
+            } else {
+                "Qrow"
+            })
             .track_focus(&self.focus)
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .text_sm()
             .on_action(cx.listener(Self::run))
             .on_action(cx.listener(Self::format_sql))
+            .on_action(cx.listener(Self::toggle_comment))
             .on_action(
                 cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
             )
             .on_action(cx.listener(Self::new_tab))
-            .on_action(
-                cx.listener(|this, _: &CloseTab, window, cx| {
-                    this.close_tab(this.active, window, cx)
-                }),
-            )
+            .on_action(cx.listener(Self::import_sql_file))
+            .on_action(cx.listener(Self::paste_connection))
+            .on_action(cx.listener(Self::save_as_sql_file))
+            .on_action(cx.listener(Self::select_tab))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                // The pane covers the tab, so ⌘W closes the cover first, like
+                // it closes a dialog.
+                if this.assistant_covers_workspace(cx) {
+                    if !this.dialog_open() {
+                        this.set_assistant_maximized(false, window, cx);
+                    }
+                    return;
+                }
+                this.close_tab(this.active, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
-                this.set_sidebar(!this.sidebar, window, cx)
+                let shown = !this.sidebar || this.assistant_covers_workspace(cx);
+                this.uncover_workspace(window, cx);
+                this.set_sidebar(shown, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ShowConnections, window, cx| {
                 this.show_sidebar_panel(SidebarPanel::Connections, window, cx)
@@ -839,6 +1187,12 @@ impl Qrow {
             )
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MaximizeAssistant, window, cx| {
+                this.set_assistant_maximized(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MinimizeAssistant, window, cx| {
+                this.set_assistant_maximized(false, window, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &ToggleActivity, window, cx| {
@@ -859,9 +1213,9 @@ impl Qrow {
                         return;
                     }
                     let available = window.viewport_size().width
-                        - this.ui_px(420.)
+                        - this.ui_px(MIN_WORK_AREA_WIDTH)
                         - if this.sidebar {
-                            this.sidebar_width
+                            this.shown_sidebar_width(window.viewport_size().width)
                         } else {
                             px(0.)
                         };
@@ -901,52 +1255,115 @@ impl Qrow {
                 }),
             )
             .child(
-                TitleBar::new().bg(cx.theme().title_bar).child(
-                    // Balance TitleBar's fixed 80 px traffic-light inset. It
-                    // does not follow the UI scale, so this padding must not.
-                    div()
-                        .flex_1()
-                        .pr(px(80.))
-                        .text_center()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
-                ),
+                TitleBar::new()
+                    .bg(cx.theme().title_bar)
+                    .on_close_window(
+                        cx.listener(|this, _, window, cx| this.request_quit(window, cx)),
+                    )
+                    .when(cfg!(not(target_os = "macos")), |bar| {
+                        #[cfg(not(target_os = "macos"))]
+                        // The title bar is a window drag area. Without
+                        // occlusion, Windows sees the drag area under the
+                        // button and handles a click as a caption drag.
+                        let bar = bar.pl(rems(APPLICATION_MENU_INSET_REMS)).child(
+                            div().id("application-menu-area").occlude().child(
+                                Button::new("application-menu")
+                                    .ghost()
+                                    .small()
+                                    .icon(Icon::new(AssetIconName::Menu).small())
+                                    .accessibility_label("Application menu")
+                                    .tooltip("Application menu")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_application_menu(window, cx)
+                                    })),
+                            ),
+                        );
+                        bar
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            // Balance the fixed macOS traffic-light inset.
+                            .when(cfg!(target_os = "macos"), |el| el.pr(px(80.)))
+                            .text_center()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
+                    ),
             )
-            // Activity covers the workspace and the assistant pane while it
-            // is open.
-            .when(activity_open, |el| {
-                el.child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(changed_view(self.activity.clone().into(), window)),
-                )
-            })
-            .when(!activity_open, |el| {
-                el.child(
-                    h_flex()
-                        .items_stretch()
-                        .flex_1()
-                        .min_h_0()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
+            // Activity takes over this area from the right. Its fixed-width
+            // contents keep their layout during the transition.
+            .child(
+                div()
+                    .id("workspace-body")
+                    .test_support()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .map(|el| {
+                        use gpui_kit::component::ElementExt as _;
+                        let size = self.workspace_body_size.clone();
+                        el.on_prepaint(move |bounds, window, _| {
+                            if size.replace(bounds.size) != bounds.size {
+                                window.request_animation_frame();
+                            }
+                        })
+                    })
+                    .when(!activity_open, |el| {
+                        el.child(
+                            h_flex()
+                                .items_stretch()
+                                .size_full()
                                 .min_h_0()
-                                .child(changed_view(cx.entity().into(), window)),
-                        )
-                        .when(
-                            self.settings.assistant.enabled && self.assistant_state.open,
-                            |el| {
-                                el.child(self.assistant_splitter(cx)).child(
-                                    div().w(assistant_width).flex_shrink_0().min_h_0().child(
-                                        changed_view(self.assistant_pane.clone().into(), window),
-                                    ),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .min_h_0()
+                                        .overflow_hidden()
+                                        .when(!self.assistant_maximized(), |el| {
+                                            el.child(cx.entity().into_any_element())
+                                        }),
                                 )
-                            },
-                        ),
-                )
-            })
+                                .when(assistant_shown || animated_assistant_width > px(0.), |el| {
+                                    el.when(!self.assistant_maximized(), |el| {
+                                        el.child(if assistant_shown {
+                                            self.assistant_splitter(cx).into_any_element()
+                                        } else {
+                                            div()
+                                                .w(self.ui_px(1.))
+                                                .h_full()
+                                                .bg(cx.theme().border)
+                                                .into_any_element()
+                                        })
+                                    })
+                                    .child(
+                                        motion::sidebar_panel(
+                                            "assistant-motion",
+                                            assistant_shown,
+                                            animated_assistant_width,
+                                            assistant_content_width,
+                                            changed_view(
+                                                self.assistant_pane.clone().into(),
+                                                window,
+                                            )
+                                            .into_any_element(),
+                                            cx,
+                                        ),
+                                    )
+                                }),
+                        )
+                    })
+                    .when(activity_open || animated_activity_width > px(0.), |el| {
+                        el.child(motion::takeover_panel(
+                            activity_open,
+                            animated_activity_width,
+                            activity_width,
+                            changed_view(self.activity.clone().into(), window),
+                            cx,
+                        ))
+                    }),
+            )
             .when_some(self.menu.as_ref(), |el, menu| {
                 el.child(
                     deferred(
@@ -967,7 +1384,18 @@ impl Qrow {
                         .child(Alert::warning("workspace-alert", message).banner()),
                 )
             })
-            .child(self.status_bar(cx))
+            .child({
+                let height = self.status_bar_height.clone();
+                div()
+                    .relative()
+                    .w_full()
+                    .flex_shrink_0()
+                    .child(self.status_bar(cx))
+                    .map(|el| {
+                        use gpui_kit::component::ElementExt as _;
+                        el.on_prepaint(move |bounds, _, _| height.set(bounds.size.height))
+                    })
+            })
     }
 }
 impl Render for Qrow {
@@ -979,25 +1407,69 @@ impl Render for Qrow {
             .editor_height
             .min(window.viewport_size().height - self.ui_px(294.))
             .max(self.ui_px(100.));
+        let results_expansion = motion::panel_fraction(
+            "query-results",
+            !self.settings.results_minimized,
+            self.settings.smooth_transitions,
+            self.resize.is_some_and(|(horizontal, _, _)| !horizontal),
+            window,
+            cx,
+        );
+        let results_settled = !self.settings.results_minimized && results_expansion == 1.;
+        let sidebar_width = self.shown_sidebar_width(window.viewport_size().width);
+        let animated_sidebar_width = motion::panel_extent(
+            "connections-sidebar",
+            self.sidebar,
+            sidebar_width,
+            self.settings.smooth_transitions,
+            self.resize.is_some_and(|(horizontal, _, _)| horizontal),
+            window,
+            cx,
+        );
+        let sidebar_content = motion::content(
+            "sidebar-panel",
+            format!("{:?}", self.sidebar_panel),
+            0,
+            self.settings.smooth_transitions,
+            window,
+            cx,
+        );
+        let editor_content = motion::content(
+            "query-editor",
+            self.tabs[self.active].saved.id.to_string(),
+            self.tabs[self.active].revision,
+            self.settings.smooth_transitions,
+            window,
+            cx,
+        );
         h_flex()
             .size_full()
             .items_stretch()
-            .when(self.sidebar, |el| {
-                el.child(
+            .when(self.sidebar || animated_sidebar_width > px(0.), |el| {
+                el.child(motion::sidebar_panel(
+                    "sidebar-motion",
+                    self.sidebar,
+                    animated_sidebar_width,
+                    sidebar_width,
                     div()
+                        .relative()
+                        .left(sidebar_content.offset())
+                        .opacity(sidebar_content.opacity())
                         .track_focus(&self.sidebar_focus)
-                        .w(self.sidebar_width)
-                        .flex_shrink_0()
-                        .map(|el| match self.sidebar_panel {
-                            SidebarPanel::Connections => {
-                                el.child(self.connections(window, cx).into_any_element())
-                            }
-                            SidebarPanel::SignIns => {
-                                el.child(self.sign_ins_sidebar(cx).into_any_element())
-                            }
-                        }),
-                )
-                .child(self.splitter(true, cx))
+                        .size_full()
+                        .child(changed_view(self.sidebar_view.clone().into(), window))
+                        .into_any_element(),
+                    cx,
+                ))
+                .child(if self.sidebar {
+                    self.splitter(true, cx).into_any_element()
+                } else {
+                    div()
+                        .w(self.ui_px(1.))
+                        .h_full()
+                        .bg(cx.theme().border)
+                        .into_any_element()
+                })
             })
             .child(
                 v_flex()
@@ -1005,53 +1477,113 @@ impl Render for Qrow {
                     .min_w_0()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(self.query_tabs(cx))
+                    .child(self.query_tabs(window, cx))
                     .child(self.query_toolbar(cx))
                     .child(
                         // GPUI Kit's Editor has no ID setter; tests find the
                         // editor through its container.
                         div()
                             .id("sql-editor")
+                            .overflow_hidden()
+                            .key_context("SqlEditor")
                             .test_support()
-                            .when(self.settings.results_minimized, |el| el.flex_1().min_h_0())
-                            .when(!self.settings.results_minimized, |el| {
-                                el.h(editor_height).flex_shrink_0()
-                            })
+                            .flex_basis(editor_height)
+                            .flex_grow(1. - results_expansion)
+                            .flex_shrink_0()
+                            .min_h_0()
                             .min_w_0()
                             .line_height(relative(self.settings.editor_line_height))
                             .child(
-                                Editor::new(&self.tabs[self.active].input)
-                                    .appearance(false)
-                                    .context_menu_with_capabilities(|_, capabilities, _, cx| {
-                                        gpui_kit::component::native_menu::NativeMenu::from(
-                                            format_sql::editor_menu(
-                                                capabilities,
-                                                cx.read_from_clipboard().is_some(),
-                                            ),
-                                        )
-                                    })
-                                    .font_family(self.settings.editor_font_family.clone())
-                                    .text_size(self.ui_px(self.settings.editor_font_size))
-                                    .size_full()
-                                    .aria_label("SQL Editor"),
+                                div().opacity(editor_content.opacity()).size_full().child(
+                                    changed_view(self.sql_editor_view.clone().into(), window),
+                                ),
                             ),
                     )
-                    .when(!self.settings.results_minimized, |el| {
-                        el.child(self.splitter(false, cx))
-                    })
-                    .when(self.settings.results_minimized, |el| {
+                    .when(results_settled, |el| el.child(self.splitter(false, cx)))
+                    .when(!results_settled, |el| {
                         el.child(div().h(self.ui_px(1.)).bg(cx.theme().border))
                     })
                     .child(
                         div()
-                            .when(self.settings.results_minimized, |el| {
-                                el.h(self.ui_px(result_tabs::RESULT_TAB_BAR_HEIGHT))
-                                    .flex_shrink_0()
-                            })
-                            .when(!self.settings.results_minimized, |el| el.flex_1().min_h_0())
-                            .child(self.query_panel(cx)),
+                            .id("results-motion")
+                            .test_support()
+                            .flex_basis(self.ui_px(result_tabs::RESULT_TAB_BAR_HEIGHT))
+                            .flex_grow(results_expansion)
+                            .flex_shrink_0()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(self.query_panel(window, cx)),
                     ),
             )
+    }
+}
+
+/// A part of the workspace in a view of its own. Qrow itself renders in each
+/// frame of the window, but a part renders again only when Qrow notifies or
+/// when the state of one of its elements changes. Thus a keystroke in the
+/// editor does not render the sidebar again, and a keystroke in the message
+/// field does not render the editor again.
+pub(super) struct QrowPart {
+    qrow: WeakEntity<Qrow>,
+    render: fn(&Qrow, &mut Window, &mut Context<Qrow>) -> AnyElement,
+    _observe: Subscription,
+}
+
+impl QrowPart {
+    /// Qrow creates its parts while Qrow itself is not ready, so this does
+    /// not read Qrow.
+    pub(super) fn new(
+        qrow: &Entity<Qrow>,
+        render: fn(&Qrow, &mut Window, &mut Context<Qrow>) -> AnyElement,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self {
+            qrow: qrow.downgrade(),
+            render,
+            _observe: cx.observe(qrow, |_, _, cx| cx.notify()),
+        }
+    }
+}
+
+impl Render for QrowPart {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let render = self.render;
+        self.qrow
+            .update(cx, |qrow, cx| render(qrow, window, cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
+impl Qrow {
+    /// The panel of the sidebar: the connections or the sign-ins.
+    pub(super) fn sidebar_content(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match self.sidebar_panel {
+            SidebarPanel::Connections => self.connections(window, cx).into_any_element(),
+            SidebarPanel::SignIns => self.sign_ins_sidebar(cx).into_any_element(),
+        }
+    }
+
+    /// The SQL editor of the active tab.
+    pub(super) fn sql_editor(&self, _: &mut Window, _: &mut Context<Self>) -> AnyElement {
+        Editor::new(&self.tabs[self.active].input)
+            .smooth_caret(self.settings.editor_smooth_caret)
+            .smooth_scrolling(self.settings.editor_smooth_scrolling)
+            .appearance(false)
+            .context_menu_with_capabilities(|_, capabilities, _, cx| {
+                gpui_kit::component::native_menu::NativeMenu::from(format_sql::editor_menu(
+                    capabilities,
+                    cx.read_from_clipboard().is_some(),
+                ))
+            })
+            .font_family(self.settings.editor_font_family.clone())
+            .text_size(self.ui_px(self.settings.editor_font_size))
+            .size_full()
+            .aria_label("SQL Editor")
+            .into_any_element()
     }
 }
 
@@ -1074,12 +1606,17 @@ impl Render for WindowView {
             .size_full()
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 this.content
-                    .update(cx, |content, cx| content.request_quit(window, cx));
+                    .update(cx, |content, cx| content.request_user_quit(window, cx));
             }))
             // Capture above editor and dialog focus scopes, before text input consumes keys.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = &event.keystroke;
-                if !key.modifiers.platform || key.modifiers.control || key.modifiers.alt {
+                let primary = if cfg!(target_os = "macos") {
+                    key.modifiers.platform && !key.modifiers.control
+                } else {
+                    key.modifiers.control && !key.modifiers.platform
+                };
+                if !primary || key.modifiers.alt {
                     return;
                 }
                 let change = match key.key.as_str() {

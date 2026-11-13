@@ -55,7 +55,10 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
         }
         let mut pagination_width = None;
         // 75% is the lower limit; three decreases clamp the scale to it.
-        for width in [1900., 850., 700., 500., 1900.] {
+        // A narrow window narrows the sidebar first, so the narrowest width
+        // leaves the results pane about as wide as a 500-point window did
+        // with a full sidebar.
+        for width in [1900., 850., 700., 450., 1900.] {
             cx.simulate_window_resize(app.window, size(px(width * scale), px(650. * scale)));
             app.settle(cx);
             assert_toolbar_fits(&app, cx);
@@ -82,11 +85,11 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                 if !compact {
                     assert_eq!(
                         label(window, "result-range").as_deref(),
-                        Some("Rows 1–1000")
+                        Some("Rows 1–1,000")
                     );
                     assert_eq!(
                         label(window, "result-loaded").as_deref(),
-                        Some("2250 loaded")
+                        Some("2,250 loaded")
                     );
                     assert_eq!(
                         label(window, "result-columns").as_deref(),
@@ -105,7 +108,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                     assert!(window.try_find("result-loaded").is_none());
                     assert!(window.try_find("result-columns").is_none());
                     assert!(window.try_find("result-elapsed").is_none());
-                    if width == 500. {
+                    if width == 450. {
                         assert!(window.try_find("result-range").is_none());
                     }
                 }
@@ -116,7 +119,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                 app.update(cx, |window, _| {
                     assert_eq!(
                         label(window, "result-detail-loaded").as_deref(),
-                        Some("Loaded Rows: 2250")
+                        Some("Loaded Rows: 2,250")
                     );
                     assert_eq!(
                         label(window, "result-detail-columns").as_deref(),
@@ -202,7 +205,7 @@ fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppCo
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1–1000")
+            Some("Visible Rows: 1–1,000")
         );
     });
     app.press(cx, "escape");
@@ -227,7 +230,7 @@ fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppCo
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1001–2000")
+            Some("Visible Rows: 1,001–2,000")
         )
     });
     // Outside clicks dismiss without consuming the target command.
@@ -252,8 +255,26 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
             ..Workspace::default()
         },
     );
-    for (target, title, shortcut) in [("new-tab", "New tab", "⌘T"), ("run", "Run query", "⌘⏎")]
-    {
+    for (target, title, shortcut) in [
+        (
+            "new-tab",
+            "New tab",
+            if cfg!(target_os = "macos") {
+                "⌘T"
+            } else {
+                "Ctrl+T"
+            },
+        ),
+        (
+            "run",
+            "Run query",
+            if cfg!(target_os = "macos") {
+                "⌘⏎"
+            } else {
+                "Ctrl+Enter"
+            },
+        ),
+    ] {
         app.update(cx, |window, cx| window.hover(target, cx));
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
@@ -281,7 +302,11 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
-            Some("⌘B")
+            Some(if cfg!(target_os = "macos") {
+                "⌘B"
+            } else {
+                "Ctrl+B"
+            })
         );
     });
     app.hover_labelled(cx, "Warehouse · East");
@@ -302,4 +327,92 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
         );
         assert_tooltip_metadata_rows(window);
     });
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn application_menu_icon_lines_up_with_the_sidebar_title(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    for zoom in [false, true] {
+        if zoom {
+            app.press(cx, "secondary-=");
+            app.settle(cx);
+        }
+        app.update(cx, |window, _| {
+            let button = bounds_of(window, "application-menu");
+            let title = bounds_of(window, "sidebar-title");
+            // The small menu icon is 0.875 rem wide, centered in the button,
+            // and its ink starts 3/24 of the icon in.
+            let icon = window.rem_size() * 0.875;
+            let ink = button.left() + (button.size.width - icon) / 2. + icon * (3. / 24.);
+            assert!(
+                (ink - title.left()).abs() < px(0.5),
+                "zoom {zoom}: icon ink at {ink:?}, title at {:?}",
+                title.left()
+            );
+        });
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn application_menu_opens_the_settings_window(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    app.click(cx, "application-menu");
+    app.wait_label(cx, "Settings…");
+    app.wait_label(cx, "File");
+    app.wait_label(cx, "Edit");
+    app.wait_label(cx, "View");
+    app.click_labelled(cx, "Settings…");
+    cx.run_until_parked();
+    assert!(app.settings_window(cx).is_some());
+    app.press(cx, "secondary-w");
+    cx.run_until_parked();
+    assert!(app.settings_window(cx).is_none());
+    app.click(cx, "application-menu");
+    app.click_labelled(cx, "Settings…");
+    cx.run_until_parked();
+    assert!(app.settings_window(cx).is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn application_file_menu_creates_a_query_tab(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "application-menu");
+    app.choose_in_submenu(cx, "File", "New query tab");
+    app.wait_label(cx, "Query 2");
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn application_edit_menu_targets_the_editor(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.type_sql(cx, "SELECT 123");
+    app.press(cx, "end");
+    app.click(cx, "application-menu");
+    app.choose_in_submenu(cx, "Edit", "Select all");
+    app.press(cx, "secondary-c");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("SELECT 123")
+    );
 }

@@ -4,7 +4,7 @@ use crate::support::{
     cell, header, label,
 };
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{TestAppContext, px, size};
+use gpui_kit::{ScrollDelta, TestAppContext, point, px, size};
 use qrow::model::SavedTab;
 use std::time::Duration;
 
@@ -15,12 +15,12 @@ fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppCon
     let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     for _ in 0..3 {
         app.press(cx, "down");
     }
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "middle😀;");
     assert_eq!(app.saved().tabs[0].sql, sql);
@@ -34,12 +34,12 @@ fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppCon
     let submissions = app.logs(cx).matches("Submitted query:").count();
     for line in [4, 5, 7] {
         app.click(cx, "sql-editor");
-        app.press(cx, "cmd-a");
+        app.press(cx, "secondary-a");
         app.press(cx, "left");
         for _ in 0..line {
             app.press(cx, "down");
         }
-        app.press(cx, "cmd-enter");
+        app.press(cx, "secondary-enter");
         app.wait_status(cx, "Rejected");
         let logs = app.logs(cx);
         assert!(logs.contains("Move the cursor into a SQL statement or select SQL to run."));
@@ -48,10 +48,10 @@ fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppCon
 
     // Select the first line through the editor, including Unicode text.
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
-    app.press(cx, "cmd-shift-right");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "shift-end");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "最初😀;");
     assert_eq!(app.saved().tabs[0].sql, sql);
@@ -59,7 +59,7 @@ fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppCon
     // An unterminated statement still runs when the cursor is inside it.
     let sql = "invalid earlier SQL;\nSELECT 3 AS value\n-- trailing ;\n";
     app.type_sql(cx, sql);
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.press(cx, "down");
     app.press(cx, "right");
@@ -143,30 +143,21 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
     let app = TestApp::launch_with(cx, workspace, credentials);
     cx.simulate_window_resize(app.window, size(px(600.), px(650.)));
     app.settle(cx);
-    app.click(cx, "result-details");
+    // Before the first result, the result toolbar and its details do not show.
     app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 0")
-        );
-        assert_eq!(
-            label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded Rows: 0")
-        );
-        assert!(window.try_find("result-detail-elapsed").is_none());
+        assert!(window.try_find("result-details").is_none());
     });
-    app.press(cx, "escape");
     app.click(cx, "run");
     app.wait_status(cx, "Preview: More rows available");
     app.click(cx, "result-details");
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1–1000")
+            Some("Visible Rows: 1–1,000")
         );
         assert_eq!(
             label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded Rows: 1000")
+            Some("Loaded Rows: 1,000")
         );
         assert_eq!(
             label(window, "result-detail-columns").as_deref(),
@@ -179,12 +170,12 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
         cx,
         "the fetched page in Result Details",
         QUERY_TIMEOUT,
-        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded Rows: 1001"),
+        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded Rows: 1,001"),
     );
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible Rows: 1001–1001")
+            Some("Visible Rows: 1,001–1,001")
         );
         assert_eq!(cell(window, 0, 1).as_deref(), Some("1000"));
     });
@@ -415,7 +406,7 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
         );
         assert_eq!(
             label(window, "result-range").as_deref(),
-            Some("Rows 1–1000")
+            Some("Rows 1–1,000")
         );
     });
     // The cursor is closed, so Next page does not fetch.
@@ -425,7 +416,7 @@ fn a_pinned_result_keeps_its_rows_after_the_next_run_closes_its_cursor(cx: &mut 
         assert_eq!(app.status(cx), "Complete");
         assert_eq!(
             label(window, "result-range").as_deref(),
-            Some("Rows 1–1000")
+            Some("Rows 1–1,000")
         );
     });
     // A compact toolbar shows the Partial tag between the range and the details.
@@ -462,16 +453,16 @@ fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
     let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(cx, "formatted query", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == "SELECT '日本語😀;' AS value"
     });
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "日本語😀;");
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(cx, "original SQL", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == sql
     });
@@ -480,24 +471,31 @@ fn format_sql_runs_and_undo_restores_original(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
-    let (workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 233 AS value", PASSWORD);
+    workspace.settings.smooth_transitions = true;
     let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.update(|cx| cx.set_reduce_motion(false));
     let height = app.update(cx, |window, _| {
         window.find("sql-editor").bounds().size.height
     });
     app.click(cx, "toggle-results");
-    app.update(cx, |window, _| {
-        assert!(window.find("sql-editor").bounds().size.height > height);
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+    app.wait_until(cx, "results collapsing", QUERY_TIMEOUT, |window, _| {
+        window.find("sql-editor").bounds().size.height > height
+            && window.find("toggle-results").label() == Some("Expand results")
     });
     app.click(cx, "run");
     app.wait_cell(cx, 0, 1, "233");
-    app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Collapse"));
-        assert_eq!(window.find("sql-editor").bounds().size.height, height);
-    });
-    app.press(cx, "cmd-j");
-    app.press(cx, "cmd-j");
+    app.wait_until(
+        cx,
+        "results restored to their previous height",
+        QUERY_TIMEOUT,
+        |window, _| {
+            window.find("toggle-results").label() == Some("Collapse results")
+                && window.find("sql-editor").bounds().size.height == height
+        },
+    );
+    app.press(cx, "secondary-j");
+    app.press(cx, "secondary-j");
     app.wait_cell(cx, 0, 1, "233");
     app.wait_until(
         cx,
@@ -505,4 +503,136 @@ fn running_query_restores_minimized_results(cx: &mut TestAppContext) {
         Duration::from_secs(10),
         |_, _| !app.saved().settings.results_minimized,
     );
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn linux_application_menu_opens_settings_after_a_query(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().workspace("SELECT 1 AS value", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "1");
+    app.click(cx, "application-menu");
+    app.wait_label(cx, "Settings…");
+    app.click_labelled(cx, "Settings…");
+    cx.run_until_parked();
+    assert!(app.settings_window(cx).is_some());
+    app.press(cx, "secondary-w");
+    cx.run_until_parked();
+    assert!(app.settings_window(cx).is_none());
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn smooth_motion_keeps_typed_sql_and_query_execution_immediate(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let sql = format!("SELECT 4;\n{}", "-- Synthetic scroll padding\n".repeat(100));
+    let (mut workspace, credentials) = kyuubi.workspace(&sql, PASSWORD);
+    workspace.settings.editor_smooth_caret = true;
+    workspace.settings.editor_smooth_scrolling = true;
+    workspace.settings.smooth_transitions = true;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.dispatch(cx, qrow::ui::ToggleActivity);
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.dispatch(cx, qrow::ui::ToggleActivity);
+    app.dispatch(cx, qrow::ui::ShowSignIns);
+    app.dispatch(cx, qrow::ui::ShowConnections);
+    app.dispatch(cx, qrow::ui::ToggleSidebar);
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.click_labelled(cx, "SQL Editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
+    for _ in 0..8 {
+        app.press(cx, "right");
+    }
+    app.press(cx, "2");
+    app.update(cx, |window, cx| {
+        window.scroll("sql-editor", ScrollDelta::Lines(point(0., -20.)), cx)
+    });
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.press(cx, "secondary-enter");
+    app.wait_until(
+        cx,
+        "the SQL typed and scrolled with smooth motion",
+        QUERY_TIMEOUT,
+        |window, _| cell(window, 0, 1).as_deref() == Some("42"),
+    );
+    let expected_sql = sql.replacen("SELECT 4;", "SELECT 42;", 1);
+    app.wait_until(
+        cx,
+        "the typed SQL to be saved",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == expected_sql,
+    );
+    app.click_labelled(cx, "SQL Editor");
+    app.press(cx, "secondary-f");
+    app.update(cx, |window, cx| window.input("SELECT", cx));
+    app.press(cx, "left");
+    app.press(cx, "escape");
+    let saved = app.saved();
+    assert!(saved.settings.editor_smooth_caret);
+    assert!(saved.settings.editor_smooth_scrolling);
+    assert!(saved.settings.smooth_transitions);
+    assert_eq!(saved.tabs[0].sql, expected_sql);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn numbered_shortcuts_keep_query_results_with_their_tabs(cx: &mut TestAppContext) {
+    let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 111 AS value", PASSWORD);
+    let profile = workspace.tabs[0].profile;
+    workspace.tabs.push(SavedTab {
+        sql: "SELECT 222 AS value".into(),
+        ..SavedTab::new(2, profile)
+    });
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "111");
+    // Switch from the result grid, then run from the newly focused editor.
+    app.update(cx, |window, cx| {
+        window.within(("row", 0_usize)).click(("cell", 1_usize), cx)
+    });
+    app.press(cx, "secondary-2");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "222");
+    app.press(cx, "secondary-1");
+    app.wait_cell(cx, 0, 1, "111");
+    app.press(cx, "secondary-2");
+    app.wait_cell(cx, 0, 1, "222");
+    app.press(cx, "secondary-9");
+    app.wait_cell(cx, 0, 1, "222");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn toggle_comment_runs_uncommented_sql(cx: &mut TestAppContext) {
+    let sql = "-- SELECT\n-- '日本語😀' AS value";
+    let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-/");
+    app.wait_until(cx, "uncommented query", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == "SELECT\n'日本語😀' AS value"
+    });
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀");
 }

@@ -21,11 +21,12 @@ Open **Qrow → Settings… → Assistant**. In **General**, turn on **Enabled**
 read the data sharing notice. When the notice changes, for example when the
 assistant gets access to schema names, Qrow turns the assistant off until you
 read the new notice and turn it on again. Select **Codex** or **Claude Code**
-in **General → Harness**. Qrow looks for `codex` or `claude` on your `PATH`
-and in the usual Homebrew folders. For Claude Code, it also looks in
-`~/.local/bin` and `~/.claude/local`. If Qrow cannot find the program, enter
-its full path in **Codex → Executable** or **Claude Code → Executable**. The
-assistant is off by default. Qrow does not start the harness until you open
+in **General → Harness**. Qrow looks for `codex` or `claude` on your `PATH`,
+in the usual Homebrew folders, and in `~/.local/bin`. For Claude Code, it also
+looks in `~/.claude/local`. On Windows, Qrow looks in other folders. See
+[Windows harnesses](#windows-harnesses). If Qrow cannot find the program,
+enter its full path in **Codex → Executable** or **Claude Code → Executable**.
+The assistant is off by default. Qrow does not start the harness until you open
 the assistant pane.
 
 Select the default query mode in **General → Query Execution**. A new
@@ -75,9 +76,46 @@ Claude Code works as Codex does, with these differences:
 
 ## Work with SQL
 
+Click **Maximize assistant** in the conversation header or press **⇧⌘R** to fill the work area,
+as Activity does. Click **Minimize assistant** or press **⇧⌘R** again to return to the side pane at
+its previous width. The tooltip of each button shows its keyboard shortcut.
+With **Smooth Transitions**, maximizing and restoring
+animate the width. A second click reverses the motion. Reduced motion makes
+the change immediate. Activity can cover the maximized assistant. Close Activity
+to return to it. **Show tab** in Activity restores the side pane and shows
+the query tab. **⌘R** closes and opens the assistant without changing its
+maximized state or saved side-pane width. The width adjusts only if the
+window does not have enough space. Maximize also opens a closed assistant.
+Minimize has no effect when the assistant is closed.
+
+The maximized assistant hides the query tabs, so the workspace shortcuts
+operate on the items that you can see:
+
+| Shortcut | When the assistant is maximized |
+|---|---|
+| **⌘T** | Starts a new conversation, like **New conversation**. The assistant stays maximized. |
+| **⌘1** to **⌘9** | Selects the conversation at that position in the conversation list. |
+| **⌘W** | Returns to the side pane. It does not close a query tab. |
+| **⌘O**, **⇧⌘S** | Returns to the side pane, then imports or saves the SQL file. |
+| **⌘B** | Returns to the side pane and shows the Connections sidebar. |
+| **⌘J** | Returns to the side pane and shows the results. |
+| **⌘Enter**, **⌥⌘L** | Do nothing outside the message field. The SQL editor is not visible. |
+
+The same rules apply to the menu items of these commands. Other shortcuts,
+for example **⌘R**, **⇧⌘R**, and **⇧⌘U**, do not change. When Activity covers
+the maximized assistant, the shortcuts operate as in the side pane.
+
+
 Select a query tab. Click the assistant button near the right end of the
 status bar, select **Toggle assistant** in the **View** menu, or press **⌘R**. Write a message and press **Enter** or
-**⌘Enter** to send it. Press **Shift-Enter** to start a new line. While the assistant works, the Send button becomes
+**⌘Enter** to send it. Press **Shift-Enter** to start a new line. The message
+field shows three lines. It grows with a longer message to 40% of the window
+height, and then scrolls. After you send the message, the field shows three
+lines again. To animate these height changes or short caret movements, enable
+**Smooth Composer Resize** or **Smooth Composer Caret** in
+[Appearance → Conversations](workspace.md). Both options are off by default
+and follow reduced motion. Text entry stays immediate.
+While the assistant works, the Send button becomes
 **Cancel**. While the harness starts a new conversation after its first message, you
 cannot send or cancel. Type a follow-up and press **Enter** to steer the current
 turn. With Claude Code, the follow-up starts the next turn. **Cancel**
@@ -91,25 +129,58 @@ Qrow does not send it. Qrow shows a notice and keeps the text in the message
 field. If the harness does not accept a message, Qrow puts its text back in the
 message field and shows the error in the conversation.
 
-You can draft a message while the harness starts. The model, reasoning, service tier,
-and Send controls stay disabled until the harness is ready. The pane does not show
-routine status text above the message field.
+A new conversation shows **Assistant** in bold and a short description in the
+middle of the pane, until you send the first message. An empty conversation
+list shows **No conversations yet**.
 
-While the assistant works on a reply, a shimmering **Working…** line shows at the end of
-the conversation. It shows from the time that you send a message until the
-turn ends or fails. It also shows while the assistant writes text or uses tools. It does
-not show while a query waits for your approval.
+You can draft a message while the harness starts. Until the harness is ready,
+the row below the message field shows `Waiting for Codex…` or `Waiting for
+Claude Code…` in place of the model, reasoning, and service tier selectors, and
+**Send** stays disabled. The pane does not show routine status text above the
+message field.
+
+When the harness is ready, the row shows the model, reasoning, and service tier
+selectors beside the execution mode and **Send**. Each selector shows its
+value when it fits. In a narrow pane, the selectors that do not fit show only
+their icons, so the row stays one line. The tooltip of a selector names its
+value.
+
+The pane header has **New conversation**, **Conversation actions**,
+**Maximize assistant**, and **Show conversations**. **Conversation actions** opens the
+menu of the conversation. **Show conversations** and **Hide conversations**
+show and hide the conversation list.
+
+A shimmering **Working…** line shows while the assistant waits to write a
+reply or uses tools. The first words of a reply replace this line in the same
+space. The line does not show below a reply that is still being written, or
+while a query waits for your approval.
 
 See [Conversation state](#conversation-state) for the status that the thread
 list and the assistant toggle show.
 
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
-can show headings, lists, code, links, and tables.
+can show headings, lists, code, links, and tables. Each line break that you
+type in a message shows as a line break.
+
+Select the **Copy code** icon above a code block in an assistant reply to copy its
+contents. The copy keeps spaces and line breaks. It does not include the
+Markdown fences or the text around the block.
 
 The harness sends a reply in parts of different sizes. Qrow shows the reply word by
 word at an even speed, about 0.3 seconds after the text arrives, and each word
 fades in. Qrow does not split bold text, inline code, a link, or a table row.
 If you reduce motion in macOS, each part shows when it arrives.
+
+To show complete replies, enable **Appearance → Conversations → Buffered
+Replies** in Settings. This option is off by default. It waits for each reply
+message to finish, then shows it at its full height with a short fade. A long
+reply stays hidden until it is complete. Tool activity still shows as it
+occurs. If you cancel a reply, or the harness fails or disconnects, the text
+received so far shows. Reduced motion removes the fade but keeps the wait.
+**Smooth Transitions** also fades new messages that you send, without moving
+them.
+Turn this option off to return to word-by-word replies, including text that
+is currently waiting.
 
 Your messages show at the right. Assistant replies and errors use the full width
 of the conversation. If a table is too wide for a reply, its columns become
@@ -117,6 +188,8 @@ narrower and their text wraps. If the columns are at their minimum width, you
 can scroll the table horizontally.
 
 Each Qrow tool call shows as a card across the full width of the conversation.
+With **Smooth Transitions**, new cards fade in. Status updates do not start
+the fade again.
 The card is collapsed. It shows the tool icon, the tool name, for example
 **Edit query** or **Run query**, and the state at the right:
 
@@ -305,8 +378,8 @@ activity, and its [state](#conversation-state). The state dot shows at the end
 of the title line. The age shows at the end of the connection line. The
 connection and age use separate labels. **Tab closed** shows beside the connection when its tab is
 closed. Older saved conversations
-without an activity time show **Earlier**. On a narrow pane, select **Toggle
-Conversation List** to open the list. When you select a conversation there,
+without an activity time show **Earlier**. On a narrow pane, select **Show
+conversations** to open the list. When you select a conversation there,
 Qrow selects its tab and connection, and the pane shows that conversation. On a
 wide pane, the list stays open. Search the list by title or connection name.
 When you send the first message, Qrow sends it to Codex in a separate, unsaved
@@ -327,12 +400,13 @@ when it follows the conversation title. The shimmer stops when the request
 ends, including when it fails. If you reduce motion in macOS, the titles stay
 still.
 If you rename the tab, Qrow keeps your tab name when the conversation title changes.
-Open **Conversation Actions** in the pane header to rename the current
+Open **Conversation actions** in the pane header to rename the current
 conversation, make a new title, or delete it. To use these actions on a
 conversation in the thread list, right-click it. You cannot rename or delete a
 conversation while it works or waits for approval. Two conversations can have the same title.
-**Rename…** opens the same dialog as a query tab rename. Type a title with 1 to
-120 characters and select **Rename** or press **⌘Enter**.
+**Rename…** opens the **Rename Conversation** dialog with the current title
+selected. Type a title with 1 to 120 characters and select **Rename** or press
+**⌘Enter**.
 Automatic title requests do not replace a title that you set. Select
 **Regenerate title** to ask Codex for a new title from the conversation
 messages. This title replaces a title that you set. If the conversation is not
@@ -461,10 +535,14 @@ card opens to the same query tab, arguments, and result. A card whose call did
 not end, for example because Qrow quit during the call, shows **Cancelled**.
 
 Qrow saves the copy about one second after a change, at the end of each turn,
-and at quit. Each copy is a file in the `assistant/transcripts` folder next to
-the workspace file. Only your user account can read it. A tool result in the
+and at quit. Each copy is a file in the `assistant/transcripts` folder of the
+[local data directory](workspace.md#saved-state). Only your user account can read it. A tool result in the
 copy can contain query rows. When a copy is larger than 8 MB, Qrow keeps its
 newest part. Delete a conversation to delete its copy.
+
+Qrow keeps each conversation that you open in memory until the window
+closes. A long session that opens many large conversations thus uses more
+memory.
 
 A Codex conversation from before this version has no copy. The first time that you
 open it, Qrow loads its latest messages from Codex and saves them. Tool call
@@ -522,8 +600,7 @@ The dots use this order of priority: approval, error, work, unread reply.
 A ready reply or an error stays until its transcript shows. The thread list
 and Activity do not read replies. Approval stays until you approve or cancel
 the request. Tooltips and accessible names give the state in words.
-Conversation tooltips show the title and a short status beside its first line.
-The title and status share a vertical center. The
+Conversation tooltips show the title, with a short status below it. The
 assistant toggle tooltip shows **Assistant** and its keyboard shortcut first.
 Its status appears below. The name and shortcut share a vertical center.
 Status text uses secondary styling.
@@ -534,9 +611,10 @@ assistant runs SQL, the query tab shows its execution state.
 
 ## Pane and connection state
 
-Opening the pane does not hide the Connections sidebar. In a small window, the
-pane uses its minimum width. Press **⌘B** to hide the sidebar if you need more
-space.
+Opening the pane does not hide the Connections sidebar. The pane leaves at
+least 560 points to the work area. In a small window, the pane uses its minimum
+width. Press **⌘B** to hide the sidebar if you need more space. In a window of
+1280 points, the pane is narrow, so the conversation list is closed at first.
 Drag the pane's left edge to change its width. A narrow pane shows either the
 thread list or the current conversation. Qrow saves the width and starts
 with the pane closed. Closing the pane does not stop a database query.
@@ -602,3 +680,18 @@ The demo uses synthetic query data and an in-memory workspace. Qrow asks Codex
 to delete demo conversations on normal exit. It reads the deletion replies
 after stopping the assistant worker. A conversation can remain if Codex does
 not confirm deletion before exit or if Qrow crashes.
+
+## Windows harnesses
+
+Executable discovery checks `PATH`, then `%APPDATA%\npm` (npm global
+packages), then `%USERPROFILE%\.local\bin` (the Claude Code installer). For
+Claude Code, it also checks `%USERPROFILE%\.claude\local`. It does not check
+Homebrew folders. In each folder, it accepts a `.exe` file first and then an
+npm `.cmd` shim. You can also
+select a path in Settings. Rust starts batch shims through its Windows command
+adapter. Qrow does not build a command-interpreter string from the arguments.
+
+CLI children run without a console window. Stopping a live run uses
+`taskkill /T /F` to stop its process tree. This does not give the lifetime
+guarantees of a Windows Job Object. Detached children, or children whose parent
+has already exited, can need separate cleanup.

@@ -1,9 +1,12 @@
 //! Shared, in-memory browser authentication. Database connectors implement
 //! their own challenge protocol; this service coordinates their callers.
+use crate::sync::LockExt as _;
 use crate::{
     connector::Secret,
     model::{Authentication, DatabaseType, Profile},
 };
+#[cfg(windows)]
+use anyhow::Context as _;
 use anyhow::{Result, anyhow};
 use std::{
     sync::{
@@ -98,7 +101,7 @@ struct Entry {
 impl Entry {
     fn invalidate(&self) {
         self.valid.store(false, Ordering::SeqCst);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_unpoisoned();
         state.token = None;
         if let Some(flight) = state.flight.take() {
             flight.cancel.store(true, Ordering::SeqCst);
@@ -117,7 +120,7 @@ struct Shared {
 }
 impl Shared {
     fn changed(&self) {
-        let notify = self.notify.lock().unwrap().clone();
+        let notify = self.notify.lock_unpoisoned().clone();
         if let Some(notify) = notify {
             notify();
         }
@@ -141,11 +144,11 @@ impl Service {
         }
     }
     pub fn set_on_change(&self, notify: Arc<dyn Fn() + Send + Sync>) {
-        *self.shared.notify.lock().unwrap() = Some(notify);
+        *self.shared.notify.lock_unpoisoned() = Some(notify);
     }
     /// Invalidate tokens and running work when connection settings change.
     pub fn configure(&self, profiles: &[Profile]) {
-        let mut registry = self.shared.registry.lock().unwrap();
+        let mut registry = self.shared.registry.lock_unpoisoned();
         registry.profiles = profiles.to_vec();
         registry.entries.retain(|entry| {
             let keep = profiles.iter().any(|profile| {
@@ -168,7 +171,7 @@ impl Service {
             profile.database_type == DatabaseType::Trino && profile.tls,
             "Trino external authentication requires HTTPS"
         );
-        let mut registry = self.shared.registry.lock().unwrap();
+        let mut registry = self.shared.registry.lock_unpoisoned();
         anyhow::ensure!(
             registry
                 .profiles
@@ -205,14 +208,13 @@ impl Service {
     pub(crate) fn is_authenticated(&self, profile: &Profile) -> bool {
         self.shared
             .registry
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .entries
             .iter()
             .any(|entry| {
                 entry.profile.connection_identity_eq(profile)
                     && entry.valid.load(Ordering::SeqCst)
-                    && entry.state.lock().unwrap().token.is_some()
+                    && entry.state.lock_unpoisoned().token.is_some()
             })
     }
     /// Failures belong to one connection, even if another has a cached token.
@@ -220,22 +222,21 @@ impl Service {
     pub(crate) fn failed(&self, profile: &Profile) -> bool {
         self.shared
             .registry
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .entries
             .iter()
             .any(|entry| {
                 entry.profile.connection_identity_eq(profile)
                     && entry.valid.load(Ordering::SeqCst)
-                    && entry.state.lock().unwrap().failed
+                    && entry.state.lock_unpoisoned().failed
             })
     }
     pub fn status(&self, id: Uuid) -> Status {
-        let registry = self.shared.registry.lock().unwrap();
+        let registry = self.shared.registry.lock_unpoisoned();
         let entries = &registry.entries;
         let mut status = Status::SignedOut;
         for entry in entries.iter().filter(|entry| entry.profile.id == id) {
-            let state = entry.state.lock().unwrap();
+            let state = entry.state.lock_unpoisoned();
             if state.flight.is_some() {
                 return Status::Waiting;
             }
@@ -252,8 +253,7 @@ impl Service {
     pub fn clear(&self, id: Uuid) {
         self.shared
             .registry
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .entries
             .retain(|entry| {
                 if entry.profile.id == id {
@@ -291,14 +291,13 @@ impl Source {
         Ok(self
             .entry
             .state
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .token
             .as_ref()
             .map(|token| Zeroizing::new(token.as_str().to_owned())))
     }
     pub fn reject(&self, token: Option<&str>) {
-        let mut state = self.entry.state.lock().unwrap();
+        let mut state = self.entry.state.lock_unpoisoned();
         if state
             .token
             .as_ref()
@@ -335,7 +334,7 @@ impl Source {
             "Connection settings changed; reconnect"
         );
         let (flight, start) = {
-            let mut state = self.entry.state.lock().unwrap();
+            let mut state = self.entry.state.lock_unpoisoned();
             if let Some(token) = &state.token
                 && Some(token.as_str()) != rejected
             {
@@ -380,7 +379,7 @@ impl Source {
                     )
                 });
                 {
-                    let mut state = entry.state.lock().unwrap();
+                    let mut state = entry.state.lock_unpoisoned();
                     // A sign-out, setting change, or last waiter cancellation
                     // must not allow a late result to restore authentication.
                     if entry.valid.load(Ordering::SeqCst)
@@ -400,7 +399,7 @@ impl Source {
                     {
                         state.flight = None;
                     }
-                    *running.result.lock().unwrap() = Some(result);
+                    *running.result.lock_unpoisoned() = Some(result);
                 }
                 shared.changed();
             });
@@ -410,7 +409,7 @@ impl Source {
             if self.control.is_cancelled() || !self.entry.valid.load(Ordering::SeqCst) {
                 return Err(Cancelled.into());
             }
-            if let Some(result) = flight.result.lock().unwrap().as_ref() {
+            if let Some(result) = flight.result.lock_unpoisoned().as_ref() {
                 return result
                     .as_ref()
                     .map(|token| Zeroizing::new(token.as_str().to_owned()))
@@ -429,7 +428,7 @@ struct Waiter {
 }
 impl Drop for Waiter {
     fn drop(&mut self) {
-        let _state = self.entry.state.lock().unwrap();
+        let _state = self.entry.state.lock_unpoisoned();
         if self.flight.waiters.fetch_sub(1, Ordering::SeqCst) == 1 {
             self.flight.cancel.store(true, Ordering::SeqCst);
         }
@@ -438,6 +437,13 @@ impl Drop for Waiter {
         self.shared.changed();
     }
 }
+#[cfg(windows)]
+fn open_browser(url: &str) -> Result<()> {
+    // ShellExecuteExW opens the URL as data, without a command interpreter.
+    open::that_detached(url).context("Cannot open the browser")
+}
+
+#[cfg(not(windows))]
 fn open_browser(url: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     let command = "open";

@@ -351,6 +351,14 @@ impl TextView {
         self
     }
 
+    /// Show each line ending in a paragraph as a line break; see
+    /// [`MarkdownExtensions::line_breaks`].
+    pub fn markdown_line_breaks(mut self) -> Self {
+        let extensions = Arc::make_mut(&mut self.markdown_extensions);
+        *extensions = extensions.clone().line_breaks();
+        self
+    }
+
     /// Enable MDX JSX/expression parsing.
     ///
     /// This disables raw HTML parsing because `markdown-rs` gives HTML

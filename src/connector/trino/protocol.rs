@@ -2,6 +2,7 @@ use super::{
     Page, external,
     transport::{Runtime, Transport},
 };
+use crate::sync::LockExt as _;
 use crate::{connector::Secret, model::Profile, tls::Trust};
 use anyhow::{Context, Result};
 use reqwest::{
@@ -166,7 +167,7 @@ impl Http {
             allowance,
         )?;
         let runtime = Arc::new(Runtime::new()?);
-        *self.requests.lock().unwrap() = Requests {
+        *self.requests.lock_unpoisoned() = Requests {
             scope: scope.clone(),
             client: Some(client),
             runtime: Some(runtime),
@@ -175,7 +176,7 @@ impl Http {
     }
 
     pub fn end_requests(&self, scope: &Arc<Transport>) {
-        let mut requests = self.requests.lock().unwrap();
+        let mut requests = self.requests.lock_unpoisoned();
         if Arc::ptr_eq(&requests.scope, scope) {
             requests.client = None;
             requests.runtime = None;
@@ -184,7 +185,7 @@ impl Http {
 
     #[cfg(test)]
     pub fn has_peer(&self) -> bool {
-        self.peer.lock().unwrap().is_some()
+        self.peer.lock_unpoisoned().is_some()
     }
 
     pub fn cursor(&self, text: &str) -> Result<Url> {
@@ -233,14 +234,13 @@ impl Http {
                     self.secret.value()?
                 } else {
                     self.cleanup_token
-                        .lock()
-                        .unwrap()
+                        .lock_unpoisoned()
                         .as_ref()
                         .map(|token| zeroize::Zeroizing::new(token.as_str().to_owned()))
                         .context("No cached Trino authentication token for cleanup")?
                 };
                 anyhow::ensure!(token.len() <= 64 * 1024, "Trino token exceeds 64 KiB");
-                *self.cleanup_token.lock().unwrap() =
+                *self.cleanup_token.lock_unpoisoned() =
                     Some(zeroize::Zeroizing::new(token.as_str().to_owned()));
                 request = request.bearer_auth(token.as_str());
             }
@@ -255,8 +255,7 @@ impl Http {
             Secret::External(source) if authenticate => source.cached()?,
             Secret::External(source) => source.cached().ok().flatten().or_else(|| {
                 self.cleanup_token
-                    .lock()
-                    .unwrap()
+                    .lock_unpoisoned()
                     .as_ref()
                     .map(|token| zeroize::Zeroizing::new(token.as_str().to_owned()))
             }),
@@ -273,7 +272,7 @@ impl Http {
             }
             if let Some(token) = &token {
                 anyhow::ensure!(token.len() <= 64 * 1024, "Trino token exceeds 64 KiB");
-                *self.cleanup_token.lock().unwrap() =
+                *self.cleanup_token.lock_unpoisoned() =
                     Some(zeroize::Zeroizing::new(token.as_str().to_owned()));
             }
             let mut current = request.try_clone().context("Cannot retry Trino request")?;
@@ -289,7 +288,7 @@ impl Http {
                         anyhow::Error::new(error.without_url()).context("Trino request failed")
                     })
                 }))?;
-            *self.peer.lock().unwrap() = response.remote_addr();
+            *self.peer.lock_unpoisoned() = response.remote_addr();
             if response.status() != reqwest::StatusCode::UNAUTHORIZED || !authenticate {
                 return Ok(response);
             }
@@ -352,7 +351,7 @@ impl Http {
         headers: &SessionHeaders,
         spooling: bool,
     ) -> Result<(Page, HeaderMap)> {
-        let requests = self.requests.lock().unwrap().clone();
+        let requests = self.requests.lock_unpoisoned().clone();
         let _activity = requests.scope.activity()?;
         let mut response = self.request(method, url, sql, headers, &requests, spooling)?;
         anyhow::ensure!(
@@ -422,8 +421,7 @@ impl Http {
         self.cursor(url.as_str())?;
         let peer = self
             .peer
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .context("No established Trino coordinator peer for cleanup")?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         anyhow::ensure!(!remaining.is_zero(), "Trino cleanup deadline expired");
@@ -451,7 +449,7 @@ impl Http {
             if !password.is_empty() {
                 request = request.basic_auth(&self.username, Some(password.as_str()));
             }
-        } else if let Some(token) = self.cleanup_token.lock().unwrap().as_ref() {
+        } else if let Some(token) = self.cleanup_token.lock_unpoisoned().as_ref() {
             request = request.bearer_auth(token.as_str());
         }
         let remaining = deadline.saturating_duration_since(Instant::now());

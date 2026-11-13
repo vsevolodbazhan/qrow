@@ -21,12 +21,21 @@ class OpenGlProbeTests(unittest.TestCase):
     def test_only_an_explicit_unsupported_result_can_skip_hardware_suites(self):
         for status, available in (("available", True), ("unavailable", False)):
             with self.subTest(status=status):
-                result, call = self.probe(f"QROW_OPENGL_CAPABILITY {status}: driver result\n")
+                reason = "driver result" if available else "hardware OpenGL Core pixel format unavailable (10002)"
+                result, call = self.probe(f"QROW_OPENGL_CAPABILITY {status}: {reason}\n")
                 self.assertIs(result["available"], available)
-                self.assertEqual(result["reason"], "driver result")
+                self.assertEqual(result["reason"], reason)
                 self.assertIn("--exact", call.args[0])
                 self.assertIn(opengl.PROBE, call.args[0])
                 self.assertEqual(call.args[2], 1800)
+
+    def test_libtest_prefix_from_uncaptured_prepared_nextest_is_recognized(self):
+        reason = "hardware OpenGL Core pixel format unavailable (10002)"
+        result, _ = self.probe(f"test {opengl.PROBE} ... QROW_OPENGL_CAPABILITY unavailable: {reason}\nok\n")
+        self.assertIs(result["available"], False)
+        self.assertEqual(result["reason"], reason)
+        result, _ = self.probe(f"test unrelated ... QROW_OPENGL_CAPABILITY unavailable: {reason}\n")
+        self.assertIn("no unique", result["error"])
 
     def test_failure_cannot_be_hidden_by_an_unavailable_marker(self):
         result, _ = self.probe("QROW_OPENGL_CAPABILITY unavailable: no GPU\nshader bug", 101)

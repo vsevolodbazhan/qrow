@@ -26,10 +26,12 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [External authentication](../src/external_auth.rs) | Share in-memory tokens and cancellable browser work; let each connector implement its challenge protocol. |
 | [Trino connector](../src/connector/trino.rs) | Implement HTTP statements, session headers, cancellation, metadata, and bounded temporary results. |
 | [SASL transport](../src/connector/sasl.rs) | Open plain or TLS transports and send the SASL PLAIN password or access token. |
-| [TLS](../src/tls.rs) | Verify servers against the macOS trust store, or a synthetic authority in tests. |
+| [TLS](../src/tls.rs) | Verify servers against the system trust store, with the Windows certificate verifier on Windows, or a synthetic authority in tests. |
 | [Sign-ins](../src/oidc/) | Run the OpenID Connect browser sign-in, validate ID tokens, and give access tokens to connections. |
 | [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
 | [Storage](../src/storage.rs) | Lock and save the workspace. Define the password and token stores and their macOS Keychain implementation. |
+| [Updates](../src/update.rs) | Find a newer release of the build channel, verify its signed checksums and package, and install the Linux archive or the macOS DMG, or run the Windows installer. Detect installations that a package manager owns. |
+| [Update UI](../src/ui/updates.rs) | Run the daily check, download in the background, show the update toasts and the About status, restart into the new version, and report an update that did not install. |
 
 The [core library](../src/lib.rs) builds without the `ui` feature. The UI
 modules are in the same library behind the `ui` feature, and the application
@@ -129,12 +131,16 @@ the memory of long results, does not stay in the footprint that Activity
 Monitor shows.
 See the [macOS platform patch](../vendor/gpui-pre-macos/QROW-PATCH.md).
 
-The assistant pane is a separate view. Typing in its message field or a
-streamed reply renders the pane again, but not the workspace. The transcript
-renders only the messages on screen. GPUI does not keep the accessibility
-nodes of a view that it does not render again. Thus, while an accessibility
-client such as VoiceOver reads the window, the workspace and the pane render
-again in each frame.
+The assistant pane, the sidebar, the SQL editor, and the result table are
+separate views. The workspace layout around them renders in each frame of
+the window. A separate view renders again only when the workspace state or
+its own state changes. Thus a keystroke in the editor renders the editor
+again, but not the sidebar or the result table. Typing in the message field or
+a streamed reply renders the pane again, but not the other views. The Logs
+panel renders with the workspace layout. The transcript renders only the
+messages on screen. GPUI does not keep the accessibility nodes of a view that
+it does not render again. Thus, while an accessibility client such as
+VoiceOver reads the window, all views render again in each frame.
 
 The catalog worker sleeps until a command arrives. It does not poll while it
 has no refresh. While a tab of one of its connections has a live session and

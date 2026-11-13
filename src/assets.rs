@@ -19,17 +19,22 @@ const TRIANGLE_ALERT_ICON: &str = "icons/triangle-alert.svg";
 #[cfg(test)]
 const CLIPBOARD_PASTE_ICON: &str = "icons/clipboard-paste.svg";
 #[cfg(test)]
-const STATUS_BAR_ICONS: [&str; 4] = [
+const STATUS_BAR_ICONS: [&str; 5] = [
     "icons/bot.svg",
     "icons/plug.svg",
     "icons/key-round.svg",
     "icons/activity.svg",
+    "icons/circle-fading-arrow-up.svg",
 ];
 
 // Icons outside the GPUI Kit default set. The assistant tool call cards use
 // the icons after `Send`. The status bar uses `Activity`, `Plug`, and
-// `KeyRound`, and the Sign-ins sidebar uses `KeyRound` and `ClipboardPaste`.
-// The result toolbar uses `FileCode` for Copy query and `Pin`.
+// `KeyRound`. The Sign-ins sidebar uses `KeyRound`, and the Connections and
+// Sign-ins sidebars use `ClipboardPaste`.
+// The result toolbar uses `FileCode` for Copy query and `Pin`, and the Logs
+// toolbar uses `Trash` for Clear. The Connections search uses `ListFilter`.
+// The conversation list toggle uses `List`. The status bar Updates button uses
+// `CircleFadingArrowUp`.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
@@ -52,8 +57,34 @@ gpui_kit::assets::icon_assets!(
         FileCode,
         Download,
         Pin,
+        Trash,
+        ListFilter,
+        List,
+        CircleFadingArrowUp,
     ]
 );
+
+/// The bundled fonts: IBM Plex Sans for the interface and JetBrains Mono for
+/// SQL and logs, in the weights that the interface uses. Code uses only the
+/// regular, bold, and italic styles of JetBrains Mono; a request for another
+/// weight uses the nearest one. See NOTICE.
+pub(crate) fn fonts() -> Vec<Cow<'static, [u8]>> {
+    macro_rules! fonts {
+        ($($path:literal),+ $(,)?) => {
+            vec![$(Cow::Borrowed(include_bytes!(concat!("../assets/fonts/", $path)).as_slice())),+]
+        };
+    }
+    fonts![
+        "ibm-plex-sans/IBMPlexSans-Regular.ttf",
+        "ibm-plex-sans/IBMPlexSans-Medium.ttf",
+        "ibm-plex-sans/IBMPlexSans-SemiBold.ttf",
+        "ibm-plex-sans/IBMPlexSans-Bold.ttf",
+        "ibm-plex-sans/IBMPlexSans-Italic.ttf",
+        "jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "jetbrains-mono/JetBrainsMono-Bold.ttf",
+        "jetbrains-mono/JetBrainsMono-Italic.ttf",
+    ]
+}
 
 pub struct Assets;
 
@@ -145,6 +176,21 @@ mod tests {
         for icon in STATUS_BAR_ICONS {
             assert!(Assets.load(icon).unwrap().is_some(), "{icon} is missing");
         }
+    }
+
+    #[test]
+    fn the_search_scope_icon_is_available() {
+        assert!(Assets.load("icons/list-filter.svg").unwrap().is_some());
+    }
+
+    #[test]
+    fn conversation_list_icon_is_embedded_and_listed() {
+        use gpui_kit::assets::IconName;
+
+        let path = IconName::List.path();
+        let bytes = Assets.load(&path).unwrap().expect("conversation list icon");
+        assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
+        assert!(Assets.list("icons/").unwrap().contains(&path));
     }
 
     #[test]

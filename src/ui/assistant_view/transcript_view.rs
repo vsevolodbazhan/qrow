@@ -1,5 +1,6 @@
 //! The rows of the conversation transcript.
 use super::*;
+use gpui_kit::base::{Easing, text::TextViewMotion};
 
 /// One row of the transcript list. `index` is the place of the row, which
 /// orders the text selection.
@@ -8,6 +9,8 @@ pub(super) fn transcript_row(
     handle: &WeakEntity<Qrow>,
     row: Row,
     index: usize,
+    pane: &WeakEntity<AssistantPane>,
+    window: &mut Window,
     cx: &App,
 ) -> AnyElement {
     let shown = qrow.shown_conversation();
@@ -26,25 +29,7 @@ pub(super) fn transcript_row(
                 }))
                 .into_any_element()
         }
-        Row::Working => Message::new()
-            .flex_shrink_0()
-            .alignment(MessageAlignment::Start)
-            .content(
-                MessageContent::new().bubble(
-                    Bubble::new().with_variant(BubbleVariant::Ghost).child(
-                        div()
-                            .id("assistant-working")
-                            .test_support()
-                            .role(Role::Status)
-                            .aria_label("Assistant is working")
-                            .child(
-                                ShimmerText::new("Working…")
-                                    .text_color(cx.theme().muted_foreground),
-                            ),
-                    ),
-                ),
-            )
-            .into_any_element(),
+        Row::Working => working_entry(qrow, cx),
         Row::Entry { id, .. } => {
             // The rows before the entries hold at most the button.
             let offset = usize::from(
@@ -58,24 +43,159 @@ pub(super) fn transcript_row(
             };
             let thread = shown.thread.as_deref().unwrap_or("");
             match &entry.tool {
-                Some(tool) => tool_entry(qrow, handle, thread, index, entry, tool, cx),
-                None => message_entry(qrow, entry, cx),
+                Some(tool) => div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .opacity(entry_opacity(qrow, entry, pane, window, cx))
+                    .child(tool_entry(qrow, handle, thread, index, entry, tool, cx))
+                    .into_any_element(),
+                None if entry.speaker == Speaker::Assistant
+                    && entry.shown_text().trim().is_empty()
+                    && (entry.revealing()
+                        || shown.run.is_some_and(|run| {
+                            run.active_turn
+                                .as_deref()
+                                .is_some_and(|turn| entry.turn_id.as_deref() == Some(turn))
+                        }))
+                    && shown.entries.last().is_some_and(|last| last.id == entry.id) =>
+                {
+                    working_entry(qrow, cx)
+                }
+                None => message_entry(qrow, entry, pane, window, cx),
             }
         }
     }
 }
 
+/// The status occupies the first reply line until its first word is ready.
+fn working_entry(qrow: &Qrow, cx: &App) -> AnyElement {
+    Message::new()
+        .flex_shrink_0()
+        .alignment(MessageAlignment::Start)
+        .content(
+            MessageContent::new().bubble(
+                Bubble::new().with_variant(BubbleVariant::Ghost).child(
+                    div()
+                        .id("assistant-working")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label("Assistant is working")
+                        .font_family(qrow.settings.assistant_font_family.clone())
+                        .text_size(qrow.ui_px(qrow.settings.assistant_font_size))
+                        .line_height(relative(qrow.settings.assistant_line_height))
+                        .child(
+                            ShimmerText::new("Working…").text_color(cx.theme().muted_foreground),
+                        ),
+                ),
+            ),
+        )
+        .into_any_element()
+}
+
+fn entry_opacity(
+    qrow: &Qrow,
+    entry: &TranscriptEntry,
+    pane: &WeakEntity<AssistantPane>,
+    window: &mut Window,
+    cx: &App,
+) -> f32 {
+    entry
+        .appearance_started()
+        .filter(|_| {
+            !cx.reduce_motion()
+                && (qrow.settings.smooth_transitions
+                    || entry.speaker == Speaker::Assistant
+                        && qrow.settings.assistant_buffer_replies)
+        })
+        .map_or(1., |started| {
+            let duration = cx.theme().motion_tokens().duration_slow;
+            if duration.is_zero() {
+                return 1.;
+            }
+            let elapsed = cx
+                .background_executor()
+                .now()
+                .saturating_duration_since(started);
+            let progress = (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0., 1.);
+            if progress < 1. {
+                // Keep the fade tied to the pane that owns these virtual rows.
+                let pane = pane.clone();
+                window.on_next_frame(move |_, cx| {
+                    let _ = pane.update(cx, |_, cx| cx.notify());
+                });
+            }
+            Easing::EaseInOut.sample(progress)
+        })
+}
+
 /// A message, a reply, or an error.
-fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
+fn message_entry(
+    qrow: &Qrow,
+    entry: &TranscriptEntry,
+    pane: &WeakEntity<AssistantPane>,
+    window: &mut Window,
+    cx: &App,
+) -> AnyElement {
+    let opacity = entry_opacity(qrow, entry, pane, window, cx);
     let mut table_style = StyleRefinement::default();
     table_style.overflow.x = Some(Overflow::Scroll);
+    let entry_id = entry.id;
     let content = TextView::markdown(
         format!("assistant-markdown-{}", entry.id),
         entry.shown_text().clone(),
     )
     // Each word that a streamed reply shows fades in.
-    .stream_fade(true)
-    .style(TextViewStyle::default().table(table_style))
+    .stream_fade(opacity == 1.)
+    .when(qrow.settings.smooth_transitions && opacity == 1., |view| {
+        view.motion(
+            TextViewMotion::default()
+                .with_stream_fade(cx.theme().motion_tokens().duration_slow)
+                .with_stream_fade_easing(Easing::EaseInOut),
+        )
+    })
+    // A line break that you type in a message stays a line break. Replies
+    // keep the Markdown rule that joins the lines of a paragraph.
+    .when(entry.speaker == Speaker::User, |view| {
+        view.markdown_line_breaks()
+    })
+    .when(entry.speaker == Speaker::Assistant, |view| {
+        view.code_block_actions(move |block, _, _| {
+            let code = block.code();
+            Button::new(format!(
+                "assistant-copy-code-{entry_id}-{}",
+                block.span.map_or(0, |span| span.start)
+            ))
+            .ghost()
+            .small()
+            .icon(IconName::Copy)
+            .accessibility_label("Copy code")
+            .tooltip("Copy code")
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
+                window.push_notification(
+                    crate::ui::toast::notice(
+                        crate::ui::toast::NotificationType::Success,
+                        "code-copied",
+                        "Code copied",
+                        None,
+                    ),
+                    cx,
+                );
+            })
+        })
+    })
+    .style(
+        TextViewStyle::default()
+            .table(table_style)
+            // Leave a header for the block action so it cannot cover code.
+            .code_block(if entry.speaker == Speaker::Assistant {
+                StyleRefinement::default().pt_10()
+            } else {
+                StyleRefinement::default()
+            }),
+    )
     .font_family(qrow.settings.assistant_font_family.clone())
     .text_size(qrow.ui_px(qrow.settings.assistant_font_size))
     .line_height(relative(qrow.settings.assistant_line_height))
@@ -102,6 +222,7 @@ fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
     let full_width = entry.speaker != Speaker::User;
     Message::new()
         .flex_shrink_0()
+        .opacity(opacity)
         .alignment(alignment)
         .content(
             MessageContent::new()
@@ -127,7 +248,7 @@ fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
                                 .id(format!("assistant-entry-{}", entry.id))
                                 .test_support()
                                 .role(Role::Paragraph)
-                                .aria_label(entry.label().clone())
+                                .aria_label(entry.label())
                                 .whitespace_normal()
                                 .child(content),
                         ),
@@ -148,7 +269,7 @@ fn tool_entry(
 ) -> AnyElement {
     let muted = cx.theme().muted_foreground;
     let destructive = cx.theme().semantic_tokens().colors.destructive;
-    let accessible_label = entry.label().clone();
+    let accessible_label = entry.label();
     let summary = h_flex()
         .flex_1()
         .min_w_0()

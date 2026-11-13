@@ -2,6 +2,7 @@ use super::{
     Cancellation, Completion, Connector, MetadataRequest, QueryError, QueryState, Secret, Session,
     sasl, t_c_l_i_service::*, wait_for_completion,
 };
+use crate::sync::LockExt as _;
 use crate::{
     model::{Authentication, Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row},
     tls::Trust,
@@ -143,7 +144,7 @@ impl Credentials {
         sasl::connect_registered(&endpoint, &profile.username, &secret, |socket| {
             control.register(socket)
         }).inspect(|_| {
-            *self.authenticated_secret.lock().unwrap() = Some(Arc::new(secret.clone()));
+            *self.authenticated_secret.lock_unpoisoned() = Some(Arc::new(secret.clone()));
         }).map_err(|error| {
             if error.downcast_ref::<sasl::Rejected>().is_none() {
                 return error;
@@ -178,7 +179,7 @@ struct CancelTransport {
 impl Cancellation for Cancel {
     fn abort_transport(&self) {
         self.abort.shutdown();
-        let mut transport = self.transport.lock().unwrap();
+        let mut transport = self.transport.lock_unpoisoned();
         transport.aborted = true;
         if let Some(socket) = &transport.socket {
             socket.shutdown();
@@ -202,7 +203,7 @@ impl Cancellation for Cancel {
             self.abort.peer()?,
             deadline,
             |socket| {
-                let mut transport = self.transport.lock().unwrap();
+                let mut transport = self.transport.lock_unpoisoned();
                 ensure!(!transport.aborted, "Cancellation cleanup deadline passed");
                 transport.socket = Some(socket);
                 Ok(())
@@ -829,8 +830,7 @@ impl HiveSession {
             secret: self
                 .credentials
                 .authenticated_secret
-                .lock()
-                .unwrap()
+                .lock_unpoisoned()
                 .as_ref()
                 .context("No authenticated session credential")?
                 .clone(),
@@ -914,8 +914,11 @@ fn decode_columns_limited(
     );
     let mut length = None;
     let mut bytes = 0usize;
+    // The text of each double column, formatted once while its size counts.
+    let mut doubles: Vec<Option<Vec<String>>> = Vec::with_capacity(columns.len());
     // Check shape and expanded storage before allocating rows or formatting binary values.
     for column in &columns {
+        let mut formatted = None;
         macro_rules! measure {
             ($c:expr, $size:expr) => {{
                 let c = $c;
@@ -942,19 +945,27 @@ fn decode_columns_limited(
             }};
         }
         match column {
-            TColumn::BoolVal(c) => measure!(c, |v: &bool| v.to_string().capacity()),
+            TColumn::BoolVal(c) => measure!(c, |v: &bool| if *v { 4 } else { 5 }),
             TColumn::ByteVal(c) => measure!(c, |v: &i8| integer_length(i64::from(*v))),
             TColumn::I16Val(c) => measure!(c, |v: &i16| integer_length(i64::from(*v))),
             TColumn::I32Val(c) => measure!(c, |v: &i32| integer_length(i64::from(*v))),
             TColumn::I64Val(c) => measure!(c, |v: &i64| integer_length(*v)),
             TColumn::DoubleVal(c) => {
-                measure!(c, |v: &thrift::OrderedFloat<f64>| v.to_string().capacity())
+                let mut texts = Vec::with_capacity(c.values.len());
+                measure!(c, |v: &thrift::OrderedFloat<f64>| {
+                    let text = v.to_string();
+                    let size = text.capacity();
+                    texts.push(text);
+                    size
+                });
+                formatted = Some(texts);
             }
             TColumn::StringVal(c) => measure!(c, |v: &String| v.capacity()),
             TColumn::BinaryVal(c) => {
                 measure!(c, |v: &Vec<u8>| v.len().saturating_mul(2).saturating_add(2))
             }
         }
+        doubles.push(formatted);
     }
     let length = length.unwrap_or(0);
     let row_bytes = expected
@@ -969,7 +980,7 @@ fn decode_columns_limited(
         "Decoded result exceeds memory limit"
     );
     let mut rows: Vec<Row> = (0..length).map(|_| Vec::with_capacity(expected)).collect();
-    for column in columns {
+    for (column, formatted) in columns.into_iter().zip(doubles) {
         macro_rules! append {
             ($c:expr, $format:expr) => {{
                 let c = $c;
@@ -988,7 +999,10 @@ fn decode_columns_limited(
             TColumn::I16Val(c) => append!(c, |v: i16| integer_text(i64::from(v))),
             TColumn::I32Val(c) => append!(c, |v: i32| integer_text(i64::from(v))),
             TColumn::I64Val(c) => append!(c, integer_text),
-            TColumn::DoubleVal(c) => append!(c, |v: thrift::OrderedFloat<f64>| v.to_string()),
+            TColumn::DoubleVal(c) => {
+                let mut texts = formatted.unwrap_or_default().into_iter();
+                append!(c, |_| texts.next().unwrap_or_default())
+            }
             TColumn::StringVal(c) => append!(c, |v| v),
             TColumn::BinaryVal(c) => append!(c, |v: Vec<u8>| {
                 use std::fmt::Write;
@@ -1076,6 +1090,29 @@ mod tests {
             rows[0][0].as_deref(),
             Some(format!("0x{}", "07".repeat(32)).as_str())
         );
+    }
+
+    #[test]
+    fn doubles_and_booleans_decode_once_with_their_nulls() {
+        use crate::connector::t_c_l_i_service::{TBoolColumn, TDoubleColumn};
+        let doubles = TColumn::DoubleVal(TDoubleColumn::new(
+            vec![1.5.into(), 0.0.into(), (-2.25).into()],
+            vec![0b010],
+        ));
+        let booleans = TColumn::BoolVal(TBoolColumn::new(vec![true, false, true], vec![0b100]));
+        assert_eq!(
+            decode_columns(vec![doubles, booleans], 2).unwrap(),
+            vec![
+                vec![Some("1.5".into()), Some("true".into())],
+                vec![None, Some("false".into())],
+                vec![Some("-2.25".into()), None],
+            ]
+        );
+        // The size of a boolean is its text: 5 bytes for `false`.
+        let row = std::mem::size_of::<Row>() + std::mem::size_of::<Option<String>>();
+        let booleans = || vec![TColumn::BoolVal(TBoolColumn::new(vec![false], vec![]))];
+        assert!(decode_columns_limited(booleans(), 1, 1, row + 4).is_err());
+        assert!(decode_columns_limited(booleans(), 1, 1, row + 5).is_ok());
     }
 
     #[test]

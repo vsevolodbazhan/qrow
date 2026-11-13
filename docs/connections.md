@@ -31,10 +31,9 @@ error is unread. Yellow means that an assistant query needs approval.
 
 The priority is approval, error, running work, connecting, unread success,
 then connected and idle.
-The tooltip shows the connection name and a short status beside it. The status
-uses secondary text. The name and status share a vertical center. The status
-stays beside the first line when the name wraps.
-Host and User show on compact labeled rows below the name. **Unread error**
+The tooltip shows the connection name, with a short status below it. The status
+uses secondary text.
+Host and User show on compact labeled rows below the status. **Unread error**
 identifies an unread error. No dot means that no session, work, or
 unread outcome needs an indicator. A schema refresh uses its own temporary
 session. That session does not give the connection a dim blue dot.
@@ -74,8 +73,12 @@ search field above the pages to find a field.
     connection](#give-the-assistant-facts-about-a-connection).
 11. Click **Save**.
 
-Connection names must be unique. If the form contains an error, Qrow keeps the
-form open and shows the error above the form actions.
+Connection names must be unique. **Save** checks **Name**, **Host**, **Port**,
+**Username**, and **Initial Database** together. If a field has an error, Qrow
+keeps the form open, shows the error below that field with a red border, and
+moves the focus to the first field with an error. All field errors show at
+the same time. An error that applies to no single field shows above the form
+actions. A new connection opens as **New Connection**.
 
 For example, a session parameter can select an engine-sharing subdomain:
 
@@ -153,7 +156,7 @@ Enter session settings as a JSON object with string values. For example:
 ```
 
 Postgres checks each setting when the session opens. If a setting is invalid,
-the connection fails and names the setting. Passwords use macOS Keychain.
+the connection fails and names the setting. Passwords use the system secret store.
 Postgres connections do not use OpenID Connect sign-ins.
 
 Select a **TLS Mode**:
@@ -233,7 +236,7 @@ the catalog, schema, and table, with double quotes.
 
 For **Password** authentication, enter the username. Leave the password blank
 if the server accepts a username without a password. Turn on **TLS** when you
-enter a password. Passwords use macOS Keychain.
+enter a password. Passwords use the system secret store.
 
 For **External** authentication, enter the Trino username and turn on **TLS**.
 The connection's host is the coordinator. You do not need a saved sign-in or
@@ -329,8 +332,10 @@ memory reservation until it stops. Failed cleanup closes the session.
   the established coordinator address and cached credentials. It does not
   refresh tokens or start browser sign-in. Cleanup waits for the current
   response read to stop, even when `DELETE` succeeds. Repeated cancellation
-  uses the same cleanup result and deadline. If cleanup cannot finish within
-  two seconds, Qrow closes the session and the next Run reconnects.
+  uses the same cleanup result and deadline. A response read interrupted by
+  cancellation reports cancellation. Qrow keeps the session only after cleanup
+  succeeds. If cleanup cannot finish within two seconds, Qrow closes the session
+  and the next Run reconnects.
 - Cancellation closes raw sockets during TLS or a stalled response. It cannot
   stop a system DNS lookup that has already started. A late connection is
   rejected before TLS or authentication.
@@ -450,8 +455,8 @@ To add a sign-in that a colleague sent to you:
 Qrow ignores other text of the message around the settings. If a sign-in
 with the same name exists, Qrow adds `copy` to the name. If the clipboard
 does not contain sign-in settings, Qrow tells you and adds nothing. Each
-user signs in with their own account. Each connection keeps its own
-database username, so a colleague must add their own connections.
+user signs in with their own account. To give a connection together with its
+sign-in, see [Share connections](#share-connections).
 
 ### Sign in and use a sign-in
 
@@ -522,11 +527,12 @@ the issuer, client ID, scopes, or resource. Sign out first.
 
 ### Tokens and sessions
 
-Qrow keeps the access token and the refresh token in macOS Keychain. Tokens
+Qrow keeps the access token and the refresh token in macOS Keychain, the
+Linux desktop secret store, or Windows Credential Manager. Tokens
 are not in the workspace file, Logs, error messages, or assistant context.
 Before Qrow opens a transport, it gets an access token that stays valid for
 at least 60 seconds. If necessary, it uses the refresh token. When the provider
-replaces the refresh token, Qrow saves the new token in Keychain before it uses
+replaces the refresh token, Qrow saves the new token in the secret store before it uses
 the new access token. All tabs of a Qrow process share one refresh. If the
 provider gives no refresh token, a new browser sign-in is necessary when the
 access token expires.
@@ -539,7 +545,7 @@ session, so it does not wait for a token refresh. If that token has expired
 and cancellation fails, the worker interrupts the transport and discards
 the session. The server can continue work that it did not cancel.
 
-**Sign out** deletes the tokens from Keychain. It does not end the session at
+**Sign out** deletes the tokens from the secret store. It does not end the session at
 the provider, and it does not revoke the tokens. Sign out is disabled while a
 query that uses the sign-in runs. Sign out releases the idle sessions of the
 sign-in. Their SQL and downloaded results remain available. A sign-in as
@@ -614,6 +620,9 @@ Qrow reads manifests of schema v12. dbt-core 1.8 and later, and dbt Fusion,
 write this schema. Run a dbt command, for example `dbt parse`, to make the
 file.
 
+When the path is too long for the field, the field shows the end of the
+path. Point to it to see the full path in a tooltip.
+
 Below the path, the form shows the state of the manifest: the time that dbt
 wrote it, the dbt version, and the number of models. It shows an error when
 the file is missing, has another schema version, or is not a valid manifest.
@@ -625,7 +634,8 @@ duration and result.
 
 To remove the project, clear **Manifest** and save.
 
-Qrow saves a compact copy of each manifest next to the workspace, and loads it
+Qrow saves a compact copy of each manifest in the
+[local data directory](workspace.md#saved-state), and loads it
 at launch. Connections with the same manifest path share one copy. Qrow
 removes a copy when no connection uses its manifest.
 
@@ -694,9 +704,10 @@ details**. A panel opens at the right side of the window. It shows:
     SQL.
   - **Tests** has the tests of the table. A test with arguments shows each
     argument under its name.
-  - **Columns** has the documented columns, with their types, descriptions,
-    and tests. Type in **Filter columns** to find columns by name or
-    description. Columns whose name matches come first.
+  - **Columns** has the documented columns. Each column is in a card with its
+    name and type, its description, and its tests. Type in **Filter
+    columns** to find columns by name or description. Columns whose name
+    matches come first.
   - **Parents** and **Children** have the lineage, with the materialization
     of each model or the kind of each other resource. Click a parent or a
     child to show its details in the panel. **Tests**, **Columns**,
@@ -713,7 +724,11 @@ pointer onto the title of a closed part, so the part opens quickly. A part
 that you close releases them.
 
 The panel takes almost half of the window width, so make the window wider to
-read long text more easily.
+read long text more easily. The panel ends above the status bar. It does not
+dim or block the window behind it, so you can use the window while the panel
+is open. When the panel closes, the focus goes back to the tree row that
+opened it. Drag in the SQL to select it, or double-click a word. The selection
+shows while you drag.
 
 ### dbt limitations
 
@@ -752,8 +767,47 @@ available. The next Run opens a session with the updated connection settings.
 Editing and deletion are disabled while a session using the profile is busy.
 Deletion requires confirmation. Qrow closes sessions that use the deleted
 profile, even when another profile is selected. Qrow removes the profile and requests deletion
-of its stored password. Keychain deletion failures are not reported in the UI,
-so a failed deletion can leave the password in Keychain.
+of its stored password. Secret store deletion failures are not reported in the UI,
+so a failed deletion can leave the password in the secret store.
+
+## Share connections
+
+To give a connection to a colleague, for example in a Slack message:
+
+1. Right-click the connection and select **Copy settings**.
+2. Paste the text into the message.
+
+To add a connection that a colleague sent to you:
+
+1. Copy the text of the message.
+2. In the **Connections** sidebar, click the paste button beside **+**, or
+   select **File → Paste connection**.
+3. **New Connection** opens with the values. Make sure that you trust the
+   host. Change the username to your username, and enter your password.
+4. Click **Save**.
+
+The text contains the settings of all pages of **Connection Settings**,
+including the username, the session parameters, and the assistant notes.
+Remove secrets from the session parameters before you share a connection.
+The text does not contain the password, the identifier, the dbt project, or
+the shared catalog. A member of a shared catalog gives the settings of the
+shared catalog as its own schema settings. A connection with a sign-in
+includes the sign-in settings, but not your account or your tokens.
+
+The pasted settings can be partial. For example, remove the `username` line
+from the text so that each colleague enters their own username. **New
+Connection** shows the fields that you must complete when you click **Save**.
+Without a port, Qrow uses the default port of the database type.
+
+Qrow ignores other text of the message around the settings. If a connection
+with the same name exists, Qrow adds `copy` to the name. If the clipboard does
+not contain connection settings, an error message tells you why and Qrow adds
+nothing.
+
+A pasted sign-in uses a sign-in that you have with the same issuer, client ID,
+scopes, and resource. If you do not have one, **Save** also adds the sign-in.
+The note at the bottom of **New Connection** gives the name and the issuer of
+the sign-in that Qrow adds. Make sure that you trust the issuer.
 
 ## Browse schemas
 
@@ -762,7 +816,9 @@ connection that browses schemas, the tree shows its schemas, then the tables
 and views of each schema, then the columns of each table or view. A column
 row shows a minus icon under the icon of its table or view, the column name,
 and its type in lowercase. A schema row shows the number of its tables and
-views.
+views. The type of a column, and the dbt kind of a table, show only when they
+fit beside the full name. The columns of one table show their types all
+together or not at all.
 
 Schema browsing is off for a new connection. To turn it on, open the
 connection settings and set **Schema Refresh**, the first field of the
@@ -787,6 +843,9 @@ To use the tree:
 - Click the arrow before a connection to expand or collapse it.
   This does not change the connection of the query.
 - Click a schema, a table, or a view to expand or collapse it.
+- A context menu of a row opens below the row, so the row stays visible. The
+  menu shows the keyboard shortcuts of its commands. When the menu closes,
+  the focus goes back to the tree.
 - To collapse all rows below a connection or a schema, right-click it and
   select **Collapse**. The connection or the schema stays expanded. During
   a search, **Collapse** on a connection also collapses the schemas that
@@ -986,20 +1045,41 @@ catalog and its copy of the schemas.
 
 ### Search the tree
 
-Type in **Search relations…** to find schemas, tables, and views in all
-connections. Use a name or part of a name. For a table or view,
-you can include the schema, for example `integrations.bookings`. The search
-also accepts names from **Copy qualified name**, for example
-`` `integrations`.`bookings` ``. The search ignores letter case and spaces
-at the start and end of the search text.
+Type in **Search…** above the tree to find connections, schemas, tables, and
+views. Use a name or part of a name. For a table or view, you can include the
+schema, for example `integrations.bookings`. The search also accepts names
+from **Copy qualified name**, for example `` `integrations`.`bookings` ``.
+The search ignores letter case and spaces at the start and end of the search
+text.
 
-The search does not find columns. Qrow expands the connections and schemas
-that contain matches. If you expand a connection with no matches, the tree
-shows **No matches**. You can collapse and expand the connection again.
-A schema that matches by name shows all its tables when you expand it. The
-search shows the first 500 matches. If the limit hides all matches in a
-connection, the tree shows **Search limit reached**. Clear the search field
-to show the full tree again.
+During a search, the tree shows only the connections that match. If no
+connection matches, the tree shows **No matches**.
+
+- A connection that matches by name shows all its schemas when you expand it.
+- Qrow expands a connection that matches only through its schemas or tables.
+  It shows only the matching schemas and the schemas that contain matching
+  tables. A schema that matches by name shows all its tables when you expand it.
+- The search does not find columns.
+- The search shows the first 500 matches. If the limit hides all matches in
+  a connection, the connection shows **Search limit reached**.
+
+To clear the search, press Escape in the search field, or click **Clear**
+(×) at the end of the field. The full tree shows again.
+
+To search only some connections, click the filter button to the right of the
+search field, then select:
+
+- **All connections** to search all connections. This is the default.
+- **Current connection** to search only the connection of the current query.
+  When you select a query tab of a different connection, the search follows it.
+- A connection name to add the connection to the search, or to remove it.
+  When you remove the last connection, the search goes back to all
+  connections.
+
+The filter button tooltip shows the connections that the search uses. The
+button shows as selected when the search does not use all connections. The
+choice applies only while the search field has text. Qrow saves the choice
+in the workspace. If you delete a connection, Qrow removes it from the choice.
 
 ### Use names in SQL
 
@@ -1166,11 +1246,16 @@ PLAIN password is an LDAP password or the access token of a
 [sign-in](#sign-in-with-openid-connect). SASL PLAIN does not encrypt the
 transport. Turn on **TLS** to encrypt it, or use a trusted network or VPN.
 Qrow verifies the server
-certificate and the host name against the macOS trust store. To trust a
-company certificate authority, add it to Keychain and trust it. Kerberos, HTTP
+certificate and the host name against the system trust store. On macOS, add a
+company certificate authority to Keychain and trust it. On Linux, add it to
+the system certificate store. On Windows, add it to the Trusted Root
+Certification Authorities store. Windows verifies the certificate chain
+itself, so it can also get a trusted public root that the computer does not
+have yet. Kerberos, HTTP
 transport, and SSH tunneling are not implemented.
 
-Passwords are stored in macOS Keychain. They are not part of the
+Passwords are stored in macOS Keychain, the desktop secret store on
+Linux, or Windows Credential Manager. Linux needs an available Secret Service. Passwords are not part of the
 [workspace file](workspace.md#saved-state). If Qrow cannot read a password,
 edit the connection to save a password again.
 
@@ -1230,7 +1315,7 @@ the worker watches the folder of the manifest with FSEvents, because dbt can
 replace the file, and it does not poll. See the
 [parser](../src/dbt/manifest.rs) and the [saved form](../src/dbt/saved.rs).
 
-[Credential storage](../src/storage.rs) uses Keychain service
+[Credential storage](../src/storage.rs) uses the service identifier
 `io.qrow.connection`, keyed by profile UUID. Keeping that identifier stable
 preserves access to existing passwords. Direct OpenID Connect tokens use the separate
 service `io.qrow.sign-in`, keyed by sign-in UUID. Each record holds the
@@ -1249,3 +1334,16 @@ The [external authentication service](../src/external_auth.rs) shares in-memory
 tokens and authentication work for Trino connections. The
 [Trino challenge adapter](../src/connector/trino/external.rs) follows the
 [upstream Trino client protocol](https://github.com/trinodb/trino/tree/483/client/trino-client/src/main/java/io/trino/client/auth/external).
+
+## Windows credentials
+
+Windows stores passwords and sign-in tokens in Windows Credential Manager.
+Each generic credential has a target with the service name and profile UUID.
+Passwords and tokens use separate services. Workspace files do not contain
+these secrets. The Windows backend has a synthetic round-trip test in native CI.
+
+A Windows generic credential holds at most 2560 bytes. A sign-in record with
+large tokens can be larger. Thus Qrow divides a large secret into parts of
+2048 bytes and saves each part as a different credential. The credential with
+the profile target holds the first part and the number of parts. Qrow writes
+this credential last, so a save that stops halfway keeps the previous secret.

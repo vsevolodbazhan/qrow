@@ -7,7 +7,6 @@ use crate::model::{
 };
 use crate::sql::KeywordCase;
 use crate::themes;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     IndexPath, h_flex,
     input::{NumberInputEvent, StepAction},
@@ -29,6 +28,8 @@ const SIDEBAR_MAX_REMS: f32 = 18.;
 const CONTROL_REMS: f32 = 16.;
 
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
+/// The line height of a setting description, for its small text.
+pub(super) const DESCRIPTION_LINE_REMS: f32 = 1.25;
 const SYSTEM_FONT_LABEL: &str = "System Font";
 
 /// A setting the dialog edits as a number. The variants carry their own
@@ -216,6 +217,8 @@ pub(super) struct SettingsForm {
     assistant_executable: Entity<InputState>,
     claude_executable: Entity<InputState>,
     copy_format: SettingSelect,
+    /// Stable or Nightly, for copies that install updates themselves.
+    update_channel: SettingSelect,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -473,6 +476,39 @@ impl Qrow {
                 }
             },
         ));
+        const CHANNELS: [crate::update::Channel; 2] = [
+            crate::update::Channel::Stable,
+            crate::update::Channel::Nightly,
+        ];
+        let current_channel = self.update_channel();
+        let update_channel = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    CHANNELS
+                        .map(|channel| super::updates::channel_name(channel).to_owned())
+                        .to_vec(),
+                ),
+                CHANNELS
+                    .iter()
+                    .position(|channel| *channel == current_channel)
+                    .map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &update_channel,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && let Some(channel) = CHANNELS
+                        .into_iter()
+                        .find(|channel| super::updates::channel_name(*channel) == value)
+                {
+                    this.set_update_channel(channel, cx);
+                }
+            },
+        ));
         self.settings_form = Some(SettingsForm {
             theme,
             numbers,
@@ -483,6 +519,7 @@ impl Qrow {
             assistant_executable: executable,
             claude_executable,
             copy_format,
+            update_channel,
             _subscriptions: subscriptions,
         });
     }
@@ -741,36 +778,41 @@ impl Qrow {
         cx.notify();
     }
 
-    pub(super) fn open_settings_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let close = weak.clone();
-            let body = weak.clone();
-            let footer = weak.update(cx, |this, cx| this.settings_footer(cx)).ok();
-            let (width, height) = settings_dialog_size(window);
-            let viewport = window.viewport_size();
-            dialog
-                .title("Settings")
-                .w(width)
-                .h(height)
-                .margin_top((viewport.height - height) / 2.)
-                .overlay_closable(false)
-                .on_ok(|_, _, _| false)
-                .content(move |content, window, cx| {
-                    let panel = body
-                        .update(cx, |this, cx| this.settings_content(window, cx))
-                        .ok();
-                    content.children(panel)
-                })
-                .when_some(footer, |dialog, footer| dialog.footer(footer))
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |this, cx| {
-                        this.settings_open = false;
-                        this.settings_form = None;
-                        cx.notify();
-                    });
-                })
-        });
+    /// The content of the Settings window: the sections and pages, then a
+    /// footer with Restore defaults at the right, like the actions of the
+    /// settings dialogs.
+    pub(super) fn settings_window_content(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .size_full()
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.settings_content(window, cx)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_4()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(self.settings_footer(cx)),
+            )
+            .into_any_element()
+    }
+
+    /// The Settings window closed: keep the pending edits and drop the form.
+    pub(super) fn settings_window_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_settings_form(window, cx);
+        self.settings_open = false;
+        self.settings_form = None;
+        self.settings_window = None;
+        cx.notify();
     }
 
     fn settings_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -845,30 +887,44 @@ impl Qrow {
                 state.set_selected_value(&harness.to_owned(), window, cx)
             });
         }
-        // Match the gap the dialog leaves above the footer, which the dialog
-        // adds to the smaller gap below the title.
+        let updates = self.updates.enabled().then(|| {
+            updates_page(
+                form,
+                cx.weak_entity(),
+                self.settings.check_for_updates,
+                self.can_switch_channel(),
+            )
+        });
         div()
             .size_full()
-            .mt_2()
             .overflow_hidden()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
-            .child(
-                settings_panel("settings", window, cx)
-                    .page(appearance_page(form))
+            .child({
+                let panel = settings_panel("settings", window, cx)
+                    .page(appearance_page(
+                        form,
+                        cx.entity().downgrade(),
+                        &self.settings,
+                    ))
                     .page(
                         SettingPage::new("Export")
                             .resettable(false)
                             .group(SettingGroup::new().title("Copy").item(setting_item(
                                 "Copy Format",
                                 "Default format when copying result cells.",
-                                &["copy", "clipboard", "markdown", "plain", "csv", "tsv", "json"],
+                                &[
+                                    "copy",
+                                    "clipboard",
+                                    "markdown",
+                                    "plain",
+                                    "csv",
+                                    "tsv",
+                                    "json",
+                                ],
                                 select_field(&form.copy_format, "Copy Format"),
                             )))
                             .group(SettingGroup::new().title("Replay").item(setting_item(
                                 "Replay Limit",
-                                "Keep completed downloads up to this size. Zero turns retention off.",
+                                "Size limit for kept downloads. Zero turns it off.",
                                 &["export", "replay", "spool", "disk"],
                                 number_field(form, NumberSetting::ExportReplayLimit),
                             ))),
@@ -878,64 +934,119 @@ impl Qrow {
                         cx.weak_entity(),
                         self.settings.assistant.enabled,
                         self.settings.assistant.web_search,
-                    )),
-            )
+                    ));
+                match updates {
+                    Some(page) => panel.page(page),
+                    None => panel,
+                }
+            })
             .into_any_element()
+    }
+
+    /// Keep the edits that apply only when they are complete: numbers that
+    /// are still being typed and the executable paths. Settings has no Save:
+    /// closing its window keeps every change.
+    fn commit_settings_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let pending: Vec<_> = self
+            .settings_form
+            .iter()
+            .flat_map(|form| form.numbers.iter())
+            .map(|(setting, input, _)| (*setting, input.clone()))
+            .collect();
+        for (setting, input) in pending {
+            self.commit_number_setting(&input, setting, 0., window, cx);
+        }
+        if let Some(form) = &self.settings_form {
+            let read = |input: &Entity<InputState>| {
+                let path = input.read(cx).value().trim().to_owned();
+                (!path.is_empty()).then_some(path)
+            };
+            let codex = read(&form.assistant_executable);
+            let claude = read(&form.claude_executable);
+            if self.settings.assistant.codex_executable != codex
+                || self.settings.assistant.claude_executable != claude
+            {
+                self.settings.assistant.codex_executable = codex;
+                self.settings.assistant.claude_executable = claude;
+                self.changed(cx);
+            }
+        }
     }
 
     fn settings_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
             .gap_2()
+            .justify_end()
             .child(
                 Button::new("reset-settings")
                     .label("Restore defaults")
                     .on_click(cx.listener(|this, _, window, cx| this.reset_settings(window, cx))),
             )
-            .child(div().flex_1())
-            .child(
-                Button::new("save-settings")
-                    .primary()
-                    .label("Save")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        // Commit pending numeric edits before disposing their subscriptions.
-                        let pending: Vec<_> = this
-                            .settings_form
-                            .iter()
-                            .flat_map(|form| form.numbers.iter())
-                            .map(|(setting, input, _)| (*setting, input.clone()))
-                            .collect();
-                        for (setting, input) in pending {
-                            this.commit_number_setting(&input, setting, 0., window, cx);
-                        }
-                        if let Some(form) = &this.settings_form {
-                            let read = |input: &Entity<InputState>| {
-                                let path = input.read(cx).value().trim().to_owned();
-                                (!path.is_empty()).then_some(path)
-                            };
-                            let codex = read(&form.assistant_executable);
-                            let claude = read(&form.claude_executable);
-                            if this.settings.assistant.codex_executable != codex
-                                || this.settings.assistant.claude_executable != claude
-                            {
-                                this.settings.assistant.codex_executable = codex;
-                                this.settings.assistant.claude_executable = claude;
-                                this.changed(cx);
-                            }
-                        }
-                        // Programmatic close_dialog does not invoke Dialog::on_close.
-                        this.settings_open = false;
-                        this.settings_form = None;
-                        window.close_dialog(cx);
-                        cx.notify();
-                    })),
-            )
             .into_any_element()
     }
 }
 
+/// Update checks. Only release builds show this page.
+fn updates_page(
+    form: &SettingsForm,
+    owner: WeakEntity<Qrow>,
+    checked: bool,
+    can_switch: bool,
+) -> SettingPage {
+    let channel = select_field(&form.update_channel, "Release Channel");
+    // The page title names the topic; its one group needs no second title.
+    SettingPage::new("Updates").resettable(false).group(
+        SettingGroup::new()
+            .item(setting_item(
+                "Check Automatically",
+                "Look for a new version once a day.",
+                &["update", "version", "release", "download", "upgrade"],
+                move |_: &mut Window, _: &mut App| {
+                    let owner = owner.clone();
+                    Switch::new("check-for-updates")
+                        .checked(checked)
+                        .accessibility_label("Check Automatically")
+                        .on_click(move |next, _, cx| {
+                            let _ = owner.update(cx, |this, cx| {
+                                this.settings.check_for_updates = *next;
+                                this.changed(cx);
+                            });
+                        })
+                },
+            ))
+            .item(setting_item(
+                "Release Channel",
+                if can_switch {
+                    "Stable receives tested releases. Nightly receives changes earlier."
+                } else {
+                    "The package manager sets the channel of this copy."
+                },
+                &[
+                    "channel", "nightly", "stable", "update", "release", "upgrade",
+                ],
+                move |window: &mut Window, cx: &mut App| channel(window, cx).disabled(!can_switch),
+            )),
+    )
+}
+
 /// Appearance settings for the interface, assistant messages, editor, and logs.
-fn appearance_page(form: &SettingsForm) -> SettingPage {
+fn appearance_page(
+    form: &SettingsForm,
+    owner: WeakEntity<Qrow>,
+    settings: &Settings,
+) -> SettingPage {
+    let smooth_caret = settings.editor_smooth_caret;
+    let smooth_scrolling = settings.editor_smooth_scrolling;
+    let smooth_transitions = settings.smooth_transitions;
+    let composer_caret = settings.assistant_smooth_caret;
+    let composer_resize = settings.assistant_smooth_resize;
+    let buffer_replies = settings.assistant_buffer_replies;
+    let composer_caret_owner = owner.clone();
+    let composer_resize_owner = owner.clone();
+    let buffer_replies_owner = owner.clone();
+    let transitions_owner = owner.clone();
+    let scrolling_owner = owner.clone();
     SettingPage::new("Appearance")
         .default_open(true)
         // The footer resets all appearance settings, so this page does not
@@ -946,13 +1057,34 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 .title("Interface")
                 .item(setting_item(
                     "Theme",
-                    "Colors of the interface. System follows macOS.",
+                    "Colors of the interface. System follows your system settings.",
                     &["appearance", "colors", "dark", "light"],
                     theme_field(form),
                 ))
                 .item(setting_item(
+                    "Smooth Transitions",
+                    "Animate sidebars and soften tab and panel changes.",
+                    &["interface", "ui", "motion", "animation", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = transitions_owner.clone();
+                        Switch::new("smooth-transitions")
+                            .checked(smooth_transitions)
+                            .accessibility_label("Smooth Transitions")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.smooth_transitions = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
                     "Scale",
-                    "Size of all text and controls. Also ⌘+ and ⌘−.",
+                    if cfg!(target_os = "macos") {
+                        "Size of all text and controls. Also ⌘+ and ⌘−."
+                    } else {
+                        "Size of all text and controls. Also Ctrl+ and Ctrl−."
+                    },
                     &["zoom", "interface", "ui"],
                     number_field(form, NumberSetting::Scale),
                 ))
@@ -965,7 +1097,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
         )
         .group(
             SettingGroup::new()
-                .title("Assistant")
+                .title("Conversations")
                 .item(setting_item(
                     "Font Family",
                     "Font of messages in assistant conversations.",
@@ -983,6 +1115,65 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                     "Space between message lines, times the font size.",
                     &["assistant", "messages", "spacing"],
                     number_field(form, NumberSetting::AssistantLineHeight),
+                ))
+                .item(setting_item(
+                    "Smooth Composer Caret",
+                    "Animate short caret movements in the message field.",
+                    &["assistant", "typing", "cursor", "motion", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = composer_caret_owner.clone();
+                        Switch::new("assistant-smooth-caret")
+                            .checked(composer_caret)
+                            .accessibility_label("Smooth Composer Caret")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_smooth_caret = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Buffered Replies",
+                    "Wait for each complete reply, then fade it in.",
+                    &[
+                        "assistant",
+                        "messages",
+                        "streaming",
+                        "buffer",
+                        "motion",
+                        "smooth",
+                    ],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = buffer_replies_owner.clone();
+                        Switch::new("assistant-buffer-replies")
+                            .checked(buffer_replies)
+                            .accessibility_label("Buffered Replies")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_buffer_replies = *next;
+                                    this.reveal_assistant_replies(cx);
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Smooth Composer Resize",
+                    "Ease message-field growth and shrinkage.",
+                    &["assistant", "height", "resize", "motion", "smooth"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = composer_resize_owner.clone();
+                        Switch::new("assistant-smooth-resize")
+                            .checked(composer_resize)
+                            .accessibility_label("Smooth Composer Resize")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.assistant_smooth_resize = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
                 )),
         )
         .group(
@@ -1007,6 +1198,48 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                     number_field(form, NumberSetting::EditorLineHeight),
                 ))
                 .item(setting_item(
+                    "Smooth Caret",
+                    "Animate caret movement in the editor and search fields.",
+                    &["editor", "sql", "cursor", "motion", "animation", "typing"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = owner.clone();
+                        Switch::new("editor-smooth-caret")
+                            .checked(smooth_caret)
+                            .accessibility_label("Smooth Caret")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.editor_smooth_caret = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Smooth Scrolling",
+                    "Smooth mouse-wheel steps; trackpad gestures stay direct.",
+                    &[
+                        "editor",
+                        "sql",
+                        "scroll",
+                        "wheel",
+                        "motion",
+                        "animation",
+                        "smooth",
+                    ],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = scrolling_owner.clone();
+                        Switch::new("editor-smooth-scrolling")
+                            .checked(smooth_scrolling)
+                            .accessibility_label("Smooth Scrolling")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.editor_smooth_scrolling = *next;
+                                    this.changed(cx);
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
                     "Tab Size",
                     "Spaces for each indent level.",
                     &["editor", "sql", "indent", "spaces", "format"],
@@ -1014,7 +1247,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 ))
                 .item(setting_item(
                     "SQL Keyword Case",
-                    "Keyword case for formatted and assistant-generated SQL.",
+                    "Applies to formatted and assistant-written SQL.",
                     &[
                         "editor",
                         "sql",
@@ -1067,7 +1300,11 @@ fn assistant_page(
                 .title("General")
                 .item(setting_item(
                     "Enabled",
-                    "Shows the assistant button and turns on ⌘R.",
+                    if cfg!(target_os = "macos") {
+                        "Shows the assistant button and turns on ⌘R."
+                    } else {
+                        "Shows the assistant button and turns on Ctrl+R."
+                    },
                     &["assistant", "enable", "codex", "claude", "ai"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();
@@ -1083,7 +1320,7 @@ fn assistant_page(
                 ))
                 .item(setting_item(
                     "Harness",
-                    "Runs new conversations. A conversation keeps its harness.",
+                    "Runs new conversations. Old ones keep theirs.",
                     &["assistant", "harness", "codex", "claude", "agent"],
                     select_field(&form.assistant_harness, "Assistant Harness"),
                 ))
@@ -1112,11 +1349,10 @@ fn assistant_page(
         )
         .group(SettingGroup::new().title("Codex").item(setting_item(
             "Executable",
-            "Empty searches your PATH and Homebrew folders.",
+            super::assistant_view::executable_help(),
             &["assistant", "codex", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&executable)
-                    .focus_ring(false)
                     .id(setting_id("Codex Executable"))
                     .w_full()
                     .aria_label("Codex Executable")
@@ -1124,11 +1360,10 @@ fn assistant_page(
         )))
         .group(SettingGroup::new().title("Claude Code").item(setting_item(
             "Executable",
-            "Empty searches your PATH, Homebrew folders, and ~/.local/bin.",
+            super::assistant_view::executable_help(),
             &["assistant", "claude", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&claude_executable)
-                    .focus_ring(false)
                     .id(setting_id("Claude Code Executable"))
                     .w_full()
                     .aria_label("Claude Code Executable")
@@ -1188,12 +1423,17 @@ pub(super) fn setting_row<E: IntoElement>(
                             .role(Role::Label)
                             .aria_label(description.clone())
                             .text_sm()
+                            // Without it, a wrapped description inherits the
+                            // loose default line height of 1.618.
+                            .line_height(rems(DESCRIPTION_LINE_REMS))
                             .text_color(cx.theme().muted_foreground)
                             .child(description.clone()),
                     )
                 },
             );
-            let control = div().child(field(window, cx));
+            // The focus ring paints outside the control; the page clips at its
+            // edge, so the control keeps the ring width free beside it.
+            let control = div().px_1().child(field(window, cx));
             if stacked || options.layout() == Axis::Vertical {
                 v_flex()
                     .w_full()
@@ -1201,12 +1441,24 @@ pub(super) fn setting_row<E: IntoElement>(
                     .child(label.w_full())
                     .child(control.w_full())
             } else {
+                // Labels align with the top of their control, so a control
+                // that grows, like a field with an error below it, does not
+                // move its label.
                 h_flex()
                     .w_full()
+                    .items_start()
                     .justify_between()
                     .gap_3()
                     .child(label.flex_1().min_w_0().max_w_3_5())
-                    .child(control.w(rem * CONTROL_REMS).flex_shrink_0())
+                    // Narrow controls, like switches, end at the same right
+                    // edge as the full-width ones, so they do not float.
+                    .child(
+                        control
+                            .w(rem * CONTROL_REMS)
+                            .flex_shrink_0()
+                            .flex()
+                            .justify_end(),
+                    )
             }
         },
     )
@@ -1290,7 +1542,6 @@ fn select_field(
     let select = select.clone();
     move |_: &mut Window, _: &mut App| {
         Select::new(&select)
-            .focus_ring(false)
             .id(setting_id(label))
             .w_full()
             .accessibility_label(label)

@@ -12,12 +12,11 @@ use crate::dbt::{
     worker::{ManifestState, Refresher},
 };
 use crate::model::DbtProject;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::base::{
     SelectableText, StyledExt as _, TextSelectionEvent, TextSelectionHandle, input::Rope,
 };
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex,
@@ -110,23 +109,44 @@ impl Qrow {
                             }),
                     )
                 });
+            let status_bar = close
+                .read_with(cx, |this, _| this.status_bar_height.get())
+                .unwrap_or_default();
             sheet
                 .size(
                     (window.viewport_size().width * SHEET_WIDTH)
                         .clamp(px(MIN_SHEET_WIDTH), px(MAX_SHEET_WIDTH)),
                 )
+                // The status bar stays visible below the sheet.
+                .margin_bottom(status_bar)
+                // A side sheet is not modal: the window behind it stays bright
+                // and usable.
+                .overlay(false)
                 .title(title_bar)
                 .child(view.clone())
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(cx));
+                .on_close(move |_, window, cx| {
+                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(window, cx));
                 })
         });
     }
 
     /// The user closed the details sheet. The way back through the lineage
     /// closes with it: only the back button goes back.
-    fn dbt_details_closed(&mut self, cx: &mut Context<Self>) {
+    /// A sheet that a tree row opened gives the focus back to that row.
+    fn dbt_details_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dbt_details = None;
+        if let Some(origin) = self.dbt_details_origin.take() {
+            let tree = self.catalog.state.clone();
+            // After the sheet restores the focus it had when it opened.
+            cx.defer_in(window, move |_, window, cx| {
+                tree.update(cx, |tree, cx| {
+                    if let Some(ix) = tree.index_of(&origin) {
+                        tree.set_selected_index(Some(ix), cx);
+                    }
+                    tree.focus(window, cx);
+                });
+            });
+        }
         cx.notify();
     }
 
@@ -1293,12 +1313,19 @@ impl DbtDetailsView {
             Row::Column(position) => {
                 let column = &data.columns[position];
                 let id = format!("dbt-details-column-{}", column.name);
-                v_flex()
+                // Each column is a card, so its name, description, and tests
+                // read as one item. The list row holds the gap above it.
+                let card = v_flex()
                     .id(SharedString::from(id.clone()))
                     .test_support()
                     .role(Role::Label)
                     .aria_label(column.name.clone())
-                    .pt_3()
+                    .px_3()
+                    .py_2()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().group_box)
                     .gap_1()
                     .text_sm()
                     // The name and the description share a line height, so
@@ -1311,7 +1338,7 @@ impl DbtDetailsView {
                             .gap_2()
                             .child(div().font_semibold().child(column.name.clone()))
                             .when_some(column.data_type.clone(), |row, data_type| {
-                                row.child(div().text_color(muted).child(data_type))
+                                row.child(div().text_color(muted).child(data_type.to_lowercase()))
                             }),
                     )
                     .when(!column.description.is_empty(), |row| {
@@ -1336,8 +1363,8 @@ impl DbtDetailsView {
                             &self.code_font,
                             muted,
                         )))
-                    })
-                    .into_any_element()
+                    });
+                div().pt_2().child(card).into_any_element()
             }
             Row::Parent(position) => linked_row(
                 ("dbt-details-parent", position),
@@ -1366,12 +1393,22 @@ impl DbtDetailsView {
             Part::Parents => data.parents.len(),
             Part::Children => data.children.len(),
         };
-        let header = disclosure(
+        // An empty part has nothing to open: its header says so and does not
+        // open. Columns load when they open, so their count can be zero first.
+        let empty = count == 0 && part != Part::Columns;
+        let open = open && !empty;
+        let header = disclosure_with(
             format!("dbt-details-{}-toggle", part.id()),
-            format!("{} ({count})", part.title()).into(),
+            if empty {
+                format!("No {}", part.title().to_lowercase()).into()
+            } else {
+                format!("{} ({count})", part.title()).into()
+            },
             open,
+            !empty,
             muted,
         )
+        .disabled(empty)
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_part(part, cx)))
         .when(part == Part::Columns && !open, |header| {
             header.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
@@ -1382,9 +1419,6 @@ impl DbtDetailsView {
         });
         let body = match part {
             _ if !open => None,
-            Part::Tests if data.tests.is_empty() => {
-                Some(muted_text("No tests of the table.", muted))
-            }
             Part::Tests => Some(tests_element(
                 "dbt-details-tests",
                 &data.tests,
@@ -1393,14 +1427,13 @@ impl DbtDetailsView {
             )),
             Part::Columns => (!data.columns.is_empty()).then(|| {
                 Input::new(&self.filter)
-                    .focus_ring(false)
                     .id("dbt-details-filter")
                     .small()
                     .cleanable(true)
                     .aria_label("Filter columns")
                     .into_any_element()
             }),
-            Part::Parents | Part::Children => (count == 0).then(|| muted_text("None.", muted)),
+            Part::Parents | Part::Children => None,
         };
         v_flex()
             .map(|header| self.group_spacing(header, Row::Part(part)))
@@ -1706,6 +1739,18 @@ fn column_match(name: &str, description: &str, query: &str) -> Option<ColumnMatc
 /// The header of a part that opens on a click, with a chevron that turns
 /// down when the part is open.
 fn disclosure(id: String, title: SharedString, open: bool, muted: Hsla) -> Button {
+    disclosure_with(id, title, open, true, muted)
+}
+
+/// A disclosure header. One that is not `expandable` keeps the chevron slot
+/// empty, so that its title stays on the line of the other titles.
+fn disclosure_with(
+    id: String,
+    title: SharedString,
+    open: bool,
+    expandable: bool,
+    muted: Hsla,
+) -> Button {
     Button::new(SharedString::from(id))
         .ghost()
         .small()
@@ -1722,7 +1767,8 @@ fn disclosure(id: String, title: SharedString, open: bool, muted: Hsla) -> Butto
                     Icon::new(IconName::ChevronRight)
                         .xsmall()
                         .text_color(muted)
-                        .rotate(percentage(if open { 0.25 } else { 0. })),
+                        .rotate(percentage(if open { 0.25 } else { 0. }))
+                        .when(!expandable, |icon| icon.invisible()),
                 )
                 .child(div().text_sm().font_semibold().child(title)),
         )

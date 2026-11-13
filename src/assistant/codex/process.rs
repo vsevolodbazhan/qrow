@@ -34,6 +34,43 @@ pub(in crate::assistant) struct WriteCommand {
     pub(in crate::assistant) completed: SyncSender<std::result::Result<(), String>>,
 }
 
+/// How a line for a harness failed to reach its input.
+pub(in crate::assistant) enum WriteFailure {
+    /// The writer thread has a line that it did not write yet.
+    Busy,
+    /// The input closed before the line reached the writer thread.
+    Closed,
+    /// The writer thread could not write the line.
+    Failed(String),
+    /// The harness did not read the line in time.
+    Timeout,
+    /// The writer thread stopped before it reported the line.
+    Stopped,
+}
+
+/// Gives one encoded line to the writer thread of a harness, and waits up
+/// to `timeout` until the harness reads it.
+pub(in crate::assistant) fn send_line(
+    writer: Option<&SyncSender<WriteCommand>>,
+    bytes: Vec<u8>,
+    timeout: Duration,
+) -> std::result::Result<(), WriteFailure> {
+    let writer = writer.ok_or(WriteFailure::Closed)?;
+    let (completed, completion) = mpsc::sync_channel(1);
+    writer
+        .try_send(WriteCommand { bytes, completed })
+        .map_err(|error| match error {
+            TrySendError::Full(_) => WriteFailure::Busy,
+            TrySendError::Disconnected(_) => WriteFailure::Closed,
+        })?;
+    match completion.recv_timeout(timeout) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(WriteFailure::Failed(error)),
+        Err(RecvTimeoutError::Timeout) => Err(WriteFailure::Timeout),
+        Err(RecvTimeoutError::Disconnected) => Err(WriteFailure::Stopped),
+    }
+}
+
 pub(in crate::assistant) fn write_protocol_stream(
     mut stdin: ChildStdin,
     commands: &Receiver<WriteCommand>,
@@ -316,7 +353,7 @@ pub(crate) fn terminate_process_group(pid: u32) -> std::io::Result<()> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(in crate::assistant) fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
     child.kill()
 }
@@ -326,7 +363,9 @@ pub(crate) fn terminate_process_tree(pid: u32) -> std::io::Result<()> {
     if pid == 0 {
         return Err(std::io::Error::other("invalid Codex process identifier"));
     }
+    use std::os::windows::process::CommandExt;
     let status = Command::new("taskkill")
+        .creation_flags(0x08000000)
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -336,5 +375,71 @@ pub(crate) fn terminate_process_tree(pid: u32) -> std::io::Result<()> {
         Ok(())
     } else {
         Err(std::io::Error::other("could not stop Codex process tree"))
+    }
+}
+
+#[cfg(windows)]
+pub(in crate::assistant) fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
+    terminate_process_tree(child.id()).or_else(|error| {
+        if child.try_wait()?.is_some() {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::os::windows::process::CommandExt;
+
+    #[test]
+    fn stopping_a_run_kills_its_child_tree() {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command",
+            "$child = Start-Process -FilePath ($PSHOME + '\\powershell.exe') -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 60' -WindowStyle Hidden -PassThru; [Console]::Out.WriteLine($child.Id); Start-Sleep -Seconds 60"])
+            .creation_flags(0x08000000 | 0x00000200)
+            .stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut leader = LaunchChild::new(command.spawn().unwrap());
+        let mut line = String::new();
+        std::io::BufReader::new(leader.child_mut().stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let descendant: u32 = line.trim().parse().unwrap();
+        kill_process_tree(leader.child_mut()).unwrap();
+        leader.child_mut().wait().unwrap();
+        let status = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!(
+                    "if (Get-Process -Id {descendant} -ErrorAction SilentlyContinue) {{ exit 1 }}"
+                ),
+            ])
+            .creation_flags(0x08000000)
+            .status()
+            .unwrap();
+        assert!(status.success(), "assistant descendant survived shutdown");
+    }
+
+    #[test]
+    fn npm_cmd_shim_accepts_arguments() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("synthetic.cmd");
+        std::fs::write(&script, "@echo off\r\n@echo %~1\r\n").unwrap();
+        // Rust's Windows Command implementation explicitly routes .cmd files
+        // through cmd.exe and escapes arguments. Never construct a /c string.
+        let output = Command::new(script)
+            .arg("synthetic argument")
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "synthetic argument"
+        );
     }
 }

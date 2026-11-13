@@ -258,15 +258,15 @@ fn only_the_selected_statement_runs(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, &["Alpha"], "");
     // A bad first statement proves that only the selection reaches Spark.
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.update(cx, |window, cx| window.input("invalid prefix;", cx));
     app.press(cx, "enter");
     app.update(cx, |window, cx| {
         window.input("SELECT '日本語😀' AS selected_value", cx)
     });
     // Select the second line, which has multi-byte text.
-    app.press(cx, "cmd-shift-left");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "shift-home");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "日本語😀");
 }

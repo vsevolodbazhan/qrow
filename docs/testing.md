@@ -24,6 +24,64 @@ The [catalog](../scripts/qtest/catalog.py) defines the suites, groups, pinned
 tools, and change rules. Rust tests run through
 [cargo-nextest](https://nexte.st/) with the [nextest profiles](../.config/nextest.toml).
 
+## Plan and execute checks
+
+Use a saved plan to separate selection from execution:
+
+```sh
+./qtest plan unit ui --target linux-x86_64 --output target/check-plan.json
+./qtest execute target/check-plan.json --install --output target/check-result.json
+./qtest verify target/check-plan.json target/check-result.json
+```
+
+Store plans under `target/`, or outside the source directory. A plan records
+the source files, target, suite definitions, runtime, repeat count, and build
+settings. Execution stops if these inputs change. A plan for another target
+can be made on any host. Execute it on that target's native architecture.
+Windows supports the native package and core-test suites listed below.
+
+Use `--runtime docker` for disposable servers. Use `--repeat N` on `plan` to
+repeat suites. Each attempt keeps a separate nextest report. A failed attempt
+fails the run. Verification rejects missing suites, failed suites, and empty
+nextest selections. Checks without test cases, such as formatting, need a
+successful command result.
+
+Execution uses machine-wide locks for a shared Cargo directory, fixture, or
+desktop. A run owns its output directory. It writes progress to `events.jsonl`
+and final results to `summary.json`. Cancellation stops the child process
+group and keeps partial results. Fixture cleanup failures fail the run.
+Child builds receive the run's Git commit through `QROW_COMMIT`, unless it is
+already supplied. Background changes to other Git refs do not rebuild each
+stress-test iteration. Exported snapshots without Git keep the supplied build
+identity, if any.
+
+The portable entry point is `uv run --locked python scripts/qtest`. On Windows,
+`qtest.cmd` calls this entry point without Python development dependencies.
+Windows native suites do not use the DuckDB benchmark module or Ruff. The
+common Linux static job runs the Python script checks. Windows server fixtures and headless UI suites are not enabled. Local `run`, hook, fixture, and
+comparison commands remain available. The legacy `ci` scheduler was removed;
+see [Continuous integration](ci.md) for job ownership.
+
+To build once and execute the same binaries, use a prepared build:
+
+```sh
+./qtest plan ui e2e --runtime docker --output target/ui-plan.json
+./qtest prepare target/ui-plan.json --output target/ui-builds --install
+./qtest execute target/ui-plan.json --reuse-builds target/ui-builds/manifest.json --output target/ui-result.json
+./qtest verify target/ui-plan.json target/ui-result.json
+```
+
+Preparation groups test binaries by features and profile. It builds each group
+once before servers start. Execution verifies the source, target, compiler
+settings, toolchain, and archive digests. It extracts each archive once and
+uses nextest metadata without another Cargo build. Missing or stale builds
+fail; execution does not fall back to compilation. A plan for another
+architecture of the same OS, like `--target macos-x86_64` on Apple silicon,
+prepares a cross-compiled build. Install the Rust target first with
+`rustup target add`. Execute that build on the plan target. `run --reuse-builds` also
+supports filtered repeats with these binaries. Doctests and non-nextest checks
+remain separate commands.
+
 ## Suites
 
 A suite is the smallest unit that you can select. Suites marked with `*`
@@ -31,12 +89,22 @@ accept a test filter.
 
 | Suite | Checks | Needs |
 | --- | --- | --- |
+| `app-unit` * | Application unit tests and doctests, without repeating portable core tests. | Desktop libraries, cargo-nextest |
+| `clippy-native` | Production application Clippy for the current target. | Desktop build libraries |
+| `native-storage` | OS credential tests with synthetic data. | cargo-nextest; on Linux, D-Bus and GNOME Keyring |
+| `native-font` | Native macOS font and tooltip layout on the main thread. | macOS, Rust |
+| `native-ui` * | macOS branches of headless shortcut assertions. | macOS, cargo-nextest |
+| `native-assistant` * | macOS branch of the assistant server interaction. | macOS, cargo-nextest, fixture runtime |
+| `postgres-core` | Postgres connector scenarios without GPUI. | Docker, cargo-nextest |
+| `trino-core` | Trino connector scenarios without GPUI. | Docker, cargo-nextest |
+| `postgres-ui` | Postgres headless window scenarios. | Docker, desktop libraries, cargo-nextest |
+| `trino-ui` | Trino headless window scenarios. | Docker, desktop libraries, cargo-nextest |
 | `fmt` | Rust formatting. | Rust |
-| `clippy` | Clippy for the core library and, on macOS, the application. | Rust |
-| `clippy-app` | Clippy for the application with all features. | macOS |
+| `clippy` | Clippy for the core library. | Rust |
+| `clippy-app` | Clippy for the application with all features. | Rust; on Linux, the desktop libraries |
 | `rustdoc` | Rust API documentation without warnings. | Rust |
-| `unit` * | Rust unit and integration tests that need no UI and no servers. | Rust, cargo-nextest |
-| `ui` * | Headless tests of the real Qrow window, without servers. | macOS, cargo-nextest |
+| `unit` * | Rust unit and integration tests that need no UI and no servers. | cargo-nextest; on Linux, the desktop libraries |
+| `ui` * | Headless tests of the real Qrow window, without servers. | cargo-nextest; on Linux, the desktop libraries |
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
 | `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
@@ -49,23 +117,31 @@ accept a test filter.
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
-| `postgres` | Postgres connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
-| `trino` | Trino connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
+| `postgres` | Postgres connector and real-window tests with a disposable server. | Docker, cargo-nextest; on Linux, the desktop libraries |
+| `trino` | Trino connector and real-window tests with a disposable server. | Docker, cargo-nextest; on Linux, the desktop libraries |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
-| `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
+| `e2e` * | The real Qrow window, headless, against the real servers. | Docker and, on Linux, the desktop libraries; on macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
+| `windows-unit` * | Core unit tests without UI or database servers. | Windows, cargo-nextest |
+| `windows-storage` * | Synthetic Credential Manager round trip. | Windows, cargo-nextest |
+| `windows-package` | Build the unsigned native installer and the portable archive in `target/package`. | Windows, MSVC, Windows SDK |
+| `linux-package` | Build the native archive in `target/package`. | Linux desktop build libraries |
+| `package-smoke` | Inspect and launch the extracted package. | A built package; on Linux, Xvfb and xdotool |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
-| `software-ui` | CPU rendering of the editor and results, with native input and synthetic demo data. | macOS desktop, Xcode tools |
-| `opengl-unit` | OpenGL scene encoding, atlas storage, limits, and shared renderer startup policy without a GPU. | macOS, Cargo |
-| `opengl-renderer` | Hardware OpenGL shader, atlas, and pixel regression tests. | macOS with hardware OpenGL |
-| `opengl-ui` | Hardware OpenGL rendering and native input in a separate demo package. | macOS desktop, hardware OpenGL, Xcode tools |
-| `perf-renderers` | Native release CPU and OpenGL composition, scrolling, launch, memory, and idle measurements. | macOS desktop, hardware OpenGL, Xcode tools |
 
-On Linux, `unit` and `clippy` use only the core library. These suites need
-macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
-`perf-e2e`, `perf-app`, `perf-package`, `package`, `desktop`, `software-ui`, `opengl-unit`, `opengl-renderer`,
-`opengl-ui`, and `perf-renderers`. `clippy-app` is the second
-pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
+| `opengl-unit` * | GPU-independent OpenGL and CPU compositor/startup tests. | macOS, Cargo, cargo-nextest |
+| `software-ui` | Native CPU demo pixels and input. | macOS desktop, Xcode tools |
+| `opengl-renderer` * | Strict hardware Core OpenGL context, shader, and pixel tests. | macOS, hardware OpenGL, cargo-nextest |
+| `opengl-ui` | Strict hardware OpenGL native demo pixels and input. | macOS desktop, hardware OpenGL |
+| `perf-renderers` | Optional native CPU/OpenGL release measurements. | macOS desktop, hardware OpenGL |
+
+The suites do the same checks on macOS and Linux. `clippy` lints the core
+library without the application. `clippy-app`, `unit`, and `ui` build the
+application. On Linux, they need the desktop libraries that the README lists.
+On Ubuntu, `sh scripts/ci/linux-build-deps.sh` installs them. These suites
+need macOS and are not available on Linux: `perf-ui`, `perf-e2e`, `perf-app`,
+`perf-package`, `package`, `desktop`, `native-font`, `native-ui`, and
+`native-assistant`.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
 Spark, and OpenID Connect servers. `desktop` also takes over the desktop. These suites, the
@@ -79,86 +155,13 @@ core library are modules of one test binary,
 links one binary. The `backend` suite runs the `backend::` module of this
 binary.
 
-The full `ui` suite also checks tooltip alignment with the native macOS font
+On macOS, `native-font` checks tooltip alignment with the native font
 backend at 1× and 2× display scales. Titles, statuses, and shortcuts share
 the vertical center of the first line. Checks cover system and Menlo fonts
 at 75%, 100%, 110%, 125%, and 150% UI scale. It runs this check on the process main
 thread because AppKit requires that thread. The other headless UI tests
-use GPUI's test text backend. Run `./qtest run ui` to include the native
-check. A test filter runs only the matching GPUI tests.
-
-The full `ui` suite also runs CPU renderer unit tests. These tests check
-clipping, transparency, borders, atlas storage, image colors, glyph transforms,
-and path coverage without a GPU.
-
-## Check CPU rendering
-
-Run `./qtest run software-ui` to check the real application with CPU rendering.
-This suite builds its own package inside the run artifact directory. It uses
-the demo, an isolated workspace directory, and native macOS input. It checks
-the editor line highlight, result text, Unicode SQL input, and demo query
-execution. It also checks both result scroll axes, splitters, menu dialogs,
-resize, minimize, hide, restore, and last-window closure.
-It opens a normal window with an empty isolated workspace, enters SQL, and
-checks the saved text after closure.
-It needs Accessibility and Screen Recording permission, as the
-[desktop suite](#run-the-desktop-suite) does. It needs no database servers,
-Keychain credentials, Docker, or Java.
-
-The suite runs only when selected by name and takes over the desktop. It sets
-`QROW_SOFTWARE_RENDERER=1`, so a Mac with Metal also checks the CPU path.
-Screenshots and application logs are in the run's `software-ui/` directory.
-
-## Check OpenGL rendering
-
-Run `./qtest run opengl-unit` to check scene encoding, atlas storage and
-hardware limits without creating a GPU context. It also checks the startup
-policy shared by native and headless rendering: only automatic selection can
-fall back after OpenGL initialization fails. A successful GPU startup keeps
-its backend. Drawing does not invoke this startup policy.
-
-Run `./qtest run opengl-renderer` to check actual GPU pixels. It requires
-hardware Core OpenGL 3.3+, compiles GLSL 3.30 shaders, and checks blending,
-clipping, borders, paths, texture upload, and texture reuse.
-It also checks renderer configuration and precedence over the compatibility alias.
-
-Run `./qtest run opengl-ui` to build a separate package and check its native
-window with `QROW_RENDERER=opengl`. It uses the same isolated demo scenarios
-as `software-ui` and checks Core Profile and hardware acceleration in the
-application log. Results are in `opengl-ui/core/`. The pixel tests also check
-mixed batches, rotated sprites, and per-instance upload sizes. Native checks
-require Accessibility and Screen Recording permission.
-These suites run only when selected by name. They need no database or credentials.
-
-Hosted macOS runners can lack a hardware CGL pixel format. The `e2e`,
-`e2e-intel`, and `perf-ui` CI jobs probe production context creation and hardware
-limits before selecting hardware suites. An unavailable pixel format (CGL
-error 10002) records `opengl-renderer`, `opengl-ui`, or `perf-renderers` as
-`skipped`, with the diagnostic in `opengl-capability.json` in the run directory.
-The required `opengl-unit` and CPU desktop checks still run. Probe build errors,
-crashes, timeouts, and unexpected context or limit errors fail the job. Shader
-and drawing failures on supported hardware also fail their checks.
-
-An explicit local `./qtest run opengl-renderer opengl-ui` stays strict: absent
-hardware does not count as a pass. Run these commands on a physical Mac with
-an unlocked desktop and automation permissions before claiming GPU validation.
-A hosted capability skip supplies no GPU pixel or native-input coverage.
-
-Run `./qtest run perf-renderers` to compare CPU and OpenGL in the same release
-package. The suite uses three separate demo workspaces per backend. It records
-result scrolling in both axes, editor scrolling, launch, sampled memory, and
-idle CPU time. `perf-renderers/measurements.json` contains the results.
-Run it without other builds or UI tests. It takes over the desktop.
-
-The composition measurement includes scene encoding and drawing. OpenGL waits
-for GPU completion only when `QROW_RENDER_METRICS=1`. The measurement excludes
-GPUI layout and final display presentation. The initial targets are OpenGL
-composition p95 at most 33 ms in each scroll scenario and lower process CPU time in scripted actions
-than CPU rendering. Screenshots must show movement and a return to the start.
-Monotonic timestamps limit each measurement to its action interval.
-These targets do not change the existing performance budgets.
-
-## UI coverage
+use GPUI's test text backend. Run `./qtest run native-font` on macOS for the
+native check. `ui` and its test filters run only the headless GPUI tests.
 
 UI tests also compare the Connections and Sign-Ins headers with query tabs.
 They check text height, control centers, and separator positions at different
@@ -187,6 +190,11 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   They check fragmented messages, rejection of a large declared message before
   body allocation, cancellation deadlines for both sockets, and the server's
   ReadyForQuery confirmation before session reuse after a SQL error.
+- The Trino cancellation test waits for **SQL accepted by the server** in
+  Logs before it selects **Cancel**. It then checks session reuse. The
+  **Executing** status can show before the server returns a query URL. A
+  cancellation at that time can close the session; see
+  [Trino limits](connections.md#trino-limits).
 - Property tests check SQL validation with arbitrary Unicode and quoting.
   Keep the Proptest regression seeds that a fixed failure adds.
 - Export tests use the `csv` crate to check text syntax. The Kyuubi,
@@ -228,8 +236,14 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
 The macOS unit tests use explicit temporary keychains with synthetic tokens.
 They check token removal when another executable created the item. They do not
 change the default keychain or its search list. A separate password test uses
-the real macOS Keychain, so no suite runs it. Run that test with
-`cargo test --test integration keychain:: -- --ignored`.
+the real macOS Keychain with a randomly named synthetic item. `native-storage`
+runs both checks on disposable macOS runners and removes the synthetic item.
+
+On Linux, `native-storage` starts a private D-Bus session and a
+temporary GNOME Keyring. It waits until the keyring is available on that
+session, then checks password and token storage with synthetic values. It
+needs `dbus-run-session`, `dbus-send`, and `gnome-keyring-daemon`. The test
+does not use the desktop secret store.
 
 Kyuubi transfer tests check adaptive request counts and normal preview
 limits on the wire. Worker tests check session reuse after a preset change,
@@ -243,6 +257,45 @@ commands without results, failures, and successful or rejected cursor drains.
 A Docker backend test checks actual Spark collection behavior with executor
 evidence before the first fetch. It also checks restoration for explicit
 and absent settings, and the collection mode of the next normal query.
+
+## Check CPU rendering
+
+`./qtest run opengl-unit` checks atlas, scene encoding, limits, CPU composition,
+and renderer startup policy without a GPU. It is required in macOS plans.
+`./qtest run software-ui` checks native CPU demo input, copied Unicode SQL,
+editor and result pixels, scrolling, splitters, and the window lifecycle.
+It needs Accessibility and Screen Recording, as the desktop suite does.
+
+Local native suites build isolated release packages. In prepared CI, they
+reuse the source-bound candidate ZIP and native driver without compiling.
+They disable update checks and preserve the user's workspace and clipboard.
+
+## Check OpenGL rendering
+
+`./qtest run opengl-renderer opengl-ui` is strict: it requires hardware Core
+OpenGL 3.3+, GLSL 3.30 and 14 vertex attributes. It checks context limits,
+shader output, pixels, and the same native demo scenarios as `software-ui`.
+Explicit local suites never skip because of a CI environment variable.
+
+macOS CI prepares these tests with the required binaries. After the strict
+native contract passes, a separate prepared nextest probe creates the production
+CGL context and checks limits. Only CGL error 10002 (no hardware pixel format)
+allows recorded hardware-suite skips. Probe preparation, timeout, crash,
+malformed markers, shader failures and drawing failures fail the native job.
+The offline gate requires `renderer-result.json`, bound to the same source
+snapshot, target and prepared manifest. Missing or mismatched evidence fails.
+`contract.verify()` still requires every suite in the strict plan to pass;
+GPU-independent and CPU native suites cannot be skipped.
+
+Pull requests qualify macOS ARM64 as well as Linux to run this coverage.
+Hosted macOS runners hide the Dock to preserve the fixed 992×652-point native
+test window and 16-point margins. Local Dock settings remain unchanged.
+A hardware skip provides no GPU validation; use a physical Mac for that evidence.
+
+`./qtest run perf-renderers` provides optional local native release measurements
+of CPU and OpenGL composition and scrolling. Full macOS ARM64 CI runs it as
+report-only when the hardware probe succeeds. It needs a real desktop and GPU;
+no frame-rate improvement is claimed from instance-upload size alone.
 
 ## Trino tests
 
@@ -264,12 +317,14 @@ stops. A stalled HEAD request can stop without closing the primary socket.
 Wide-row tests check the fetch byte limit and the order of a pending row.
 SQL error tests check transaction-header updates before the next statement.
 
-Run `./qtest run trino --runtime docker` to test the connector and, on macOS,
-the real window against a disposable Trino 483 coordinator. The suite uses
+Run `./qtest run trino --runtime docker` to test the connector and the real
+window against a disposable Trino 483 coordinator. The suite uses
 synthetic credentials, a temporary certificate authority, and a loopback HTTPS
 port. A pinned Adobe S3Mock 5.2.3 container supplies HTTPS storage. It shares
 a network namespace with Trino, so presigned loopback URLs work from both
 the coordinator and client. The fixture removes both containers after the run.
+The coordinator container can use 3 GiB of memory and S3Mock 1 GiB. Parallel
+tests hold several large results at the same time.
 S3Mock does not check presigned signatures or expiry and does not encrypt stored
 objects. Fake HTTPS peers check expiry and storage encryption headers.
 The suite checks password authentication, certificate checks, types, pagination,
@@ -303,8 +358,8 @@ The fixture provider uses only synthetic accounts and an HTTPS callback at
 Trino. The storage namespace stays alive during the OAuth2 restart.
 
 The suite needs Docker and OpenSSL. It builds the tests before the server
-starts. The Linux backend CI job runs its connector tests. The real-window
-Trino tests run locally on macOS with Docker. The Kyuubi `e2e` suite excludes
+starts. The Linux `backend` CI job runs its connector and real-window tests.
+The Kyuubi `e2e` suite excludes
 Postgres and Trino tests because each connector has its own fixture.
 
 ## Groups
@@ -313,12 +368,12 @@ A group selects several suites.
 
 | Group | Suites | Use |
 | --- | --- | --- |
-| `default` | `fmt`, `clippy`, `unit`, `ui` | Runs when you give no selector. |
-| `all` | `scripts`, `deps`, `fmt`, `clippy`, `rustdoc`, `unit`, `ui`, `perf`, `coverage` | Every local suite without servers. |
+| `default` | `fmt`, `clippy`, `clippy-app`, `unit`, `ui` | Runs when you give no selector. |
+| `all` | `scripts`, `deps`, `fmt`, `clippy`, `clippy-app`, `rustdoc`, `unit`, `ui`, `perf`, `coverage` | Every local suite without servers. |
 
-A group skips a suite that the platform does not support, for example `ui`
-on Linux. A suite that you select by name does not skip. It fails with a
-missing prerequisite.
+A group skips a suite that the platform does not support, for example
+`package` on Linux. A suite that you select by name does not skip. It fails
+with a missing prerequisite.
 
 ## Select tests
 
@@ -347,9 +402,9 @@ to Rust sources, tests, Cargo files, `vendor/`, themes, and embedded icons
 select `fmt`, `clippy`, `rustdoc`, `unit`, and `ui`. Changes to Cargo files or
 dependency policy files also select `deps`. Changes to Cargo files, dependency
 policy files, or workflows select `policy`. Changes to scripts, hooks,
-workflows, `qtest`, the Python dependencies, this page, or the Python and
-shell files in `tests/desktop/` select `scripts`. The `scripts` suite also
-lints these files.
+workflows, `qtest`, the Python dependencies, this page, the Python and
+shell files in `tests/desktop/`, or the shell scripts in `website/` select
+`scripts`. The `scripts` suite also lints these files.
 
 To list the tests of a suite, run `./qtest list ui --tests`.
 
@@ -369,9 +424,6 @@ snapshots set it, as
 | `junit/<suite>.xml` | The nextest JUnit report of a failed suite. |
 | `fixture/` | Server logs, execution evidence, and the versions of the servers. |
 | `desktop/` | Screenshots, accessibility snapshots, and logs of the desktop driver. |
-| `software-ui/` | A separate application package, screenshots, accessibility snapshots, and logs of CPU rendering checks. |
-| `opengl-ui/` | A separate OpenGL package, native screenshots, accessibility snapshots, and application logs. |
-| `perf-renderers/` | The comparison package, native resource logs, and `measurements.json`. |
 
 The summary gives the status of each suite: `passed`, `failed`, `skipped`, or
 `missing`. A failed suite names its failed step. A failed nextest suite also
@@ -402,14 +454,31 @@ gap. Give suite names to check only those suites. It exits with code 3 when
 a prerequisite is missing.
 
 `./qtest install` installs the pinned Cargo tools: cargo-nextest,
-cargo-deny, cargo-machete, and cargo-llvm-cov with its LLVM component. Give
-tool names to install only those tools. The [catalog](../scripts/qtest/catalog.py)
-holds the pinned versions and the prebuilt release archives of each tool.
-On Apple silicon Macs and on x86_64 Linux, each tool comes from its archive,
-which takes seconds. qtest checks the archive against the SHA-256 digest in
-the catalog. When the download or the check fails, qtest builds the tool from
-source. On other computers, the tools that have no archive for the computer
-build from source.
+cargo-deny, cargo-machete, cargo-llvm-cov with its LLVM component, and the
+sccache build cache. Give tool names to install only those tools. The
+[catalog](../scripts/qtest/catalog.py) holds the pinned versions and the
+prebuilt release archives of each tool. On Apple silicon Macs and on x86_64
+Linux, each tool comes from its archive, which takes seconds. On Windows, only
+cargo-nextest and sccache come from an archive. qtest checks the archive
+against the SHA-256 digest in the catalog. When the download or the check
+fails, qtest builds the tool from source. On other computers, the tools that
+have no archive for the computer build from source.
+
+When sccache 0.19.0 or newer is installed, qtest gives it to Cargo as
+`RUSTC_WRAPPER`, so a new worktree reuses the compiled dependencies of other
+checkouts. [Reuse builds across worktrees](development.md#reuse-builds-across-worktrees)
+tells what it caches. Only the commands that qtest starts get the wrapper, so
+plans and prepared builds do not depend on the cache. qtest does not use
+sccache in these conditions:
+
+- `CI` is set.
+- You chose a rustc wrapper: `RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER`, or
+  `build.rustc-wrapper` in a Cargo configuration file.
+- No sccache 0.19.0 or newer is on `PATH` or in the Cargo `bin` directory.
+
+To turn the cache off, set `RUSTC_WRAPPER` to an empty value. `./qtest doctor`
+does not check sccache. Run `./qtest install sccache` to install it or to see
+that it is installed.
 
 Install the script linters separately:
 
@@ -525,8 +594,8 @@ Run `./qtest run postgres`. This suite starts a separate disposable Postgres 17
 container with a synthetic password and a temporary TLS certificate. It tests
 connector results, SQL errors, cancellation, session settings, schema metadata,
 TLS encryption without a trusted certificate, and certificate verification.
-On macOS, it also tests encrypted queries, result pages, and cancellation
-through the real Qrow window. The unit suite includes a protocol test that
+It also tests encrypted queries, result pages, and cancellation through the
+real Qrow window. The unit suite includes a protocol test that
 checks that required TLS cannot fall back to plaintext.
 
 Cancellation tests check the result of a new query after each cancelled query.
@@ -549,9 +618,12 @@ Postgres tests fail if their fixture settings are missing.
 The `desktop` suite operates the packaged app with real keyboard and pointer
 events. It checks only what needs the real operating system:
 
-1. **About Qrow** and **Settings…** open from the menu bar.
+1. **About Qrow** and **Settings…** open from the menu bar, and **⌘W** closes
+   the Settings window.
 2. A connection that you add through the form keeps its password in the real
-   Keychain, and a real query reads it.
+   Keychain, and a real query reads it. This check follows the close of
+   Settings, so it also checks that background results still reach the main
+   window. The driver waits for the saved connection in the sidebar.
 3. Pixels of the selected connection row: when the pointer is on the status
    dot, the focus outline stays above the hover fill of the dot.
 4. When the workspace cannot be saved, **⌘Q** keeps the editor open with its
@@ -583,22 +655,15 @@ it, needs the Accessibility and Screen Recording permissions. Give them in
 System Settings when preflight reports that they are missing. Preflight
 writes `target/e2e-tools/preflight.log`. It does not change the settings.
 `./qtest run desktop` runs the preflight before it builds the package. The
-driver also checks the permissions each time it starts. `./qtest ci JOB`
-stops before it builds or starts servers when a prerequisite of a suite is
-missing, so the `e2e` job fails at once without the permissions.
+driver also checks the permissions each time it starts. CI stops before it
+starts servers when a required prerequisite is missing.
 
 The suite builds a release package in the run directory. It does not replace
 `dist/Qrow.app`. It uses a temporary workspace and new synthetic Keychain
 passwords. The driver restores the clipboard after it types text. It sets the
 Qrow window to 992 by 652 points, the window size on a hosted macOS runner,
 so local and CI runs show the same layout. The main display must fit this
-window with 16 points of space on each side. Hosted `e2e`, `e2e-intel`, and
-`perf-ui` jobs enable Dock auto-hide before the native checks, so Dock resizing
-as additional app bundles start cannot reduce the usable work area. This
-configuration applies only to the disposable CI desktop. Local runs do not
-change Dock settings. The driver keeps the fixed viewport and checks that the
-whole window fits; failures include the display and visible-frame bounds.
-The pixel checks read the
+window with 16 points of space on each side. The pixel checks read the
 pixels of the Qrow window alone, so other windows, their shadows, and
 notifications do not change the result. A check captures its region again
 until two captures in a row match, so it does not measure a frame of an
@@ -642,26 +707,24 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 
 | Suite | Probes |
 | --- | --- |
-| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding and CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
-| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
+| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding of narrow, double, wide, and null-heavy data. CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
+| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns. Opening and typing into a tab with 1 MB of SQL. A keystroke in the editor of the demo, and of a workspace with 20 connections and 60 tabs. A frame, a scroll step, and a search keystroke of a schema tree with 2,000 tables. A search keystroke in a catalog with 100,000 tables: the input frame, and all the work until the tree shows the result. A batch of 500 Logs entries in a tab that keeps 20,000 entries. An assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a reply of 400 KB, a transcript save without changes, and a keystroke in the message field. [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probes draw their frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
 | `perf-e2e` | The time from **Run** to the first result row and to the next page. |
 | `perf-kyuubi` | Kyuubi export throughput and peak memory for each preset. |
 | `perf-postgres` | Postgres export throughput and peak memory for each preset. Normal protocol and server CSV `COPY` comparison. |
 | `perf-trino` | Trino export throughput and peak memory for each preset. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 18 seconds before the measurement, so the caret no longer blinks and Qrow has returned its free memory to macOS. The first launch after a build warms up, and the median of the next three counts. |
-| `perf-renderers` | Three native release runs per backend. Reports composition p95 and the process CPU ratio for result and editor scrolling. [OpenGL checks](#check-opengl-rendering) describe the measurement limits and the full comparison file. |
 | `perf-package` | The `perf-app` probes on the app in a package zip, without a build. The zip is `QROW_MACOS_PACKAGE`, or `target/macos-package/Qrow-macos.zip`. |
 
 CI runs `perf` with its budgets on Linux. It runs the other probes as
 report-only suites, because the hosted runners are slower and less steady
 than a developer computer. Pull requests skip the report-only suites. Runs
 on `main` keep the measurements for 90 days. To get the measurements of a
-run, download its `performance-package`, `performance-backend`,
-`performance-e2e`, `performance-perf`, or `performance-perf-ui` artifact,
-for example:
+run, download its `performance-common-performance`, `performance-common-backend`,
+or `performance-macos-arm64` artifact. For example:
 
 ```sh
-gh run download RUN_ID -n performance-perf
+gh run download RUN_ID -n performance-common-performance
 ```
 
 To find smaller changes, compare the probes with another revision on the
@@ -697,10 +760,11 @@ the median of three measured samples after one warm-up. Latency is per MiB
 of cell payload. The memory probe uses the largest operating-system peak
 resident set size of the three samples. The CSV cases also report the
 spool-to-CSV size ratio. The decoder cases use the same narrow, wide, and
-null-heavy schemas and exclude input cloning from their timed interval.
+null-heavy schemas, and a double case of 8 columns of floating-point
+numbers. They exclude input cloning from their timed interval.
 
-Export budgets allow large regressions before failure. Integer decoding
-must stay below 400 ns per cell. Wide and null-heavy decoding must stay below
+Export budgets allow large regressions before failure. Integer and double
+decoding must stay below 400 ns per cell. Wide and null-heavy decoding must stay below
 50 ns per cell. Writer latency limits are 400 ms/MiB for narrow data and
 800 ms/MiB for null-heavy data. Wide CSV and Parquet limits are 20 and
 10 ms/MiB. Each process must stay below 384 MiB peak resident set size.
@@ -786,13 +850,20 @@ uv run --locked python scripts/core/size.py
 ```
 
 The [size check](../scripts/core/size.py) allows 40 MiB for the executable
-and 12 MiB for the zipped bundle. Find the cause of an increase before you
+and 15 MiB for the zipped bundle. Find the cause of an increase before you
 change a budget.
 
 When you publish performance results, give the build, the hardware, the
 method, and what you did not measure.
 
 ## Write a UI test
+
+Shared waits use a wall-time deadline and advance GPUI polling timers by the
+measured elapsed time. Polling more often does not advance application time
+faster. Use explicit clock advancement only for deterministic timer tests.
+Use `click_ready` for an enabled button reached after asynchronous work. It
+dispatches input once. Use `click` when disabled behavior is the test subject.
+Wait failures include recent actions and the current observed labels.
 
 UI tests open the real Qrow window in a headless GPUI Kit window. They send
 clicks and keys through GPUI and check the visible result and the saved
@@ -830,6 +901,11 @@ More helpers operate controls that GPUI Kit owns:
   search field of Settings. Use it only for elements that GPUI Kit names.
 - `app.dispatch(action)` sends an action, like `OpenSettings`, as its menu
   item does. The menu bar itself is part of the `desktop` suite.
+- `app.hover(id)` and `app.hover_labelled(label)` move the pointer over an
+  element, for controls that show only on hover, like **Show tab** in
+  Activity or the close button of a tab.
+- Settings opens in its own window. While it is open, the helpers operate
+  the Settings window.
 
 Assistant tests use the synthetic Codex server in
 [`tests/desktop/fake-codex.py`](../tests/desktop/fake-codex.py).
@@ -862,6 +938,8 @@ Follow these rules:
 
 - Find controls by element ID. Do not find them by the text that they show.
 - Do not sleep. Wait for a condition with `wait_until`.
+- For coordinate gestures, use a fully visible target. A visible snapshot can
+  still be partly outside the scroll viewport.
 - After each action, make sure that it had an effect before the next action.
 - Check the result that a user can see, and the saved state when it applies.
 - Include a negative case when it applies, for example a rejected input.
@@ -894,7 +972,8 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
   fails when the servers are not there. It does not skip the test.
 - `cell(window, row, column)` and `header(window, column)` read the result
   table. Column 0 holds the row number.
-- `app.type_sql` replaces the SQL of the active tab through the editor.
+- `app.type_sql` replaces the SQL of the active tab through the editor. It checks
+  that the editor owns keyboard focus before it sends keys.
   `app.run_sql` also runs it. `app.wait_status("Complete")` waits for the
   status of the active tab, which its dot tooltip shows, and `app.wait_cell(row, column, text)` waits for a result.
 - `app.select_connection(profile)` selects a connection, and `app.logs()`
@@ -942,8 +1021,8 @@ suites that the changed files select, as `--changed` does (see
 
 | Hook | Changed files | Suites |
 | --- | --- | --- |
-| pre-commit | The staged files. | `scripts`, `policy`, `fmt`, `clippy` |
-| pre-push | The changes that the remote does not have. | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc`, `unit`, `ui` |
+| pre-commit | The staged files. | `scripts`, `policy`, `fmt`, `clippy`, `clippy-app` |
+| pre-push | The changes that the remote does not have. | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `clippy-app`, `rustdoc`, `unit`, `ui` |
 
 With a warm build cache and a change to Rust sources, pre-commit takes about
 20 seconds, and pre-push takes about 2 minutes. The pre-push hook checks the
@@ -959,96 +1038,15 @@ checkout. All worktrees of the repository use it. To use a different
 directory, set `QROW_HOOK_TARGET_DIR`. You can remove the directory to get
 disk space back. The next hook then builds the dependencies again.
 
-The [checks workflow](../.github/workflows/checks.yml) checks one commit. The
-[test workflow](../.github/workflows/test.yml) and the
-[release workflow](../.github/workflows/release.yml) call it. The qtest
-catalog defines its jobs: the suites of each job, its time budget, the jobs
-that it waits for, the events that start it, and the paths that select it.
-The workflow prepares each runner and runs `./qtest ci JOB`. To run the
-suites of a job on your computer, run the same command, for example
-`./qtest ci ui`. Add `--measure` to also run its report-only suites.
-`./qtest ci` lists the jobs:
+The test and release workflows use one validation graph. Common static,
+core, backend, headless UI, and performance jobs run before native tests.
+Each native test consumes its own build artifact. Portable tests run once;
+OS assertions and package checks run on all applicable native targets.
 
-| Job | Runner | Suites | Runs in |
-| --- | --- | --- | --- |
-| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | all runs |
-| `core` | Linux | `coverage`, which runs the unit tests of the core library | all runs |
-| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | all runs |
-| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | all runs |
-| `backend` | Linux | `backend`, `postgres`, `trino`, with Docker | all runs |
-| `e2e` | macOS ARM64 | `e2e`, `desktop` on a debug app, renderer checks (`software-ui`, `opengl-unit`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | all runs |
-| `perf` | Linux | `perf` | all runs |
-| `perf-ui` | macOS ARM64 | `perf-ui`, `perf-renderers` (report only) | pushes, manual runs, releases |
-| `perf-backend` | Linux | `perf-postgres`, `perf-trino`, `perf-kyuubi` (report only), with Docker | pushes, manual runs, releases |
-| `desktop-package` | macOS ARM64 | `desktop` on the package of `package` | manual runs, releases |
-| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | manual runs, releases |
-| `package-intel` | macOS ARM64 | `package` for x86_64 | manual runs, releases |
-| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package of `package-intel`, renderer checks (`software-ui`, `opengl-unit`, `opengl-renderer`, `opengl-ui`), and `perf-e2e`, `perf-package` (report only), with local Java servers | manual runs, releases |
-
-A pull request run takes about 10 minutes. To keep it there, the jobs start
-at once and run in parallel. Only `desktop-package` and `e2e-intel` wait,
-for the package that they test. A failed job skips the jobs that wait for
-it. Each job has a time budget for its suites, most of them 8 minutes or
-less. When the suites take longer, the job shows a warning. Find the cause
-before you raise the budget. `static` lints the core library, and the two
-`ui` jobs lint the application on their Mac architecture.
-
-A report-only suite runs, and its measurements go into the run summary. Its
-failure does not fail the job. Pull requests do not keep measurements, so
-they skip the report-only suites and the measurement jobs `perf-ui` and
-`perf-backend`. Pushes, manual runs, and releases run them.
-
-The `desktop` suite of the `e2e` job tests a debug app. The app contains
-the executable that the E2E test build makes, so the job does not wait for
-the release package and does not compile again. `desktop-package` tests the
-release package that a release publishes. The isolated `software-ui` and
-`opengl-ui` scenarios build release apps even when the E2E job uses a debug app.
-Renderer measurements run in the macOS `perf-ui` job, not the Linux `perf` job.
-
-A `plan` job selects the jobs of a pull request from its changed files.
-Pull requests and pushes do not run the Intel jobs. The Intel runners are
-slow, and GitHub runs only a small number of macOS jobs at the same time for
-the account. Manual runs and releases run all jobs, so a release finds Intel
-failures. To run the Intel jobs before a merge or a release, start the test
-workflow manually on the branch. `package-intel` builds the Intel package on
-an ARM64 runner with `CARGO_BUILD_TARGET=x86_64-apple-darwin`. This takes
-about half the time of a build on an Intel runner. `e2e-intel` tests the
-package on an Intel runner, and `perf-package` measures its launch there.
-
-For a pull request, the plan always selects `static`. Changes to Rust
-sources or `.cargo/config.toml` select all pull request jobs. Changes to the
-server fixture or the E2E scripts select `backend` and `e2e`. Changes under
-`tests/desktop/` select `e2e`. Changes to the packaging or probe scripts,
-`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the packaging
-scripts also select `e2e`, because it packages its debug app. Changes to the
-workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
-pull request jobs. A selected job also selects the jobs that it waits for. A
-job that the plan does not select shows as skipped. To see the plan of your
-changes, run `./qtest ci plan`.
-
-In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
-from forks, because they run repository code in Docker and through macOS
-accessibility APIs. The ARM64 jobs and `package-intel` use `macos-15`. The
-other Intel jobs use `macos-15-intel`.
-Each E2E job shares one set of servers between its suites. The native archives download from the
-mirror in each run, with a limit of 2 hours for each archive. Each Rust build
-cache belongs to one job, and only that job saves it. Each E2E job also
-restores the cache of its UI job, which builds the same dependencies. Runs on
-`main` save the build caches. Other runs only restore them. A change to
-`Cargo.lock` or to the toolchain gives a cache a new name, and the old cache
-stays. After the checks of a run on `main`, the `cache-cleanup` job of the test
-workflow and of the release workflow deletes the old caches. It also runs
-after failed or cancelled checks. A cancelled job saves no cache, so a newer
-push to `main` does not cancel the run in progress. For each job, it keeps the newest cache. A
-release of an older commit with another `Cargo.lock` saves a newer cache that
-`main` does not use, so the next run on `main` builds the dependencies again.
-To see the caches that it deletes, run
-`python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`.
-CI keeps its artifacts for one day. Runs on `main` also keep the measurements of the
-package, E2E, `perf`, `perf-ui`, and `perf-backend` jobs for 90 days, in
-the `performance-NAME` artifacts. See [Check performance](#check-performance). See
-[Development](development.md#hooks-and-continuous-integration) for workflow
-events, required checks, and releases.
+[Continuous integration](ci.md) lists each job, its dependencies, prepared
+build variants, evidence, cache policy, full-run measurements, and merge steps.
+The only branch protection context is `ci-required`. The old `checks / ...`
+jobs and the `qtest ci` scheduler have been removed.
 
 ## Limitations
 
@@ -1072,3 +1070,9 @@ events, required checks, and releases.
 - The pixel checks of `desktop` depend on the main display and its scale.
 - In CI, only `perf` has enforced budgets. The other probes are report-only,
   so a slower probe does not fail CI. Compare their history on `main`.
+
+Windows CI runs core unit tests, a synthetic Credential Manager round trip,
+and the packaged demo window check. Server-backed E2E tests run in Linux
+Docker jobs. Windows headless UI tests compile for cross checks, but do not run in CI. Native CI builds the
+release on Windows to compile GPUI shaders with the SDK. A Linux cross check
+verifies types only; it does not verify Windows rendering or interaction.

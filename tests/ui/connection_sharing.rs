@@ -1,0 +1,337 @@
+//! Copy settings and Paste connection.
+use crate::support::{MemoryCredentials, TestApp, connection_row, label, offline_profile, value};
+use gpui_kit::test::TestWindowExt;
+use gpui_kit::{ClipboardItem, TestAppContext};
+use qrow::{
+    model::{Authentication, SavedTab, SignIn, Workspace},
+    storage::Credentials,
+};
+use std::time::Duration;
+
+const WAIT: Duration = Duration::from_secs(10);
+const PASSWORD: &str = "synthetic-password";
+
+fn sign_in() -> SignIn {
+    SignIn {
+        name: "Company".into(),
+        issuer: "https://id.example.test/realms/data".into(),
+        client_id: "qrow-desktop".into(),
+        ..SignIn::default()
+    }
+}
+
+/// A workspace with a password connection, "Warehouse", and a connection
+/// with the sign-in "Company", "Lake".
+fn workspace() -> (Workspace, MemoryCredentials) {
+    let credentials = MemoryCredentials::default();
+    let sign_in = sign_in();
+    let warehouse = offline_profile("Warehouse");
+    credentials.set_password(warehouse.id, PASSWORD).unwrap();
+    let lake = qrow::model::Profile {
+        authentication: Authentication::Oidc {
+            sign_in: sign_in.id,
+        },
+        ..offline_profile("Lake")
+    };
+    let tabs = vec![
+        SavedTab::new(1, Some(warehouse.id)),
+        SavedTab::new(1, Some(lake.id)),
+    ];
+    (
+        Workspace {
+            profiles: vec![warehouse, lake],
+            sign_ins: vec![sign_in],
+            tabs,
+            ..Workspace::default()
+        },
+        credentials,
+    )
+}
+
+fn clipboard(cx: &mut TestAppContext) -> String {
+    cx.read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default()
+}
+
+fn copy_settings(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid) -> String {
+    cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Copy settings");
+    app.wait_gone(cx, "popup-menu");
+    clipboard(cx)
+}
+
+fn paste(app: &TestApp, cx: &mut TestAppContext, text: String) {
+    cx.write_to_clipboard(ClipboardItem::new_string(text));
+    app.click(cx, "paste-connection");
+    app.wait_for(cx, "connection-pasted-note");
+}
+
+fn toast_detail(app: &TestApp, cx: &mut TestAppContext, toast: &'static str) -> String {
+    app.wait_for(cx, toast);
+    app.update(cx, |window, _| {
+        window
+            .within(toast)
+            .find("detail")
+            .label()
+            .unwrap_or_default()
+            .to_owned()
+    })
+}
+
+#[gpui_kit::test]
+fn copy_settings_puts_the_connection_without_its_password_on_the_clipboard(
+    cx: &mut TestAppContext,
+) {
+    let (workspace, credentials) = workspace();
+    let (warehouse, lake) = (workspace.profiles[0].clone(), workspace.profiles[1].clone());
+    let sign_in = workspace.sign_ins[0].clone();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    let copied = copy_settings(&app, cx, warehouse.id);
+    let json: serde_json::Value = serde_json::from_str(&copied).unwrap();
+    assert_eq!(json["qrow_connection"], 1);
+    assert_eq!(json["name"], "Warehouse");
+    assert_eq!(json["host"], "example.invalid");
+    assert_eq!(json["username"], "synthetic");
+    for private in [PASSWORD, &warehouse.id.to_string(), "\"id\""] {
+        assert!(!copied.contains(private), "{private} in {copied}");
+    }
+    // A sign-in goes with its settings, not its identifier.
+    let copied = copy_settings(&app, cx, lake.id);
+    let json: serde_json::Value = serde_json::from_str(&copied).unwrap();
+    assert_eq!(json["authentication"]["method"], "oidc");
+    assert_eq!(json["authentication"]["sign_in"]["issuer"], sign_in.issuer);
+    assert!(!copied.contains(&sign_in.id.to_string()), "{copied}");
+}
+
+#[gpui_kit::test]
+fn a_pasted_connection_opens_for_review_and_saves_with_a_new_password(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace();
+    let warehouse = workspace.profiles[0].clone();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    let copied = copy_settings(&app, cx, warehouse.id);
+    let message = format!("Here is our warehouse:\n```\n{copied}\n```\nUse {{your name}}.");
+    paste(&app, cx, message.clone());
+    app.update(cx, |window, _| {
+        // The name of the existing connection stays unique.
+        assert_eq!(
+            value(window, "connection-name").as_deref(),
+            Some("Warehouse copy")
+        );
+        assert_eq!(
+            value(window, "connection-host").as_deref(),
+            Some("example.invalid")
+        );
+        assert_eq!(
+            value(window, "connection-username").as_deref(),
+            Some("synthetic")
+        );
+        // A masked field reports no value, so the password shows no text.
+        assert!(
+            value(window, "connection-password")
+                .unwrap_or_default()
+                .is_empty()
+        );
+        assert!(
+            label(window, "connection-pasted-note")
+                .unwrap()
+                .contains("trust the host")
+        );
+    });
+    // Cancel adds nothing.
+    app.click(cx, "cancel-profile");
+    app.wait_gone(cx, "save-profile");
+    app.settle(cx);
+    assert_eq!(app.saved().profiles.len(), 2);
+
+    paste(&app, cx, message);
+    app.click(cx, "save-profile");
+    app.wait_until(cx, "the password error", WAIT, |window, _| {
+        label(window, "connection-form-error-accessibility").as_deref()
+            == Some("Enter the password for this connection.")
+    });
+    app.scroll_to(cx, "connection-password");
+    app.fill(cx, "connection-password", "pasted-password");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "the pasted connection", WAIT, |_, _| {
+        app.saved().profiles.len() == 3
+    });
+    let pasted = app.saved().profiles[2].clone();
+    assert_eq!(pasted.name, "Warehouse copy");
+    assert_ne!(pasted.id, warehouse.id);
+    assert_eq!(pasted.host, warehouse.host);
+    assert_eq!(pasted.catalog, warehouse.catalog);
+    assert_eq!(
+        app.credentials.get(pasted.id).as_deref(),
+        Some("pasted-password")
+    );
+    // Connection Settings of a saved connection show no note.
+    app.context_menu(cx, connection_row(pasted.id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-name");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("connection-pasted-note").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn a_pasted_connection_uses_a_matching_sign_in_or_adds_its_own_on_save(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace();
+    let lake = workspace.profiles[1].clone();
+    let existing = workspace.sign_ins[0].clone();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    let copied = copy_settings(&app, cx, lake.id);
+
+    // The workspace has a sign-in with the same settings.
+    paste(&app, cx, copied.clone());
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-sign-in").as_deref(),
+            Some("Company")
+        );
+        assert!(
+            !label(window, "connection-pasted-note")
+                .unwrap()
+                .contains("adds the sign-in")
+        );
+    });
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "the pasted connection", WAIT, |_, _| {
+        app.saved().profiles.len() == 3
+    });
+    let saved = app.saved();
+    assert_eq!(saved.sign_ins.len(), 1);
+    assert_eq!(
+        saved.profiles[2].authentication,
+        Authentication::Oidc {
+            sign_in: existing.id
+        }
+    );
+
+    // Another issuer needs a new sign-in. Only Save adds it.
+    let other = copied.replace("id.example.test", "other.example.test");
+    paste(&app, cx, other.clone());
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-sign-in").as_deref(),
+            Some("Company copy")
+        );
+        assert!(
+            label(window, "connection-pasted-note")
+                .unwrap()
+                .contains(
+                    "the issuer https://other.example.test/realms/data. Save also adds the sign-in \"Company copy\"."
+                )
+        );
+    });
+    app.click(cx, "cancel-profile");
+    app.wait_gone(cx, "save-profile");
+    app.settle(cx);
+    assert_eq!(app.saved().sign_ins.len(), 1);
+    paste(&app, cx, other);
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "the new sign-in", WAIT, |_, _| {
+        app.saved().sign_ins.len() == 2
+    });
+    let saved = app.saved();
+    let added = &saved.sign_ins[1];
+    assert_eq!(added.name, "Company copy");
+    assert_eq!(added.issuer, "https://other.example.test/realms/data");
+    assert_eq!(added.identity, None);
+    assert_eq!(
+        saved.profiles[3].authentication,
+        Authentication::Oidc { sign_in: added.id }
+    );
+}
+
+#[gpui_kit::test]
+fn pasting_other_text_explains_why_and_adds_nothing(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.write_to_clipboard(ClipboardItem::new_string("SELECT 1".into()));
+    app.dispatch(cx, qrow::ui::PasteConnection);
+    let detail = toast_detail(&app, cx, "paste-connection-toast");
+    assert!(
+        detail.contains("does not contain connection settings"),
+        "{detail}"
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window
+                .within("paste-connection-toast")
+                .find("title")
+                .label(),
+            Some("Could not paste connection")
+        );
+        assert!(window.try_find("connection-name").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn a_pasted_connection_without_a_username_asks_for_one_on_save(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    paste(
+        &app,
+        cx,
+        r#"{"qrow_connection": 1, "name": "Team", "host": "db.example.test", "database": "default"}"#
+            .into(),
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, "connection-name").as_deref(), Some("Team"));
+        assert_eq!(value(window, "connection-username").as_deref(), Some(""));
+        // A missing port is the default port of the database type.
+        assert_eq!(value(window, "connection-port").as_deref(), Some("10009"));
+    });
+    app.click(cx, "save-profile");
+    app.wait_until(cx, "the username error", WAIT, |window, _| {
+        crate::support::labels(window)
+            .iter()
+            .any(|label| label == "Enter a username.")
+    });
+    app.fill(cx, "connection-username", "colleague");
+    app.scroll_to(cx, "connection-password");
+    app.fill(cx, "connection-password", "colleague-password");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "the pasted connection", WAIT, |_, _| {
+        app.saved().profiles.len() == 3
+    });
+    let saved = app.saved().profiles[2].clone();
+    assert_eq!(saved.username, "colleague");
+    assert_eq!(saved.port, 10009);
+}
+
+#[gpui_kit::test]
+fn a_shared_catalog_member_copies_the_shared_schema_settings(cx: &mut TestAppContext) {
+    use qrow::model::{CatalogRefresh, CatalogSettings, SharedCatalog};
+    let (mut workspace, credentials) = workspace();
+    let shared = SharedCatalog {
+        id: uuid::Uuid::new_v4(),
+        name: "Metastore".into(),
+        settings: CatalogSettings {
+            include: vec!["sales_*".into()],
+            refresh: CatalogRefresh::Manual,
+            ..CatalogSettings::default()
+        },
+        preferred: None,
+    };
+    // One member browses schemas, the other has browsing off.
+    for profile in &mut workspace.profiles {
+        profile.shared_catalog = Some(shared.id);
+    }
+    workspace.profiles[1].catalog.refresh = CatalogRefresh::Disabled;
+    workspace.shared_catalogs = vec![shared];
+    let (browsing, off) = (workspace.profiles[0].id, workspace.profiles[1].id);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    for (id, mode) in [(browsing, "manual"), (off, "disabled")] {
+        let json: serde_json::Value = serde_json::from_str(&copy_settings(&app, cx, id)).unwrap();
+        assert_eq!(json["catalog"]["include"], serde_json::json!(["sales_*"]));
+        assert_eq!(json["catalog"]["refresh"]["mode"], mode);
+        assert!(json.get("shared_catalog").is_none());
+    }
+}

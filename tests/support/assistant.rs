@@ -5,8 +5,9 @@ use super::{TestApp, elements, label, labels, present};
 use gpui_kit::{TestAppContext, Window};
 use qrow::model::{AssistantHarness, AssistantTitleSource, Settings, Workspace};
 use qrow::ui::ToggleAssistant;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -14,6 +15,86 @@ use tempfile::TempDir;
 
 /// A synthetic reply takes well under a second; some turns wait for a marker.
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub const BUFFERED_REPLY: &str =
+    "**Buffered reply**\n\n| Column | Value |\n| --- | --- |\n| Result | 1 |";
+
+/// A held message stays hidden, then keeps its complete geometry during its fade.
+pub fn assert_buffered_reply_completion(app: &TestApp, cx: &mut TestAppContext, codex: &FakeCodex) {
+    buffered_reply_completion(app, cx, codex, "Hold a buffered reply", BUFFERED_REPLY);
+}
+
+pub fn assert_large_buffered_reply_completion(
+    app: &TestApp,
+    cx: &mut TestAppContext,
+    codex: &FakeCodex,
+) {
+    let reply = format!(
+        "**Buffered reply**\n\n{}{}",
+        "word ".repeat(2000),
+        &BUFFERED_REPLY[18..]
+    );
+    buffered_reply_completion(app, cx, codex, "Hold a buffered reply long", &reply);
+}
+
+fn buffered_reply_completion(
+    app: &TestApp,
+    cx: &mut TestAppContext,
+    codex: &FakeCodex,
+    message: &str,
+    reply: &str,
+) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    app.send(cx, message);
+    app.wait_until(cx, "the buffered partial", REPLY_TIMEOUT, |_, _| {
+        codex.marked("buffered-partial")
+    });
+    cx.executor().advance_clock(Duration::from_millis(500));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(
+            !transcript(window)
+                .iter()
+                .any(|text| text.contains("Buffered reply"))
+        );
+        assert!(window.try_find("assistant-working").is_some());
+    });
+    codex.mark("buffered-release");
+    let expected = format!("Assistant: {reply}");
+    app.wait_until(
+        cx,
+        "the complete buffered message",
+        REPLY_TIMEOUT,
+        |window, _| {
+            let entries = transcript(window);
+            for entry in entries
+                .iter()
+                .filter(|entry| entry.starts_with("Assistant: "))
+            {
+                assert_eq!(entry, &expected, "a partial buffered reply became visible");
+            }
+            entries.iter().any(|entry| entry == &expected)
+        },
+    );
+    app.wait_for(cx, "assistant-stop");
+    let bounds = app.update(cx, |window, _| {
+        super::labelled_starting(window, &expected)[0].bounds()
+    });
+    for _ in 0..8 {
+        cx.executor().advance_clock(Duration::from_millis(40));
+        app.update(cx, |window, cx| {
+            window.simulate_next_frame(cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(
+                super::labelled_starting(window, &expected)[0].bounds(),
+                bounds
+            );
+        });
+    }
+    codex.mark("buffered-turn-release");
+    app.wait_idle(cx);
+}
 
 pub struct FakeCodex {
     executable: PathBuf,
@@ -38,6 +119,7 @@ impl FakeCodex {
             ),
         )
         .unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         let state = directory.path().join("fake-codex");
         std::fs::create_dir_all(&state).unwrap();
@@ -127,6 +209,7 @@ impl FakeClaude {
             ),
         )
         .unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
         let state = directory.path().join("fake-claude");
         std::fs::create_dir_all(&state).unwrap();
@@ -242,7 +325,9 @@ pub fn approval(window: &Window) -> Option<String> {
 impl TestApp {
     /// Opens the assistant pane and waits until Codex reports its models.
     pub fn open_assistant(&self, cx: &mut TestAppContext) {
-        if !self.update(cx, |window, _| window_has(window, "assistant-model")) {
+        // While Codex starts, the composer shows a status in place of the
+        // model selector, so the composer tells whether the pane is open.
+        if !self.update(cx, |window, _| window_has(window, "assistant-composer")) {
             self.dispatch(cx, ToggleAssistant);
         }
         self.wait_until(cx, "Codex to start", REPLY_TIMEOUT, |window, _| {
@@ -273,7 +358,7 @@ impl TestApp {
     pub fn type_message(&self, cx: &mut TestAppContext, message: &str) {
         self.show_conversation(cx);
         self.click(cx, "assistant-composer");
-        self.press(cx, "cmd-a");
+        self.press(cx, "secondary-a");
         self.update(cx, |window, cx| {
             gpui_kit::test::TestWindowExt::input(window, message, cx)
         });
@@ -416,5 +501,52 @@ impl TestApp {
         self.wait_until(cx, text, REPLY_TIMEOUT, |window, _| {
             labels(window).iter().any(|l| l.contains(text))
         });
+    }
+}
+
+/// The reply's code-copy actions, independent of their visible text.
+pub fn code_copy_buttons(window: &Window) -> Vec<gpui_kit::base::test_support::ElementSnapshot> {
+    elements(window)
+        .into_iter()
+        .filter(|element| {
+            matches!(element.path().last(), Some(gpui_kit::ElementId::Name(id)) if id.starts_with("assistant-copy-code-"))
+        })
+        .collect()
+}
+
+/// Copies two distinct blocks through the reply's real buttons.
+pub fn assert_copyable_code_blocks(app: &TestApp, cx: &mut TestAppContext) {
+    app.send(
+        cx,
+        "Show copyable code blocks\n\n```sql\nSELECT user_message;\n```",
+    );
+    app.wait_reply(cx, "last line");
+    app.wait_idle(cx);
+    for (index, expected) in [
+        "-- Пример\nSELECT '你好',\n    42;",
+        "  second block\n\nlast line",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()));
+        app.update(cx, |window, cx| {
+            let mut buttons = code_copy_buttons(window);
+            buttons.sort_by(|a, b| a.bounds().top().partial_cmp(&b.bounds().top()).unwrap());
+            assert_eq!(buttons.len(), 2);
+            for button in &buttons {
+                assert_eq!(button.label(), Some("Copy code"));
+                let size = button.bounds().size;
+                assert!(
+                    f32::from(size.width - size.height).abs() <= 1.,
+                    "The code copy action should be an icon-only square: {size:?}"
+                );
+            }
+            super::click_element(window, &buttons[index], cx);
+        });
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some(expected)
+        );
     }
 }

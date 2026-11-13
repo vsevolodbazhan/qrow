@@ -1,17 +1,16 @@
 """Command line of qtest. Run `./qtest help` for the guide."""
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
 import tarfile
-import time
 
 import catalog
 import runner  # Adds scripts/e2e to the import path for fixture.
+import contract
+import targets
 import fixture  # noqa: E402
-import opengl  # noqa: E402
 from runner import EXIT_FAILED, EXIT_MISSING, EXIT_PASSED, EXIT_USAGE, ROOT
 
 GUIDE = ROOT / "docs/testing.md"
@@ -43,7 +42,7 @@ def guide_sections():
     """Level-two sections of docs/testing.md, keyed by slug."""
     sections = {}
     current = None
-    for line in GUIDE.read_text().splitlines():
+    for line in GUIDE.read_text(encoding="utf-8").splitlines():
         if line.startswith("## "):
             current = slug(line[3:])
             sections[current] = [line]
@@ -62,7 +61,7 @@ def command_list(args):
         "name": suite.name,
         "summary": suite.summary,
         "requires": list(suite.requires),
-        "macos_only": suite.macos_only,
+        "platforms": list(suite.platforms),
         "explicit_only": suite.explicit_only,
         "servers": suite.fixture is not None,
         "filterable": suite.filterable,
@@ -77,8 +76,8 @@ def command_list(args):
     for suite in suites:
         flags = "*" if suite["filterable"] else " "
         extra = []
-        if suite["macos_only"]:
-            extra.append("macOS")
+        if len(suite["platforms"]) < len(catalog.PLATFORM_NAMES):
+            extra.append(", ".join(catalog.PLATFORM_NAMES[name] for name in suite["platforms"]))
         if suite["servers"]:
             extra.append("servers")
         if suite["explicit_only"]:
@@ -132,8 +131,9 @@ def command_run(args):
     output = runner.Output(quiet=args.json or args.quiet)
     for note in notes:
         output.note(note)
-    options = {"runtime": args.runtime, "repeat": args.repeat}
-    summary = runner.run(selected, options, args.extra, output, fail_fast=args.fail_fast)
+    options = {"runtime": args.runtime, "repeat": args.repeat, "reuse_builds": args.reuse_builds, "isolated_reports": True}
+    summary = runner.run(selected, options, args.extra, output, fail_fast=args.fail_fast,
+                         report_only=[item.suite.name for item in selected] if args.report_only else (), require_all=True)
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
@@ -150,82 +150,6 @@ def command_hook(args):
     summary = runner.run(selected, {"runtime": "auto", "repeat": 1}, [], output, fail_fast=True)
     print_summary(summary)
     return summary["exit_code"]
-
-
-SCOPE_NOTES = {"pull_request": "", "push": "  not in pull requests", "manual": "  releases and manual runs only"}
-
-
-def command_ci(args):
-    """List the CI jobs, print the jobs for the changed paths, or run the suites of one job."""
-    if args.job is None:
-        for job in catalog.CI_JOBS.values():
-            suites = ", ".join([*job.suites, *(f"{name} (report only)" for name in job.report_only)])
-            needs = f"  waits for {', '.join(job.needs)}" if job.needs else ""
-            print(f"{job.name:<15} {job.runner:<14} {job.budget:>2} min  {suites}{needs}{SCOPE_NOTES[job.scope]}")
-        return EXIT_PASSED
-    if args.job == "plan":
-        if args.all:
-            names = catalog.ci_jobs_for_event("manual")
-        elif args.push:
-            names = catalog.ci_jobs_for_event("push")
-        else:
-            names = catalog.ci_jobs_for_changes(runner.changed_paths_from_git())
-        plan = json.dumps({name: name in names for name in catalog.CI_JOBS})
-        print(plan)
-        if args.github_output:
-            with open(args.github_output, "a") as output:
-                output.write(f"jobs={plan}\n")
-        return EXIT_PASSED
-    job = catalog.CI_JOBS[args.job]
-    measure = args.measure or os.environ.get("QROW_CI_MEASURE") == "true"
-    report_only = job.report_only if measure else ()
-    names = [*job.suites, *report_only]
-    os.environ.update(job.env)
-    if args.install:
-        tools = [tool for tool in catalog.TOOLS if any(tool in catalog.SUITES[name].requires for name in names)]
-        if install_tools(tools):
-            return EXIT_FAILED
-        target = dict(job.env).get("CARGO_BUILD_TARGET")
-        if target and subprocess.run(("rustup", "target", "add", target), cwd=ROOT).returncode:
-            return EXIT_FAILED
-    output = runner.Output(quiet=False)
-    if not names:
-        output.note(f"CI job {job.name} only measures, and this run does not measure. Use --measure.")
-        return EXIT_PASSED
-    selected, _ = runner.resolve(names)
-    output.note(f"CI job {job.name}: {', '.join(names)}")
-    started = time.monotonic()
-    # A CI job stops at once when a prerequisite is missing, for example the
-    # automation permissions of the desktop suite, so it builds nothing.
-    options = {"runtime": job.runtime, "repeat": 1}
-    run_dir = None
-    # Keep the existing preflight contract: missing required tools/session
-    # permissions stop the job before compiling the capability probe.
-    prerequisites = [runner.precheck(item, options) for item in selected] if job.probe_opengl else []
-    missing = any(result and result.status == "missing" and result.name not in report_only
-                  for result in prerequisites)
-    if job.probe_opengl and not missing:
-        run_dir = runner.new_run_dir()
-        log = run_dir / "logs" / "opengl-capability.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
-        options["ci_opengl_capability"] = opengl.probe(runner.execute, log, output)
-    summary = runner.run(selected, options, [], output,
-                         report_only=report_only, require_all=True, run_dir=run_dir)
-    print_summary(summary)
-    report_budget(job, (time.monotonic() - started) / 60)
-    return summary["exit_code"]
-
-
-def report_budget(job, minutes):
-    """Warn when the suites of a CI job took longer than its budget."""
-    if minutes <= job.budget:
-        return
-    message = (f"The suites of {job.name} took {minutes:.1f} min, over the budget of {job.budget} min "
-               "in scripts/qtest/catalog.py. Find what got slower before you raise the budget.")
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        print(f"::warning title=CI budget::{message}")
-    else:
-        print(f"[qtest] {message}", file=sys.stderr)
 
 
 def print_summary(summary):
@@ -247,7 +171,7 @@ def command_doctor(args):
         selected, _ = runner.resolve(args.selectors)
         suites = [item.suite for item in selected]
     else:
-        suites = [suite for suite in catalog.SUITES.values() if catalog.MACOS or not suite.macos_only]
+        suites = [suite for suite in catalog.SUITES.values() if catalog.HOST in suite.platforms]
     options = {"runtime": args.runtime}
     results = {}
     for suite in suites:
@@ -257,6 +181,12 @@ def command_doctor(args):
     report = [{"requirement": name, "ok": fix is None, "fix": fix,
                "suites": [suite.name for suite in suites if name in suite.requires]}
               for name, fix in results.items()]
+    # A suite of another platform, which only a selector can name.
+    elsewhere = [suite for suite in suites if catalog.HOST not in suite.platforms]
+    for systems in sorted({suite.platforms for suite in elsewhere}):
+        names = " or ".join(catalog.PLATFORM_NAMES[name] for name in systems)
+        report.append({"requirement": "platform", "ok": False, "fix": f"Run this suite on {names}.",
+                       "suites": [suite.name for suite in elsewhere if suite.platforms == systems]})
     if args.json:
         print(json.dumps(report, indent=2))
     else:
@@ -279,12 +209,11 @@ def command_install(args):
 def install_archive(tool, archive):
     """Download a prebuilt tool archive, check its digest, and unpack the tool into the Cargo bin directory."""
     import hashlib
-    import os
     import shutil
     import tempfile
     import urllib.request
-    from pathlib import Path
-    bin_dir = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
+    from pathlib import Path, PurePosixPath
+    bin_dir = runner.cargo_bin()
     print(f"[qtest] Downloading {archive.url}", file=sys.stderr)
     with tempfile.TemporaryDirectory() as directory:
         bundle_path = Path(directory) / "tool.tar.gz"
@@ -299,8 +228,9 @@ def install_archive(tool, archive):
         with tarfile.open(bundle_path) as bundle:
             bundle.extract(bundle.getmember(archive.member), unpacked, filter="data")
         bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(unpacked / archive.member, bin_dir / tool.name)
-        (bin_dir / tool.name).chmod(0o755)
+        installed = bin_dir / PurePosixPath(archive.member).name
+        shutil.move(unpacked / archive.member, installed)
+        installed.chmod(0o755)
     return True
 
 
@@ -389,15 +319,15 @@ def command_new(args):
     path = directory / f"{args.suite}.rs"
     if args.suite in ("main", "support"):
         raise runner.UsageError(f"{args.suite} is reserved.")
-    if path.exists() and re.search(rf"\bfn {args.name}\(", path.read_text()):
+    if path.exists() and re.search(rf"\bfn {args.name}\(", path.read_text(encoding="utf-8")):
         raise runner.UsageError(f"{path.relative_to(ROOT)} already has {args.name}.")
     header, template = TEMPLATES[args.layer]
-    text = path.read_text() if path.exists() else header
-    path.write_text(text + template.format(name=args.name))
-    lines = main.read_text().splitlines()
+    text = path.read_text(encoding="utf-8") if path.exists() else header
+    path.write_text(text + template.format(name=args.name), encoding="utf-8")
+    lines = main.read_text(encoding="utf-8").splitlines()
     module = f"mod {args.suite};"
     if module not in lines:
-        main.write_text("\n".join(insert_module(lines, args.suite)) + "\n")
+        main.write_text("\n".join(insert_module(lines, args.suite)) + "\n", encoding="utf-8")
     print(f"Added {args.name} to {path.relative_to(ROOT)}. It fails until you write it.")
     print(f"Run it with: ./qtest run {args.layer}/{args.name}")
     return EXIT_PASSED
@@ -441,16 +371,19 @@ def command_fixture(args):
     argv = [args.action]
     if args.action == "up":
         argv += ["--runtime", args.runtime]
-    return fixture.main(argv)
+    from process import lease
+    with lease([f"fixture:{fixture.state_path().resolve()}"]):
+        return fixture.main(argv)
 
 
 def command_artifacts(args):
-    latest = runner.runs_dir() / "latest"
+    pointer = runner.runs_dir() / "latest.json"
+    latest = runner.runs_dir() / (json.loads(pointer.read_text(encoding="utf-8"))["run"] if pointer.exists() else "latest")
     summary = latest / "summary.json"
     if not summary.exists():
         print("No qtest run has finished yet.", file=sys.stderr)
         return EXIT_FAILED
-    data = json.loads(summary.read_text())
+    data = json.loads(summary.read_text(encoding="utf-8"))
     if args.json:
         print(json.dumps(data, indent=2))
     else:
@@ -458,11 +391,57 @@ def command_artifacts(args):
     return EXIT_PASSED
 
 
+def command_plan(args):
+    host = targets.host_target()
+    target = args.target or (host.name if host else None)
+    if not target:
+        raise runner.UsageError("Choose a supported --target")
+    value = contract.plan(ROOT, target, args.selectors, args.runtime, args.repeat)
+    if args.output:
+        contract.atomic_json(args.output, value)
+    print(json.dumps(value, indent=2))
+    return EXIT_PASSED
+
+
+def command_prepare(args):
+    import builds
+    value = json.loads(args.plan.read_text(encoding="utf-8"))
+    contract.validate_plan(value, ROOT, build=True)
+    if args.install and install_tools(["cargo-nextest"]):
+        return EXIT_FAILED
+    builds.prepare(value, ROOT, args.output, runner.Output(quiet=False))
+    return EXIT_PASSED
+
+
+def command_execute(args):
+    value = json.loads(args.plan.read_text(encoding="utf-8"))
+    if args.install:
+        names = {name for item in value["suites"] for name in item["definition"]["requires"] if name in catalog.TOOLS}
+        # Validate source and commands before installing anything from a plan.
+        contract.validate_plan(value, ROOT)
+        if install_tools(sorted(names)):
+            return EXIT_FAILED
+    result = contract.execute(value, ROOT, runner.Output(quiet=False), args.reuse_builds)
+    if args.output:
+        contract.atomic_json(args.output, result)
+    print_summary(result)
+    return result["exit_code"]
+
+
+def command_verify(args):
+    contract.verify(json.loads(args.plan.read_text(encoding="utf-8")), json.loads(args.result.read_text(encoding="utf-8")))
+    print("Required execution evidence passed.")
+    return EXIT_PASSED
+
+
 COMMANDS = {
+    "plan": command_plan,
+    "execute": command_execute,
+    "prepare": command_prepare,
+    "verify": command_verify,
     "list": command_list,
     "run": command_run,
     "hook": command_hook,
-    "ci": command_ci,
     "doctor": command_doctor,
     "install": command_install,
     "new": command_new,
@@ -477,6 +456,25 @@ def parser():
     root = argparse.ArgumentParser(prog="qtest", description=DESCRIPTION,
                                    formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = root.add_subparsers(dest="command")
+    from pathlib import Path
+    planning = commands.add_parser("plan", help="Write a source-bound plan without running checks.")
+    planning.add_argument("selectors", nargs="*")
+    planning.add_argument("--target", choices=list(targets.TARGETS))
+    planning.add_argument("--runtime", choices=["auto", "docker", "native"], default="auto")
+    planning.add_argument("--repeat", type=int, default=1)
+    planning.add_argument("--output", type=Path)
+    preparation = commands.add_parser("prepare", help="Archive the test builds of a source-bound plan.")
+    preparation.add_argument("plan", type=Path)
+    preparation.add_argument("--output", type=Path, required=True)
+    preparation.add_argument("--install", action="store_true")
+    execution = commands.add_parser("execute", help="Execute a plan on its native target.")
+    execution.add_argument("plan", type=Path)
+    execution.add_argument("--output", type=Path)
+    execution.add_argument("--install", action="store_true")
+    execution.add_argument("--reuse-builds", type=Path)
+    verification = commands.add_parser("verify", help="Reject incomplete or failed execution evidence.")
+    verification.add_argument("plan", type=Path)
+    verification.add_argument("result", type=Path)
 
     listing = commands.add_parser("list", help="Show suites and groups, or the tests of suites.")
     listing.add_argument("selectors", nargs="*", help="Suites or groups whose tests to list (with --tests).")
@@ -498,6 +496,8 @@ def parser():
                          help="Server runtime of the backend, e2e, and desktop suites. auto (the "
                               "default) uses Docker when its daemon answers, else local Java processes.")
     running.add_argument("--json", action="store_true", help="Print only a JSON summary on stdout.")
+    running.add_argument("--report-only", action="store_true", help="Record measurement failures without failing the run.")
+    running.add_argument("--reuse-builds", type=Path)
     running.add_argument("--quiet", action="store_true", help="Do not stream command output.")
 
     hook = commands.add_parser(
@@ -505,20 +505,6 @@ def parser():
         description="The repository hooks call this command in a snapshot of the commit. "
                     "It runs the suites that the changed paths select and that the hook includes.")
     hook.add_argument("name", choices=list(catalog.HOOKS))
-
-    ci = commands.add_parser(
-        "ci", help="List the CI jobs, plan them for changed paths, or run one job.",
-        description="Without JOB, list the jobs of the checks workflow. `plan` prints the jobs that "
-                    "the changed paths select, as JSON. JOB runs the suites of that job, as CI does.")
-    ci.add_argument("job", nargs="?", choices=[*catalog.CI_JOBS, "plan"])
-    plan = ci.add_mutually_exclusive_group()
-    plan.add_argument("--all", action="store_true", help="plan: select every job, as releases and manual runs do.")
-    plan.add_argument("--push", action="store_true", help="plan: select the jobs of a push to main.")
-    ci.add_argument("--measure", action="store_true",
-                    help="Also run the report-only suites, as pushes and releases do. "
-                         "QROW_CI_MEASURE=true does the same.")
-    ci.add_argument("--github-output", metavar="FILE", help="plan: also write `jobs=JSON` to FILE.")
-    ci.add_argument("--install", action="store_true", help="Install the pinned tools of the job first.")
 
     doctor = commands.add_parser("doctor", help="Check prerequisites and print a fix for each gap.")
     doctor.add_argument("selectors", nargs="*", help="Check only these suites or groups.")
@@ -576,7 +562,7 @@ def main(argv=None):
         return EXIT_USAGE
     try:
         return COMMANDS[arguments.command](arguments)
-    except runner.UsageError as error:
+    except (runner.UsageError, ValueError, OSError) as error:
         print(f"qtest: {error}", file=sys.stderr)
         return EXIT_USAGE
     except KeyboardInterrupt:

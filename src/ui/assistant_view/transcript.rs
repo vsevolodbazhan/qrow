@@ -1,7 +1,7 @@
 //! The messages and tool cards of a conversation.
 use super::*;
 use std::borrow::Cow;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::ui) enum Speaker {
@@ -205,14 +205,18 @@ impl ToolActivity {
 pub(in crate::ui) struct TranscriptEntry {
     pub(super) id: Uuid,
     pub speaker: Speaker,
-    /// Shared strings, so that each frame passes the text and the label
-    /// without a copy. A change replaces them.
+    /// Shared strings, so that each frame passes the text without a copy.
+    /// A change replaces them.
     text: SharedString,
-    label: SharedString,
+    /// The text of a reply while its parts arrive. It grows in place, so a
+    /// long reply does not copy all its text for each part. The text moves
+    /// to `text` when the reply is complete.
+    growing: Option<String>,
     /// The part of `text` that shows. A streamed reply shows its text step
     /// by step. See [`Reveal`].
     shown: SharedString,
     reveal: Option<Reveal>,
+    appearance_started: Option<Instant>,
     pub turn_id: Option<String>,
     pub tool: Option<ToolActivity>,
     pub detail: Option<String>,
@@ -227,9 +231,10 @@ impl TranscriptEntry {
             id: Uuid::new_v4(),
             speaker,
             text: SharedString::default(),
-            label: SharedString::default(),
+            growing: None,
             shown: SharedString::default(),
             reveal: None,
+            appearance_started: None,
             turn_id,
             tool: None,
             detail: None,
@@ -255,8 +260,9 @@ impl TranscriptEntry {
         entry
     }
 
-    pub fn text(&self) -> &SharedString {
-        &self.text
+    /// All received text, also the text that does not show yet.
+    pub fn text(&self) -> &str {
+        self.growing.as_deref().unwrap_or(&self.text)
     }
 
     /// The text that the transcript shows.
@@ -264,9 +270,20 @@ impl TranscriptEntry {
         &self.shown
     }
 
-    /// The accessible label: the speaker and the shown text.
-    pub fn label(&self) -> &SharedString {
-        &self.label
+    /// The accessible label: the speaker and the shown text. A row makes it
+    /// when it renders, so an entry keeps no second copy of its text.
+    pub fn label(&self) -> SharedString {
+        let speaker = if self.tool.is_some() {
+            "Tool Call"
+        } else {
+            match self.speaker {
+                Speaker::User => "You",
+                Speaker::Assistant => "Assistant",
+                Speaker::Activity => "Assistant Activity",
+                Speaker::Error => "Assistant Error",
+            }
+        };
+        format!("{speaker}: {}", self.shown).into()
     }
 
     pub fn expanded(&self) -> bool {
@@ -287,6 +304,7 @@ impl TranscriptEntry {
     /// new text continues shows the rest step by step.
     pub fn set_text(&mut self, text: impl Into<SharedString>) {
         let text = text.into();
+        self.growing = None;
         match &mut self.reveal {
             Some(reveal) if text.starts_with(self.shown.as_str()) => reveal.complete(),
             _ => self.reveal = None,
@@ -304,33 +322,63 @@ impl TranscriptEntry {
 
     fn shown_changed(&mut self) {
         self.revision += 1;
-        let speaker = if self.tool.is_some() {
-            "Tool Call"
-        } else {
-            match self.speaker {
-                Speaker::User => "You",
-                Speaker::Assistant => "Assistant",
-                Speaker::Activity => "Assistant Activity",
-                Speaker::Error => "Assistant Error",
-            }
-        };
-        self.label = format!("{speaker}: {}", self.shown).into();
     }
 
-    /// Appends a streamed part. This copies the text once for each part.
+    /// Appends a streamed part. While the text reveals step by step, the
+    /// part only grows the received text. Else it shows at once.
     pub fn push_text(&mut self, part: &str) {
-        let mut text = String::with_capacity(self.text.len() + part.len());
-        text.push_str(&self.text);
-        text.push_str(part);
-        if let Some(reveal) = &mut self.reveal {
-            reveal.received();
+        let growing = self.growing.get_or_insert_with(|| self.text.to_string());
+        growing.push_str(part);
+        match &mut self.reveal {
+            Some(reveal) => reveal.received(),
+            None => {
+                let text = self.growing.take().unwrap_or_default();
+                self.replace_text(text.into());
+            }
         }
-        self.replace_text(text.into());
+    }
+
+    /// Move the received text of a complete reply to the shared text.
+    fn settle(&mut self) {
+        if let Some(text) = self.growing.take() {
+            self.text = text.into();
+        }
     }
 
     /// Whether the entry has streamed text that does not show yet.
     pub fn revealing(&self) -> bool {
-        self.reveal.is_some() && self.shown.len() < self.text.len()
+        self.reveal.is_some() && self.shown.len() < self.text().len()
+    }
+
+    pub fn finish_reply(&mut self) {
+        if let Some(reveal) = &mut self.reveal {
+            reveal.complete();
+        }
+        self.settle();
+    }
+
+    pub fn reply_complete(&self) -> bool {
+        self.reveal.as_ref().is_none_or(Reveal::is_complete)
+    }
+
+    pub fn appearance_started(&self) -> Option<Instant> {
+        self.appearance_started
+    }
+
+    /// Mark a live message for appearance motion. Restored entries stay still.
+    pub fn appearing(mut self, now: Instant) -> Self {
+        self.appearance_started = Some(now);
+        self
+    }
+
+    /// Show a completed message without changing its layout during the fade.
+    pub fn show_buffered(&mut self, now: Instant) -> bool {
+        let first = self.shown.trim().is_empty();
+        let changed = self.show_all();
+        if changed && first {
+            self.appearance_started = Some(now);
+        }
+        changed
     }
 
     /// Shows more of the streamed text. Returns whether the shown text changed.
@@ -338,13 +386,14 @@ impl TranscriptEntry {
         let Some(reveal) = &mut self.reveal else {
             return false;
         };
-        if !reveal.advance(&self.text, elapsed) {
+        let text = self.growing.as_deref().unwrap_or(&self.text);
+        if !reveal.advance(text, elapsed) {
             return false;
         }
-        self.shown = if reveal.shown() == self.text.len() {
+        self.shown = if self.growing.is_none() && reveal.shown() == self.text.len() {
             self.text.clone()
         } else {
-            self.text[..reveal.shown()].to_owned().into()
+            text[..reveal.shown()].to_owned().into()
         };
         self.shown_changed();
         true
@@ -352,6 +401,10 @@ impl TranscriptEntry {
 
     /// Shows all streamed text at once. Returns whether the shown text changed.
     pub fn show_all(&mut self) -> bool {
+        if self.reveal.is_none() {
+            return false;
+        }
+        self.settle();
         let Some(reveal) = &mut self.reveal else {
             return false;
         };
@@ -367,6 +420,14 @@ impl TranscriptEntry {
     pub fn with_detail(mut self, detail: String) -> Self {
         self.detail = Some(detail);
         self
+    }
+
+    /// Update a card without replacing its identity or appearance clock.
+    pub fn update_tool(&mut self, tool: ToolActivity, detail: String) {
+        let label = tool.label();
+        self.tool = Some(tool);
+        self.detail = Some(detail);
+        self.set_text(label);
     }
 
     /// Replaces the tool state and keeps the accessible text in step with it.
@@ -487,6 +548,43 @@ pub(in crate::ui) fn row_change(old: &[Row], new: &[Row]) -> RowChange {
 mod tests {
     use super::*;
     use crate::assistant::WORKSPACE_CONTEXT_SEPARATOR;
+
+    #[::core::prelude::v1::test]
+    fn tool_updates_keep_identity_appearance_and_expansion() {
+        let now = Instant::now();
+        let mut entry = TranscriptEntry::tool(
+            ToolActivity {
+                kind: ToolKind::RunQuery,
+                target: None,
+                state: ToolState::Running("Preparing".into()),
+            },
+            "turn-1".into(),
+        )
+        .appearing(now);
+        let id = entry.id;
+        entry.toggle_expanded();
+        let revision = entry.revision();
+        entry.update_tool(
+            ToolActivity {
+                kind: ToolKind::RunQuery,
+                target: Some("Query 1".into()),
+                state: ToolState::QueryResult {
+                    rows: 1,
+                    more: false,
+                    elapsed: Some(Duration::from_millis(50)),
+                },
+            },
+            "The result".into(),
+        );
+        assert_eq!(entry.id, id);
+        assert_eq!(entry.appearance_started(), Some(now));
+        assert!(entry.expanded());
+        assert!(entry.revision() > revision);
+        assert!(entry.label().contains("1 row"));
+        entry.set_tool_state(ToolState::Failed);
+        assert_eq!(entry.appearance_started(), Some(now));
+        assert_eq!(entry.id, id);
+    }
 
     #[::core::prelude::v1::test]
     fn the_icon_of_each_tool_kind_loads() {
@@ -680,6 +778,25 @@ mod tests {
         // The last page removes the button.
         assert_eq!(row_change(&rows, &rows[1..]), change(0..1, 0, &[]));
         assert_eq!(row_change(&[], &rows), change(0..0, 3, &[]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn streamed_parts_grow_the_text_until_the_reply_shows() {
+        let mut entry = TranscriptEntry::streamed(Speaker::Assistant, "Hello", None);
+        entry.push_text(", world");
+        assert_eq!(entry.text(), "Hello, world");
+        assert_eq!(entry.shown_text().as_str(), "");
+        assert!(entry.revealing());
+        entry.finish_reply();
+        assert_eq!(entry.text(), "Hello, world");
+        assert!(entry.show_all());
+        assert_eq!(entry.shown_text().as_str(), "Hello, world");
+        assert_eq!(entry.label().as_str(), "Assistant: Hello, world");
+        // A part after the reply showed continues the text.
+        entry.push_text("!");
+        assert_eq!(entry.text(), "Hello, world!");
+        assert!(entry.show_all());
+        assert_eq!(entry.shown_text().as_str(), "Hello, world!");
     }
 
     #[::core::prelude::v1::test]

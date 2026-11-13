@@ -5,6 +5,7 @@ use gpui::{
     AnyElement, App, Bounds, Edges, Element, ElementId, ElementInputHandler, Entity,
     GlobalElementId,
 };
+use gpui::{Font, LineFragment};
 use gpui::{
     HighlightStyle, Hitbox, HitboxBehavior, Hsla, InteractiveElement, IntoElement, LayoutId,
     LongPressEvent, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Path, Pixels,
@@ -1866,7 +1867,32 @@ impl<M: InputModeKind> Element for TextElement<M> {
             if state.mode.is_auto_grow() {
                 // Auto grow to let height match to rows, but not exceed max rows.
                 let rows = state.mode.max_rows().min(state.mode.rows());
-                style.min_size.height = (rows * line_height).into();
+                let target = rows * line_height;
+                let duration = state.editor_style.auto_grow_transition;
+                // Direct window/width and typography changes must keep their layout
+                // response. Only content-driven row changes ease between heights.
+                let geometry = (window.viewport_size(), state.input_bounds.size.width, line_height);
+                let previous = window.use_keyed_state(
+                    ElementId::from(("auto-grow-geometry", self.state.entity_id())),
+                    cx,
+                    |_, _| geometry,
+                );
+                let changed = *previous.read(cx) != geometry;
+                if changed {
+                    previous.update(cx, |previous, _| *previous = geometry);
+                }
+                let height = crate::motion::transition(
+                    ElementId::from(("auto-grow-height", self.state.entity_id())),
+                    target,
+                    crate::motion::Transition::new(if changed {
+                        std::time::Duration::ZERO
+                    } else {
+                        duration
+                    }),
+                    window,
+                    cx,
+                );
+                style.min_size.height = height.into();
             } else {
                 style.min_size.height = line_height.into();
             }
@@ -1929,6 +1955,22 @@ impl<M: InputModeKind> Element for TextElement<M> {
         // Calculate the width of the line numbers
         let (line_number_width, line_number_len) =
             Self::layout_line_numbers(&state, &text, text_size, &text_style, window);
+        // Qrow: the placeholder of an empty editor wraps at its spaces to
+        // the text width, so a narrow editor does not cut it off.
+        let wrapped_placeholder;
+        let display_text = if is_empty && multi_line {
+            let width = bounds.size.width - line_number_width - RIGHT_MARGIN;
+            wrapped_placeholder = Rope::from(wrap_placeholder(
+                &placeholder,
+                text_style.font(),
+                text_size,
+                width,
+                cx,
+            ));
+            &wrapped_placeholder
+        } else {
+            display_text
+        };
 
         let mut bounds = bounds;
         let wrap_width = if multi_line && state.soft_wrap {
@@ -2532,10 +2574,63 @@ impl<M: InputModeKind> Element for TextElement<M> {
             }
         }
 
-        // Paint blinking cursors (shared blink state for all carets)
+        // The logical caret stays at its destination for input, IME and popups.
+        // Only the painted primary caret can travel between adjacent positions.
+        let cursors = prepaint.cursor_infos_with_scroll();
+        let primary = cursors.first().map(|cursor| cursor.bounds);
+        let duration = {
+            let state = self.state.read(cx);
+            let snapshot =
+                primary.map(|caret| (caret, prepaint.cursor_scroll_offset, input_bounds));
+            let previous = state.caret_snapshot.replace(snapshot);
+            let eligible = focused
+                && show_cursor
+                && !disabled
+                && selected_range.is_empty()
+                && cursors.len() == 1
+                && !state.selecting
+                && state.ime_marked_range.is_none();
+            let continuous = previous.zip(snapshot).is_some_and(|(before, after)| {
+                before.1 == after.1
+                    && before.2 == after.2
+                    && before.0.origin.y == after.0.origin.y
+                    && before.0.size == after.0.size
+                    && (before.0.origin.x - after.0.origin.x).abs() <= line_height * 2.
+            });
+            if !eligible {
+                state.caret_snapshot.set(None);
+            }
+            if eligible && continuous {
+                editor_style.caret_transition
+            } else {
+                std::time::Duration::ZERO
+            }
+        };
+        let painted = primary.map(|target| {
+            crate::motion::transition(
+                ElementId::from(("caret", self.state.entity_id())),
+                target,
+                crate::motion::Transition::new(duration),
+                window,
+                cx,
+            )
+        });
+        self.state
+            .read(cx)
+            .caret_presentation
+            .set(if focused && show_cursor {
+                painted
+            } else {
+                None
+            });
         if focused && show_cursor {
-            for cursor_info in prepaint.cursor_infos_with_scroll() {
-                window.paint_quad(fill(cursor_info.bounds, editor_style.caret));
+            for (ix, cursor_info) in cursors.iter().enumerate() {
+                let caret = if ix == 0 {
+                    painted.unwrap_or(cursor_info.bounds)
+                } else {
+                    cursor_info.bounds
+                };
+                window.paint_quad(fill(caret, editor_style.caret));
             }
         }
 
@@ -2655,6 +2750,28 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         self.paint_mouse_listeners(&prepaint.hitbox, window, cx);
     }
+}
+
+/// `text` with the space before each wrap at `width` changed to a line break.
+/// The text keeps its length, so its runs stay valid.
+fn wrap_placeholder(text: &str, font: Font, font_size: Pixels, width: Pixels, cx: &App) -> String {
+    if width <= px(0.) {
+        return text.to_owned();
+    }
+    let mut wrapper = cx.text_system().line_wrapper(font, font_size);
+    let mut bytes = text.as_bytes().to_vec();
+    let mut offset = 0;
+    for line in text.split('\n') {
+        for boundary in wrapper.wrap_line(&[LineFragment::text(line)], width) {
+            // A boundary is the start of the next line.
+            let ix = offset + boundary.ix;
+            if ix > 0 && bytes[ix - 1] == b' ' {
+                bytes[ix - 1] = b'\n';
+            }
+        }
+        offset += line.len() + 1;
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_owned())
 }
 
 /// Split placeholder text into display lines and trim runs to each line.

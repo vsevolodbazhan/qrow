@@ -1,6 +1,7 @@
 use crate::support::{
     MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot,
-    assert_tooltip_header_center, bounds_of, connection_row, label, labelled,
+    assert_tooltip_header_center, assert_tooltip_status_below, bounds_of, connection_row, label,
+    labelled,
 };
 use gpui_kit::component::{ActiveTheme, input::EMPHASIS_OPACITY};
 use gpui_kit::test::TestWindowExt;
@@ -17,12 +18,25 @@ use std::{
 };
 
 #[gpui_kit::test]
+fn run_is_a_compact_text_button(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    app.update(cx, |window, _| {
+        let button = bounds_of(window, "run");
+        assert_eq!(label(window, "run").as_deref(), Some("Run"));
+        assert!(
+            button.size.width <= button.size.height * 2.,
+            "Run should fit its text without space for a leading icon: {button:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.type_sql(cx, "SELECT '日本語😀;';\nSELECT 2;\n-- trailing ;\n");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     assert!(
         app.logs(cx)
             .contains("Choose a connection before running SQL.")
@@ -30,8 +44,8 @@ fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestApp
     assert_eq!(app.credentials.reads(), 0);
 
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
     assert!(app.logs(cx).contains("Run one statement at a time."));
     assert_eq!(app.credentials.reads(), 0);
 
@@ -41,7 +55,7 @@ fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestApp
     {
         if text.is_empty() {
             app.click(cx, "sql-editor");
-            app.press(cx, "cmd-a");
+            app.press(cx, "secondary-a");
             app.press(cx, "backspace");
             app.wait_until(
                 cx,
@@ -52,7 +66,7 @@ fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestApp
         } else {
             app.type_sql(cx, text);
         }
-        app.press(cx, "cmd-enter");
+        app.press(cx, "secondary-enter");
         assert_eq!(
             app.logs(cx)
                 .matches("Write or select a SQL statement first.")
@@ -79,12 +93,12 @@ fn run_uses_a_multiline_cursor_statement_and_rejects_gaps(cx: &mut TestAppContex
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     for _ in 0..3 {
         app.press(cx, "down");
     }
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_status(cx, "Error");
     assert!(app.logs(cx).contains("SELECT\n  'middle😀;' AS value;"));
     assert!(!app.logs(cx).contains("SELECT 3;"));
@@ -93,7 +107,7 @@ fn run_uses_a_multiline_cursor_statement_and_rejects_gaps(cx: &mut TestAppContex
     // The blank line and standalone comment do not submit another query.
     for line in [4, 5, 7] {
         app.click(cx, "sql-editor");
-        app.press(cx, "cmd-a");
+        app.press(cx, "secondary-a");
         app.press(cx, "left");
         for _ in 0..line {
             app.press(cx, "down");
@@ -123,7 +137,7 @@ fn the_editor_tints_the_statement_that_run_uses(cx: &mut TestAppContext) {
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
 
     // Statements that share a line tint only their own text.
@@ -158,7 +172,7 @@ fn the_editor_tints_the_statement_that_run_uses(cx: &mut TestAppContext) {
         app.press(cx, "down");
     }
     assert_eq!(run_tint(&app, cx), vec![]);
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.press(cx, "down");
     assert_eq!(run_tint(&app, cx), vec![]);
@@ -172,6 +186,67 @@ fn the_editor_tints_the_statement_that_run_uses(cx: &mut TestAppContext) {
     let last = run_tint(&app, cx);
     assert_eq!(last.len(), 1, "{last:?}");
     assert_eq!(last[0].top(), first[0].top() + first[0].size.height);
+}
+
+#[gpui_kit::test]
+fn the_tint_follows_large_sql_after_its_background_index(cx: &mut TestAppContext) {
+    // More than 64 KB, so the statements index on a background thread.
+    let sql = format!(
+        "SELECT 1; SELECT 2;\n{}",
+        "SELECT 'filler';\n".repeat(5_000)
+    );
+    let mut tab = SavedTab::new(1, None);
+    tab.sql = sql.clone();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    // Ctrl+Up does not move to the start on Linux.
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
+    app.settle(cx);
+    let first = run_tint(&app, cx);
+    assert_eq!(first.len(), 1, "{first:?}");
+
+    for _ in 0.."SELECT 1; ".len() {
+        app.press(cx, "right");
+    }
+    app.settle(cx);
+    let second = run_tint(&app, cx);
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert!(second[0].left() > first[0].right());
+
+    // An edit indexes the new text, and the tint follows it to the
+    // statement after the inserted one.
+    app.update(cx, |window, cx| window.input("SELECT 9; ", cx));
+    app.settle(cx);
+    let edited = run_tint(&app, cx);
+    assert_eq!(edited.len(), 1, "{edited:?}");
+    assert_eq!(edited[0].top(), second[0].top());
+    assert!(edited[0].left() > second[0].left(), "{edited:?} {second:?}");
+
+    // Small SQL indexes at once. Then large SQL that indexed on a
+    // background thread before comes back, and the tint follows it again.
+    let paste = |app: &TestApp, cx: &mut TestAppContext, text: &str| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_owned()));
+        app.press(cx, "secondary-a");
+        app.press(cx, "secondary-v");
+        app.settle(cx);
+    };
+    paste(&app, cx, &sql);
+    paste(&app, cx, "SELECT 5;");
+    paste(&app, cx, &sql);
+    // Ctrl+Up does not move to the start on Linux.
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
+    app.settle(cx);
+    let restored = run_tint(&app, cx);
+    assert_eq!(restored.len(), 1, "{restored:?}");
+    assert_eq!(restored[0].top(), first[0].top());
 }
 
 /// The rows that the run tint paints in the SQL editor, top to bottom.
@@ -241,12 +316,12 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
         app.update(cx, |window, cx| window.hover(id, cx));
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
-        app.update(cx, |window, cx| {
+        app.update(cx, |window, _| {
             assert_eq!(
                 label(window, "status-tooltip-status").as_deref(),
                 Some("Connecting")
             );
-            assert_tooltip_header_center(window, cx, "status-tooltip-status");
+            assert_tooltip_status_below(window);
         });
     };
     hover(format!("query-status-{query}"), &app, cx);
@@ -286,8 +361,8 @@ fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_theme(cx: &mu
         app.hover_labelled(cx, &name);
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
-        app.update(cx, |window, cx| {
-            assert_tooltip_header_center(window, cx, "status-tooltip-status");
+        app.update(cx, |window, _| {
+            assert_tooltip_status_below(window);
             assert_eq!(
                 label(window, "status-tooltip-title").as_deref(),
                 Some(name.as_str())
@@ -409,7 +484,11 @@ fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppConte
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
-            Some("⇧⌘U")
+            Some(if cfg!(target_os = "macos") {
+                "⇧⌘U"
+            } else {
+                "Ctrl+Shift+U"
+            })
         );
         let title = bounds_of(window, "status-tooltip-title");
         let shortcut = bounds_of(window, "status-tooltip-shortcut");
@@ -442,7 +521,11 @@ fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppConte
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
-            Some("⇧⌘U")
+            Some(if cfg!(target_os = "macos") {
+                "⇧⌘U"
+            } else {
+                "Ctrl+Shift+U"
+            })
         );
     });
     app.click(cx, "toggle-activity");
@@ -632,6 +715,8 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
+    // Show tab shows when the pointer is over its row.
+    app.hover_labelled(cx, "Show tab");
     app.click_labelled(cx, "Show tab");
     app.wait_gone(cx, "activity");
     app.wait_until(cx, "the first tab", Duration::from_secs(10), |_, _| {
@@ -639,7 +724,7 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     });
 
     // A closed tab keeps its entries without a link.
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
@@ -666,7 +751,7 @@ fn activity_does_not_read_a_hidden_tabs_local_error(cx: &mut TestAppContext) {
     let idle_button = app.update(cx, |window, _| bounds_of(window, "toggle-activity"));
     assert_eq!(idle_button.size.width, idle_button.size.height);
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.click(cx, "toggle-activity");
     app.wait_for(cx, "activity");
     app.dispatch(cx, qrow::ui::RunQuery);
@@ -723,8 +808,8 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     let sql = "select '日本語😀;' as value from t;\n\n-- between;\nselect 2 from t;";
     app.type_sql(cx, sql);
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     let formatted = "SELECT '日本語😀;' AS value\nFROM t;\n\n-- between;\nSELECT 2\nFROM t;";
     app.wait_until(
         cx,
@@ -732,12 +817,12 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
         Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql == formatted,
     );
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(cx, "format undo", Duration::from_secs(10), |_, _| {
         app.saved().tabs[0].sql == sql
     });
     app.press(cx, "left");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "alt-secondary-l");
     let first_only = "SELECT '日本語😀;' AS value\nFROM t;\n\n-- between;\nselect 2 from t;";
     app.wait_until(
         cx,
@@ -748,8 +833,8 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
     assert_eq!(app.credentials.reads(), 0);
 
     app.type_sql(cx, "SET x=1");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_label(
         cx,
         "Some SQL statements are not supported by the formatter.",
@@ -760,10 +845,15 @@ fn format_sql_selection_cursor_notices_and_undo(cx: &mut TestAppContext) {
             window.find("format-sql-notice").role(),
             Some(gpui_kit::Role::Alert)
         );
+        // Every toast leads with a title that names the event.
+        let notice = window.within("format-sql-notice");
+        let title = notice.find("title");
+        assert_eq!(title.label(), Some("Could not format all SQL"));
+        assert!(notice.find("detail").bounds().top() >= title.bounds().bottom());
     });
     app.type_sql(cx, "select ${hivevar:dt}");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_label(cx, "Some SQL could not be formatted safely.");
     assert_eq!(app.saved().tabs[0].sql, "select ${hivevar:dt}");
 }
@@ -777,7 +867,7 @@ fn format_sql_keeps_selections_inside_quoted_tokens(cx: &mut TestAppContext) {
         "SELECT 1 /*select 1*/",
     ] {
         app.type_sql(cx, sql);
-        app.press(cx, "cmd-a");
+        app.press(cx, "secondary-a");
         app.press(cx, "left");
         for _ in 0..sql.find("select 1").unwrap() {
             app.press(cx, "right");
@@ -785,7 +875,7 @@ fn format_sql_keeps_selections_inside_quoted_tokens(cx: &mut TestAppContext) {
         for _ in 0..8 {
             app.press(cx, "shift-right");
         }
-        app.press(cx, "alt-cmd-l");
+        app.press(cx, "alt-secondary-l");
         app.wait_label(cx, "Some SQL could not be formatted safely.");
         assert_eq!(app.saved().tabs[0].sql, sql);
     }
@@ -798,8 +888,8 @@ fn format_sql_uses_editor_style(cx: &mut TestAppContext) {
     workspace.settings.editor_tab_size = 4;
     let app = TestApp::launch(cx, workspace);
     app.type_sql(cx, "SELECT a FROM t WHERE x=1 AND y=2");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "editor format style",
@@ -810,10 +900,10 @@ fn format_sql_uses_editor_style(cx: &mut TestAppContext) {
         },
     );
     app.type_sql(cx, "select 1;\n\nselect 2;");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.press(cx, "down");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "alt-secondary-l");
     app.wait_label(
         cx,
         "Move the cursor into a SQL statement or select SQL to format.",
@@ -839,8 +929,8 @@ fn format_real_trino_queries_and_undo(cx: &mut TestAppContext) {
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
-    app.press(cx, "alt-cmd-l");
+    app.press(cx, "secondary-a");
+    app.press(cx, "alt-secondary-l");
     app.wait_until(
         cx,
         "formatted Trino cost queries",
@@ -854,7 +944,7 @@ fn format_real_trino_queries_and_undo(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert!(window.try_find("format-sql-notice").is_none())
     });
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_until(
         cx,
         "undo Trino cost formatting",
@@ -900,24 +990,24 @@ fn format_sql_uses_each_connections_quoting_rules(cx: &mut TestAppContext) {
             },
         );
         app.click(cx, "sql-editor");
-        app.press(cx, "cmd-a");
+        app.press(cx, "secondary-a");
         app.press(cx, "left");
-        app.press(cx, "alt-cmd-l");
+        app.press(cx, "alt-secondary-l");
         app.wait_until(
             cx,
             "dialect cursor formatting",
             Duration::from_secs(10),
             |_, _| app.saved().tabs[0].sql == format!("{expected}\n\nselect 2;"),
         );
-        app.press(cx, "cmd-z");
+        app.press(cx, "secondary-z");
         app.wait_until(
             cx,
             "dialect format undo",
             Duration::from_secs(10),
             |_, _| app.saved().tabs[0].sql == original,
         );
-        app.press(cx, "cmd-a");
-        app.press(cx, "alt-cmd-l");
+        app.press(cx, "secondary-a");
+        app.press(cx, "alt-secondary-l");
         app.wait_until(
             cx,
             "dialect selection formatting",
@@ -926,4 +1016,331 @@ fn format_sql_uses_each_connections_quoting_rules(cx: &mut TestAppContext) {
         );
         assert_eq!(app.credentials.reads(), 0);
     }
+}
+
+#[gpui_kit::test]
+fn a_long_log_draws_only_the_rows_near_the_view_and_selects_its_sql(cx: &mut TestAppContext) {
+    use gpui_kit::{
+        InputEvent as _, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+        point,
+    };
+
+    // The demo runs the query of its first tab at launch; each run adds
+    // the submitted query and its outcome.
+    let app = TestApp::launch_demo(cx);
+    app.click(cx, "output-panel-tab");
+    app.wait_for(cx, "output-count");
+    app.wait_status(cx, "Complete");
+    for _ in 0..30 {
+        let before = app.update(cx, |window, _| label(window, "output-count"));
+        app.click(cx, "sql-editor");
+        app.dispatch(cx, qrow::ui::RunQuery);
+        app.wait_until(cx, "a new entry", Duration::from_secs(20), |window, _| {
+            label(window, "output-count") != before
+        });
+        // A submission adds a log entry before its outcome. Wait for both,
+        // so the final outcome cannot scroll the row during the drag.
+        app.wait_status(cx, "Complete");
+        app.click(cx, "output-panel-tab");
+    }
+    app.settle(cx);
+    let sql_blocks = |window: &gpui_kit::Window| {
+        crate::support::elements(window)
+            .into_iter()
+            .filter(|element| element.path().last() == Some(&"sql-text".into()))
+            .collect::<Vec<_>>()
+    };
+    // A frame lays out and paints the rows on screen and a band around
+    // them, not all 30 queries, so a drag stays fast in a long log.
+    let (drawn, sql) = app.update(cx, |window, _| {
+        let blocks = sql_blocks(window);
+        // A visible snapshot can be partly clipped. Both drag endpoints
+        // must stay inside the Logs viewport.
+        let viewport = window.find("output-scroll").bounds();
+        let visible = blocks
+            .iter()
+            .rfind(|block| {
+                let bounds = block.bounds();
+                block.visible()
+                    && bounds.top() >= viewport.top()
+                    && bounds.bottom() <= viewport.bottom()
+            })
+            .unwrap()
+            .bounds();
+        (blocks.len(), visible)
+    });
+    assert!(drawn < 30, "The Logs drew {drawn} of 30 queries");
+    // Select within the text lane; the SQL block also contains buttons.
+    let start = point(sql.left() + px(4.), sql.top() + px(4.));
+    let end = point(sql.right() - px(4.), sql.bottom() - px(4.));
+    app.update(cx, |window, cx| {
+        window.activate_window();
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position: start,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: end,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position: end,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        let selected = gpui_kit::base::TextSelection::selected_text(window, cx);
+        assert!(
+            selected.contains("COUNT(*) AS departures"),
+            "The drag must select the logged SQL: {selected:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn activity_shows_a_cut_tab_name_in_full_on_hover(cx: &mut TestAppContext) {
+    use gpui_kit::{InputEvent as _, MouseMoveEvent};
+
+    const LONG: &str = "Модели Ривенделла по стоимости";
+    // The demo runs the query of "Route overview" at launch. A rename and
+    // another run add entries under the long name.
+    let app = TestApp::launch_demo(cx);
+    app.wait_for(cx, "toggle-activity");
+    app.context_menu_labelled(cx, "Route overview");
+    app.choose(cx, "popup-menu", "Rename…");
+    app.fill(cx, "rename-tab-name", LONG);
+    app.click(cx, "rename-tab");
+    app.wait_gone(cx, "rename-tab-name");
+    app.click(cx, "sql-editor");
+    app.dispatch(cx, qrow::ui::RunQuery);
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    let source = |window: &gpui_kit::Window, name: &str| {
+        crate::support::elements(window)
+            .into_iter()
+            .filter(|element| {
+                element.path().last() == Some(&"source".into()) && element.label() == Some(name)
+            })
+            .find(|element| element.visible())
+            .map(|element| element.bounds())
+    };
+    app.wait_until(
+        cx,
+        "an entry of the long name",
+        Duration::from_secs(20),
+        |window, _| source(window, LONG).is_some(),
+    );
+    let hover = |app: &TestApp, cx: &mut TestAppContext, name: &str| {
+        app.update(cx, |window, cx| {
+            let bounds = source(window, name).expect(name);
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position: bounds.center(),
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, _| window.try_find("tooltip").is_some())
+    };
+    assert!(
+        hover(&app, cx, LONG),
+        "A cut tab name must show its tooltip"
+    );
+    // Leaving the name hides the tooltip; a name that fits shows none.
+    assert!(
+        !hover(&app, cx, "Route overview"),
+        "A name that fits must not show a tooltip"
+    );
+}
+
+#[gpui_kit::test]
+fn a_long_logged_query_shows_five_lines_until_it_expands(cx: &mut TestAppContext) {
+    use gpui_kit::ClipboardItem;
+
+    // The demo runs its 11-line query at launch.
+    let app = TestApp::launch_demo(cx);
+    app.click(cx, "output-panel-tab");
+    let found = |window: &gpui_kit::Window, id: &'static str| {
+        crate::support::elements(window)
+            .into_iter()
+            .find(|element| element.path().last() == Some(&id.into()))
+    };
+    app.wait_until(
+        cx,
+        "a logged query",
+        Duration::from_secs(10),
+        |window, _| found(window, "sql").is_some(),
+    );
+    let (collapsed, line) = app.update(cx, |window, _| {
+        assert!(
+            found(window, "sql-fade").is_some(),
+            "A long query must fade out"
+        );
+        (
+            found(window, "sql").unwrap().bounds().size.height,
+            window.line_height(),
+        )
+    });
+    app.click_labelled(cx, "Expand query");
+    app.wait_until(
+        cx,
+        "the full query",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "Collapse query").is_some(),
+    );
+    app.update(cx, |window, _| {
+        assert!(
+            found(window, "sql-fade").is_none(),
+            "A full query has no fade"
+        );
+        let expanded = found(window, "sql").unwrap().bounds().size.height;
+        assert!(
+            expanded > collapsed + line * 4.,
+            "The full query {expanded:?} must show more lines than {collapsed:?}"
+        );
+    });
+    app.click_labelled(cx, "Collapse query");
+    app.wait_until(
+        cx,
+        "the short query",
+        Duration::from_secs(10),
+        |window, _| found(window, "sql-fade").is_some(),
+    );
+    // Copy query copies all of the SQL, also the lines that a collapsed block hides.
+    cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+    app.click_labelled(cx, "Copy query");
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert!(
+        copied.starts_with("-- A quick look at route performance")
+            && copied.trim_end().ends_with("ORDER BY departures DESC;"),
+        "Copy query must copy the full SQL: {copied:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn logged_query_buttons_stay_inside_code_and_clear_of_long_sql(cx: &mut TestAppContext) {
+    use qrow::logs::{LogEvent, LogKind};
+
+    let app = TestApp::launch(cx, Workspace::default());
+    let sql = format!(
+        "SELECT '{}' AS value\n-- two\n-- three\n-- four\n-- five\n-- six",
+        "長い列名".repeat(80)
+    );
+    app.qrow
+        .update(cx, |qrow, cx| {
+            qrow.record_tab_logs(
+                0,
+                vec![LogEvent::new(
+                    None,
+                    Severity::Info,
+                    LogKind::Submitted,
+                    format!("Submitted query:\n{sql}"),
+                )],
+                cx,
+            );
+        })
+        .unwrap();
+    app.click(cx, "output-panel-tab");
+    let check = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| {
+            let block = bounds_of(window, "sql");
+            let text = bounds_of(window, "sql-text");
+            let copy = crate::support::elements(window)
+                .into_iter()
+                .find(|element| element.path().last() == Some(&("output-copy-query", 0_u64).into()))
+                .unwrap()
+                .bounds();
+            let expand = crate::support::elements(window)
+                .into_iter()
+                .find(|element| element.path().last() == Some(&("output-expand", 0_u64).into()))
+                .unwrap()
+                .bounds();
+            assert!(copy.left() >= block.left() && expand.right() <= block.right());
+            assert!(copy.top() >= block.top() && copy.bottom() <= block.bottom());
+            assert!(expand.top() >= block.top() && expand.bottom() <= block.bottom());
+            assert!(
+                text.right() <= copy.left(),
+                "SQL must leave a separate button lane"
+            );
+            assert!(block.right() <= window.viewport_size().width);
+        });
+    };
+    for width in [1280., 900.] {
+        cx.simulate_window_resize(app.window, gpui_kit::size(px(width), px(820.)));
+        app.settle(cx);
+        check(&app, cx);
+        app.click(cx, ("output-copy-query", 0_u64));
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(sql.clone())
+        );
+        app.click(cx, ("output-expand", 0_u64));
+        app.settle(cx);
+        check(&app, cx);
+        app.click(cx, ("output-expand", 0_u64));
+        app.settle(cx);
+    }
+}
+
+#[gpui_kit::test]
+fn toggle_comment_selection_cursor_undo_and_redo(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    let sql = "  SELECT '日本語😀';\n\n\tSELECT 2;";
+    app.type_sql(cx, sql);
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-/");
+    let commented = "  -- SELECT '日本語😀';\n\n\t-- SELECT 2;";
+    app.wait_until(cx, "commented lines", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == commented
+    });
+    app.press(cx, "secondary-/");
+    app.wait_until(cx, "uncommented lines", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.press(cx, "secondary-z");
+    app.wait_until(cx, "undo uncomment", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == commented
+    });
+    #[cfg(target_os = "macos")]
+    app.press(cx, "secondary-shift-z");
+    #[cfg(not(target_os = "macos"))]
+    app.press(cx, "ctrl-y");
+    app.wait_until(cx, "redo uncomment", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
+    app.press(cx, "secondary-/");
+    app.wait_until(cx, "current line only", Duration::from_secs(10), |_, _| {
+        app.saved().tabs[0].sql == "  -- SELECT '日本語😀';\n\n\tSELECT 2;"
+    });
+    assert_eq!(app.credentials.reads(), 0);
 }

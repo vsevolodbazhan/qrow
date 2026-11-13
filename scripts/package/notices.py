@@ -7,9 +7,9 @@ import sys
 
 target = os.environ.get("CARGO_BUILD_TARGET")
 if not target:
-    target = subprocess.check_output(["rustc", "-vV"], text=True).split("host: ")[1].splitlines()[0]
+    target = subprocess.check_output(["rustc", "-vV"], text=True, encoding="utf-8").split("host: ")[1].splitlines()[0]
 metadata = json.loads(subprocess.check_output(
-    ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", target], text=True
+    ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", target], text=True, encoding="utf-8"
 ))
 resolved = {node["id"] for node in metadata["resolve"]["nodes"]}
 sections = ["Qrow: third-party license notices\n\nIncludes target dependencies and build/test dependencies.\n"]
@@ -24,5 +24,5 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
     if package.get("license_file"):
         files.add(root / package["license_file"])
     for path in sorted(files):
-        sections.append(f"\n--- {path.name} ---\n{path.read_text(errors='replace')}\n")
-pathlib.Path(sys.argv[1]).write_text("".join(sections))
+        sections.append(f"\n--- {path.name} ---\n{path.read_text(encoding='utf-8', errors='replace')}\n")
+pathlib.Path(sys.argv[1]).write_text("".join(sections), encoding="utf-8")

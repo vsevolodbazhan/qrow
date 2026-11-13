@@ -74,6 +74,15 @@ impl Credentials for MemoryCredentials {
     }
 }
 
+/// The label of the saved-file action that shows a file in the file manager.
+pub const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else if cfg!(windows) {
+    "Reveal in File Explorer"
+} else {
+    "Open Containing Folder"
+};
+
 /// The observed element `id` inside the scope `scope`, when both exist in the
 /// last frame. `TestWindowExt::within` panics when its scope is absent.
 pub fn find_in(
@@ -210,7 +219,16 @@ pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &s
     use gpui_kit::component::ActiveTheme;
     use gpui_kit::{FontWeight, Styled, div};
 
-    let mut title = div().text_sm().font_weight(FontWeight::MEDIUM);
+    // The title is medium weight only above secondary lines.
+    let title_weight = if ["status", "detail", "metadata"]
+        .iter()
+        .any(|part| window.try_find(format!("status-tooltip-{part}")).is_some())
+    {
+        FontWeight::MEDIUM
+    } else {
+        FontWeight::NORMAL
+    };
+    let mut title = div().text_sm().font_weight(title_weight);
     let mut secondary_style = div().text_xs();
     let center = |id: &str, font_size, weight, window: &mut Window| {
         let mut style = window.text_style();
@@ -240,7 +258,7 @@ pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &s
     let title_center = center(
         "status-tooltip-title",
         title.style().text.font_size.unwrap(),
-        FontWeight::MEDIUM,
+        title_weight,
         window,
     );
     let secondary_center = center(
@@ -253,6 +271,18 @@ pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &s
         title_center, secondary_center,
         "{secondary} visual center differs from the title's first line"
     );
+}
+
+/// The status is a secondary line below the title, at the same left edge.
+pub fn assert_tooltip_status_below(window: &Window) {
+    let title = bounds_of(window, "status-tooltip-title");
+    let status = bounds_of(window, "status-tooltip-status");
+    assert_eq!(
+        title.left(),
+        status.left(),
+        "status starts at the title edge"
+    );
+    assert!(status.top() >= title.bottom(), "status is below the title");
 }
 
 /// Connection fields stack without an extra blank spacer between rows.
@@ -691,6 +721,7 @@ pub struct TestApp {
     pub credentials: Arc<MemoryCredentials>,
     pub sign_ins: Option<SignIns>,
     workspace: PathBuf,
+    actions: Mutex<Vec<String>>,
     _directory: TempDir,
 }
 
@@ -722,6 +753,24 @@ impl TestApp {
             Some(workspace),
             credentials,
             Some(sign_ins),
+            None,
+        )
+    }
+
+    /// Opens Qrow on `workspace` with this update setup, for example a local
+    /// release server.
+    pub fn launch_with_updates(
+        cx: &mut TestAppContext,
+        workspace: Workspace,
+        updates: qrow::update::Setup,
+    ) -> Self {
+        Self::open(
+            cx,
+            tempfile::tempdir().unwrap(),
+            Some(workspace),
+            MemoryCredentials::default(),
+            None,
+            Some(updates),
         )
     }
 
@@ -733,6 +782,7 @@ impl TestApp {
             None,
             MemoryCredentials::default(),
             None,
+            None,
         )
     }
 
@@ -743,7 +793,7 @@ impl TestApp {
         workspace: Workspace,
         credentials: MemoryCredentials,
     ) -> Self {
-        Self::open(cx, directory, Some(workspace), credentials, None)
+        Self::open(cx, directory, Some(workspace), credentials, None, None)
     }
 
     /// Opens Qrow on `workspace` in `directory`, or on the demo data.
@@ -753,6 +803,38 @@ impl TestApp {
         workspace: Option<Workspace>,
         credentials: MemoryCredentials,
         sign_ins: Option<SignIns>,
+        updates: Option<qrow::update::Setup>,
+    ) -> Self {
+        let file = workspace.map(|workspace| {
+            serde_json::to_value(Workspace {
+                version: WORKSPACE_VERSION,
+                ..workspace
+            })
+            .unwrap()
+        });
+        Self::open_file(cx, directory, file, credentials, sign_ins, updates)
+    }
+
+    /// Opens Qrow on a workspace file with this JSON, which can have fields
+    /// that the model does not know, like a file of a newer version.
+    pub fn launch_json(cx: &mut TestAppContext, file: serde_json::Value) -> Self {
+        Self::open_file(
+            cx,
+            tempfile::tempdir().unwrap(),
+            Some(file),
+            MemoryCredentials::default(),
+            None,
+            None,
+        )
+    }
+
+    fn open_file(
+        cx: &mut TestAppContext,
+        directory: TempDir,
+        file: Option<serde_json::Value>,
+        credentials: MemoryCredentials,
+        sign_ins: Option<SignIns>,
+        updates: Option<qrow::update::Setup>,
     ) -> Self {
         // Worker and saver threads wake the UI. GPUI's deterministic
         // scheduler rejects wakes from other threads unless parking is allowed.
@@ -765,14 +847,13 @@ impl TestApp {
         });
         let path = directory.path().join("workspace.json");
         let credentials = Arc::new(credentials);
-        let environment = match workspace {
-            Some(workspace) => {
-                let workspace = Workspace {
-                    version: WORKSPACE_VERSION,
-                    ..workspace
-                };
-                std::fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
-                let environment = Environment::isolated(path.clone(), credentials.clone());
+        let environment = match file {
+            Some(file) => {
+                std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+                let mut environment = Environment::isolated(path.clone(), credentials.clone());
+                if let Some(updates) = updates {
+                    environment = environment.with_updates(updates);
+                }
                 match &sign_ins {
                     Some(sign_ins) => environment.with_sign_ins(
                         sign_ins.tokens.clone() as Arc<dyn TokenStore>,
@@ -796,13 +877,27 @@ impl TestApp {
             credentials,
             sign_ins,
             workspace: path,
+            actions: Mutex::new(Vec::new()),
             _directory: directory,
         };
         app.update(cx, |window, cx| window.render_frame(cx));
         app
     }
 
+    /// Runs `f` in the window that has the keyboard: the Settings window
+    /// while it is open, else the main window.
     pub fn update<R>(
+        &self,
+        cx: &mut TestAppContext,
+        f: impl FnOnce(&mut Window, &mut App) -> R,
+    ) -> R {
+        let target = self.settings_window(cx).unwrap_or(self.window);
+        cx.update_window(target, |_, window, cx| f(window, cx))
+            .expect("Qrow window closed")
+    }
+
+    /// Runs `f` in the main window, also while Settings is open.
+    pub fn update_main<R>(
         &self,
         cx: &mut TestAppContext,
         f: impl FnOnce(&mut Window, &mut App) -> R,
@@ -811,10 +906,43 @@ impl TestApp {
             .expect("Qrow window closed")
     }
 
+    /// The Settings window, while it is open.
+    pub fn settings_window(&self, cx: &mut TestAppContext) -> Option<AnyWindowHandle> {
+        let qrow = self.qrow.upgrade()?;
+        cx.read(|cx| qrow.read(cx).settings_window())
+    }
+
     pub fn click(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
         let id = id.into();
+        self.record(format!("click {id:?}"));
         self.reveal(cx, &id);
         self.update(cx, |window, cx| window.click(id, cx));
+    }
+
+    /// Waits for an enabled, visible control, then dispatches input once.
+    /// Use `click` directly when testing disabled controls.
+    pub fn click_ready(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.reveal(cx, &id);
+        self.wait_until(
+            cx,
+            &format!("{id:?} to accept input"),
+            Duration::from_secs(10),
+            |window, _| {
+                window
+                    .try_find(id.clone())
+                    .is_some_and(|element| element.visible() && element.is_clickable())
+            },
+        );
+        self.click(cx, id);
+    }
+
+    fn record(&self, action: String) {
+        let mut actions = self.actions.lock().unwrap();
+        if actions.len() == 100 {
+            actions.remove(0);
+        }
+        actions.push(action);
     }
 
     /// Scrolls the element `id` into view when it is in the window but out of
@@ -855,12 +983,14 @@ impl TestApp {
     }
 
     pub fn press(&self, cx: &mut TestAppContext, key: &str) {
+        self.record(format!("press {key}"));
         self.update(cx, |window, cx| window.press(key, cx));
     }
 
-    /// Dispatches an action as a key binding or a menu item does.
+    /// Dispatches an action as a key binding or a menu item does, in the main
+    /// window, which handles the application commands.
     pub fn dispatch(&self, cx: &mut TestAppContext, action: impl Action) {
-        self.update(cx, |window, cx| {
+        self.update_main(cx, |window, cx| {
             window.dispatch_action(action.boxed_clone(), cx)
         });
     }
@@ -899,7 +1029,7 @@ impl TestApp {
     pub fn fill_labelled(&self, cx: &mut TestAppContext, text: &str, value: &str) {
         self.click_labelled(cx, text);
         self.update(cx, |window, cx| {
-            window.press("cmd-a", cx);
+            window.press("secondary-a", cx);
             if value.is_empty() {
                 window.press("backspace", cx);
             } else {
@@ -1008,11 +1138,40 @@ impl TestApp {
         self.wait_until(cx, text, Duration::from_secs(10), |window, _| {
             labelled(window, text).is_some()
         });
-        self.update(cx, |window, cx| {
-            let element = labelled(window, text).unwrap();
-            pointer_click(window, &element, MouseButton::Right, cx);
+        self.open_context_menu(cx, text, |window, cx| {
+            if let Some(element) = labelled(window, text) {
+                pointer_click(window, &element, MouseButton::Right, cx);
+            }
         });
-        self.wait_for(cx, "popup-menu");
+    }
+
+    /// Right-clicks with `click` until a context menu opens. A click while a
+    /// dialog closes reaches its fading backdrop and opens nothing, so the
+    /// helper clicks again when no menu opened after about half a second.
+    fn open_context_menu(
+        &self,
+        cx: &mut TestAppContext,
+        what: &str,
+        mut click: impl FnMut(&mut Window, &mut App),
+    ) {
+        self.update(cx, |window, cx| click(window, cx));
+        let menu = ElementId::Name("popup-menu".into());
+        let mut polls = 0;
+        self.wait_until(
+            cx,
+            &format!("the context menu of {what}"),
+            Duration::from_secs(10),
+            |window, cx| {
+                if present(window, &menu) {
+                    return true;
+                }
+                polls += 1;
+                if polls % 10 == 0 {
+                    click(window, cx);
+                }
+                false
+            },
+        );
     }
 
     /// Scrolls the container of `target` with the wheel until `target` is
@@ -1167,11 +1326,11 @@ impl TestApp {
         self.wait_until(cx, prefix, Duration::from_secs(10), |window, _| {
             labelled_starting(window, prefix).len() == 1
         });
-        self.update(cx, |window, cx| {
-            let element = labelled_starting(window, prefix).remove(0);
-            pointer_click(window, &element, MouseButton::Right, cx);
+        self.open_context_menu(cx, prefix, |window, cx| {
+            if let Some(element) = labelled_starting(window, prefix).into_iter().next() {
+                pointer_click(window, &element, MouseButton::Right, cx);
+            }
         });
-        self.wait_for(cx, "popup-menu");
     }
 
     /// Clicks the first element whose label starts with `prefix`.
@@ -1220,8 +1379,8 @@ impl TestApp {
     /// Right-clicks `id` and waits for its context menu.
     pub fn context_menu(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
         let id = id.into();
-        self.update(cx, |window, cx| window.right_click(id, cx));
-        self.wait_for(cx, "popup-menu");
+        let what = format!("{id:?}");
+        self.open_context_menu(cx, &what, |window, cx| window.right_click(id.clone(), cx));
     }
 
     /// Clicks the item labelled `item` in the open menu `scope`.
@@ -1244,7 +1403,7 @@ impl TestApp {
         self.reveal(cx, &id.into());
         self.update(cx, |window, cx| {
             window.click(id, cx);
-            window.press("cmd-a", cx);
+            window.press("secondary-a", cx);
             if text.is_empty() {
                 window.press("backspace", cx);
             } else {
@@ -1265,10 +1424,13 @@ impl TestApp {
     /// Replaces the SQL of the active tab by typing into the editor, and waits
     /// until Qrow saves it.
     pub fn type_sql(&self, cx: &mut TestAppContext, sql: &str) {
+        self.click(cx, "sql-editor");
         self.update(cx, |window, cx| {
-            window.click("sql-editor", cx);
-            window.press("cmd-a", cx);
-            window.input(sql, cx);
+            // Finish the click's update before typing. Scoped input also
+            // verifies that the editor, rather than the result, owns focus.
+            let mut editor = window.within("sql-editor");
+            editor.press("secondary-a", cx);
+            editor.input(sql, cx);
         });
         self.wait_until(
             cx,
@@ -1343,11 +1505,15 @@ impl TestApp {
         timeout: Duration,
         mut predicate: impl FnMut(&mut Window, &mut App) -> bool,
     ) {
+        self.record(format!("wait for {what} ({timeout:?})"));
         let deadline = Instant::now() + timeout;
+        let mut last_poll = Instant::now();
         loop {
-            // Advance the test clock for Qrow's polling timers, then run the
-            // tasks that real threads woke.
-            cx.executor().advance_clock(Duration::from_millis(50));
+            // Bridge polling timers to elapsed wall time. Poll frequency must
+            // not accelerate application timeouts while real I/O is pending.
+            let now = Instant::now();
+            cx.executor().advance_clock(now.duration_since(last_poll));
+            last_poll = now;
             cx.run_until_parked();
             let ready = self.update(cx, |window, cx| {
                 window.render_frame(cx);
@@ -1363,9 +1529,13 @@ impl TestApp {
                         .filter_map(|element| element.label().map(str::to_owned))
                         .collect::<Vec<_>>()
                 });
+                // The status bar text is no labelled element. It names the
+                // error that replaced the awaited state.
+                let status = self.update(cx, |_, cx| self.status(cx));
                 let saved = std::fs::read_to_string(&self.workspace).unwrap_or_default();
+                let actions = self.actions.lock().unwrap();
                 panic!(
-                    "Timed out after {timeout:?} waiting for {what}.\nLabels: {labels:?}\nSaved workspace: {saved}"
+                    "Timed out after {timeout:?} waiting for {what}.\nStatus: {status}\nActions: {actions:?}\nLabels: {labels:?}\nSaved workspace: {saved}"
                 );
             }
             std::thread::sleep(Duration::from_millis(10));

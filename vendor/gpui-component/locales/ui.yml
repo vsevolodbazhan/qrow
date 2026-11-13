@@ -255,6 +255,11 @@ List:
     zh-TW: 搜尋...
     it: Ricerca...
 Input:
+  Clear:
+    en: Clear
+    zh-CN: 清除
+    zh-HK: 清除
+    zh-TW: 清除
   Decrement:
     en: Decrement
     zh-CN: 减少

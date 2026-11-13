@@ -185,6 +185,14 @@ pub trait TableDelegate: Sized + 'static {
     fn load_more(&mut self, window: &mut Window, cx: &mut Context<TableState<Self>>) {}
 
     /// Render the last empty column, default to empty.
+    /// Qrow: the background that the cell at `row_ix` and `col_ix` draws over
+    /// its row, if any, such as a selection tint. A column that an edge of
+    /// the table cuts fades into the row in this color.
+    fn cell_background(&self, row_ix: usize, col_ix: usize, cx: &App) -> Option<gpui::Hsla> {
+        let _ = (row_ix, col_ix, cx);
+        None
+    }
+
     fn render_last_empty_col(
         &mut self,
         window: &mut Window,

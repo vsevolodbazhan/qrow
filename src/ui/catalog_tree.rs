@@ -12,15 +12,17 @@ use crate::catalog::{
     Catalog, CatalogConfig, CatalogIdentity, CatalogWorker, Event as CatalogEvent, RelationKind,
     Scope, Seed, Status, catalog_key, qualified_name,
 };
+use crate::model::SearchScope;
 use gpui_kit::assets::IconName as AssetIconName;
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::base::{
-    ElementExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState,
+    ElementExt as _, FocusableExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem,
+    TreeState,
 };
 use gpui_kit::component::{
-    Icon,
+    Icon, Selectable as _,
     button::ButtonCustomVariant,
     h_flex,
+    menu::DropdownMenu as _,
     scroll::ScrollableElement as _,
     spinner::Spinner,
     text::{TextView, TextViewState, TextViewStyle},
@@ -38,14 +40,18 @@ use std::{
 pub(super) const MAX_SEARCH_MATCHES: usize = 500;
 /// Separates the names in a node ID. Names cannot contain it in practice.
 const SEPARATOR: char = '\u{1f}';
+/// The most connections that the search scope menu shows without a scroll.
+const SCOPE_MENU_CONNECTIONS: usize = 10;
 /// The height of every tree row. The virtual list needs one height for all rows.
 const ROW_HEIGHT: f32 = 30.;
 /// The gap between the columns of a tree row, in pixels at UI scale 1.
 const ROW_GAP: f32 = 4.;
 /// The trailing lane shared by catalog status icons and the header action.
-const STATUS_SLOT_WIDTH: f32 = 28.;
+pub(super) const STATUS_SLOT_WIDTH: f32 = 28.;
 /// The opacity of the accent fill of the current connection row.
 const CURRENT_CONNECTION_FILL: f32 = 0.18;
+/// The key of the width that all tree rows share.
+const ROW_WIDTH_KEY: &str = "tree-row-width";
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
@@ -215,15 +221,23 @@ pub(super) struct CatalogTree {
     /// The list around the tree. The tree shows its selection only while
     /// it has the focus.
     focus: FocusHandle,
-    /// The workspace file. Caches are next to it. `None` keeps them in memory.
-    workspace: Option<PathBuf>,
+    /// The local data directory of the caches. `None` keeps them in memory.
+    local: Option<PathBuf>,
+    /// The connections that the search looks in.
+    pub(super) scope: SearchScope,
+    /// The connection of the active tab when the tree was last built.
+    built_for: Option<Uuid>,
 }
 
 impl CatalogTree {
-    pub(super) fn new(workspace: Option<PathBuf>, window: &mut Window, cx: &mut App) -> Self {
+    pub(super) fn new(local: Option<PathBuf>, window: &mut Window, cx: &mut App) -> Self {
         Self {
             state: cx.new(|cx| TreeState::new(cx)),
-            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search relations…")),
+            search: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Search…")
+                    .clean_on_escape()
+            }),
             expanded: HashSet::new(),
             collapsed: HashSet::new(),
             connections: HashMap::new(),
@@ -234,7 +248,9 @@ impl CatalogTree {
             widths: Rc::new(RefCell::new(HashMap::new())),
             tips: Rc::new(RefCell::new(HashMap::new())),
             focus: cx.focus_handle(),
-            workspace,
+            local,
+            scope: SearchScope::All,
+            built_for: None,
         }
     }
 
@@ -349,12 +365,48 @@ fn child_id(parent: &SharedString, suffix: &str) -> SharedString {
     format!("{parent}{SEPARATOR}{suffix}").into()
 }
 
+/// Whether `name` contains `needle`, which is in lowercase, ignoring case
+/// like `str::to_lowercase`. ASCII text needs no allocation.
+fn contains_lowercase(name: &str, needle: &str) -> bool {
+    if !(name.is_ascii() && needle.is_ascii()) {
+        return name.to_lowercase().contains(needle);
+    }
+    let (name, needle) = (name.as_bytes(), needle.as_bytes());
+    let Some(&first) = needle.first() else {
+        return true;
+    };
+    name.len() >= needle.len()
+        && (0..=name.len() - needle.len()).any(|start| {
+            name[start].to_ascii_lowercase() == first
+                && name[start..start + needle.len()].eq_ignore_ascii_case(needle)
+        })
+}
+
+/// Whether the relation `name` in `schema` contains `search`, which is in
+/// lowercase, also in its qualified names. `schema_matches` tells whether
+/// `schema` contains it.
+fn relation_matches(search: &str, schema: &str, schema_matches: bool, name: &str) -> bool {
+    if schema_matches || contains_lowercase(name, search) {
+        return true;
+    }
+    // In ASCII names, a search without a dot or a backtick matches a
+    // qualified name only in its schema or its relation name. Other scripts
+    // can lowercase differently in the qualified name, like the final sigma.
+    if !search.contains(['.', '`']) && schema.is_ascii() && name.is_ascii() {
+        return false;
+    }
+    contains_lowercase(&format!("{schema}.{name}"), search)
+        || contains_lowercase(&qualified_name(schema, name), search)
+}
+
 /// Builds the tree items and their nodes.
 struct Builder<'a> {
     tree: &'a CatalogTree,
     /// The dbt resources of the tables of each connection.
-    dbt: &'a HashMap<Uuid, super::dbt::DbtLookup>,
+    dbt: &'a HashMap<Uuid, Rc<super::dbt::DbtLookup>>,
     search: String,
+    /// The connection of the active tab, for the Current connection scope.
+    current: Option<Uuid>,
     nodes: HashMap<SharedString, Node>,
     matches: usize,
 }
@@ -428,52 +480,67 @@ impl Builder<'_> {
     }
 
     fn matches(&self, name: &str) -> bool {
-        name.to_lowercase().contains(&self.search)
+        contains_lowercase(name, &self.search)
     }
 
-    fn matches_relation(&self, schema: &str, name: &str) -> bool {
-        self.matches(name)
-            || self.matches(&format!("{schema}.{name}"))
-            || self.matches(&qualified_name(schema, name))
+    /// Whether the relation `name` in `schema` matches, also by its
+    /// qualified names. `schema_matches` tells whether `schema` matches.
+    fn matches_relation(&self, schema: &str, schema_matches: bool, name: &str) -> bool {
+        relation_matches(&self.search, schema, schema_matches, name)
     }
 
-    fn connection(&mut self, profile: &Profile) -> TreeItem {
+    /// The row of a connection, or `None` when a search hides it: the
+    /// connection is outside the search scope or has no matches.
+    fn connection(&mut self, profile: &Profile) -> Option<TreeItem> {
         let id = connection_id(profile.id);
+        let searching = !self.search.is_empty();
+        if searching && !self.tree.scope.includes(profile.id, self.current) {
+            return None;
+        }
+        // A connection that matches by name shows all its schemas.
+        let filtered = searching && !self.matches(&profile.name);
+        let browses = profile.catalog.browses();
+        if filtered
+            && !(browses
+                && self.tree.catalog(profile.id).is_some_and(|catalog| {
+                    catalog.schemas.iter().any(|(name, schema)| {
+                        self.matches(name)
+                            || schema.relations.as_ref().is_some_and(|relations| {
+                                relations
+                                    .keys()
+                                    .any(|r| self.matches_relation(name, false, r))
+                            })
+                    })
+                }))
+        {
+            return None;
+        }
         let item = self.add(
             id.clone(),
             profile.name.clone(),
             Node::Connection(profile.id),
         );
         // A connection without schema browsing is a row without children.
-        if !profile.catalog.browses() {
-            return item;
+        if !browses {
+            return Some(item);
         }
-        let catalog = self.tree.catalog(profile.id);
-        let searching = !self.search.is_empty();
-        let has_matches = searching
-            && catalog.is_some_and(|catalog| {
-                catalog.schemas.iter().any(|(name, schema)| {
-                    self.matches(name)
-                        || schema.relations.as_ref().is_some_and(|relations| {
-                            relations.keys().any(|r| self.matches_relation(name, r))
-                        })
-                })
-            });
-        let expanded = if searching {
-            has_matches && self.search_expands(&id) || self.is_expanded(&id) && !has_matches
+        let expanded = if filtered {
+            self.search_expands(&id)
         } else {
             self.is_expanded(&id)
         };
-        self.folder(item, expanded, profile.id, |builder| {
-            builder.connection_children(profile.id, &id, has_matches)
-        })
+        Some(self.folder(item, expanded, profile.id, |builder| {
+            builder.connection_children(profile.id, &id, filtered)
+        }))
     }
 
+    /// The schemas of a connection. A `filtered` connection shows only the
+    /// schemas that match the search, or that contain matching relations.
     fn connection_children(
         &mut self,
         profile: Uuid,
         id: &SharedString,
-        has_matches: bool,
+        filtered: bool,
     ) -> Vec<TreeItem> {
         let mut children = vec![];
         let status = self.tree.status(profile).cloned().unwrap_or_default();
@@ -505,22 +572,22 @@ impl Builder<'_> {
         } else if catalog.schemas.is_empty() {
             children.push(self.notice(id, profile, "No schemas", Tone::Muted, None));
         }
-        let searching = !self.search.is_empty();
         for (name, schema) in &catalog.schemas {
-            // The match limit applies only to a search. Without a search,
-            // every name matches the empty text.
-            if searching && self.matches >= MAX_SEARCH_MATCHES {
+            // The match limit applies only to a filtered connection.
+            if filtered && self.matches >= MAX_SEARCH_MATCHES {
                 break;
             }
-            let schema_matches = self.matches(name);
-            let relation_matches = searching
+            let schema_matches = !filtered || self.matches(name);
+            let relation_matches = !schema_matches
                 && schema.relations.as_ref().is_some_and(|relations| {
-                    relations.keys().any(|r| self.matches_relation(name, r))
+                    relations
+                        .keys()
+                        .any(|r| self.matches_relation(name, false, r))
                 });
-            if searching && !schema_matches && !relation_matches {
+            if !schema_matches && !relation_matches {
                 continue;
             }
-            if searching && schema_matches {
+            if filtered && schema_matches {
                 self.matches += 1;
             }
             let item_id = schema_id(profile, name);
@@ -538,7 +605,7 @@ impl Builder<'_> {
             );
             // A search shows only the matching relations of a schema that
             // matches through them. A schema that matches by name shows all.
-            let filtered = searching && !schema_matches;
+            let filtered = filtered && !schema_matches;
             let expanded = if filtered {
                 self.search_expands(&item_id)
             } else {
@@ -548,13 +615,9 @@ impl Builder<'_> {
                 builder.schema_children(catalog, profile, name, &item_id, filtered)
             }));
         }
-        if searching && children.is_empty() {
-            let text = if has_matches {
-                "Search limit reached"
-            } else {
-                "No matches"
-            };
-            children.push(self.notice(id, profile, text, Tone::Muted, None));
+        // A filtered connection has matches, so the limit hides them all.
+        if filtered && children.is_empty() {
+            children.push(self.notice(id, profile, "Search limit reached", Tone::Muted, None));
         }
         children
     }
@@ -586,7 +649,7 @@ impl Builder<'_> {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
                 for (name, relation) in relations {
-                    if filtered && !self.matches_relation(schema, name) {
+                    if filtered && !self.matches_relation(schema, false, name) {
                         continue;
                     }
                     if filtered {
@@ -799,19 +862,36 @@ impl Qrow {
         Rc::make_mut(&mut self.catalog.seen_errors)
             .retain(|profile, _| self.profiles.iter().any(|item| item.id == *profile));
         let search = self.catalog.search.read(cx).value().trim().to_lowercase();
+        let searching = !search.is_empty();
         let dbt = self.dbt_lookups();
+        let current = self.active_profile();
         let mut builder = Builder {
             tree: &self.catalog,
             dbt: &dbt,
             search,
+            current,
             nodes: HashMap::new(),
             matches: 0,
         };
         let mut items: Vec<TreeItem> = self
             .profiles
             .iter()
-            .map(|profile| builder.connection(profile))
+            .filter_map(|profile| builder.connection(profile))
             .collect();
+        if searching && items.is_empty() {
+            let text = "No matches".to_owned();
+            let notice = builder.add(
+                "search-empty".into(),
+                text.clone(),
+                Node::Notice {
+                    profile: Uuid::nil(),
+                    text,
+                    tone: Tone::Muted,
+                    refresh: None,
+                },
+            );
+            items.push(notice);
+        }
         if builder.matches >= MAX_SEARCH_MATCHES {
             // The first row, so it shows without a scroll to the end.
             let text =
@@ -829,6 +909,7 @@ impl Qrow {
             items.insert(0, notice);
         }
         self.catalog.nodes = Rc::new(builder.nodes);
+        self.catalog.built_for = current;
         self.catalog.state.update(cx, |state, cx| {
             let selected = state.selected_item().map(|item| item.id.clone());
             state.set_items(items, cx);
@@ -848,10 +929,10 @@ impl Qrow {
     /// The cache file of the catalog `key`, or `None` to keep it in memory.
     fn catalog_cache(&self, key: Uuid) -> Option<PathBuf> {
         self.catalog
-            .workspace
+            .local
             .as_deref()
             .filter(|_| self.saver.is_some() && !self.demo)
-            .map(|workspace| storage::catalog_path(workspace, key))
+            .map(|local| storage::catalog_cache_path(local, key))
     }
 
     /// Find the catalog key of each connection again.
@@ -1103,16 +1184,65 @@ impl Qrow {
         cx.notify();
     }
 
-    /// A search reads every cache, so it can find tables in any connection.
+    /// A search reads the cache of each connection in its scope, so it can
+    /// find tables in any of them.
     pub(super) fn catalog_search_changed(&mut self, cx: &mut Context<Self>) {
         self.catalog.collapsed.clear();
-        if !self.catalog.search.read(cx).value().trim().is_empty() {
-            for index in 0..self.profiles.len() {
-                self.ensure_catalog(self.profiles[index].id);
-            }
-        }
+        self.ensure_search_catalogs(cx);
         self.rebuild_catalog_tree(cx);
         cx.notify();
+    }
+
+    /// Read the caches of the connections that the search looks in.
+    pub(super) fn ensure_search_catalogs(&mut self, cx: &App) {
+        if self.catalog.search.read(cx).value().trim().is_empty() {
+            return;
+        }
+        let current = self.active_profile();
+        for index in 0..self.profiles.len() {
+            let profile = self.profiles[index].id;
+            if self.catalog.scope.includes(profile, current) {
+                self.ensure_catalog(profile);
+            }
+        }
+    }
+
+    /// Change the connections that the search looks in, and save the choice.
+    pub(super) fn set_search_scope(&mut self, scope: SearchScope, cx: &mut Context<Self>) {
+        let mut scope = scope;
+        scope.sanitize(&self.profiles);
+        if scope == self.catalog.scope {
+            return;
+        }
+        self.catalog.scope = scope;
+        self.catalog_search_changed(cx);
+        self.changed(cx);
+    }
+
+    /// With the Current connection scope, search the connection of the
+    /// active tab after it changes.
+    pub(super) fn sync_search_scope(&mut self, cx: &mut Context<Self>) {
+        if self.catalog.scope == SearchScope::Current
+            && self.catalog.built_for != self.active_profile()
+        {
+            self.ensure_search_catalogs(cx);
+            self.rebuild_catalog_tree(cx);
+        }
+    }
+
+    /// The tooltip of the search scope button: the control and its value.
+    fn search_scope_label(&self) -> String {
+        let value = match &self.catalog.scope {
+            SearchScope::All => "All connections".to_owned(),
+            SearchScope::Current => "Current connection".to_owned(),
+            SearchScope::Connections(ids) if ids.len() == 1 => self
+                .profiles
+                .iter()
+                .find(|profile| ids.contains(&profile.id))
+                .map_or_else(|| "1 connection".to_owned(), |profile| profile.name.clone()),
+            SearchScope::Connections(ids) => format!("{} connections", ids.len()),
+        };
+        format!("Search in: {value}")
     }
 
     /// Bring the catalog workers in line with the saved profiles and shared
@@ -1329,6 +1459,13 @@ impl Qrow {
         self.catalog_node_names(self.catalog.node(&state.selected_item()?.id)?)
     }
 
+    /// Whether keyboard focus is within the catalog tree. The Linux
+    /// application menu uses it to pick the Copy action.
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn catalog_has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.catalog.focus.contains_focused(window, cx)
+    }
+
     /// Copies the name of the selected row, like Copy Name in its menu.
     pub(super) fn copy_catalog_name(&mut self, cx: &mut Context<Self>) {
         if let Some((name, _)) = self.selected_catalog_names(cx) {
@@ -1399,8 +1536,10 @@ impl Qrow {
                 ..
             } => {
                 let (profile, unique_id) = (*profile, dbt.unique_id.clone());
+                let origin = id;
                 Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.open_dbt_details(profile, &unique_id, window, cx)
+                    this.open_dbt_details(profile, &unique_id, window, cx);
+                    this.dbt_details_origin = Some(origin.clone());
                 }))
             }
             _ => None,
@@ -1418,8 +1557,10 @@ impl Qrow {
             }
             _ => None,
         };
-        self.open_context_menu(
+        let tree = self.catalog.state.read(cx).focus_handle(cx);
+        self.open_context_menu_from(
             position,
+            Some(tree),
             move |menu, _, _| {
                 let menu = match refresh {
                     Some(refresh) => menu.item(
@@ -1439,8 +1580,17 @@ impl Qrow {
                 };
                 let menu = if has_commands { menu.separator() } else { menu };
                 let menu = menu
-                    .item(PopupMenuItem::new(copy_label).on_click(copy))
-                    .item(PopupMenuItem::new("Insert into editor").on_click(insert));
+                    // The actions only show the shortcuts: a click runs the handler.
+                    .item(
+                        PopupMenuItem::new(copy_label)
+                            .action(Box::new(CopyCatalogName))
+                            .on_click(copy),
+                    )
+                    .item(
+                        PopupMenuItem::new("Insert into editor")
+                            .action(Box::new(InsertCatalogName))
+                            .on_click(insert),
+                    );
                 match details {
                     Some(details) => menu
                         .separator()
@@ -1481,9 +1631,71 @@ impl Qrow {
         )
     }
 
+    /// The button after the search field that picks the connections to
+    /// search. It shows as selected when the search skips connections. It
+    /// is as wide as the status slots and centered under New connection.
+    fn search_scope_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let size = self.ui_px(STATUS_SLOT_WIDTH);
+        let scope = self.catalog.scope.clone();
+        let profiles: Vec<(Uuid, String)> = self
+            .profiles
+            .iter()
+            .map(|profile| (profile.id, profile.name.clone()))
+            .collect();
+        let weak = cx.weak_entity();
+        let label = self.search_scope_label();
+        Button::new("search-scope")
+            .ghost()
+            .small()
+            .w(size)
+            .h(size)
+            .flex_shrink_0()
+            .icon(AssetIconName::ListFilter)
+            .selected(!scope.is_all())
+            .accessibility_label(label.clone())
+            .tooltip(label)
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                let set = |scope: SearchScope| {
+                    let weak = weak.clone();
+                    move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                        let _ =
+                            weak.update(cx, |this, cx| this.set_search_scope(scope.clone(), cx));
+                    }
+                };
+                // A scrollable menu always shows its scrollbar, so only a long
+                // list of connections scrolls.
+                let mut menu = menu
+                    .scrollable(profiles.len() > SCOPE_MENU_CONNECTIONS)
+                    .max_h(px(400.))
+                    .item(
+                        PopupMenuItem::new("All connections")
+                            .checked(scope.is_all())
+                            .on_click(set(SearchScope::All)),
+                    )
+                    .item(
+                        PopupMenuItem::new("Current connection")
+                            .checked(scope == SearchScope::Current)
+                            .on_click(set(SearchScope::Current)),
+                    )
+                    .separator();
+                for (id, name) in &profiles {
+                    let mut toggled = scope.clone();
+                    toggled.toggle(*id);
+                    menu = menu.item(
+                        PopupMenuItem::new(name.clone())
+                            .checked(
+                                matches!(&scope, SearchScope::Connections(ids) if ids.contains(id)),
+                            )
+                            .on_click(set(toggled)),
+                    );
+                }
+                menu
+            })
+    }
+
     /// The Connections sidebar: its header, the search, and the tree.
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let action_size = self.ui_px(STATUS_SLOT_WIDTH);
+        let action_size = self.ui_px(workspace_view::SIDEBAR_HEADER_ACTION_SIZE);
         let active = self.active_profile();
         let rows: Rc<HashMap<Uuid, ConnectionRow>> = Rc::new(
             self.profiles
@@ -1569,25 +1781,43 @@ impl Qrow {
             // A tooltip would cover the open menu.
             menu_open: self.menu.is_some(),
             focused: self.catalog.focus.contains_focused(window, cx),
+            relation_types: RefCell::default(),
         });
         let tree = self.catalog.state.clone();
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
+                // The header actions have the same size and place as the
+                // Sign-ins header actions.
                 self.sidebar_header("Connections", cx).child(
-                    Button::new("add-connection")
-                        .ghost()
-                        .small()
-                        .w(action_size)
-                        .h(action_size)
-                        .flex_shrink_0()
-                        .icon(IconName::Plus)
-                        .accessibility_label("New connection")
-                        .tooltip("New connection…")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.edit_profile(Profile::default(), true, window, cx)
-                        })),
+                    self.sidebar_header_actions()
+                        .child(
+                            Button::new("paste-connection")
+                                .ghost()
+                                .small()
+                                .w(action_size)
+                                .h(action_size)
+                                .icon(gpui_kit::assets::IconName::ClipboardPaste)
+                                .accessibility_label("Paste connection")
+                                .tooltip("Paste connection")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.paste_connection(&PasteConnection, window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("add-connection")
+                                .ghost()
+                                .small()
+                                .w(action_size)
+                                .h(action_size)
+                                .icon(IconName::Plus)
+                                .accessibility_label("New connection")
+                                .tooltip("New connection")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.edit_profile(Profile::default(), true, window, cx)
+                                })),
+                        ),
                 ),
             )
             .when(!self.profiles.is_empty(), |el| {
@@ -1595,21 +1825,27 @@ impl Qrow {
                 // button share a centerline. The bottom padding stands in for
                 // the toolbar border. The first row adds its own top padding,
                 // so the tree moves up by that padding and the border to make
-                // the gap below the search box match the gap above it.
+                // the gap below the search box match the gap above it. The
+                // scope button uses the padding and the gap of the header, so
+                // it is under New connection.
                 el.child(
                     h_flex()
                         .h_12()
                         .px_2()
+                        .gap_1()
                         .pb_px()
                         .mb(-(px(1.) + window.rem_size() * 0.125))
                         .flex_shrink_0()
                         .child(
                             Input::new(&self.catalog.search)
+                                .smooth_caret(self.settings.editor_smooth_caret)
+                                .flex_1()
+                                .min_w_0()
                                 .focus_ring(false)
-                                .small()
-                                .w_full()
-                                .aria_label("Search relations"),
-                        ),
+                                .cleanable(true)
+                                .aria_label("Search connections and relations"),
+                        )
+                        .child(self.search_scope_button(cx)),
                 )
             })
             .child(
@@ -1661,6 +1897,10 @@ struct RowContext {
     menu_open: bool,
     /// Whether the tree has the focus. A selection without it is not shown.
     focused: bool,
+    /// For each relation in this frame, whether the data types of all its
+    /// columns fit beside their names. The columns of one relation show
+    /// their types together or not at all.
+    relation_types: RefCell<HashMap<(Uuid, String, String), bool>>,
 }
 
 impl RowContext {
@@ -1703,6 +1943,61 @@ impl RowContext {
     }
 
     /// Records the laid-out width of the label `key` during prepaint.
+    /// Records the bottom edge of the row `key`, so that its context menu
+    /// opens below the row and leaves its label visible. The probe covers
+    /// its parent, which must be positioned.
+    fn bottom_probe(&self, key: SharedString) -> impl IntoElement + use<> {
+        let widths = self.widths.clone();
+        canvas(
+            move |bounds, _, _| {
+                let mut widths = widths.borrow_mut();
+                if widths.len() >= MAX_LABEL_WIDTHS && !widths.contains_key(&key) {
+                    widths.clear();
+                }
+                widths.insert(key, bounds.bottom());
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Where the context menu of the row `key` opens for a click at
+    /// `position`: below the row, at the pointer column.
+    fn menu_position(&self, key: SharedString) -> impl Fn(Point<Pixels>) -> Point<Pixels> + use<> {
+        let widths = self.widths.clone();
+        move |position| {
+            let bottom = widths.borrow().get(&key).copied();
+            point(position.x, bottom.unwrap_or(position.y).max(position.y))
+        }
+    }
+
+    /// Records the width of the tree rows under `key`. Rows decide from it
+    /// whether a detail fits, so a new width, for example after a window or
+    /// sidebar resize, renders the tree again with the current width.
+    fn record_row_width(
+        &self,
+        key: SharedString,
+    ) -> impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + use<> {
+        let widths = self.widths.clone();
+        let weak = self.weak.clone();
+        move |bounds, _, cx| {
+            let width = bounds.size.width;
+            let changed = {
+                let mut widths = widths.borrow_mut();
+                if widths.len() >= MAX_LABEL_WIDTHS && !widths.contains_key(&key) {
+                    widths.clear();
+                }
+                widths.insert(key, width) != Some(width)
+            };
+            if changed {
+                cx.defer(move |cx| {
+                    let _ = weak.update(cx, |_, cx| cx.notify());
+                });
+            }
+        }
+    }
+
     fn record_width(
         &self,
         key: SharedString,
@@ -1835,7 +2130,7 @@ fn render_entry(
     entry: &TreeEntry,
     state: TreeEntryState,
     context: &RowContext,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let RowContext {
@@ -1981,6 +2276,29 @@ fn render_entry(
             if text.is_empty() {
                 return div().h(ui_px(ROW_HEIGHT)).into_any_element();
             }
+            // A search notice has no parent row. Its text starts where the
+            // text of the search field starts: the search row and the tree
+            // have the same side padding, and the field adds its border and
+            // its padding.
+            if profile.is_nil() {
+                return h_flex()
+                    .id(id.clone())
+                    .w_full()
+                    .h(ui_px(ROW_HEIGHT))
+                    .pl(px(1.) + gpui_kit::component::Size::Medium.input_px())
+                    .pr(ui_px(STATUS_SLOT_WIDTH / 2.))
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        div()
+                            .id(child_id(&id, "label"))
+                            .test_support()
+                            .min_w_0()
+                            .truncate()
+                            .child(text.clone()),
+                    )
+                    .into_any_element();
+            }
             return notice_row(&id, *profile, text, *tone, refresh.clone(), weak, scale, cx)
                 .pl(indent)
                 .into_any_element();
@@ -2016,6 +2334,69 @@ fn render_entry(
     let menu_id = id.clone();
     let schema_detail = matches!(node, Node::Schema { .. });
     let detail = detail.filter(|_| !schema_detail || (!loading && error_status.is_none()));
+    let leaf = matches!(node, Node::Column { .. });
+    // The name comes first: a data type or a dbt kind shows only when it fits
+    // next to the full name. The width of the row does not depend on the
+    // detail, so the choice is stable from frame to frame.
+    // All rows of the tree have the same width, so one value serves every
+    // row, also a row that scrolls into view.
+    let row_key = SharedString::new_static(ROW_WIDTH_KEY);
+    let row_width = context.widths.borrow().get(&row_key).copied();
+    let fits = |label: &str, detail: &str| {
+        let Some(row_width) = row_width else {
+            return true;
+        };
+        let measure = |text: &str, rems: f32| {
+            let run = TextRun {
+                len: text.len(),
+                font: font(cx.theme().font_family.clone()),
+                color: cx.theme().foreground,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            window
+                .text_system()
+                .shape_line(
+                    SharedString::from(text.to_owned()),
+                    window.rem_size() * rems,
+                    &[run],
+                    None,
+                )
+                .width
+        };
+        let lanes = if leaf { 1. } else { 2. };
+        let fixed = indent + ui_px((16. + ROW_GAP) * lanes + ROW_GAP + 8.);
+        fixed + measure(label, 0.875) + measure(detail, 0.75) <= row_width
+    };
+    let detail = detail.filter(|detail| match node {
+        _ if schema_detail => true,
+        Node::Column {
+            profile,
+            schema,
+            relation,
+            ..
+        } => {
+            let key = (*profile, schema.clone(), relation.clone());
+            if let Some(fit) = context.relation_types.borrow().get(&key) {
+                return *fit;
+            }
+            let fit = context.nodes.values().all(|sibling| match sibling {
+                Node::Column {
+                    profile: p,
+                    schema: s,
+                    relation: r,
+                    name,
+                    data_type,
+                    ..
+                } if p == profile && s == schema && r == relation => fits(name, data_type),
+                _ => true,
+            });
+            context.relation_types.borrow_mut().insert(key, fit);
+            fit
+        }
+        _ => fits(&label, detail),
+    });
     // Show the tooltip only when it adds text: a name that the row cuts, a
     // comment, or an error.
     let label_key = child_id(&id, "label");
@@ -2044,10 +2425,10 @@ fn render_entry(
     if let Some(text) = &tooltip {
         context.record_tip(&id, text.clone(), truncation);
     }
-    let leaf = matches!(node, Node::Column { .. });
     let row = h_flex()
         .id(id.clone())
         .size_full()
+        .on_prepaint(context.record_row_width(row_key))
         .pl(indent)
         .when(!schema_detail && !loading && error_status.is_none(), |el| {
             el.pr_2()
@@ -2083,7 +2464,9 @@ fn render_entry(
                 .id(label_key.clone())
                 .test_support()
                 .relative()
-                .flex_1()
+                // The name keeps its width before the detail does: the detail
+                // shrinks much faster when the row is short.
+                .flex_grow(1.)
                 .min_w_0()
                 .truncate()
                 .child(label)
@@ -2095,7 +2478,10 @@ fn render_entry(
                     .id(detail_key.clone())
                     .test_support()
                     .relative()
-                    .flex_shrink_0()
+                    .when(!schema_detail, |el| {
+                        el.min_w(ui_px(DETAIL_MIN_WIDTH)).flex_shrink(DETAIL_SHRINK)
+                    })
+                    .when(schema_detail, |el| el.flex_shrink_0())
                     .max_w(ui_px(120.))
                     .truncate()
                     .when(schema_detail, |el| {
@@ -2125,6 +2511,7 @@ fn render_entry(
                             ui_px(STATUS_SLOT_WIDTH),
                             label,
                             show_activity(profile, weak),
+                            cx,
                         )
                         .child(DotStatus::Error.dot(cx)),
                     )
@@ -2139,8 +2526,9 @@ fn render_entry(
         .on_mouse_down(MouseButton::Left, focus)
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
+            let menu_position = context.menu_position(child_id(&id, "bottom"));
             move |event, window, cx| {
-                let (id, position) = (menu_id.clone(), event.position);
+                let (id, position) = (menu_id.clone(), menu_position(event.position));
                 let _ = weak.update(cx, |_, cx| {
                     cx.defer_in(window, move |this, window, cx| {
                         this.open_catalog_menu(id, position, window, cx)
@@ -2149,10 +2537,12 @@ fn render_entry(
             }
         });
     div()
+        .relative()
         .w_full()
         .h(ui_px(ROW_HEIGHT))
         .py_0p5()
         .child(row)
+        .child(context.bottom_probe(child_id(&id, "bottom")))
         .into_any_element()
 }
 
@@ -2294,6 +2684,11 @@ pub(super) fn error_summary(error: &str) -> String {
 }
 
 /// The hint under a dbt description that the tooltip cuts.
+/// How much faster the detail of a row shrinks than its name.
+const DETAIL_SHRINK: f32 = 24.;
+/// The narrowest detail, which still shows a letter and the ellipsis.
+const DETAIL_MIN_WIDTH: f32 = 24.;
+
 const DESCRIPTION_HINT: &str = "Open dbt details to see the full description.";
 
 /// The tooltip of a schema, table, or column row.
@@ -2366,15 +2761,24 @@ fn status_lane(id: SharedString, width: Pixels) -> Stateful<Div> {
 
 /// A button for one status dot at the end of a catalog row. The header and
 /// the list have the same side padding, so a slot as wide as the header's New
-/// Connection button at the row end has the same centerline.
+/// Connection button at the row end has the same centerline. Like the row's
+/// own button, the slot paints no fill: a hover square on the row fill looks
+/// like a second, misaligned highlight.
 fn status_slot(
     id: String,
     width: Pixels,
     label: String,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
 ) -> Button {
     Button::new(SharedString::from(id))
-        .ghost()
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(transparent_black())
+                .hover(transparent_black())
+                .active(transparent_black())
+                .shadow(false),
+        )
         .small()
         .h_full()
         .w(width)
@@ -2576,6 +2980,7 @@ fn connection_row(
                             slot_width,
                             label,
                             show_activity(id, weak),
+                            cx,
                         )
                         .child(status.dot(cx)),
                     )
@@ -2589,10 +2994,13 @@ fn connection_row(
         .when(keyboard_position, |el| el.child(focus_outline(cx)))
         .child(connection_drop_target(id, false, weak.clone()))
         .child(connection_drop_target(id, true, weak.clone()))
+        .child(context.bottom_probe(SharedString::from(format!("{entry}:bottom"))))
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
+            let menu_position =
+                context.menu_position(SharedString::from(format!("{entry}:bottom")));
             move |event, window, cx| {
-                let position = event.position;
+                let position = menu_position(event.position);
                 let _ = weak.update(cx, |_, cx| {
                     cx.defer_in(window, move |this, window, cx| {
                         this.open_profile_menu(id, position, window, cx)
@@ -2678,6 +3086,30 @@ mod tests {
         let long = "x".repeat(ERROR_SUMMARY_CHARS + 1);
         let summary = error_summary(&long);
         assert_eq!(summary, format!("{}…", "x".repeat(ERROR_SUMMARY_CHARS)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn search_text_matches_names_in_any_case_without_allocation_for_ascii() {
+        assert!(contains_lowercase("Sales_Orders", "orders"));
+        assert!(contains_lowercase("SALES_ORDERS", "s_o"));
+        assert!(contains_lowercase("orders", ""));
+        assert!(!contains_lowercase("ord", "orders"));
+        assert!(!contains_lowercase("sales", "x"));
+        // Other scripts use the full lowercase conversion.
+        assert!(contains_lowercase("Заказы_2024", "заказы"));
+        assert!(contains_lowercase("ÉVÉNEMENTS", "événements"));
+        assert!(!contains_lowercase("Заказы", "orders"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn relations_match_by_name_and_by_qualified_name() {
+        assert!(relation_matches("orders", "sales", false, "Orders"));
+        assert!(relation_matches("anything", "sales", true, "orders"));
+        assert!(relation_matches("sales.ord", "Sales", false, "Orders"));
+        assert!(relation_matches("`sales`.`o", "sales", false, "orders"));
+        assert!(!relation_matches("events", "sales", false, "orders"));
+        // The schema alone lowercases to `ος`, the qualified name to `οσ.`.
+        assert!(relation_matches("σ", "ΟΣ", false, "orders"));
     }
 
     #[::core::prelude::v1::test]

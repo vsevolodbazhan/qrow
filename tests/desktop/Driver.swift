@@ -1275,12 +1275,13 @@ final class Driver {
         try require(abs(bubbleRight - composerRight) <= 1,
                     "The user bubble ends \(composerRight - bubbleRight) points left of the composer")
     }
-    /// The application menu opens Settings. The headless UI tests check the
-    /// settings themselves.
+    /// The application menu opens the Settings window, and Cmd+W closes it.
+    /// Settings apply as they change, so the window has no Save button. The
+    /// headless UI tests check the settings themselves.
     func testSettingsMenu() throws {
         try selectApplicationMenuItem("Settings…")
         try waitSettingValue("Theme", "System")
-        try press("Save")
+        key(13, flags: .maskCommand) // Cmd+W closes the Settings window.
         try waitGone("UI Scale")
         print("PASS: The application menu opens and closes Settings")
     }
@@ -1288,7 +1289,7 @@ final class Driver {
         key(15, flags: .maskCommand)
         _ = try wait("Model: Synthetic Model", timeout: 20)
         if find("Search conversations") != nil {
-            try press("Toggle conversation list")
+            try press("Hide conversations")
             try waitGone("Search conversations", timeout: 5)
         }
         try fill("Assistant Message", "Explain SELECT 1")
@@ -1296,7 +1297,7 @@ final class Driver {
         _ = try wait("I can help with this query", timeout: 20)
         for close in ["cancel", "escape", "delete"] {
             // The dropdown opens on pointer input around the button.
-            try press("Conversation Actions", pointer: true)
+            try press("Conversation actions", pointer: true)
             try click(try wait("Delete…"))
             _ = try waitExact("Delete", timeout: 10, role: kAXButtonRole)
             switch close {
@@ -1317,7 +1318,7 @@ final class Driver {
         key(15, flags: .maskCommand) // Cmd+R opens the docked assistant.
         _ = try wait("Model: Synthetic Model", timeout: 20)
         if find("Search conversations") != nil {
-            try press("Toggle conversation list")
+            try press("Hide conversations")
             try waitGone("Search conversations", timeout: 5)
         }
         try checkInlineCodeMessages()
@@ -1339,7 +1340,9 @@ final class Driver {
             try fill(label, value)
         }
         try press("Save")
-        _ = try wait("Qrow E2E")
+        // The form's Name input already contains this text. Wait for the
+        // sidebar button, which appears after the asynchronous Keychain save.
+        _ = try waitExact("Qrow E2E", role: kAXButtonRole)
         try waitGone("Cancel")
         // The worker reads the password from Keychain for the session.
         try press("Qrow E2E")

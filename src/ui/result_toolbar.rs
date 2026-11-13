@@ -7,7 +7,7 @@ const LOADED_ROWS: &str = "Loaded Rows";
 const COLUMNS: &str = "Columns";
 const QUERY_DURATION: &str = "Query Duration";
 
-struct ResultSummary {
+pub(super) struct ResultSummary {
     range: String,
     loaded: usize,
     columns: usize,
@@ -23,7 +23,11 @@ impl ResultSummary {
             range: if range.is_empty() {
                 "0 rows".into()
             } else {
-                format!("Rows {}–{}", range.start + 1, range.end)
+                format!(
+                    "Rows {}–{}",
+                    crate::logs::group_digits(range.start + 1),
+                    crate::logs::group_digits(range.end)
+                )
             },
             loaded: data.rows.len(),
             columns: data.columns.len(),
@@ -49,8 +53,8 @@ impl ResultSummary {
             .when(!range_only, |row| {
                 row.child(Self::tag(
                     "result-loaded",
-                    &format!("{} loaded", self.loaded),
-                    &format!("{} loaded", self.loaded),
+                    &format!("{} loaded", crate::logs::group_digits(self.loaded)),
+                    &format!("{} loaded", crate::logs::group_digits(self.loaded)),
                     LOADED_ROWS,
                     cx,
                 ))
@@ -76,7 +80,7 @@ impl ResultSummary {
     fn columns_label(&self) -> String {
         format!(
             "{} {}",
-            self.columns,
+            crate::logs::group_digits(self.columns),
             if self.columns == 1 {
                 "column"
             } else {
@@ -102,7 +106,8 @@ impl ResultSummary {
             .child(Self::neutral_tag(cx).child(text.to_owned()))
     }
 
-    fn neutral_tag(cx: &App) -> Tag {
+    /// The chip of a count in the Result and Logs toolbars.
+    pub(super) fn neutral_tag(cx: &App) -> Tag {
         Tag::secondary().small().border_color(cx.theme().secondary)
     }
 
@@ -126,7 +131,11 @@ impl ResultSummary {
                         VISIBLE_ROWS,
                         self.range.strip_prefix("Rows ").unwrap_or("0").to_owned(),
                     ),
-                    ("result-detail-loaded", LOADED_ROWS, self.loaded.to_string()),
+                    (
+                        "result-detail-loaded",
+                        LOADED_ROWS,
+                        crate::logs::group_digits(self.loaded),
+                    ),
                     ("result-detail-columns", COLUMNS, self.columns.to_string()),
                 ]
                 .into_iter()
@@ -179,6 +188,8 @@ impl Qrow {
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
         let export_disabled = data.columns.is_empty();
+        // Without a result set, counts and pages describe nothing.
+        let no_result = data.columns.is_empty();
         // A cursor drain reads only the live result.
         let draining = tab.live == Some(result_id)
             && (tab.download.is_some() || tab.cursor == crate::worker::Cursor::Draining);
@@ -193,7 +204,9 @@ impl Qrow {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .when(show_range, |row| row.child(summary.tags(compact, cx)))
+            .when(show_range && !no_result, |row| {
+                row.child(summary.tags(compact, cx))
+            })
             // The tag stays at every toolbar width: it changes what the rows mean.
             .when(result.unfetched, |row| {
                 row.child(
@@ -213,7 +226,7 @@ impl Qrow {
                         .child(ResultSummary::neutral_tag(cx).child("Partial")),
                 )
             })
-            .when(compact, |row| {
+            .when(compact && !no_result, |row| {
                 let qrow = cx.entity().downgrade();
                 let tab_id = tab.saved.id;
                 row.child(
@@ -255,8 +268,8 @@ impl Qrow {
                                     .small()
                                     .ghost()
                                     .icon(gpui_kit::assets::IconName::Download)
-                                    .tooltip("Export results…")
-                                    .accessibility_label("Export results…")
+                                    .tooltip("Export results")
+                                    .accessibility_label("Export results")
                                     .disabled(export_disabled || draining)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_export(window, cx)
@@ -299,39 +312,42 @@ impl Qrow {
                                     })),
                             ),
                     )
-                    .child(
-                        div()
-                            .id("page-label")
-                            .test_support()
-                            .role(Role::Label)
-                            .text_xs()
-                            .whitespace_nowrap()
-                            .aria_label(page_label.clone())
-                            .child(page_label),
-                    )
-                    .child(button_pair::button_pair(
-                        "pagination-buttons",
-                        Button::new("previous-page")
-                            .small()
-                            .ghost()
-                            .icon(IconName::ChevronLeft)
-                            .tooltip("Previous page")
-                            .accessibility_label("Previous page")
-                            .disabled(page == 0 || draining)
-                            .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
-                        Button::new("next-page")
-                            .small()
-                            .ghost()
-                            .icon(IconName::ChevronRight)
-                            .tooltip("Next page")
-                            .accessibility_label("Next page")
-                            .disabled(
-                                draining
-                                    || page + 1 >= pages && (!tab.can_fetch(result_id) || tab.busy),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
-                        cx,
-                    )),
+                    .when(!no_result, |row| {
+                        row.child(
+                            div()
+                                .id("page-label")
+                                .test_support()
+                                .role(Role::Label)
+                                .text_xs()
+                                .whitespace_nowrap()
+                                .aria_label(page_label.clone())
+                                .child(page_label),
+                        )
+                        .child(button_pair::button_pair(
+                            "pagination-buttons",
+                            Button::new("previous-page")
+                                .small()
+                                .ghost()
+                                .icon(IconName::ChevronLeft)
+                                .tooltip("Previous page")
+                                .accessibility_label("Previous page")
+                                .disabled(page == 0 || draining)
+                                .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
+                            Button::new("next-page")
+                                .small()
+                                .ghost()
+                                .icon(IconName::ChevronRight)
+                                .tooltip("Next page")
+                                .accessibility_label("Next page")
+                                .disabled(
+                                    draining
+                                        || page + 1 >= pages
+                                            && (!tab.can_fetch(result_id) || tab.busy),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
+                            cx,
+                        ))
+                    }),
             )
             .into_any_element()
     }

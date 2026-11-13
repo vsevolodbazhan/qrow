@@ -17,6 +17,7 @@ use super::{
     Session,
 };
 use crate::model::transfer::TrinoSpooling;
+use crate::sync::LockExt as _;
 use crate::{
     model::{Batch, Column, DatabaseType, Profile, Row},
     tls::Trust,
@@ -100,14 +101,14 @@ impl Cancellation for Cancel {
     }
 
     fn cancel_with_deadline(&self, deadline: Instant) -> Result<()> {
-        if !*self.active.lock().unwrap() {
+        if !*self.active.lock_unpoisoned() {
             return Ok(());
         }
         self.requested.store(true, Ordering::SeqCst);
         self.requests.seal();
         self.requests.close();
         self.heartbeat.stop();
-        let mut cleanup = self.cleanup.lock().unwrap();
+        let mut cleanup = self.cleanup.lock_unpoisoned();
         if let Some(original) = cleanup.deadline {
             while cleanup.done.is_none() {
                 let remaining = original
@@ -143,7 +144,7 @@ impl Cancellation for Cancel {
         if result.is_err() {
             self.abort_transport();
         }
-        self.cleanup.lock().unwrap().done = Some(
+        self.cleanup.lock_unpoisoned().done = Some(
             result
                 .as_ref()
                 .copied()
@@ -154,7 +155,7 @@ impl Cancellation for Cancel {
     }
 
     fn abort_transport(&self) {
-        let active = self.active.lock().unwrap();
+        let active = self.active.lock_unpoisoned();
         if *active {
             self.http.transport.close_all();
         }
@@ -163,11 +164,11 @@ impl Cancellation for Cancel {
 
 impl Cancel {
     fn delete_before(&self, deadline: Instant) -> Result<()> {
-        if !*self.active.lock().unwrap() {
+        if !*self.active.lock_unpoisoned() {
             return Ok(());
         }
         let (next, terminal) = {
-            let cursor = self.next.lock().unwrap();
+            let cursor = self.next.lock_unpoisoned();
             (cursor.next.clone(), cursor.terminal)
         };
         if let Some(next) = next {
@@ -233,12 +234,10 @@ impl Operation {
             .http
             .page(reqwest::Method::GET, next, None, headers)
         {
-            Err(error)
-                if error.is::<crate::export::Cancelled>()
-                    && self.cancel.requested.load(Ordering::SeqCst) =>
-            {
-                Ok(None)
-            }
+            // Closing the socket can report an I/O error before aborting
+            // the request future. Cleanup still has to succeed before the
+            // worker can retain the session.
+            Err(_) if self.cancel.requested.load(Ordering::SeqCst) => Ok(None),
             result => result.map(Some),
         }
     }
@@ -266,7 +265,7 @@ impl Operation {
             .map(|next| self.cancel.http.cursor(next))
             .transpose()?;
         let terminal = next.is_none();
-        *self.cancel.next.lock().unwrap() = Cursor { next, terminal };
+        *self.cancel.next.lock_unpoisoned() = Cursor { next, terminal };
         if let Some(error) = page.error {
             if error.error_name == "USER_CANCELED" {
                 self.cancelled = true;
@@ -345,7 +344,7 @@ impl Operation {
     }
 
     fn complete_if_drained(&mut self) {
-        let terminal = self.cancel.next.lock().unwrap().terminal;
+        let terminal = self.cancel.next.lock_unpoisoned().terminal;
         if terminal {
             self.cancel.heartbeat.stop();
         }
@@ -367,8 +366,7 @@ impl Operation {
         let next = self
             .cancel
             .next
-            .lock()
-            .unwrap()
+            .lock_unpoisoned()
             .next
             .clone()
             .context("Trino query has no result cursor")?;
@@ -379,7 +377,7 @@ impl Operation {
         self.executing |= next.path().starts_with("/v1/statement/executing/");
         self.accept_response(page, &response, headers)?;
         if self.executing && !self.finished && !self.cancelled {
-            let next = self.cancel.next.lock().unwrap().next.clone();
+            let next = self.cancel.next.lock_unpoisoned().next.clone();
             if let Some(next) = next {
                 self.cancel.heartbeat.update(next, headers);
             }
@@ -461,7 +459,7 @@ impl Operation {
             if self.segments.as_mut().unwrap().admit()? {
                 continue;
             }
-            if self.cancel.next.lock().unwrap().terminal {
+            if self.cancel.next.lock_unpoisoned().terminal {
                 break;
             }
             self.advance(headers)?;
@@ -674,7 +672,7 @@ impl TrinoSession {
             Err(error) => {
                 cancel.requests.close();
                 self.http.end_requests(&cancel.requests);
-                *cancel.active.lock().unwrap() = false;
+                *cancel.active.lock_unpoisoned() = false;
                 return Err(error);
             }
         };
@@ -692,7 +690,7 @@ impl TrinoSession {
         if let Err(error) = control.register(operation.cancel.clone()) {
             operation.cancel.requests.close();
             self.http.end_requests(&operation.cancel.requests);
-            *operation.cancel.active.lock().unwrap() = false;
+            *operation.cancel.active.lock_unpoisoned() = false;
             return Err(error);
         }
         let (page, response) = match self.http.page_encoded(
@@ -706,7 +704,7 @@ impl TrinoSession {
             Err(error) => {
                 operation.cancel.abort_transport();
                 self.http.end_requests(&operation.cancel.requests);
-                *operation.cancel.active.lock().unwrap() = false;
+                *operation.cancel.active.lock_unpoisoned() = false;
                 return Err(error);
             }
         };
@@ -715,7 +713,7 @@ impl TrinoSession {
             .and_then(|()| operation.retain_prefix());
         if result.is_err() {
             let _ = operation.cancel.cancel();
-            *operation.cancel.active.lock().unwrap() = false;
+            *operation.cancel.active.lock_unpoisoned() = false;
         }
         result?;
         Ok(operation)
@@ -724,7 +722,7 @@ impl TrinoSession {
     fn stop(operation: &mut Option<Operation>) -> Result<()> {
         if let Some(operation) = operation.take() {
             let result = operation.cancel.cancel();
-            *operation.cancel.active.lock().unwrap() = false;
+            *operation.cancel.active.lock_unpoisoned() = false;
             result?;
         }
         Ok(())

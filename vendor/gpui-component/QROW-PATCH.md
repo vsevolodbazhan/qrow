@@ -17,6 +17,10 @@ Qrow changes these files:
   Before, clicking a disabled input moved keyboard focus to its frame.
   The sign-in UI and E2E tests check that the locked account field cannot
   receive keyboard focus.
+- `src/input/clear_button.rs` and `locales/ui.yml`: the clear button of an
+  input, a Select, and a Combobox has the accessibility label and the tooltip
+  "Clear". Before, it was an icon without a name. The Connections search UI
+  test clicks it by this label.
 - `src/input/mod.rs`: exports `EMPHASIS_OPACITY` of the GPUI Base patch, so
   Qrow tests can find the tint of the SQL editor.
 - `src/menu/popup_menu.rs` and `src/menu/menu_item.rs`: standard menu items
@@ -37,6 +41,13 @@ Qrow changes these files:
   without closing a newer modal. Removing a dialog below another modal keeps
   the focus on that modal and repairs its focus restoration. Export completion
   uses this API to preserve an unanswered quit confirmation.
+- `src/notification.rs`: the type icon of a notification is centered on the
+  first line of text. The title and message lines are 1.25 rem high, as other
+  small text. Before, the lines used the taller default line height of the
+  window. The icon was 18 pixels from the top. At the default interface scale,
+  it was 2 to 3 points below the center of the first line. Qrow toasts set the
+  same line height in `src/ui/toast.rs`. Tests cannot read painted positions,
+  so check them on screen.
 - `src/tab/tab_bar.rs`: the first tab of a tab bar without a prefix has no
   left border. Before, the tab bar always assumed a prefix, so the border of
   the first tab and the divider of a sidebar beside the bar made a double line.
@@ -63,6 +74,104 @@ Qrow changes these files:
   element `tooltip`, so application tests can find an open tooltip.
 - `Cargo.toml`: `cargo machete` ignores the `log` dependency, which the crate
   declares but does not use.
+- `src/setting/page.rs`: selecting a group in the Settings sidebar scrolls the
+  group heading as close to the top of the page as the content allows.
+  Before, the page scrolled only until the group was visible, so its heading
+  stopped in the middle of the page.
+- `src/sheet.rs`: `Sheet::margin_bottom` keeps a band at the bottom of the
+  window free. The dbt details sheet ends above the status bar.
+- `src/table/state.rs`: when the rows overflow the body, each row and the
+  header end with room for the vertical scrollbar after their cells, so it
+  covers no text, while row backgrounds, stripes, the selection tint, and
+  the row and header lines reach the right edge. When the columns overflow
+  and the last row would sit under the horizontal scrollbar, the rows end
+  with room for it. Before, the scrollbars covered the text of the bottom
+  row and of the rightmost column, and later a padded body left an empty
+  band beside and below the rows.
+  When columns are hidden past an edge of the scrolled columns, the cut
+  column fades into that edge, in the header and in each row, with a 28 px
+  gradient in the color that the row shows there: the table, a stripe, a
+  hover, the selected row, or the background of the cut cell from
+  `TableDelegate::cell_background` (new, `None` by default). The fades stop
+  above the header border, sit inside the scrollbar room, and do not take
+  pointer input. The fades in rows cover the cells inside their column
+  paddings and paint the cut cell's background again over the row color.
+  The room after the cells, through the scrollbar room, shows the
+  background of the cell at the edge, so a selection tint reaches the
+  right edge like other row backgrounds. The Qrow UI test
+  `results::cut_columns_fade_only_where_more_columns_are_hidden` checks
+  which sides fade. A new table size
+  renders the table again: the header picks its visible columns from the
+  size of the last frame, so a wider pane left the header cells of the
+  revealed columns blank.
+- `src/tab/tab.rs`: a tab with a maximum width also shrinks when its bar is
+  short of room, down to a least width of 10.5 rems, which fits a short label
+  like "Query 12" in the large size. The selected tab does not shrink, so it
+  shows its whole label up to the maximum width. `TabBar::fit_width` gives
+  capped document tabs a shared smaller least width in both selection states,
+  so that a bar that would scroll only a little fits all its tabs. `TabBar::grow_selected` lets the
+  selected tab grow past the maximum width to the visible width of the bar,
+  so it shows its whole label. A label that does not fit
+  ends in an ellipsis, and the suffix, like a close button, keeps its size.
+  Before, the bar scrolled and clipped the close button of the last tab under
+  the bar suffix.
+- `src/tab/tab_bar.rs`: a vertical wheel also scrolls a tab bar, which has
+  nothing to scroll vertically. Before, only a horizontal swipe scrolled it.
+  A bar of the `Tab` variant that tracks its scroll shows a short gradient
+  in the border color at each edge with hidden tabs past it. It snaps its
+  scroll so that a tab starts exactly at the start edge: when a wheel or a
+  swipe over it stops, and when the bar width, the selection, the tab count,
+  or a tab width changes. After such a change, the selected tab also scrolls
+  fully into view. At the end of the scroll range, the last tab aligns to
+  the end edge instead. A tab that the end edge cuts fades into the bar. A
+  tab that the start edge cuts has its title past the edge, so the bar
+  paints the title from the edge on, cut with an ellipsis, or nothing when
+  not even two characters and the ellipsis fit after the tab's left padding.
+  Fades and cues stop above the bottom border of the bar. With `test-support`, `pinned_tab_titles`
+  gives the titles that the last frame pinned. The
+  Qrow UI tests in `tabs` check the wheel, the snap, the end of the range, a
+  resize, an Assistant toggle, a rename, and new tabs.
+- `src/tooltip.rs`: `ManagedTooltipExt` is public, and `managed_tooltip_when`
+  shows its tooltip only while a condition holds when the pointer enters. A
+  hover that the condition declines leaves the tooltip of another trigger,
+  for example the close button of a query tab inside the tab, as it is.
+  A result column header shows its full name only when its column cuts it.
+  The Qrow UI test `results::a_column_name_that_fits_has_no_tooltip` checks
+  the condition.
+- `src/menu/popup_menu.rs`: `PopupMenu::set_trigger_focus` is public, so a
+  context menu that the application opens shows the shortcuts of the view
+  under the pointer.
+- `src/text/compat.rs`: `TextView::markdown_line_breaks` passes the option
+  of the same name to the GPUI Base text view. See the GPUI Base patch.
 
 Remove the patch when a GPUI Kit release includes the fixes. Update the crate
 with the other GPUI crates as one set.
+
+- `Editor::smooth_caret(bool)` enables a 70 ms caret transition. The default is off. Text input stays immediate.
+
+- `Editor::smooth_scrolling(bool)` opts into short transitions for discrete mouse-wheel steps. Pixel trackpad gestures stay direct. The default is off.
+
+- Capped document tab labels start at the same leading padding in active and
+  inactive states. Extra space from the minimum tab width follows the label.
+  Other tab variants keep their existing alignment.
+
+- Capped document tabs keep the same minimum width when selected. Short tabs
+  do not shrink on selection. A selected long title can still grow. The minimum
+  of the selected tab does not exceed the available tab width.
+
+- `Textarea::smooth_caret(bool)` uses a 35 ms horizontal caret transition.
+  The shorter duration keeps the caret close to newly typed text. `Textarea::smooth_resize(bool)` opts into auto-grow height
+  transitions using the fast motion duration. Both default to off. Text input
+  stays immediate and the system reduced-motion setting disables motion.
+
+- `Input::smooth_caret(bool)` enables a 35 ms horizontal caret transition for
+  search fields. The default is off. Text stays immediate, and reduced motion
+  disables the animation.
+
+- An input's Find and Replace fields follow its smooth-caret option, including
+  changes while Find is open. The fields use the same 35 ms transition as
+  other search inputs and honor reduced motion.
+
+- Find and Replace buttons have accessible names and managed tooltips. Previous
+  and next match, the replacement-field toggle, and Close show their bound
+  shortcuts. The replacement-field tooltip follows the current state.

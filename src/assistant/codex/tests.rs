@@ -1266,6 +1266,27 @@ done
 }
 
 #[test]
+fn completed_reply_items_include_the_full_message() {
+    let event = CodexHarness::event_from_message(json!({
+        "method": "item/completed",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "item": {"type": "agentMessage", "text": "Full reply"},
+        },
+    }))
+    .unwrap();
+    assert_eq!(
+        event,
+        AssistantEvent::MessageCompleted {
+            thread_id: "thread-1".into(),
+            turn_id: "turn-1".into(),
+            text: "Full reply".into(),
+        }
+    );
+}
+
+#[test]
 fn web_search_items_become_search_events() {
     let event = |method: &str, item: Value| {
         CodexHarness::event_from_message(json!({
@@ -1351,11 +1372,11 @@ fn web_search_items_become_search_events() {
             WebSearchStatus::Completed(Vec::new())
         )
     );
-    // Other items stay ordinary notifications.
+    // Unrelated items stay ordinary notifications.
     assert!(matches!(
         event(
             "item/completed",
-            json!({"type": "agentMessage", "id": "m-1", "text": "Done"})
+            json!({"type": "reasoning", "id": "r-1", "summary": []})
         ),
         AssistantEvent::Other { .. }
     ));

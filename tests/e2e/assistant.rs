@@ -1,8 +1,8 @@
 use crate::support::assistant::{FakeCodex, approval, editor_text};
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::{
-    TestApp, assert_tab_dot, assert_tooltip_header_center, assert_tooltip_metadata_rows, bounds_of,
-    label,
+    TestApp, assert_tab_dot, assert_tooltip_header_center, assert_tooltip_metadata_rows,
+    assert_tooltip_status_below, bounds_of, label,
 };
 use gpui_kit::TestAppContext;
 use gpui_kit::component::ActiveTheme;
@@ -55,7 +55,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
     app.hover_labelled(cx, "SQL only, connected, idle");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
-    app.update(cx, |window, cx| {
+    app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
             Some("SQL only")
@@ -64,12 +64,8 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
             label(window, "status-tooltip-status").as_deref(),
             Some("Idle")
         );
-        let title = bounds_of(window, "status-tooltip-title");
-        let status = bounds_of(window, "status-tooltip-status");
-        assert!(status.left() > title.right());
-        assert!(status.top() < title.bottom());
         assert!(window.try_find("status-tooltip-shortcut").is_none());
-        assert_tooltip_header_center(window, cx, "status-tooltip-status");
+        assert_tooltip_status_below(window);
     });
     app.hover_labelled(cx, "Toggle assistant, working");
     cx.executor().advance_clock(Duration::from_millis(800));
@@ -85,12 +81,13 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
-            Some("⌘R")
+            Some(if cfg!(target_os = "macos") {
+                "⌘R"
+            } else {
+                "Ctrl+R"
+            })
         );
-        let title = bounds_of(window, "status-tooltip-title");
-        let status = bounds_of(window, "status-tooltip-status");
-        assert_eq!(title.left(), status.left());
-        assert!(status.top() > title.bottom());
+        assert_tooltip_status_below(window);
         assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
     });
 
@@ -266,4 +263,198 @@ fn the_assistant_reads_columns_of_another_connected_connection(cx: &mut TestAppC
     app.wait_idle(cx);
     app.select_connection(cx, &beta);
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn smooth_composer_sends_a_multiline_draft_and_runs_sql(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 42 AS value", crate::support::fixture::PASSWORD);
+    let mut workspace = codex.workspace(workspace);
+    workspace.settings.assistant_smooth_caret = true;
+    workspace.settings.assistant_smooth_resize = true;
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    let empty = app.update(cx, |window, _| {
+        bounds_of(window, "assistant-composer").size.height
+    });
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let message = "select 1\nline 2\nline 3\nline 4\nline 5\nline 6";
+    app.type_message(cx, message);
+    cx.executor().advance_clock(Duration::from_millis(40));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+        assert!(bounds_of(window, "assistant-composer").size.height > empty);
+        assert_eq!(
+            crate::support::assistant::composer_text(window).as_deref(),
+            Some(message)
+        );
+    });
+    app.click(cx, "assistant-send");
+    app.wait_reply(cx, "You: select 1");
+    cx.executor().advance_clock(Duration::from_millis(200));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.wait_until(cx, "the composer to shrink", QUERY_TIMEOUT, |window, _| {
+        bounds_of(window, "assistant-composer").size.height == empty
+    });
+    app.run_complete(cx, "SELECT 42 AS value");
+    app.wait_cell(cx, 0, 1, "42");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_query_result_hidden_by_maximized_assistant_stays_unread(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (mut workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 42 AS value", crate::support::fixture::PASSWORD);
+    let gate = crate::support::response_gate::ResponseGate::new(workspace.profiles[0].port);
+    workspace.profiles[0].port = gate.port;
+    let first = workspace.tabs[0].id;
+    let mut workspace = codex.workspace(workspace);
+    workspace.settings.smooth_transitions = true;
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.run_complete(cx, "SELECT 42 AS value");
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    gate.pause();
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        window.click("assistant-maximize", cx);
+    });
+    app.wait_until(cx, "held query", QUERY_TIMEOUT, |_, _| gate.blocked());
+    app.press(cx, "secondary-r");
+    app.wait_gone(cx, "assistant-composer");
+    app.press(cx, "secondary-r");
+    app.wait_label(cx, "Minimize assistant");
+    gate.resume();
+    app.wait_status(cx, "Complete");
+    // ⌘T starts a conversation in a new tab, so Query 1 stays unseen.
+    app.dispatch(cx, qrow::ui::NewTab);
+    app.wait_label(cx, "Minimize assistant");
+    app.press(cx, "secondary-shift-r");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .find(format!("query-status-{first}"))
+                .label()
+                .unwrap()
+                .contains("unread query result")
+        );
+    });
+    app.click_labelled(cx, "Query 1, unread query result");
+    app.wait_cell(cx, 0, 1, "42");
+    app.click(cx, "assistant-maximize");
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.hover_labelled(cx, "Show tab");
+    app.click_labelled(cx, "Show tab");
+    app.wait_gone(cx, "activity");
+    cx.executor().advance_clock(Duration::from_millis(250));
+    app.update(cx, |window, cx| {
+        window.simulate_next_frame(cx);
+        window.render_frame(cx);
+    });
+    app.wait_label(cx, "Maximize assistant");
+    app.wait_cell(cx, 0, 1, "42");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn tool_call_fades_keep_the_card_stable_through_completion(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (mut workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
+    let gate = crate::support::response_gate::ResponseGate::new(workspace.profiles[0].port);
+    workspace.profiles[0].port = gate.port;
+    let mut workspace = codex.workspace(workspace);
+    workspace.settings.smooth_transitions = true;
+    workspace.settings.assistant_buffer_replies = true;
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.run_complete(cx, "SELECT 1 AS value");
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.send(cx, "Run selected SQL with approval");
+    app.wait_until(cx, "query approval", QUERY_TIMEOUT, |window, _| {
+        approval(window).is_some()
+    });
+    gate.pause();
+    app.click(cx, "assistant-approve-query");
+    app.wait_until(cx, "the held query", QUERY_TIMEOUT, |_, _| gate.blocked());
+    let card = app.update(cx, |window, _| {
+        crate::support::labelled_starting(window, "Tool Call: Run query")[0].clone()
+    });
+    let id = card.path().last().unwrap().clone();
+    for _ in 0..8 {
+        cx.executor().advance_clock(Duration::from_millis(40));
+        app.update(cx, |window, cx| {
+            window.simulate_next_frame(cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(window.find(id.clone()).bounds(), card.bounds());
+        });
+    }
+    gate.resume();
+    app.wait_reply(cx, "I ran the query.");
+    app.wait_idle(cx);
+    app.update(cx, |window, _| {
+        let completed = window.find(id);
+        assert!(completed.label().unwrap().contains("1 row"));
+        assert_eq!(completed.bounds(), card.bounds());
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn buffered_replies_complete_beside_a_connected_query(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
+    let mut workspace = codex.workspace(workspace);
+    workspace.settings.assistant_buffer_replies = true;
+    workspace.settings.smooth_transitions = true;
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.run_complete(cx, "SELECT 1 AS value");
+    app.wait_cell(cx, 0, 1, "1");
+    app.open_assistant(cx);
+    app.show_conversation(cx);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    crate::support::assistant::assert_buffered_reply_completion(&app, cx, &codex);
+    app.send(cx, "Run selected SQL with approval");
+    app.wait_until(cx, "live query approval", QUERY_TIMEOUT, |window, _| {
+        approval(window).is_some()
+    });
+    app.click(cx, "assistant-approve-query");
+    app.wait_reply(cx, "I ran the query.");
+    app.wait_idle(cx);
+    app.wait_cell(cx, 0, 1, "1");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn assistant_code_blocks_are_copyable_beside_a_connected_query(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
+    let app = TestApp::launch_in(cx, directory, codex.workspace(workspace), credentials);
+    app.run_complete(cx, "SELECT 1 AS value");
+    app.wait_cell(cx, 0, 1, "1");
+    app.open_assistant(cx);
+    crate::support::assistant::assert_copyable_code_blocks(&app, cx);
 }

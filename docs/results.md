@@ -26,7 +26,8 @@ the next execution replace the result.
 
 Right-click a result tab for these commands:
 
-- **Rename…** gives the result tab a name. The name must be unique in the
+- **Rename…** opens the **Rename Result** dialog with the current name
+  selected, and gives the result tab a name. The name must be unique in the
   query tab. Renaming also pins the result tab, if the pin limit allows it.
 - **Pin** or **Unpin** changes whether the next execution can replace it.
 - **Copy query** copies the SQL statement that made the result.
@@ -34,20 +35,23 @@ Right-click a result tab for these commands:
 
 **Copy query** in the result toolbar also copies the statement. It copies the
 statement that Qrow sent, not the current editor text. Point to a result tab
-to see its name and the start of its statement.
+to see its name and the first lines of its statement in a code block. The code
+block uses the Logs font, like the SQL in Logs. If the statement has more
+lines, the code block fades out at the end.
 
 A query tab always has at least one result tab. Closing the last result tab
 creates an empty replacement. The result tab of a running query cannot close.
 
 If a result has no columns, the panel shows a status message without a table
-header. Column headers remain visible when a query returns columns but no rows.
+header and without the result toolbar. Column headers and the toolbar remain
+visible when a query returns columns but no rows.
 
 ## Minimize the panel
 
-Press **⌘J**, select **View → Toggle results**, or use **Collapse**
+Press **⌘J**, select **View → Toggle results**, or use **Collapse results**
 at the right end of the result tabs. The editor fills the available height.
 The Logs tab and the result tabs remain visible. Selecting a tab restores the
-panel. Use **Expand** or **⌘J** to restore the previous panel height.
+panel. Use **Expand results** or **⌘J** to restore the previous panel height.
 
 The minimized state applies to all query tabs and is saved after restart.
 Running a query restores the panel. Minimizing the panel keeps its results
@@ -83,7 +87,20 @@ the last populated page stays visible. Changing pages clears the selection and r
 the scroll position. New batches preserve the current scroll position.
 
 Scroll vertically to see more rows and horizontally to see more columns.
-The scrollbars overlay the right and bottom edges of the table.
+The scrollbars overlay the right and bottom edges of the table. When rows are
+hidden below, the cells keep room for the vertical scrollbar, so it does not
+cover text. Row stripes, the selection, and the row lines continue to the edge.
+When columns are hidden past an edge, the cut column fades into that edge, in
+the header and in each row. The fade uses the color of the row: a stripe, the
+hover color, or the selection. An edge without hidden columns has no fade.
+
+Each column is at least 190 points wide at 100% scale, also when you drag its
+boundary. This width fits a name of about 18 characters and a short type. A
+column is wider when its name and type need more space. Column names start at
+the left of the header, with the type after the name. Numbers align at the
+right of their cells and use digits of equal width. A header shows a hover
+color. If a column is too narrow for its name, the name ends in an ellipsis.
+Point to the header to see the full name in a tooltip.
 Drag a column boundary to change its width. Drag the divider above Results
 to change the editor height.
 
@@ -101,10 +118,12 @@ Select a rectangle of cells on the current page, then press ⌘C to copy it.
 | Click the `#` header, or press ⌘A in the table | All cells of the current page. |
 | Arrow keys | The next cell. Shift with an arrow key extends the rectangle. |
 | Home, End | The first or last cell of the row. |
+| ⌘↑ or ⌘Home, ⌘↓ or ⌘End | The cell in the first or last row of the page. |
 | Page Up, Page Down | The cell one screen up or down. |
 
-The selected cells use the selection color. In a rectangle, the cell that the
-keys move also has a focus outline. Escape clears the selection. A click
+The selected cells use the selection color. The cell that the keys move has a
+focus outline, also when it is the only selected cell. The other cells of its
+rows get a light tint. Escape clears the selection. A click
 outside the results area or a page change also clears it.
 
 During a drag, keep the pointer at an edge to scroll rows or columns.
@@ -144,7 +163,7 @@ background. Text above 10 MiB must be saved to a file.
 
 ## Export results
 
-Click **Export results…** in the Results toolbar. The button is available
+Click **Export results** in the Results toolbar. The button is available
 when the result has columns. Choose a format, then **Save**. The export
 includes all rows and columns. Grid selection does not limit the export.
 Use the [copy commands](#browse-and-copy) to copy selected cells.
@@ -171,7 +190,11 @@ and columns, and downloads or reruns the query when needed. If the text exceeds
 the limit, the clipboard does not change. You can save the downloaded result
 to a file. Parquet is available only as a file. **Save** opens the native save
 panel. Tab separators use the `.tsv` extension. Other separators
-use `.csv`. After a save, use **Reveal in Finder** to locate the file.
+use `.csv`. After a save, a notification shows the row count and the file
+name. Use **Reveal in Finder** to locate the file. On Windows, the action is
+**Reveal in File Explorer**. On Linux, it is **Open Containing Folder**. The
+notification stays open until you close it, because an export can finish
+while you do other work.
 A successful copy or save stores the options for the next export. A save
 also stores the last output directory.
 
@@ -490,3 +513,6 @@ Changing these handlers requires pointer checks. Verify dragging, release, the
 next click, both scroll axes, and modal overlays. Earlier automation could not
 establish horizontal trackpad behavior or column resizing. A passing native
 build does not close those verification gaps.
+
+On Windows, export disk reservations conservatively share one counter across
+all volumes. Free-space checks use the volume of each output directory.

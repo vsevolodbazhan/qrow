@@ -1,9 +1,9 @@
 use crate::support::{
-    MemoryCredentials, TestApp, assert_tooltip_header_center, connection_row, label, menu_item,
-    offline_profile,
+    MemoryCredentials, TestApp, assert_tooltip_header_center, bounds_of, connection_row, label,
+    menu_item, offline_profile,
 };
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{InputEvent as _, MouseMoveEvent, TestAppContext};
+use gpui_kit::{InputEvent as _, MouseMoveEvent, TestAppContext, px};
 use qrow::{
     model::{SavedTab, Workspace},
     storage::Credentials,
@@ -39,6 +39,28 @@ fn saved_names(app: &TestApp) -> Vec<String> {
     let mut names: Vec<_> = app.saved().profiles.into_iter().map(|p| p.name).collect();
     names.sort();
     names
+}
+
+#[gpui_kit::test]
+fn connection_save_completes_after_the_settings_window_closes(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, qrow::ui::OpenSettings);
+    app.wait_for(cx, "reset-settings");
+    // Close without the helper's next main-window frame. Let the poll task
+    // run while Settings is still the entity's last rendered window.
+    app.update(cx, |window, cx| window.press("secondary-w", cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(50));
+    cx.run_until_parked();
+    app.wait_gone(cx, "reset-settings");
+
+    open_new_connection(&app, cx);
+    fill_connection(&app, cx, "After Settings");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "saved connection", Duration::from_secs(10), |_, _| {
+        saved_names(&app) == ["After Settings"]
+    });
 }
 
 #[gpui_kit::test]
@@ -84,7 +106,7 @@ fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
     );
     app.fill(cx, "connection-transfer-speed", "12");
     app.update(cx, |window, cx| {
-        window.press("cmd-a", cx);
+        window.press("secondary-a", cx);
         // Clicking the blank right side of the full input puts the caret at the end.
         window.click("connection-transfer-speed", cx);
         window.input("3", cx);
@@ -197,7 +219,7 @@ fn preset_values_keep_readonly_fields_and_preserve_unsaved_custom_values(cx: &mu
         }
         for (field, value) in expected {
             app.click(cx, field);
-            app.press(cx, "cmd-a");
+            app.press(cx, "secondary-a");
             app.update(cx, |window, cx| window.input("must not change", cx));
             app.update(cx, |window, _| {
                 assert_eq!(window.find(field).value(), Some(value))
@@ -658,7 +680,7 @@ fn a_tooltip_in_the_form_closes_with_the_form(cx: &mut TestAppContext) {
 
     // The shortcut closes the form under the pointer, so the Save button
     // never gets a hover-out. The tooltip closes with the form.
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_gone(cx, "save-profile");
     app.settle(cx);
     app.update(cx, |window, _| {
@@ -694,6 +716,7 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
             "Disconnect",
             "Edit",
             "Duplicate",
+            "Copy settings",
             "Delete",
             "Schemas",
             "Refresh",
@@ -795,6 +818,23 @@ fn the_response_timeout_is_validated_and_saved(cx: &mut TestAppContext) {
             .profiles
             .iter()
             .any(|profile| profile.lifecycle.response_timeout_seconds == 600)
+    });
+}
+
+#[gpui_kit::test]
+fn connection_settings_actions_sit_close_below_the_panel(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.update(cx, |window, _| {
+        let panel = bounds_of(window, "connection-settings-panel");
+        let save = bounds_of(window, "save-profile");
+        let gap = save.top() - panel.bottom();
+        // The dialog gap alone spaces the actions. An extra padding row
+        // doubled it.
+        assert!(
+            gap > px(0.) && gap < window.rem_size() * 1.5,
+            "The actions must sit close below the panel: gap {gap:?}"
+        );
     });
 }
 
@@ -1004,10 +1044,7 @@ fn connection_help_is_shared_and_does_not_repeat_the_database_type(cx: &mut Test
         }
     });
     app.scroll_to(cx, "connection-response-timeout");
-    app.wait_label(
-        cx,
-        "Seconds to wait for setup and cancellation, from 10 to 3600.",
-    );
+    app.wait_label(cx, "Seconds for setup and cancellation, from 10 to 3600.");
     app.scroll_to(cx, "connection-database-type");
     app.select(cx, "connection-database-type", "Spark (HiveServer2)");
     app.scroll_to(cx, "connection-response-timeout");
@@ -1051,7 +1088,7 @@ fn trino_connection_saves_catalog_schema_and_optional_password(cx: &mut TestAppC
     app.fill(cx, "connection-username", "synthetic-user");
     app.scroll_to(cx, "connection-trino-schema");
     app.fill(cx, "connection-trino-schema", "tiny");
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_gone(cx, "connection-name");
     app.wait_until(
         cx,

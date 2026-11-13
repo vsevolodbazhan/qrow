@@ -9,6 +9,14 @@ use super::*;
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 
+/// The most rows of the message field in a window `height` high.
+pub(super) fn composer_max_rows(height: Pixels, line_height: Pixels) -> usize {
+    if line_height <= px(0.) {
+        return COMPOSER_MIN_ROWS;
+    }
+    ((height * COMPOSER_MAX_HEIGHT / line_height).floor() as usize).max(COMPOSER_MIN_ROWS)
+}
+
 pub(super) fn show_thread_list(narrow: bool, override_visibility: Option<bool>) -> bool {
     override_visibility.unwrap_or(!narrow)
 }
@@ -22,26 +30,56 @@ pub(super) fn thread_list_after_selection(override_visibility: Option<bool>) -> 
     }
 }
 
-pub(super) fn assistant_select_width(label: &str) -> f32 {
-    56. + label.chars().count() as f32 * 8.
-}
+/// The width of a selector button that shows only its icon, in points.
+const SELECTOR_ICON_WIDTH: f32 = 24.;
+/// The rows the message field shows when it holds a short message.
+const COMPOSER_MIN_ROWS: usize = 3;
+/// The part of the window height that the message field can grow to. A longer
+/// message scrolls inside the field.
+const COMPOSER_MAX_HEIGHT: f32 = 0.4;
+/// The gap between two selector buttons, in points.
+const SELECTOR_GAP: f32 = 4.;
+/// What a labeled selector adds to its label: the compact side padding, the
+/// icon, the caret, and their gaps, in points. Measured on the rendered
+/// composer, with a few points to spare, so a label that shows always fits.
+const SELECTOR_CHROME: f32 = 30.;
+/// What a labeled button of the composer adds to its label, measured the
+/// same way.
+const COMPOSER_BUTTON_CHROME: f32 = 24.;
 
-pub(super) fn assistant_selector_labels(available: f32, widths: [f32; 3]) -> [bool; 3] {
-    let icons = 36. * 3. + 8.;
-    let model = available >= icons + widths[0] - 36.;
-    let reasoning = model && available >= icons + widths[0] + widths[1] - 72.;
-    let tier = reasoning && available >= widths.iter().sum::<f32>() + 8.;
-    [model, reasoning, tier]
+/// Which selectors show their labels when `available` points hold them:
+/// the model first, then reasoning, then the tier. `labeled` holds the
+/// width of each selector with its label; `None` is a selector that the
+/// composer does not show. A selector without its label shows its icon.
+pub(super) fn assistant_selector_labels(available: f32, labeled: [Option<f32>; 3]) -> [bool; 3] {
+    let shown = labeled.iter().flatten().count() as f32;
+    let mut used = shown * SELECTOR_ICON_WIDTH + (shown - 1.).max(0.) * SELECTOR_GAP;
+    let mut labels = [false; 3];
+    for (index, width) in labeled.iter().enumerate() {
+        let Some(width) = width else {
+            continue;
+        };
+        let with_label = used - SELECTOR_ICON_WIDTH + width;
+        if with_label > available {
+            break;
+        }
+        used = with_label;
+        labels[index] = true;
+    }
+    labels
 }
 
 impl Qrow {
     pub(in crate::ui) fn assistant_transcript_visible(&self, window: &Window, cx: &App) -> bool {
-        let narrow = self.assistant_width(window.viewport_size().width) < self.ui_px(600.);
+        let pane = self.assistant_pane.read(cx);
+        let width = pane
+            .layout_width
+            .unwrap_or_else(|| self.assistant_width(window.viewport_size().width));
+        let narrow = width < self.ui_px(600.);
         self.settings.assistant.enabled
             && self.assistant_state.open
             && !self.activity.read(cx).is_open()
-            && (!narrow
-                || !show_thread_list(narrow, self.assistant_pane.read(cx).thread_list_override))
+            && (!narrow || !show_thread_list(narrow, pane.thread_list_override))
     }
 
     /// The dot of a conversation state. An idle conversation has no dot.
@@ -98,11 +136,17 @@ pub(in crate::ui) struct AssistantPane {
     /// The render clears it when the search is empty.
     pub(super) lowercase: RefCell<HashMap<String, String>>,
     pub(super) thread_list_override: Option<bool>,
+    /// The scroll position of the conversation list.
+    pub(super) thread_list_scroll: ScrollHandle,
     transcript: Entity<MessageScrollerState>,
     /// The rows that `transcript` has.
     rows: TranscriptRows,
     /// The settings that change the height of the rows.
     typography: Option<Typography>,
+    /// The most rows that the message field grows to at this window height.
+    composer_max_rows: usize,
+    /// Content width presented by the shell during resize transitions.
+    layout_width: Option<Pixels>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -128,9 +172,9 @@ impl AssistantPane {
             TextareaState::new(window, cx)
                 .placeholder("Ask about your data or describe a query…")
                 .submit_on_enter(true)
+                .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MIN_ROWS)
         });
-        let thread_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations…"));
+        let thread_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search…"));
         let transcript = cx.new(|cx| MessageScrollerState::new(0, cx));
         let subscriptions = [
             // The pane reads the assistant state of Qrow.
@@ -153,10 +197,20 @@ impl AssistantPane {
             thread_search,
             lowercase: RefCell::default(),
             thread_list_override: None,
+            thread_list_scroll: ScrollHandle::new(),
             transcript,
             rows: TranscriptRows::default(),
             typography: None,
+            composer_max_rows: COMPOSER_MIN_ROWS,
+            layout_width: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    pub(in crate::ui) fn set_layout_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        if self.layout_width != Some(width) {
+            self.layout_width = Some(width);
+            cx.notify();
         }
     }
 
@@ -168,6 +222,22 @@ impl AssistantPane {
     pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
         self.transcript
             .update(cx, |list, cx| list.scroll_to_end(cx));
+    }
+
+    /// Lets the message field grow to a part of the window height.
+    fn sync_composer_rows(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let line_height = self
+            .composer
+            .read(cx)
+            .line_height()
+            .unwrap_or_else(|| window.line_height());
+        let max_rows = composer_max_rows(window.viewport_size().height, line_height);
+        if max_rows != self.composer_max_rows {
+            self.composer_max_rows = max_rows;
+            self.composer.update(cx, |state, cx| {
+                state.set_auto_grow(COMPOSER_MIN_ROWS, max_rows, cx)
+            });
+        }
     }
 
     /// Closes the thread list of a narrow pane after you select a conversation.
@@ -211,7 +281,9 @@ impl Render for AssistantPane {
         // Defer acknowledgement until this render releases the pane borrow.
         let unread_visible = {
             let qrow = qrow.read(cx);
-            let width = qrow.assistant_width(window.viewport_size().width);
+            let width = self
+                .layout_width
+                .unwrap_or_else(|| qrow.assistant_width(window.viewport_size().width));
             let narrow = width < qrow.ui_px(600.);
             (!narrow || !show_thread_list(narrow, self.thread_list_override))
                 && qrow
@@ -222,9 +294,12 @@ impl Render for AssistantPane {
         if unread_visible {
             self.read_visible_reply(window, cx);
         }
+        self.sync_composer_rows(window, cx);
         let qrow = qrow.read(cx);
-        let width = qrow.assistant_width(window.viewport_size().width);
-        self.panel(qrow, width, cx).into_any_element()
+        let width = self
+            .layout_width
+            .unwrap_or_else(|| qrow.assistant_width(window.viewport_size().width));
+        self.panel(qrow, width, window, cx).into_any_element()
     }
 }
 
@@ -244,7 +319,7 @@ impl AssistantPane {
                 MessageScroller::new(
                     "assistant-messages",
                     self.transcript.clone(),
-                    move |index, _, cx| {
+                    move |index, window, cx| {
                         let (Some(qrow_entity), Some(pane)) = (qrow.upgrade(), pane.upgrade())
                         else {
                             return div().into_any_element();
@@ -252,7 +327,15 @@ impl AssistantPane {
                         let Some(row) = pane.read(cx).rows.rows.get(index).copied() else {
                             return div().into_any_element();
                         };
-                        transcript_row(qrow_entity.read(cx), &qrow, row, index, cx)
+                        transcript_row(
+                            qrow_entity.read(cx),
+                            &qrow,
+                            row,
+                            index,
+                            &pane.downgrade(),
+                            window,
+                            cx,
+                        )
                     },
                 )
                 // Like the transcript before it, the list has no scrollbar.
@@ -268,7 +351,49 @@ impl AssistantPane {
 }
 
 impl AssistantPane {
-    fn panel(&self, qrow: &Qrow, width: Pixels, cx: &Context<Self>) -> impl IntoElement {
+    /// The transcript of a conversation without messages: what the
+    /// assistant does.
+    fn empty_transcript(&self, cx: &Context<Self>) -> impl IntoElement {
+        v_flex()
+            .id("assistant-empty")
+            .test_support()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .items_center()
+            .justify_center()
+            .px_6()
+            .py_8()
+            .gap_2()
+            .child(
+                Icon::new(AssetIconName::Bot)
+                    .large()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            // The title and its description read as one group.
+            .child(
+                v_flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(div().font_weight(FontWeight::BOLD).child("Assistant"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_height(rems(1.25))
+                            .text_center()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("The assistant reads the catalog and writes SQL for this tab."),
+                    ),
+            )
+    }
+
+    fn panel(
+        &self,
+        qrow: &Qrow,
+        width: Pixels,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let narrow = width < qrow.ui_px(600.);
         let show_threads = show_thread_list(narrow, self.thread_list_override);
         let action_size = qrow.ui_px(28.);
@@ -347,9 +472,36 @@ impl AssistantPane {
                 format!("{name}: waiting for {harness_name}")
             }
         };
-        let model_width = assistant_select_width(&model_label);
-        let reasoning_width = assistant_select_width(&reasoning_label);
-        let tier_width = assistant_select_width(&tier_label);
+        // The width of a label at the composer text size, in points of
+        // the 100% scale, like the widths of the pane below.
+        let label_width = |text: &str| {
+            let run = TextRun {
+                len: text.len(),
+                font: font(cx.theme().font_family.clone()),
+                color: cx.theme().foreground,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let width = window
+                .text_system()
+                .shape_line(
+                    SharedString::from(text.to_owned()),
+                    window.rem_size() * 0.875,
+                    &[run],
+                    None,
+                )
+                .width;
+            f32::from(width) / qrow.settings.ui_scale
+        };
+        let model_width = SELECTOR_CHROME + label_width(&model_label);
+        let reasoning_width = SELECTOR_CHROME + label_width(&reasoning_label);
+        let tier_width = SELECTOR_CHROME + label_width(&tier_label);
+        // Ask first and Send keep their labels; the selectors use the rest.
+        let actions_width = 2. * COMPOSER_BUTTON_CHROME
+            + label_width(if mode_is_run { "Auto run" } else { "Ask first" })
+            + label_width("Send")
+            + 8.;
         let model_options = qrow
             .assistant_state
             .snapshot
@@ -399,9 +551,17 @@ impl AssistantPane {
         let assistant_entity = self.qrow.clone();
         let conversation_width = width.as_f32() / qrow.settings.ui_scale
             - if show_threads && !narrow { 230. } else { 0. };
+        // The composer stays one row: selectors whose labels do not fit
+        // beside Send show only their icons, and their tooltips name the value.
+        // The composer has 12 points of padding at each side, and the
+        // selectors and the actions keep a gap between them.
         let [show_model_label, show_reasoning_label, show_tier_label] = assistant_selector_labels(
-            (conversation_width - 228.).max(0.),
-            [model_width, reasoning_width, tier_width],
+            (conversation_width - 24. - actions_width - 12.).max(0.),
+            [
+                Some(model_width),
+                Some(reasoning_width),
+                has_tiers.then_some(tier_width),
+            ],
         );
         let displayed_title = displayed
             .as_deref()
@@ -411,7 +571,14 @@ impl AssistantPane {
                 |conversation| conversation.title.clone(),
             );
         let title_generating = qrow.assistant_title_generating(selected);
+        let threads_label = if show_threads {
+            "Hide conversations"
+        } else {
+            "Show conversations"
+        };
         h_flex()
+            .id("assistant-panel")
+            .test_support()
             .size_full()
             .min_w_0()
             .bg(cx.theme().sidebar)
@@ -461,7 +628,18 @@ impl AssistantPane {
                             .flex_shrink_0()
                             .icon(IconName::Plus)
                             .accessibility_label("New conversation")
-                            .tooltip("New conversation")
+                            .map(|mut button| {
+                                // ⌘T makes a conversation only while the pane covers the tabs.
+                                if qrow.assistant_state.maximized {
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("New conversation", "")
+                                            .for_action_in(&NewTab, qrow.focus.clone()),
+                                    );
+                                    button
+                                } else {
+                                    button.tooltip("New conversation")
+                                }
+                            })
                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
                                 this.create_assistant_conversation(window, cx);
                             })),
@@ -473,13 +651,48 @@ impl AssistantPane {
                             .w(action_size)
                             .h(action_size)
                             .icon(IconName::Ellipsis)
-                            .accessibility_label("Conversation Actions")
-                            .tooltip("Conversation Actions")
+                            .accessibility_label("Conversation actions")
+                            .tooltip("Conversation actions")
                             .disabled(displayed.is_none() || busy)
                             .dropdown_menu({
                                 let menu = qrow.conversation_menu(selected, &self.qrow);
                                 move |popup, _, _| menu.build(popup)
                             }),
+                    )
+                    .child(
+                        Button::new("assistant-maximize")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
+                            .icon(if qrow.assistant_state.maximized {
+                                IconName::Minimize
+                            } else {
+                                IconName::Maximize
+                            })
+                            .accessibility_label(if qrow.assistant_state.maximized {
+                                "Minimize assistant"
+                            } else {
+                                "Maximize assistant"
+                            })
+                            .map(|mut button| {
+                                if qrow.assistant_state.maximized {
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("Minimize assistant", "")
+                                            .for_action_in(&MinimizeAssistant, qrow.focus.clone()),
+                                    );
+                                } else {
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("Maximize assistant", "")
+                                            .for_action_in(&MaximizeAssistant, qrow.focus.clone()),
+                                    );
+                                }
+                                button
+                            })
+                            .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
+                                this.set_assistant_maximized(!this.assistant_state.maximized, window, cx);
+                            })),
                     )
                     .child(
                         Button::new("assistant-toggle-threads")
@@ -488,9 +701,9 @@ impl AssistantPane {
                             .w(action_size)
                             .h(action_size)
                             .flex_shrink_0()
-                            .icon(IconName::Menu)
-                            .accessibility_label("Toggle conversation list")
-                            .tooltip("Toggle conversation list")
+                            .icon(AssetIconName::List)
+                            .accessibility_label(threads_label)
+                            .tooltip(threads_label)
                             .on_click(cx.listener(move |pane, _, window, cx| {
                                 pane.thread_list_override = Some(!show_threads);
                                 pane.read_visible_reply(window, cx);
@@ -528,7 +741,12 @@ impl AssistantPane {
                     .min_h_0()
                     .overflow_y_scroll()
                     .child(self.sign_in(qrow, cx))))
-            .when(!signed_out, |panel| panel.child(self.transcript(cx)))
+            .when(!signed_out && self.rows.rows.is_empty() && first_message.is_none(), |panel| {
+                panel.child(self.empty_transcript(cx))
+            })
+            .when(!signed_out && (!self.rows.rows.is_empty() || first_message.is_some()), |panel| {
+                panel.child(self.transcript(cx))
+            })
             .when_some(
                 pending_approval,
                 |panel, pending| {
@@ -654,14 +872,27 @@ impl AssistantPane {
                         // message field through its container.
                         div().id("assistant-composer").test_support().key_context("AssistantComposer").child(
                             Textarea::new(&self.composer)
+                                .smooth_caret(qrow.settings.assistant_smooth_caret)
+                                .smooth_resize(qrow.settings.assistant_smooth_resize && qrow.assistant_state.resizing.is_none())
                                 .focus_ring(false)
-                                .h_20()
                                 .w_full()
                                 .aria_label("Assistant Message")),
                     )
                     .child(
                         h_flex().min_w_0().gap_1()
-                            .child(
+                            // Until the harness is ready, the selectors have no
+                            // values to offer: a status names the wait.
+                            .when((!controls_ready || model.is_none()) && !disconnected, |row| row.child(
+                                div()
+                                    .id("assistant-controls-waiting")
+                                    .test_support()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("Waiting for {harness_name}…")),
+                            ))
+                            .when(controls_ready && model.is_some(), |row| row.child(
                                 h_flex()
                                     .min_w_0()
                                     .gap_1()
@@ -731,7 +962,7 @@ impl AssistantPane {
                                                     ))
                                                 })
                                             }))),
-                            )
+                            ))
                             .child(div().flex_1())
                             .when_some(disconnected_error, |row, error| row.child(
                                 Button::new("assistant-reconnect")
@@ -821,14 +1052,32 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn the_message_field_grows_to_a_part_of_the_window() {
+        // 40% of 800 points is 320 points: 16 rows of 20 points.
+        assert_eq!(composer_max_rows(px(800.), px(20.)), 16);
+        assert_eq!(composer_max_rows(px(810.), px(20.)), 16);
+        // A short window keeps the rows of a short message.
+        assert_eq!(composer_max_rows(px(100.), px(20.)), COMPOSER_MIN_ROWS);
+        assert_eq!(composer_max_rows(px(800.), px(0.)), COMPOSER_MIN_ROWS);
+    }
+
+    #[::core::prelude::v1::test]
     fn selector_labels_expand_in_priority_order() {
-        let widths = [148., 100., 68.];
-        assert_eq!(assistant_selector_labels(116., widths), [false; 3]);
+        let widths = [Some(148.), Some(100.), Some(68.)];
+        // Three icons take 3 × 24 + 2 × 4 = 80 points.
+        assert_eq!(assistant_selector_labels(80., widths), [false; 3]);
         assert_eq!(
-            assistant_selector_labels(228., widths),
+            assistant_selector_labels(204., widths),
             [true, false, false]
         );
-        assert_eq!(assistant_selector_labels(292., widths), [true, true, false]);
+        assert_eq!(assistant_selector_labels(280., widths), [true, true, false]);
         assert_eq!(assistant_selector_labels(324., widths), [true; 3]);
+        // A label that does not fit keeps the next ones as icons too.
+        assert_eq!(assistant_selector_labels(203., widths), [false; 3]);
+        // Without a tier selector, two labels need less room.
+        assert_eq!(
+            assistant_selector_labels(256., [Some(148.), Some(100.), None]),
+            [true, true, false]
+        );
     }
 }

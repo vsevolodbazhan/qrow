@@ -61,7 +61,7 @@ fn cache(directory: &TempDir, profile: &Profile) {
             .collect();
         catalog.apply_relations(schema, None, relations, 1);
     }
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
 }
 
@@ -87,7 +87,7 @@ fn rules(app: &TestApp, cx: &mut TestAppContext, text: &str) {
     app.scroll_to(cx, "connection-dbt-rules");
     app.update(cx, |window, cx| {
         window.click("connection-dbt-rules", cx);
-        window.press("cmd-a", cx);
+        window.press("secondary-a", cx);
         if text.is_empty() {
             window.press("backspace", cx);
         } else {
@@ -118,7 +118,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
     let app = launch(cx, directory, profile);
 
     edit(&app, cx, id);
-    wait_label_starting(&app, cx, "connection-dbt-status", "The manifest.json file");
+    app.wait_for(cx, "connection-dbt-manifest");
     app.fill(cx, "connection-dbt-manifest", manifest.to_str().unwrap());
     wait_label(&app, cx, "connection-dbt-status", "Read after you save.");
     rules(&app, cx, "analytics_* = *");
@@ -322,7 +322,7 @@ fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestApp
         )]),
         1,
     );
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
     let saved = directory.path().join("dbt");
     let mut tab = SavedTab::new(1, Some(profile.id));
@@ -382,7 +382,7 @@ fn launch_project_with_columns(
     });
     cache(&directory, &profile);
     if !columns.is_empty() {
-        let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+        let path = storage::catalog_cache_path(directory.path(), profile.id);
         let mut catalog = storage::load_catalog(&path).unwrap();
         let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
         let alias = dbt_manifest::model_alias(1);
@@ -404,6 +404,47 @@ fn launch_project_with_columns(
 }
 
 /// Shows the table of model 1 in the schema tree, and returns its name.
+/// Drags the sidebar edge to its widest, so a row has room for its detail
+/// beside the full name.
+fn widen_sidebar(app: &TestApp, cx: &mut TestAppContext) {
+    use gpui_kit::{InputEvent as _, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
+    app.update(cx, |window, cx| {
+        let start = crate::support::bounds_of(window, "sidebar-splitter").center();
+        let end = start + gpui_kit::point(gpui_kit::px(200.), gpui_kit::px(0.));
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position: start,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: end,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Default::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position: end,
+                modifiers: Default::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    app.settle(cx);
+}
+
 fn show_model_table(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid) -> String {
     let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
     let alias = dbt_manifest::model_alias(1);
@@ -518,6 +559,8 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     let (app, manifest, id) = launch_project(cx, &bytes, DbtRefresh::Manual);
     let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
     let alias = show_model_table(&app, cx, id);
+    // A detail shows only beside the full name, so the sidebar gets room.
+    widen_sidebar(&app, cx);
     // The row has a detail with the materialization; a unit test checks
     // its text.
     let detail: gpui_kit::ElementId =
@@ -561,9 +604,15 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
             crate::support::labelled(window, &columns).is_some(),
             "{columns}"
         );
-        for title in ["Tests (", "Parents (", "Children ("] {
+        // An empty part says so, like No tests, and does not open.
+        for (title, empty) in [
+            ("Tests (", "No tests"),
+            ("Parents (", "No parents"),
+            ("Children (", "No children"),
+        ] {
             assert_eq!(
-                crate::support::labelled_starting(window, title).len(),
+                crate::support::labelled_starting(window, title).len()
+                    + crate::support::labelled_starting(window, empty).len(),
                 1,
                 "{title}"
             );

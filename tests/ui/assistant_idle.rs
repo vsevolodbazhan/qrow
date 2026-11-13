@@ -101,10 +101,8 @@ fn codex_stops_after_the_pane_stays_closed(cx: &mut TestAppContext) {
     app.dispatch(cx, ToggleAssistant);
     app.update(cx, |window, cx| {
         window.render_frame(cx);
-        assert_eq!(
-            label(window, "assistant-model").as_deref(),
-            Some("Model: waiting for Codex")
-        );
+        assert!(has(window, "assistant-controls-waiting"));
+        assert!(!has(window, "assistant-model"));
         assert!(!has(window, "assistant-reconnect"));
     });
     app.open_assistant(cx);

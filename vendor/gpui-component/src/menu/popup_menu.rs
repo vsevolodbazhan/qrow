@@ -420,7 +420,7 @@ impl PopupMenu {
 
     /// Set the focus handle on the trigger's dispatch path that shortcut hints
     /// resolve against, without changing focus or where actions are dispatched.
-    pub(crate) fn set_trigger_focus(
+    pub fn set_trigger_focus(
         &mut self,
         handle: Option<FocusHandle>,
         cx: &mut Context<Self>,

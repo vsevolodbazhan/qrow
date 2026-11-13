@@ -14,29 +14,82 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/qtest"))
+import builds  # noqa: E402
+
 IMAGE = "trinodb/trino:483@sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534"
 
 STORAGE_IMAGE = "adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92"
 
 
+# The real-window tests run on macOS and Linux. On Linux, GPUI's test support
+# is behind the ui-test feature.
+UI_TEST_FEATURE = ("--features", "ui-test") if platform.system() == "Linux" else ()
+
+
 def command(*args, **kwargs):
+    if args[:3] == ("cargo", "nextest", "run"):
+        # A layer selects scenarios, not different fixture behavior.
+        layer = os.environ.get("QROW_CONNECTOR_LAYER", "all")
+        core = "--no-default-features" in args
+        if layer != "all" and core != (layer == "core"):
+            return None
+        return builds.run(list(args), kwargs.get("env"))
     return subprocess.run(args, check=True, text=True, **kwargs)
+
+
+def accepts_queries(origin, context):
+    """True when the coordinator finished startup and a query that reads task results succeeds.
+
+    An accepted statement does not prove readiness. The task result endpoint can
+    still answer 503 while the coordinator initializes."""
+    headers = {"X-Trino-User": "qrow", "Authorization": "Basic cXJvdzpxcm93LXRlc3QtcGFzc3dvcmQ="}
+    try:
+        with urllib.request.urlopen(origin + "/v1/info", context=context, timeout=5) as response:
+            if json.load(response).get("starting", True) is not False:
+                return False
+        request = urllib.request.Request(origin + "/v1/statement", data=b"SELECT count(*) FROM tpch.tiny.region",
+                                         headers=headers)
+        deadline = time.monotonic() + 30
+        rows = []
+        while request is not None:
+            with urllib.request.urlopen(request, context=context, timeout=5) as response:
+                body = json.load(response)
+            if body.get("error"):
+                return False
+            # Rows can arrive on any page. The last page often has none.
+            rows.extend(body.get("data", []))
+            if "nextUri" not in body:
+                return rows == [[5]]
+            if time.monotonic() >= deadline:
+                return False
+            request = urllib.request.Request(body["nextUri"], headers=headers)
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return False
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--perf", action="store_true", help="Measure export transfer in an optimized build.")
+    parser.add_argument("--layer", choices=("all", "core", "ui"), default="all")
     options = parser.parse_args()
+    if options.perf and options.layer == "ui":
+        parser.error("--perf requires core tests")
+    os.environ["QROW_CONNECTOR_LAYER"] = options.layer
     name = "qrow-e2e-trino-" + uuid.uuid4().hex[:12]
     storage_name = name + "-storage"
     env = os.environ.copy()
     profile = "ci" if env.get("CI") else "default"
     build = ("--profile", "perf") if options.perf else ()
-    command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
-    if not options.perf and platform.system() == "Darwin":
-        command("cargo", "test", "--locked", "--test", "e2e", "--no-run")
+    if not os.environ.get("QROW_NEXTEST_RUNTIME"):
+        if options.layer != "ui":
+            command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
+        if not options.perf and options.layer != "core":
+            command("cargo", "test", "--locked", *UI_TEST_FEATURE, "--test", "e2e", "--no-run")
     target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     fixture_root = target / "qtest" / "trino"
     fixture_root.mkdir(parents=True, exist_ok=True)
@@ -44,12 +97,18 @@ def main():
         path = Path(temporary)
         (path / "catalog").mkdir()
         quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        # An explicit configuration gives OpenSSL and LibreSSL the same CA. Python
+        # 3.13 verifies X.509 strictly and needs both key identifiers.
+        (path / "ca.cnf").write_text("[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n[dn]\nCN=Qrow Trino test CA\n"
+                                     "[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n"
+                                     "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n")
         command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                "-subj", "/CN=Qrow Trino test CA", "-keyout", str(path / "ca.key"),
-                "-out", str(path / "ca.crt"), "-addext", "keyUsage=critical,keyCertSign,cRLSign", **quiet)
+                "-config", str(path / "ca.cnf"), "-keyout", str(path / "ca.key"),
+                "-out", str(path / "ca.crt"), **quiet)
         command("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
                 "-keyout", str(path / "server.key"), "-out", str(path / "server.csr"), **quiet)
-        (path / "extensions").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n")
+        (path / "extensions").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n"
+                                           "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
         command("openssl", "x509", "-req", "-in", str(path / "server.csr"), "-CA", str(path / "ca.crt"),
                 "-CAkey", str(path / "ca.key"), "-CAcreateserial", "-days", "1", "-extfile", str(path / "extensions"),
                 "-out", str(path / "server.crt"), **quiet)
@@ -66,7 +125,7 @@ def main():
             "http-server.log.immediate-flush=true\n"
             "http-server.log.compression.enabled=false\n")
         (path / "node.properties").write_text("node.environment=test\nnode.id=qrow-test\nnode.data-dir=/tmp/trino-data\n")
-        (path / "jvm.config").write_text("-server\n-Xmx768M\n-XX:+UseG1GC\n-XX:+ExitOnOutOfMemoryError\n-Djdk.attach.allowAttachSelf=true\n-Djavax.net.ssl.trustStore=/etc/trino/fixture-trust.p12\n-Djavax.net.ssl.trustStorePassword=synthetic-fixture-trust\n")
+        (path / "jvm.config").write_text("-server\n-Xmx2G\n-XX:+UseG1GC\n-XX:+ExitOnOutOfMemoryError\n-Djdk.attach.allowAttachSelf=true\n-Djavax.net.ssl.trustStore=/etc/trino/fixture-trust.p12\n-Djavax.net.ssl.trustStorePassword=synthetic-fixture-trust\n")
         (path / "log.properties").write_text("io.trino=INFO\n")
         (path / "password-authenticator.properties").write_text("password-authenticator.name=file\nfile.password-file=/etc/trino/password.db\n")
         (path / "password.db").write_text("qrow:$2y$10$XGTex8TgykMhNp//95n31Okw76IAjMLFdLSLwnxZh4STmyR8RwHpK\n")
@@ -130,24 +189,19 @@ def main():
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Trino storage fixture did not create its bucket in time")
                 time.sleep(0.2)
-            command("docker", "run", "--detach", "--name", name, "--memory", "2g", "--cpus", "2",
+            # Parallel tests hold several large results and spooled segments at
+            # once. A 768 MB heap ran out of memory locally and needed major
+            # collections in CI. The JVM also needs memory outside the heap.
+            command("docker", "run", "--detach", "--name", name, "--memory", "3g", "--cpus", "2",
                     "--network", f"container:{storage_name}", "--mount", f"type=bind,source={path},target=/etc/trino,readonly", IMAGE)
             started = True
             port = str(coordinator_port)
             env.update(QROW_TRINO_FIXTURE=name, QROW_TRINO_PORT=port, QROW_TRINO_CA=str(path / "ca.crt"))
             env.update(QROW_TRINO_STORAGE=storage_name, QROW_TRINO_STORAGE_PORT=str(storage_port))
             deadline = time.monotonic() + 120
-            while True:
-                request = urllib.request.Request(f"https://localhost:{port}/v1/statement", data=b"SELECT 1",
-                                                 headers={"X-Trino-User": "qrow", "Authorization": "Basic cXJvdzpxcm93LXRlc3QtcGFzc3dvcmQ="})
-                try:
-                    with urllib.request.urlopen(request, context=context, timeout=5) as response:
-                        if response.status == 200:
-                            break
-                except (urllib.error.URLError, OSError):
-                    pass
+            while not accepts_queries(f"https://localhost:{port}", context):
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("Trino fixture did not accept SELECT 1 in time")
+                    raise RuntimeError("Trino fixture did not complete a tpch query in time")
                 time.sleep(0.2)
             if options.perf:
                 command("cargo", "nextest", "run", "--locked", "--profile", profile, "--cargo-profile", "perf",
@@ -156,9 +210,8 @@ def main():
                 return
             command("cargo", "nextest", "run", "--locked", "--profile", profile, "--no-default-features", "--test", "integration",
                     "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & not test(/external_browser/)", env=env)
-            if platform.system() == "Darwin":
-                command("cargo", "nextest", "run", "--locked", "--profile", profile, "--test", "e2e",
-                        "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & not test(/external_browser/)", env=env)
+            command("cargo", "nextest", "run", "--locked", "--profile", profile, *UI_TEST_FEATURE, "--test", "e2e",
+                    "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & not test(/external_browser/)", env=env)
             # The same disposable coordinator now delegates login to its
             # synthetic confidential OIDC client. Only this fixture changes.
             oidc_port = command("docker", "port", storage_name, "9443/tcp", capture_output=True).stdout.strip().rsplit(":", 1)[1]
@@ -200,9 +253,8 @@ def main():
                 time.sleep(0.2)
             command("cargo", "nextest", "run", "--locked", "--profile", profile, "--no-default-features", "--test", "integration",
                     "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & test(/external_browser/)", env=env)
-            if platform.system() == "Darwin":
-                command("cargo", "nextest", "run", "--locked", "--profile", profile, "--test", "e2e",
-                        "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & test(/external_browser/)", env=env)
+            command("cargo", "nextest", "run", "--locked", "--profile", profile, *UI_TEST_FEATURE, "--test", "e2e",
+                    "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & test(/external_browser/)", env=env)
         finally:
             if started:
                 subprocess.run(["docker", "exec", name, "/bin/sh", "-c", "test ! -f /tmp/trino-oidc.log || cat /tmp/trino-oidc.log"], check=False)

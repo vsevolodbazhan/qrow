@@ -4,13 +4,17 @@ mod assistant_tools;
 mod assistant_view;
 mod button_pair;
 mod catalog_tree;
+mod comments;
 mod connection_form;
+mod connection_sharing;
 mod dbt;
 mod dbt_details;
 mod demo;
 mod environment;
 mod export_dialog;
 mod format_sql;
+mod log_row;
+mod motion;
 mod output;
 mod profile_view;
 mod result_tabs;
@@ -19,11 +23,15 @@ mod results;
 mod run_highlight;
 mod setting_row;
 mod settings_view;
+mod settings_window;
 mod sign_in_view;
+mod sql_files;
 mod status_dot;
 mod status_tooltip;
 mod tab_view;
+mod toast;
 mod unit_input;
+mod updates;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
@@ -33,7 +41,10 @@ pub use workspace_view::WindowView;
 use crate::themes;
 use crate::{
     connector::DatabaseConnector,
-    logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
+    logs::{
+        ExecutionId, LogChange, LogEntry, LogEvent, LogHistory, LogKind, Panel, PanelState,
+        Severity,
+    },
     model::{
         AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
@@ -61,7 +72,7 @@ use results::Results;
 use status_dot::DotStatus;
 use status_tooltip::StatusTooltip;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
@@ -73,14 +84,20 @@ actions!(
     [
         RunQuery,
         FormatSql,
+        ToggleComment,
         RunAndExport,
         SendAssistantMessage,
         NewTab,
+        ImportSqlFile,
+        SaveAsSqlFile,
+        PasteConnection,
         CloseTab,
         ToggleSidebar,
         ShowConnections,
         ShowSignIns,
         ToggleAssistant,
+        MaximizeAssistant,
+        MinimizeAssistant,
         ToggleResults,
         ToggleActivity,
         OpenAbout,
@@ -97,10 +114,18 @@ actions!(
         Quit
     ]
 );
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = qrow, no_json)]
+struct SelectTab(usize);
+
 /// Initializes GPUI Kit, themes, the SQL language, key bindings, and menus.
 /// Call once before opening a Qrow window.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    // Before the themes: they name the bundled monospace font.
+    if let Err(error) = cx.text_system().add_fonts(crate::assets::fonts()) {
+        eprintln!("Could not load the bundled fonts: {error:#}");
+    }
     cx.set_global(crate::export::Jobs::default());
     themes::init(cx);
     // Wide result sets need a persistent, discoverable horizontal scrollbar.
@@ -117,34 +142,60 @@ pub fn init(cx: &mut App) {
         ),
     );
     cx.bind_keys(results::bindings());
+    cx.bind_keys(settings_window::bindings());
     cx.bind_keys([
-        KeyBinding::new("cmd-enter", RunQuery, None),
-        KeyBinding::new("alt-cmd-l", FormatSql, None),
+        KeyBinding::new("secondary-enter", RunQuery, None),
+        KeyBinding::new("alt-secondary-l", FormatSql, None),
+        KeyBinding::new("secondary-/", ToggleComment, Some("SqlEditor")),
         KeyBinding::new(
-            "cmd-enter",
+            "secondary-enter",
             SendAssistantMessage,
             Some("AssistantComposer > Input"),
         ),
-        KeyBinding::new("cmd-t", NewTab, None),
-        KeyBinding::new("cmd-w", CloseTab, None),
-        KeyBinding::new("cmd-b", ShowConnections, None),
-        KeyBinding::new("cmd-r", ToggleAssistant, None),
-        KeyBinding::new("cmd-j", ToggleResults, None),
-        KeyBinding::new("cmd-shift-u", ToggleActivity, None),
+        KeyBinding::new("secondary-t", NewTab, None),
+        KeyBinding::new("secondary-o", ImportSqlFile, None),
+        KeyBinding::new("secondary-shift-s", SaveAsSqlFile, None),
+        KeyBinding::new("secondary-w", CloseTab, None),
+        KeyBinding::new("secondary-b", ShowConnections, None),
+        KeyBinding::new("secondary-r", ToggleAssistant, None),
+        KeyBinding::new(
+            "secondary-shift-r",
+            MaximizeAssistant,
+            Some("Qrow && !AssistantMaximized"),
+        ),
+        KeyBinding::new(
+            "secondary-shift-r",
+            MinimizeAssistant,
+            Some("Qrow && AssistantMaximized"),
+        ),
+        KeyBinding::new("secondary-j", ToggleResults, None),
+        KeyBinding::new("secondary-shift-u", ToggleActivity, None),
         KeyBinding::new(
             "escape",
             activity_view::CloseActivity,
             Some(activity_view::CONTEXT),
         ),
-        KeyBinding::new("cmd-=", IncreaseUiScale, None),
-        KeyBinding::new("cmd-+", IncreaseUiScale, None),
-        KeyBinding::new("cmd--", DecreaseUiScale, None),
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
-        KeyBinding::new("cmd-enter", SaveSignIn, Some("SignInSettings")),
-        KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
+        KeyBinding::new("secondary-=", IncreaseUiScale, None),
+        KeyBinding::new("secondary-+", IncreaseUiScale, None),
+        KeyBinding::new("secondary--", DecreaseUiScale, None),
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
+        // ⌘W closes the topmost dialog, like a macOS window, before it
+        // closes a query tab.
         KeyBinding::new(
-            "cmd-c",
+            "secondary-w",
+            gpui_kit::base::actions::Cancel,
+            Some("Dialog"),
+        ),
+        KeyBinding::new(
+            "secondary-enter",
+            SaveConnection,
+            Some("ConnectionSettings"),
+        ),
+        KeyBinding::new("secondary-enter", SaveSignIn, Some("SignInSettings")),
+        KeyBinding::new("secondary-enter", SubmitRename, Some("RenameDialog")),
+        KeyBinding::new(
+            "secondary-c",
             CopyCatalogName,
             Some(gpui_kit::base::tree_key_context()),
         ),
@@ -156,6 +207,13 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-up", MoveConnectionUp, Some("Connections > Tree")),
         KeyBinding::new("alt-down", MoveConnectionDown, Some("Connections > Tree")),
     ]);
+    cx.bind_keys((1..=9).map(|number| {
+        KeyBinding::new(
+            &format!("secondary-{number}"),
+            SelectTab(number - 1),
+            Some("Qrow"),
+        )
+    }));
     set_menus(cx, false);
 }
 
@@ -183,7 +241,10 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New query tab", NewTab),
+                MenuItem::action("Import SQL file…", ImportSqlFile),
                 MenuItem::action("Close tab", CloseTab),
+                MenuItem::separator(),
+                MenuItem::action("Paste connection", PasteConnection),
             ],
         },
         Menu {
@@ -213,6 +274,8 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
     ];
     if assistant_enabled {
         view.push(MenuItem::action("Toggle assistant", ToggleAssistant));
+        view.push(MenuItem::action("Maximize assistant", MaximizeAssistant));
+        view.push(MenuItem::action("Minimize assistant", MinimizeAssistant));
     }
     view.push(MenuItem::action("Activity", ToggleActivity));
     menus.push(Menu {
@@ -262,7 +325,12 @@ struct Tab {
     started: Option<Instant>,
     output: LogHistory,
     panel: PanelState,
-    output_scroll: ScrollHandle,
+    /// The rows of the Logs, one for each entry of `output`. Only the rows
+    /// on screen are laid out and painted, so a long log keeps a drag
+    /// selection fast. At the end, the list follows new entries.
+    output_list: ListState,
+    /// The Logs entries whose long code block shows in full.
+    expanded_output: HashSet<u64>,
     current_execution: Option<ExecutionId>,
     result_session: Option<Uuid>,
     next_execution_id: u64,
@@ -560,7 +628,14 @@ struct ProfileEditor {
     /// The dbt project fields.
     dbt: dbt::DbtForm,
     is_new: bool,
+    /// The form came from Paste connection.
+    pasted: Option<connection_sharing::PastedConnection>,
     error: Option<String>,
+    /// The errors of single fields, by index in `fields`. Each shows below
+    /// its field; `error` holds an error of the whole form for the footer.
+    field_errors: Vec<(usize, String)>,
+    /// The field to focus in the next frame: the first invalid one.
+    focus_field: std::cell::Cell<Option<usize>>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
 }
 struct ProfileSave {
@@ -568,6 +643,8 @@ struct ProfileSave {
     /// The shared catalog that the connection uses, with its edited settings.
     shared: Option<SharedCatalog>,
     password_changed: bool,
+    /// The sign-in of a pasted connection, which the workspace does not have.
+    sign_in: Option<crate::model::SignIn>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProfileSaveAction {
@@ -628,8 +705,16 @@ fn truncate_display_name(name: &str) -> String {
 fn installed_fonts(cx: &App) -> Vec<String> {
     let mut fonts = cx.text_system().all_font_names();
     fonts.retain(|font| !font.is_empty());
-    if !fonts.iter().any(|font| font == "Menlo") {
-        fonts.insert(0, "Menlo".into());
+    // The macOS font list has only the installed fonts; the bundled fonts
+    // are in the GPUI text system and are always there.
+    for font in [
+        crate::model::INTERFACE_FONT_FAMILY,
+        crate::model::MONOSPACE_FONT_FAMILY,
+        "Menlo",
+    ] {
+        if !fonts.iter().any(|name| name == font) {
+            fonts.insert(0, font.into());
+        }
     }
     fonts
 }
@@ -653,11 +738,26 @@ fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
         theme.font_family = settings.ui_font_family.clone().into();
         theme.font_size = px(14. * settings.ui_scale);
         theme.mono_font_size = px(13. * settings.ui_scale);
+        // Notifications start below the query tabs, so they never cover the
+        // tab that a notification is about.
+        theme.notification.margins.top = gpui_kit::component::TITLE_BAR_HEIGHT
+            + px(workspace_view::TAB_BAR_HEIGHT * settings.ui_scale)
+            + theme.notification.margins.right;
         theme.font_size
     };
     gpui_kit::component::Theme::sync_base(cx);
     window.set_rem_size(font_size);
     window.refresh();
+    // The Settings window and the main window share the interface scale.
+    let current = window.window_handle();
+    for handle in cx.windows() {
+        if handle != current {
+            let _ = handle.update(cx, |_, window, _| {
+                window.set_rem_size(font_size);
+                window.refresh();
+            });
+        }
+    }
 }
 
 fn panel_empty_state(message: &'static str, cx: &App) -> Div {
@@ -678,10 +778,21 @@ pub struct Qrow {
     assistant_state: assistant_view::AssistantState,
     /// The assistant pane view. Qrow renders it beside the workspace.
     assistant_pane: Entity<assistant_view::AssistantPane>,
+    /// The panel of the sidebar, in a view of its own.
+    sidebar_view: Entity<workspace_view::QrowPart>,
+    /// The SQL editor of the active tab, in a view of its own.
+    sql_editor_view: Entity<workspace_view::QrowPart>,
+    /// The result toolbar and the result table of the active tab, in a view
+    /// of its own.
+    results_view: Entity<workspace_view::QrowPart>,
     fonts: Vec<String>,
     settings_open: bool,
+    /// The Settings window, while it is open. There is at most one.
+    settings_window: Option<AnyWindowHandle>,
     /// The page that Settings shows when it opens.
     about_open: bool,
+    /// Update checks of a release build and their state.
+    updates: updates::Updates,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
     /// The schema catalogs that several connections share.
@@ -692,6 +803,9 @@ pub struct Qrow {
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
     tab_scroll: ScrollHandle,
+    /// The Logs font, size, and line height that the Logs rows were measured
+    /// with.
+    output_typography: Option<(SharedString, Pixels, f32)>,
     form: Option<ProfileEditor>,
     tab_form: Option<TabEditor>,
     result_form: Option<result_tabs::ResultEditor>,
@@ -737,6 +851,14 @@ pub struct Qrow {
     dbt: dbt::DbtProjects,
     /// The dbt resource of the open dbt details sheet.
     dbt_details: Option<Entity<dbt_details::DbtDetailsView>>,
+    /// The schema tree row that opened the dbt details sheet. Closing the
+    /// sheet returns the focus to it.
+    dbt_details_origin: Option<SharedString>,
+    /// The height of the status bar in the last frame. Side sheets end
+    /// above it.
+    status_bar_height: std::rc::Rc<std::cell::Cell<Pixels>>,
+    /// Measured space available to the workspace and Activity takeover.
+    workspace_body_size: std::rc::Rc<std::cell::Cell<Size<Pixels>>>,
     _demo_manifest: Option<tempfile::NamedTempFile>,
 }
 impl Qrow {
@@ -768,7 +890,10 @@ impl Qrow {
             match Saver::open(path, move || {
                 let _ = save_wake.try_send(());
             }) {
-                Ok((workspace, saver)) => (workspace, None, Some(saver)),
+                Ok((workspace, saver)) => {
+                    let notice = saver.newer.as_ref().map(storage::NewerData::notice);
+                    (workspace, notice, Some(saver))
+                }
                 Err(e) => (
                     Workspace::default(),
                     Some(format!(
@@ -798,7 +923,7 @@ impl Qrow {
         let mut unavailable_font = !font_available(&workspace.settings.editor_font_family, &fonts);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
-            let warning = "The saved editor font is unavailable, so Qrow is using Menlo.";
+            let warning = "The saved editor font is unavailable, so Qrow is using JetBrains Mono.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -809,7 +934,7 @@ impl Qrow {
         if !font_available(&workspace.settings.logs_font_family, &fonts) {
             workspace.settings.logs_font_family = Settings::default().logs_font_family;
             unavailable_font = true;
-            let warning = "The saved Logs font is unavailable, so Qrow is using Menlo.";
+            let warning = "The saved Logs font is unavailable, so Qrow is using JetBrains Mono.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -821,7 +946,7 @@ impl Qrow {
             workspace.settings.assistant_font_family = Settings::default().assistant_font_family;
             unavailable_font = true;
             let warning =
-                "The saved assistant font is unavailable, so Qrow is using the system font.";
+                "The saved assistant font is unavailable, so Qrow is using IBM Plex Sans.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -833,7 +958,7 @@ impl Qrow {
             workspace.settings.ui_font_family = Settings::default().ui_font_family;
             unavailable_font = true;
             let warning =
-                "The saved interface font is unavailable, so Qrow is using the system font.";
+                "The saved interface font is unavailable, so Qrow is using IBM Plex Sans.";
             if let Some(message) = &mut message {
                 message.push(' ');
                 message.push_str(warning);
@@ -853,6 +978,14 @@ impl Qrow {
         let assistant_pane = {
             let qrow = cx.entity();
             cx.new(|cx| assistant_view::AssistantPane::new(&qrow, window, cx))
+        };
+        let (sidebar_view, sql_editor_view, results_view) = {
+            let qrow = cx.entity();
+            (
+                cx.new(|cx| workspace_view::QrowPart::new(&qrow, Self::sidebar_content, cx)),
+                cx.new(|cx| workspace_view::QrowPart::new(&qrow, Self::sql_editor, cx)),
+                cx.new(|cx| workspace_view::QrowPart::new(&qrow, Self::results_content, cx)),
+            )
         };
         let composer = assistant_pane.read(cx).composer().clone();
         let assistant_submit = cx.subscribe_in(
@@ -901,7 +1034,9 @@ impl Qrow {
                 editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
         });
-        let catalog = catalog_tree::CatalogTree::new(environment.workspace().cloned(), window, cx);
+        let mut catalog =
+            catalog_tree::CatalogTree::new(environment.local_directory().cloned(), window, cx);
+        catalog.scope = workspace.search_scope.clone();
         let catalog_subscriptions = [
             cx.subscribe(
                 &catalog.state,
@@ -916,19 +1051,20 @@ impl Qrow {
             }),
         ];
         let activity = cx.new(|cx| activity_view::ActivityView::new(window, cx));
-        // The saved dbt indexes are next to the workspace, which its lock
-        // protects. Without a saved workspace, they stay in memory.
+        // The saved dbt indexes are in the local data directory, which the
+        // workspace lock protects. Without a saved workspace, they stay in
+        // memory.
         let dbt_directory = environment
-            .workspace()
+            .local_directory()
             .filter(|_| saver.is_some() && !demo)
-            .map(|workspace| storage::dbt_directory(workspace));
+            .map(|local| storage::dbt_index_directory(local));
         let dbt = dbt::DbtProjects::new(dbt_directory, wake.clone());
         // Assistant transcripts follow the same rule as the dbt indexes.
         assistant_state.store = assistant_view::transcript_store(
             environment
-                .workspace()
+                .local_directory()
                 .filter(|_| saver.is_some() && !demo)
-                .map(|workspace| workspace.as_path()),
+                .map(|local| local.as_path()),
         );
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
@@ -938,9 +1074,14 @@ impl Qrow {
             assistant: workspace.assistant,
             assistant_state,
             assistant_pane,
+            sidebar_view,
+            sql_editor_view,
+            results_view,
             fonts,
             settings_open: false,
+            settings_window: None,
             about_open: false,
+            updates: updates::Updates::new(environment.updates(), &environment.trust()),
             settings_form: None,
             profiles: workspace.profiles,
             shared_catalogs: workspace.shared_catalogs,
@@ -949,6 +1090,7 @@ impl Qrow {
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),
+            output_typography: None,
             form: None,
             tab_form: None,
             result_form: None,
@@ -986,6 +1128,9 @@ impl Qrow {
             _activity_events: activity_events,
             dbt,
             dbt_details: None,
+            dbt_details_origin: None,
+            status_bar_height: Default::default(),
+            workspace_body_size: Default::default(),
             _demo_manifest: demo_manifest,
         };
         for tab in workspace.tabs {
@@ -1029,7 +1174,12 @@ impl Qrow {
                 } else if notifications.recv().await.is_err() {
                     break;
                 }
-                match weak.update_in(cx, |this, window, cx| this.tick(window, cx)) {
+                // Settings also renders this entity. Its last rendered window
+                // can be closed, so resolve ticks through the main window.
+                match cx
+                    .update(|window, cx| weak.update(cx, |this, cx| this.tick(window, cx)))
+                    .and_then(std::convert::identity)
+                {
                     Ok(keep_polling) => pending = keep_polling,
                     Err(_) => break,
                 }
@@ -1039,12 +1189,13 @@ impl Qrow {
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| {
-                this.request_quit(window, cx);
+                this.request_user_quit(window, cx);
             })
             .is_err()
         });
         // Native termination may bypass our Quit action and the window close guard.
         cx.on_release(|this, cx| this.finish(cx)).detach();
+        this.start_update_checks(window, cx);
         eprintln!(
             "Qrow GPUI initialized in {:.0} ms{}",
             started.elapsed().as_secs_f64() * 1000.,
@@ -1059,17 +1210,27 @@ impl Qrow {
                 .language("sql")
                 .soft_wrap(false)
                 .tab_size(editor_tab_size(&self.settings))
+                .placeholder(if cfg!(target_os = "macos") {
+                    "Write SQL, then press ⌘↩ to run"
+                } else {
+                    "Write SQL, then press Ctrl+Enter to run"
+                })
                 .default_value(saved.sql.clone())
         });
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) {
-                    let current = tab.input.read(cx).value().to_string();
-                    if tab.pending_assistant_edit.take().as_deref() != Some(current.as_str()) {
+                    // Only an assistant edit needs the text: it does not
+                    // count as a change of the user.
+                    let assistant_edit = tab
+                        .pending_assistant_edit
+                        .take()
+                        .is_some_and(|edit| tab.input.read(cx).value() == edit.as_str());
+                    if !assistant_edit {
                         tab.revision = tab.revision.saturating_add(1);
                     }
                 }
-                this.changed(cx);
+                this.sql_changed(cx);
             }
         });
         let run_highlight = run_highlight::track(&input, cx);
@@ -1099,7 +1260,8 @@ impl Qrow {
             started: None,
             output: LogHistory::default(),
             panel: PanelState::default(),
-            output_scroll: ScrollHandle::new(),
+            output_list: output::output_list(),
+            expanded_output: HashSet::new(),
             current_execution: None,
             result_session: None,
             submitted_sql: None,
@@ -1162,6 +1324,7 @@ impl Qrow {
             active_tab: self.active,
             active_tabs: self.active_tabs.clone(),
             sign_ins: self.sign_ins.clone(),
+            search_scope: self.catalog.scope.clone(),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -1275,6 +1438,7 @@ impl Qrow {
                                     window.close_dialog(cx);
                                     let _ = keep_working.update(cx, |this, cx| {
                                         this.quit_warning_open = false;
+                                        this.updates.restarting = false;
                                         cx.notify();
                                     });
                                 }),
@@ -1298,6 +1462,13 @@ impl Qrow {
         cx.notify();
     }
 
+    /// Quit that the user asks for: the Quit command or closing the window.
+    /// It replaces an earlier Restart to update that did not finish.
+    pub(super) fn request_user_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.updates.restarting = false;
+        self.request_quit(window, cx);
+    }
+
     pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending_quit.is_some() || self.quit_confirmed || self.quit_warning_open {
             return;
@@ -1314,7 +1485,7 @@ impl Qrow {
         }
         if self.demo {
             self.quit_confirmed = true;
-            cx.quit();
+            self.exit(cx);
             return;
         }
         let snapshot = self.snapshot(cx);
@@ -1366,7 +1537,7 @@ impl Qrow {
                                 .on_click(move |_, _, cx| {
                                     let _ = discard.update(cx, |this, cx| {
                                         this.quit_confirmed = true;
-                                        cx.quit();
+                                        this.exit(cx);
                                     });
                                 }),
                         )
@@ -1377,6 +1548,7 @@ impl Qrow {
                                 // Ask again if work is still active on the next quit.
                                 let _ = keep_editing.update(cx, |this, cx| {
                                     this.quit_work_confirmed = false;
+                                    this.updates.restarting = false;
                                     cx.notify();
                                 });
                             },
@@ -1401,16 +1573,34 @@ impl Qrow {
         self.external_auth.configure(&self.profiles);
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
+        self.sync_search_scope(cx);
         // The UI scale and the Logs font settings change here.
         self.sync_activity_typography(cx);
+        self.sync_output_typography();
         cx.notify();
     }
+    /// Notes an edit of the SQL of a tab, which the workspace saves after a
+    /// pause. The editor draws the edit itself. The workspace draws again
+    /// only when its save status changes.
+    fn sql_changed(&mut self, cx: &mut Context<Self>) {
+        let was_saved = self.dirty.is_none();
+        self.dirty = Some(Instant::now());
+        let _ = self.wake.try_send(());
+        if was_saved {
+            cx.notify();
+        }
+    }
     fn record_log(tab: &mut Tab, event: LogEvent) {
-        let at_bottom =
-            tab.output_scroll.offset().y <= -tab.output_scroll.max_offset().y + px(8. * 1.);
-        tab.output.record(event);
-        if at_bottom {
-            tab.output_scroll.scroll_to_bottom();
+        match tab.output.record(event) {
+            LogChange::Appended => {
+                let last = tab.output.entries().len() - 1;
+                tab.output_list.splice(last..last, 1);
+            }
+            // A new entry can also remove old groups, from any place in the log.
+            LogChange::Rewritten { before } => {
+                let after: Vec<u64> = tab.output.entries().map(LogEntry::id).collect();
+                output::splice_rows(&tab.output_list, &before, &after);
+            }
         }
     }
     fn record_local_log(tab: &mut Tab, severity: Severity, kind: LogKind, text: impl Into<String>) {
@@ -1420,7 +1610,7 @@ impl Qrow {
         );
     }
     fn record_failure(tab: &mut Tab, active: bool) {
-        tab.output_scroll.scroll_to_bottom();
+        tab.output_list.scroll_to_end();
         tab.panel.failure(active);
     }
     fn allocate_execution_id(tab: &mut Tab) -> ExecutionId {
@@ -1431,7 +1621,8 @@ impl Qrow {
     fn clear_output(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
         tab.output.clear();
-        tab.output_scroll.set_offset(point(px(0.), px(0.)));
+        tab.output_list.reset(0);
+        tab.expanded_output.clear();
         cx.notify();
     }
     fn copy_output(&self, cx: &mut App) {
@@ -1477,8 +1668,9 @@ impl Qrow {
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let mut activity = Vec::new();
-        let workspace_visible =
-            !self.activity.read(cx).is_open() && !self.settings.results_minimized;
+        let workspace_visible = !self.activity.read(cx).is_open()
+            && !self.assistant_maximized()
+            && !self.settings.results_minimized;
         let mut waits = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let events: Vec<_> = tab
@@ -1883,7 +2075,16 @@ impl Qrow {
                     profile,
                     shared,
                     password_changed,
+                    sign_in,
                 } = saved;
+                if let Some(mut sign_in) = sign_in
+                    && !self.sign_ins.iter().any(|other| other.id == sign_in.id)
+                {
+                    sign_in.name = crate::model::unique_sign_in_name(&sign_in.name, |name| {
+                        self.sign_ins.iter().any(|other| other.name == name)
+                    });
+                    self.sign_ins.push(sign_in);
+                }
                 let id = profile.id;
                 let is_new = self.form.as_ref().is_some_and(|form| form.is_new);
                 let had_profiles = !self.profiles.is_empty();
@@ -2016,7 +2217,7 @@ impl Qrow {
                     && !self.form.as_ref().is_some_and(|f| f.saving.is_some()) =>
             {
                 self.quit_confirmed = true;
-                cx.quit();
+                self.exit(cx);
             }
             Ok(()) => self.request_quit(window, cx),
             Err(error) => self.quit_failed(error, window, cx),
@@ -2050,7 +2251,7 @@ impl Qrow {
         {
             self.tab_scroll.scroll_to_item(position);
         }
-        if !self.activity.read(cx).is_open() {
+        if !self.activity.read(cx).is_open() && !self.assistant_maximized() {
             if !self.settings.results_minimized {
                 self.tabs[index].panel.content_visible();
             }
@@ -2059,7 +2260,7 @@ impl Qrow {
                     .input
                     .update(cx, |s, cx| s.focus(window, cx));
             }
-        } else {
+        } else if self.activity.read(cx).is_open() {
             let focus = self.tabs[index].input.read(cx).focus_handle(cx);
             self.activity
                 .update(cx, |view, _| view.return_focus_to(focus));
@@ -2090,17 +2291,48 @@ impl Qrow {
             })
     }
     /// A modal owns the window, so tab and profile commands wait for it.
+    /// Whether a dialog of the main window is open. The Settings window is a
+    /// window of its own and leaves the main window usable.
     fn dialog_open(&self) -> bool {
         self.form.is_some()
-            || self.settings_open
             || self.about_open
             || self.tab_form.is_some()
             || self.result_form.is_some()
             || self.assistant_state.rename_form.is_some()
             || self.sign_in_ui.editor.is_some()
     }
+    fn select_tab(&mut self, action: &SelectTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            return;
+        }
+        // The maximized assistant hides the tab strip but shows the
+        // conversation list, so the number selects a conversation.
+        if self.assistant_covers_workspace(cx) {
+            let thread = self
+                .assistant_pane
+                .read(cx)
+                .listed_conversations(self, cx)
+                .get(action.0)
+                .map(|(conversation, _)| conversation.thread_id.clone());
+            if let Some(thread) = thread {
+                self.select_assistant_thread(&thread, window, cx);
+                self.assistant_pane
+                    .read(cx)
+                    .reveal_listed_conversation(action.0);
+            }
+            return;
+        }
+        if let Some(index) = self.visible_tab_indices().get(action.0).copied() {
+            self.activate(index, window, cx);
+        }
+    }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
+            return;
+        }
+        // The maximized assistant shows a conversation, not the tab strip.
+        if self.assistant_covers_workspace(cx) {
+            self.create_assistant_conversation(window, cx);
             return;
         }
         let profile = self.active_profile();
@@ -2219,10 +2451,14 @@ impl Qrow {
         self.select_catalog_connection(id, window, cx);
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
+        // Do not run SQL from an editor that the maximized assistant hides.
+        if self.assistant_covers_workspace(cx) {
+            return;
+        }
         self.run_selected_query(window, cx);
     }
     fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.form.is_some() || self.settings_open {
+        if self.form.is_some() {
             return false;
         }
         self.run_tab_query(self.active, window, cx)
@@ -2235,13 +2471,15 @@ impl Qrow {
         }
         self.restore_results(cx);
         let query = self.selected_tab_sql(index, window, cx);
+        let active = index == self.active
+            && !self.activity.read(cx).is_open()
+            && !self.assistant_maximized();
         let tab = &mut self.tabs[index];
         let query = match query {
             Ok(query) => query,
             // The demo always shows its results.
             Err(_) if self.demo => tab.input.read(cx).value().to_string(),
             Err(message) => {
-                let active = index == self.active && !self.activity.read(cx).is_open();
                 Self::record_log(
                     tab,
                     LogEvent::new(None, Severity::Error, LogKind::Error, message),
@@ -2303,7 +2541,9 @@ impl Qrow {
             cx.notify();
             return true;
         }
-        let active = index == self.active && !self.activity.read(cx).is_open();
+        let active = index == self.active
+            && !self.activity.read(cx).is_open()
+            && !self.assistant_maximized();
         let database_type = self.tab_database_type(self.tabs[index].saved.profile);
         let tab = &mut self.tabs[index];
         if let Err(e) = sql::validate_single_for(&query, database_type) {
@@ -2554,7 +2794,7 @@ impl Qrow {
     }
     fn disconnect_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[index];
-        if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
+        if !tab.can_disconnect() || self.form.is_some() {
             return;
         }
         if tab.worker.is_some() {
@@ -2576,13 +2816,27 @@ impl Qrow {
         }
         cx.notify();
     }
-    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.dialog_open() {
-            self.settings_open = true;
-            self.init_settings_form(window, cx);
-            self.open_settings_dialog(window, cx);
-            cx.notify();
+    /// Open the Settings window, or bring the open one to the front.
+    fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.settings_window {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+            self.settings_window = None;
+            self.settings_form = None;
         }
+        // The window creates its form inside Qrow, so it opens after this
+        // update of Qrow ends.
+        let qrow = cx.weak_entity();
+        cx.defer(move |cx| settings_window::open(qrow, cx));
+    }
+
+    /// The Settings window, while it is open.
+    pub fn settings_window(&self) -> Option<AnyWindowHandle> {
+        self.settings_window
     }
     fn open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dialog_open() {
@@ -2691,6 +2945,9 @@ impl Qrow {
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
         self.settings.editor_line_height = settings.editor_line_height;
+        self.settings.editor_smooth_caret = settings.editor_smooth_caret;
+        self.settings.editor_smooth_scrolling = settings.editor_smooth_scrolling;
+        self.settings.smooth_transitions = settings.smooth_transitions;
         self.set_editor_tab_size(settings.editor_tab_size, cx);
         self.settings.assistant.sql_keyword_case = settings.assistant.sql_keyword_case;
         self.settings.logs_font_family = settings.logs_font_family;
@@ -2699,6 +2956,10 @@ impl Qrow {
         self.settings.assistant_font_family = settings.assistant_font_family;
         self.settings.assistant_font_size = settings.assistant_font_size;
         self.settings.assistant_line_height = settings.assistant_line_height;
+        self.settings.assistant_smooth_caret = settings.assistant_smooth_caret;
+        self.settings.assistant_smooth_resize = settings.assistant_smooth_resize;
+        self.settings.assistant_buffer_replies = settings.assistant_buffer_replies;
+        self.reveal_assistant_replies(cx);
         self.apply_ui_scale(settings.ui_scale, window, cx);
         themes::apply(&self.settings.theme, Some(window), cx);
         apply_ui_theme(&self.settings, window, cx);
@@ -2716,15 +2977,31 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_context_menu_from(position, None, items, window, cx);
+    }
+
+    /// Open a context menu like [`Self::open_context_menu`]. The menu shows
+    /// the shortcuts that `trigger`, the focus of the clicked view, binds.
+    pub(crate) fn open_context_menu_from(
+        &mut self,
+        position: Point<Pixels>,
+        trigger: Option<FocusHandle>,
+        items: impl FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Ask the window rather than mirroring "a dialog is up" into a flag of
         // our own: a flag only stays true until some close path forgets to
         // clear it, and then no menu ever opens again.
         if self.dialog_open() || window.has_active_dialog(cx) {
             return;
         }
-        // Dismissing the menu returns focus to the SQL editor rather than the
-        // row or tab that was clicked.
-        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
+        // Dismissing the menu returns focus to the view that opened it, like
+        // the schema tree. Other menus return it to the SQL editor rather
+        // than the row or tab that was clicked.
+        let restore = trigger
+            .clone()
+            .unwrap_or_else(|| self.tabs[self.active].input.read(cx).focus_handle(cx));
         let view = PopupMenu::build(window, cx, move |menu, window, cx| {
             items(menu.action_context(restore), window, cx)
         });
@@ -2739,6 +3016,9 @@ impl Qrow {
                 cx.notify();
             }
         });
+        if trigger.is_some() {
+            view.update(cx, |menu, cx| menu.set_trigger_focus(trigger, cx));
+        }
         view.focus_handle(cx).focus(window, cx);
         self.menu = Some(ContextMenu {
             position,
@@ -2774,6 +3054,9 @@ impl Qrow {
         let rename = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.open_tab_rename(tab, window, cx)
         });
+        let save = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.save_sql_tab(tab, window, cx);
+        });
         let duplicate = cx.listener(move |this, _: &ClickEvent, window, cx| {
             if let Some(profile) = this
                 .tabs
@@ -2795,6 +3078,7 @@ impl Qrow {
             position,
             move |menu, window, cx| {
                 let menu = menu
+                    .item(PopupMenuItem::new("Save as SQL file…").on_click(save))
                     .item(PopupMenuItem::new("Rename…").on_click(rename))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate));
                 let menu = if destinations.is_empty() {
@@ -2902,6 +3186,8 @@ impl Qrow {
             });
             this.edit_profile(profile, true, window, cx);
         });
+        let copy_settings =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.copy_connection_settings(id, cx));
         let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.confirm_delete_profile(id, window, cx)
         });
@@ -2928,8 +3214,10 @@ impl Qrow {
                 this.refresh_catalog(id, crate::catalog::Scope::Connection, cx);
             }
         });
-        self.open_context_menu(
+        let tree = self.catalog.state.read(cx).focus_handle(cx);
+        self.open_context_menu_from(
             position,
+            Some(tree),
             move |menu, _, _| {
                 // Labeled sections: what the row is, then what it contains.
                 menu.item(menu_section("Connection"))
@@ -2940,14 +3228,18 @@ impl Qrow {
                     )
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
+                    .item(PopupMenuItem::new("Copy settings").on_click(copy_settings))
                     .item(PopupMenuItem::new("Show activity").on_click(show_activity))
+                    // The actions only show the shortcuts: a click runs the handler.
                     .item(
                         PopupMenuItem::new("Move up")
+                            .action(Box::new(MoveConnectionUp))
                             .on_click(move_up)
                             .disabled(first),
                     )
                     .item(
                         PopupMenuItem::new("Move down")
+                            .action(Box::new(MoveConnectionDown))
                             .on_click(move_down)
                             .disabled(last),
                     )
@@ -3144,6 +3436,18 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_profile_editor(profile, is_new, None, window, cx);
+    }
+    /// Opens Connection Settings with the settings of `profile`. `pasted`
+    /// comes from Paste connection.
+    fn open_profile_editor(
+        &mut self,
+        profile: Profile,
+        is_new: bool,
+        pasted: Option<connection_sharing::PastedConnection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !is_new && self.profile_busy(profile.id) {
             self.message =
                 Some("Wait for queries using this connection to finish before editing it.".into());
@@ -3156,19 +3460,7 @@ impl Qrow {
                 .find(|catalog| catalog.id == id)
                 .cloned()
         });
-        // A member shows the settings of its shared catalog, also while it
-        // does not browse schemas.
-        let settings = match &shared {
-            Some(shared) => CatalogSettings {
-                refresh: if profile.catalog.browses() {
-                    shared.settings.refresh
-                } else {
-                    CatalogRefresh::Disabled
-                },
-                ..shared.settings.clone()
-            },
-            None => profile.catalog.clone(),
-        };
+        let settings = crate::model::shown_catalog(&profile, &self.shared_catalogs);
         let values = [
             profile.name.clone(),
             profile.host.clone(),
@@ -3201,7 +3493,7 @@ impl Qrow {
                         input.masked(true).placeholder(if is_new {
                             ""
                         } else {
-                            "Leave blank to keep stored password"
+                            "Keep the stored password"
                         })
                     } else {
                         input
@@ -3281,8 +3573,9 @@ impl Qrow {
                     cx.notify();
                 }
             });
-        let sign_in_choices =
-            connection_form::sign_in_choices(&self.sign_ins, profile.database_type);
+        let sign_ins =
+            self.offered_sign_ins(pasted.as_ref().and_then(|pasted| pasted.sign_in.as_ref()));
+        let sign_in_choices = connection_form::sign_in_choices(&sign_ins, profile.database_type);
         let authentication = connection_form::authentication_select(
             profile.authentication,
             profile.database_type,
@@ -3291,7 +3584,7 @@ impl Qrow {
         );
         let sign_in = connection_form::sign_in_combobox(
             &sign_in_choices,
-            &self.sign_ins,
+            &sign_ins,
             profile.authentication.sign_in(),
             window,
             cx,
@@ -3390,7 +3683,8 @@ impl Qrow {
             });
         let postgres_ssl_mode = connection_form::choice_select(
             &connection_form::postgres_ssl_mode_choices(),
-            &if is_new {
+            // A copied connection keeps its mode.
+            &if is_new && profile.postgres_ssl_mode.is_none() {
                 crate::model::PostgresSslMode::Require
             } else {
                 profile.postgres_ssl_mode()
@@ -3436,7 +3730,10 @@ impl Qrow {
             profile,
             fields,
             is_new,
+            pasted,
             error: None,
+            field_errors: Vec::new(),
+            focus_field: Default::default(),
             saving: None,
         });
         self.open_profile_dialog(window, cx);
@@ -3560,6 +3857,14 @@ impl Qrow {
         profile.username = values[3].trim().into();
         profile.database = values[5].trim().into();
         profile.trino_schema = values[15].trim().into();
+        // Report every invalid text field at once, and focus the first one.
+        form.field_errors = connection_form::field_errors(&values);
+        if let Some((first, _)) = form.field_errors.first() {
+            form.focus_field.set(Some(*first));
+            form.error = None;
+            cx.notify();
+            return;
+        }
         let parse = (|| -> anyhow::Result<()> {
             profile.transfer = form
                 .transfer
@@ -3678,9 +3983,18 @@ impl Qrow {
             } else if profile.database_type != crate::model::DatabaseType::Postgres
                 && connection_form::uses_sign_in(&form.authentication, cx)
             {
+                let pasted = form
+                    .pasted
+                    .as_ref()
+                    .and_then(|pasted| pasted.sign_in.as_ref());
                 let sign_in =
                     connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
-                        .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
+                        .and_then(|id| {
+                            self.sign_ins
+                                .iter()
+                                .chain(pasted)
+                                .find(|sign_in| sign_in.id == id)
+                        })
                         .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
                 match sign_in.provider {
                     crate::model::SignInProvider::Oidc => Authentication::Oidc {
@@ -3699,7 +4013,15 @@ impl Qrow {
             Ok(())
         })();
         if let Err(e) = parse {
-            form.error = Some(e.to_string());
+            let error = e.to_string();
+            match connection_form::field_of_error(&error) {
+                Some(field) => {
+                    form.field_errors = vec![(field, error)];
+                    form.focus_field.set(Some(field));
+                    form.error = None;
+                }
+                None => form.error = Some(error),
+            }
             cx.notify();
             return;
         }
@@ -3716,7 +4038,8 @@ impl Qrow {
             && profile.database_type != crate::model::DatabaseType::Trino
             && !self.demo
         {
-            form.error = Some("Enter the password for this connection.".into());
+            form.field_errors = vec![(4, "Enter the password for this connection.".into())];
+            form.focus_field.set(Some(4));
             cx.notify();
             return;
         }
@@ -3724,9 +4047,16 @@ impl Qrow {
         form.saving = Some(recv);
         let _ = self.wake.try_send(());
         form.error = None;
+        form.field_errors.clear();
         let demo = self.demo;
         let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();
+        // The sign-in of a pasted connection joins the workspace with it.
+        let sign_in = form
+            .pasted
+            .as_ref()
+            .and_then(|pasted| pasted.sign_in.clone())
+            .filter(|sign_in| profile.authentication.sign_in() == Some(sign_in.id));
         std::thread::spawn(move || {
             let result = if !demo
                 && (!password.is_empty()
@@ -3744,6 +4074,7 @@ impl Qrow {
                 profile,
                 shared,
                 password_changed,
+                sign_in,
             }));
         });
         cx.notify();
@@ -3840,9 +4171,12 @@ impl Qrow {
         self.activity
             .update(cx, |activity, cx| activity.remove(id, cx));
         self.profiles.retain(|p| p.id != id);
+        self.catalog.scope.sanitize(&self.profiles);
         self.active_tabs.remove(&id);
         crate::model::prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
         self.sync_catalogs(None, cx);
+        // A scope without the deleted connection can include more connections.
+        self.ensure_search_catalogs(cx);
         if self.tabs.is_empty() {
             let tab = self.make_tab(
                 SavedTab::new(1, self.profiles.first().map(|profile| profile.id)),
@@ -3917,13 +4251,13 @@ impl Qrow {
                 Some(execution_id),
                 Severity::Info,
                 LogKind::ExecutionCompleted,
-                "Execution completed on the server, result set: true (demo)",
+                "Query finished on the server",
             ),
             LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
                 LogKind::FetchCompleted,
-                "Fetched preview page 1: rows 1–2250, 2250 rows, 2250 retained, more rows: false (demo)",
+                "Fetched rows 1–2,250 (all rows)",
             ),
         ];
         let mut activity = Vec::new();
@@ -4067,6 +4401,7 @@ fn demo_workspace(manifest: Option<&tempfile::NamedTempFile>) -> Workspace {
         active_tabs: BTreeMap::new(),
         shared_catalogs,
         sign_ins: vec![],
+        search_scope: Default::default(),
     }
 }
 

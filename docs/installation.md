@@ -1,0 +1,219 @@
+# Installation
+
+Download Qrow from [GitHub Releases](https://github.com/vsevolodbazhan/qrow/releases)
+and install it as the sections below show. Qrow then [updates itself](#updates).
+You can also install Qrow with a [package manager](#package-managers). Then
+the package manager updates Qrow.
+
+Use the [latest release](https://github.com/vsevolodbazhan/qrow/releases/latest)
+for the stable channel. Nightly builds are the pre-releases. You can also
+install a stable build and select **Nightly** in
+**Settings → Updates → Release Channel**.
+
+Replace `VERSION` in the file names below with the release version.
+
+| System | Requirements | Package |
+| --- | --- | --- |
+| macOS | macOS 12 or later, a Metal-capable GPU | `Qrow-VERSION-arm64.dmg` (Apple Silicon) or `Qrow-VERSION-x86_64.dmg` (Intel) |
+| Windows | Windows 10 or later | `Qrow-VERSION-windows-x86_64-setup.exe` (Intel/AMD) or `Qrow-VERSION-windows-aarch64-setup.exe` (ARM64), or the portable `Qrow-VERSION-windows-ARCH.zip` |
+| Linux | Wayland or X11 desktop, Vulkan, a Secret Service provider | `Qrow-VERSION-linux-x86_64.tar.gz` or `Qrow-VERSION-linux-aarch64.tar.gz` |
+
+The packages do not have macOS or Windows code signatures. These signatures
+need paid developer certificates. Thus macOS and Windows show a warning the
+first time you open Qrow. The sections below show how to continue. To make
+sure that a package comes from the Qrow release process, see
+[Verify a download](#verify-a-download).
+
+## macOS
+
+Download the DMG for your Mac, open it, and drag Qrow to Applications.
+
+### Gatekeeper warning
+
+<img src="../assets/screenshots/gatekeeper/warning.png" alt="Gatekeeper Warning" width="384" height="384">
+
+macOS shows this warning because Qrow is not notarized. To open Qrow:
+
+1. Open Qrow. You see the warning. Close it.
+2. Open **System Settings → Privacy & Security** and click **Open Anyway**.
+
+![Gatekeeper Settings](../assets/screenshots/gatekeeper/settings.png)
+
+## Windows
+
+Download the installer for your processor and run it. The installer installs
+Qrow for your user account and adds it to the Start menu. It does not need
+administrator rights. To install for all users, select that option in the
+first dialog.
+
+To remove Qrow, open **Settings → Apps → Installed apps**, find Qrow, and
+select **Uninstall**. Your workspace and settings stay on the computer.
+
+To use Qrow without an installer, extract the portable
+`Qrow-VERSION-windows-ARCH.zip` to a folder and run `qrow.exe`. The portable
+copy does not update itself.
+
+Windows support is new. It has had less real-desktop use than macOS and Linux.
+Please report problems in [issues](https://github.com/vsevolodbazhan/qrow/issues).
+
+### SmartScreen warning
+
+The installer is not signed, so your browser can warn about the download, and
+Windows can show **Windows protected your PC** when you run it. To continue:
+
+1. In the browser download list, select **Keep** if the browser asks.
+2. Run the installer. In the SmartScreen dialog, select **More info**.
+3. Make sure that the file name is a Qrow installer, then select **Run anyway**.
+
+## Linux
+
+Run the install script:
+
+```sh
+curl -fsSL https://qrow.dev/install.sh | sh
+```
+
+The script downloads the archive of the latest stable release for your
+processor. It verifies the signature of the release checksums with
+[minisign](https://jedisct1.github.io/minisign/) or OpenSSL 3, then the
+checksum of the archive. Then it installs Qrow into `~/.local`. It does not
+use a minisign that cannot run, such as a mise shim without a selected
+version. If neither minisign nor OpenSSL 3 is available, the script explains
+the risk and asks before it continues with the checksum only. Without a
+terminal, it continues. Set `QROW_PREFIX` to install into another folder that
+you can write. Make sure that `~/.local/bin` is in your `PATH`. The
+[script](../website/install.sh) is short. Read it before you run it if you
+prefer.
+
+To install without the script, download the archive for your architecture.
+Extract it into `~/.local`:
+
+```sh
+mkdir -p ~/.local
+tar -xzf Qrow-VERSION-linux-ARCH.tar.gz -C ~/.local
+```
+
+The archive includes a desktop launcher. Saved passwords need a desktop Secret
+Service, such as GNOME Keyring. The archive uses the system libraries and is
+built on Ubuntu 24.04. Use it on that or a newer, compatible distribution.
+
+Use the application menu at the top left for Settings and other commands.
+
+## Package managers
+
+A package manager installs the same release packages. Qrow does not update a
+copy that a package manager installed. It shows the command that updates it.
+
+### Homebrew
+
+Install Qrow on macOS from the [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
+
+```sh
+brew install --cask vsevolodbazhan/qrow/qrow
+```
+
+To install the latest nightly build, use the separate cask:
+
+```sh
+brew install --cask vsevolodbazhan/qrow/qrow@nightly
+```
+
+To upgrade, use `brew upgrade --cask qrow` or `brew upgrade --cask qrow@nightly`.
+The casks install the Apple Silicon build only. On an Intel Mac, use the
+`x86_64` DMG. The [Gatekeeper warning](#gatekeeper-warning) also applies.
+
+### Scoop
+
+Install Qrow on Windows from the [Scoop bucket](https://github.com/vsevolodbazhan/scoop-qrow):
+
+```powershell
+scoop bucket add qrow https://github.com/vsevolodbazhan/scoop-qrow
+scoop install qrow
+```
+
+To install the latest nightly build, use `scoop install qrow-nightly`. To
+upgrade, use `scoop update qrow` or `scoop update qrow-nightly`. Scoop
+installs the portable archive, so stable and nightly builds can be installed
+at the same time. Both packages add Qrow to the Start menu and use the same
+workspace and settings.
+
+## Updates
+
+Release builds check for a new version of their channel. A stable build
+looks for stable releases, and a nightly build looks for nightly releases.
+The first check starts a few seconds after launch. While Qrow is open, it
+checks again when the last check is more than a day old. If a check fails,
+for example offline, Qrow tries again within an hour. To stop the automatic
+checks, turn off **Settings → Updates → Check Automatically**.
+
+To switch channels, select **Stable** or **Nightly** in
+**Settings → Updates → Release Channel**. The next check, within a minute,
+follows the new channel. A switch to nightly builds takes the newest nightly
+release that was published after your version. A
+switch back to stable releases waits until a stable release is published
+after your nightly version, so Qrow never installs an older build. Until
+then, the **Updates** button says so. Copies that a package manager
+installed keep the channel of their package: install the other package, for
+example `qrow@nightly`, to switch.
+
+The **Updates** button in the status bar shows the state in its tooltip. A
+dot on it shows news: an available version, a download in progress, a
+version that is ready, or a failure. When there is no news, or after a
+failure, select the button to check for updates. A message shows the result.
+When there is news, select the button to show its message again, for example
+with **Restart to update**.
+
+What happens next depends on how you installed Qrow:
+
+| Installation | Update |
+| --- | --- |
+| Linux archive in a folder that you can write, such as `~/.local` | Qrow downloads the new version in the background and shows **Restart to update**. |
+| macOS app from the DMG, in a folder that you can write, such as `/Applications` | Qrow downloads the new DMG in the background and shows **Restart to update**. The restart replaces the app. |
+| Windows installer | Qrow downloads the new installer in the background and shows **Restart to update**. Qrow quits, the installer runs without its dialogs, and Qrow starts again. An install for all users asks for administrator rights. |
+| Homebrew or Scoop | Qrow shows the command that updates it, for example `brew upgrade --cask qrow`. |
+| Flatpak or Snap | Qrow tells you to update it with that tool. |
+| Windows portable archive | Qrow shows the new version and a link to the release. Download the new archive. |
+| Linux archive or macOS app in a folder that you cannot write, such as `/usr` | Qrow shows the new version and a link to the release. |
+
+Before Qrow installs an update, it verifies the signed checksums of the
+release, as in [Verify a download](#verify-a-download), and the checksum of
+the package. If a check fails, Qrow keeps the installed version. After
+**Restart to update**, Qrow asks before it stops running work, saves the
+workspace, and starts the new version.
+
+If the Windows installer stops before it replaces Qrow, Qrow shows
+**Update did not install** at the next start and writes the error to the
+Qrow log in Activity. Qrow keeps the installer log as `update-install.log`
+in the [local data directory](workspace.md#saved-state). Select
+**Reveal in File Explorer** to find it. The next check offers the update
+again.
+
+The check sends requests to `api.github.com` and `github.com`. A download
+also goes to the GitHub server that stores release files. The requests
+contain the Qrow version and no workspace data. Development builds do not
+check for updates.
+
+## Verify a download
+
+Each release has a `SHA256SUMS` file with the checksums of all packages, and a
+`SHA256SUMS.minisig` signature of that file. The release process signs it with
+the Qrow release key. The public key is in
+[assets/release/minisign.pub](../assets/release/minisign.pub):
+
+```text
+RWR2pcgdcxt7jUi0QyCxd/bGK6kkC1Ggku3NNiniI/1PqQDEBbBkbzlG
+```
+
+Download `SHA256SUMS`, `SHA256SUMS.minisig`, and your package into one folder.
+Then use [minisign](https://jedisct1.github.io/minisign/) to verify the
+signature, and verify the checksum of your package:
+
+```sh
+minisign -Vm SHA256SUMS -P RWR2pcgdcxt7jUi0QyCxd/bGK6kkC1Ggku3NNiniI/1PqQDEBbBkbzlG
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS` for the
+second command. The first command shows the trusted comment
+`Qrow release TAG`. Make sure that `TAG` is the release that you downloaded.
+Releases before the first signed release do not have a signature.

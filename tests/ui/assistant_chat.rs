@@ -45,18 +45,11 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
             has(window, "add-connection"),
             "Opening the assistant hid the Connections sidebar"
         );
-        for (id, expected) in [
-            ("assistant-model", "Model: waiting for Codex"),
-            ("assistant-reasoning", "Reasoning: waiting for Codex"),
-            ("assistant-tier", "Service Tier: waiting for Codex"),
-        ] {
-            assert_eq!(label(window, id).as_deref(), Some(expected));
-            // A control that waits for Codex does not open its menu.
-            window.click(id, cx);
-            assert!(
-                window.try_find("popup-menu").is_none(),
-                "{id} opened while Codex started"
-            );
+        // The selectors have no values until Codex starts: a status shows
+        // in their place.
+        assert!(has(window, "assistant-controls-waiting"));
+        for id in ["assistant-model", "assistant-reasoning", "assistant-tier"] {
+            assert!(!has(window, id), "{id} showed while Codex started");
         }
         assert!(!labels(window).iter().any(|l| l.contains("Starting Codex")));
     });
@@ -200,7 +193,9 @@ fn widening_the_window_reads_the_revealed_assistant_reply(cx: &mut TestAppContex
     app.wait_label(cx, "Toggle assistant, reply ready");
     app.wait_gone(cx, "assistant-transcript");
 
-    cx.simulate_window_resize(app.window, size(px(1280.), px(820.)));
+    // At 1280 pixels the pane is too narrow for the list beside the
+    // conversation, so the list still covers it.
+    cx.simulate_window_resize(app.window, size(px(1600.), px(820.)));
     app.wait_reply(cx, "I can help with this query");
     app.wait_label(cx, "Toggle assistant");
 }
@@ -224,7 +219,7 @@ fn toolbar_run_keeps_the_draft_and_cmd_enter_sends_it(cx: &mut TestAppContext) {
         "Help me understand how `SELECT 1` behaves in the currently selected query tab and explain its result",
     );
     // Cmd+Enter sends in the message field.
-    app.press(cx, "cmd-enter");
+    app.press(cx, "secondary-enter");
     app.wait_until(
         cx,
         "the sent message",
@@ -274,12 +269,12 @@ fn the_append_tool_writes_sql_and_undo_removes_it_in_one_step(cx: &mut TestAppCo
 
     // A user edit does not merge with the assistant edit.
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-down");
+    app.press(cx, "secondary-down");
     app.update(cx, |window, cx| window.input("a", cx));
     app.wait_editor(cx, "SELECT 1a");
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_editor(cx, "SELECT 1");
-    app.press(cx, "cmd-z");
+    app.press(cx, "secondary-z");
     app.wait_editor(cx, "");
 
     app.send(cx, "Write SELECT 1 into this tab");
@@ -363,9 +358,9 @@ fn a_message_that_codex_does_not_take_stays_in_the_message_field(cx: &mut TestAp
         "Synthetic line of text.\n".repeat(64 * 1024 / 24 + 1)
     );
     app.click(cx, "assistant-composer");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(long.clone()));
-    app.press(cx, "cmd-v");
+    app.press(cx, "secondary-v");
     let pasted = long.clone();
     app.wait_until(cx, "the pasted message", REPLY_TIMEOUT, |window, _| {
         composer_text(window).as_deref() == Some(pasted.as_str())
@@ -384,22 +379,28 @@ fn a_message_that_codex_does_not_take_stays_in_the_message_field(cx: &mut TestAp
 fn command_r_toggles_assistant_and_command_j_toggles_results(cx: &mut TestAppContext) {
     let (app, _codex) = launch(cx, with_connection());
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-r");
+    app.press(cx, "secondary-r");
     app.wait_for(cx, "assistant-composer");
     app.click(cx, "assistant-composer");
-    app.press(cx, "cmd-j");
+    app.press(cx, "secondary-j");
     app.update(cx, |window, _| {
         assert!(window.find("assistant-composer").visible());
 
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Expand results")
+        );
     });
     app.update(cx, |window, cx| window.input("Focus stays here", cx));
     app.update(cx, |window, _| {
         assert_eq!(composer_text(window).as_deref(), Some("Focus stays here"));
     });
-    app.press(cx, "cmd-r");
+    app.press(cx, "secondary-r");
     app.wait_gone(cx, "assistant-composer");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("toggle-results").label(), Some("Expand"));
+        assert_eq!(
+            window.find("toggle-results").label(),
+            Some("Expand results")
+        );
     });
 }

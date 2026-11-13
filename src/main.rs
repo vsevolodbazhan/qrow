@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 use qrow::ui::{self, Environment};
@@ -30,6 +32,12 @@ fn main() {
                         ..TitleBar::title_bar_options()
                     }),
                     window_min_size: Some(size(px(850.), px(560.))),
+                    app_id: cfg!(target_os = "linux").then(|| "qrow".into()),
+                    window_decorations: if cfg!(not(target_os = "macos")) {
+                        Some(WindowDecorations::Client)
+                    } else {
+                        None
+                    },
                     ..TitleBar::window_options()
                 },
                 |window, cx| {

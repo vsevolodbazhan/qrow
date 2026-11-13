@@ -68,11 +68,14 @@ fn select(app: &TestApp, cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn export_is_disabled_before_a_result_has_columns(cx: &mut TestAppContext) {
+fn export_is_unavailable_before_a_result_has_columns(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, qrow::model::Workspace::default());
-    app.click(cx, "export-results");
+    app.settle(cx);
+    // Without a result set, the Result toolbar and its Export button are
+    // not shown.
     app.update(cx, |window, _| {
-        assert!(window.try_find("export-save").is_none())
+        assert!(window.try_find("export-results").is_none());
+        assert!(window.try_find("export-save").is_none());
     });
 }
 
@@ -167,7 +170,7 @@ fn run_export_captures_the_cursor_statement_and_cancelled_save_submits_nothing(
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.run_export(cx);
     app.wait_for(cx, "export-save");
@@ -206,7 +209,7 @@ fn trino_run_export_captures_unicode_sql_and_cancelled_save_reads_no_credentials
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.run_export(cx);
     app.wait_for(cx, "export-save");
@@ -256,7 +259,7 @@ fn postgres_run_export_captures_a_dollar_quoted_statement_without_credentials(
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.press(cx, "left");
     app.run_export(cx);
     app.wait_for(cx, "export-save");
@@ -286,7 +289,7 @@ fn run_export_rejects_multiple_selected_statements_without_starting_work(cx: &mu
         },
     );
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     app.run_export(cx);
     app.update(cx, |window, _| {
         assert!(window.try_find("export-save").is_none())
@@ -419,10 +422,20 @@ fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppConte
             Some("Exported 2250 rows")
         );
         let detail = window.find("export-complete-detail");
+        assert!(heading.bounds().top() >= detail.bounds().bottom());
         let reveal = window.find("reveal-export");
         assert!(reveal.visible());
-        assert!(reveal.bounds().top() >= detail.bounds().bottom());
-        assert_eq!(reveal.bounds().right(), notice.bounds().right());
+        assert!(reveal.bounds().left() >= notice.bounds().right());
+        assert!(reveal.bounds().top() < heading.bounds().bottom());
+        assert!(reveal.bounds().bottom() > detail.bounds().top());
+    });
+    // A finished background job stays reported until the user closes it.
+    for _ in 0..140 {
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+    }
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-complete-notice").is_some());
     });
     let text = std::fs::read(&path).unwrap();
     assert_eq!(
@@ -453,7 +466,7 @@ fn cancelled_save_prompt_keeps_options_and_escape_restores_table_focus(cx: &mut 
         |window, _| window.try_find("export-save").is_none(),
     );
     // Copy after dismissal still acts on the selected cells.
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.wait_until(
         cx,
         "copied Markdown selection",
@@ -806,7 +819,7 @@ fn context_large_markdown_confirms_with_enter_and_cancel_preserves_clipboard(
         let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();
         pointer_click_with(window, &cell, MouseButton::Left, Modifiers::default(), cx);
     });
-    app.press(cx, "cmd-a");
+    app.press(cx, "secondary-a");
     for confirm in [false, true] {
         app.update(cx, |window, cx| {
             let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();

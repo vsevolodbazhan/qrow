@@ -78,7 +78,7 @@ def footprint_megabytes(pid):
 def measure(executable):
     with tempfile.TemporaryDirectory() as directory:
         (Path(directory) / "workspace.json").write_text(json.dumps(WORKSPACE))
-        env = dict(os.environ, QROW_DATA_DIR=directory)
+        env = dict(os.environ, QROW_DATA_DIR=directory, QROW_NO_UPDATES="1")
         started = time.monotonic()
         process = subprocess.Popen([str(executable)], env=env, stderr=subprocess.PIPE, text=True,
                                    start_new_session=True)

@@ -367,7 +367,7 @@ fn new_conversation_tabs_take_generated_titles(cx: &mut TestAppContext) {
     app.wait_reply(cx, "I can help with this query");
     // Cmd+W closes the active tab, which is the tab of this conversation.
     app.click(cx, "sql-editor");
-    app.press(cx, "cmd-w");
+    app.press(cx, "secondary-w");
     app.wait_until(cx, "the closed tab", REPLY_TIMEOUT, |window, _| {
         labelled(window, "Title: Title before first").is_none()
     });

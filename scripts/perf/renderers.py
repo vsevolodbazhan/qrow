@@ -45,7 +45,7 @@ def main():
         for backend in ("software", "opengl"):
             directory = output / f"{backend}-{repeat + 1}"
             (directory / "workspace").mkdir(parents=True, exist_ok=False)
-            environment = dict(os.environ, QROW_RENDERER=backend, QROW_RENDER_METRICS="1",
+            environment = dict(os.environ, QROW_NO_UPDATES="1", QROW_RENDERER=backend, QROW_RENDER_METRICS="1",
                                QROW_E2E_BUNDLE=str(bundle), QROW_E2E_ARTIFACTS=str(directory),
                                QROW_DATA_DIR=str(directory / "workspace"))
             environment.pop("QROW_SOFTWARE_RENDERER", None)

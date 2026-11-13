@@ -3,8 +3,9 @@
 use crate::support::{
     MemoryCredentials, TestApp, assert_catalog_error_dot, assert_catalog_icon,
     assert_connection_dot, assert_connection_highlight, assert_connection_keyboard_position,
-    assert_tooltip_header_center, assert_tree_row_outline, bounds_of, connection_row, elements,
-    label, labelled, menu_item, offline_profile, press_at, selected_tree_rows, shows, value,
+    assert_tooltip_status_below, assert_tree_row_outline, bounds_of, connection_row, elements,
+    label, labelled, labelled_starting, menu_item, offline_profile, press_at, selected_tree_rows,
+    shows, value,
 };
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -12,13 +13,20 @@ use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
     model::{
-        CatalogColumnReads, CatalogRefresh, CatalogSettings, Profile, SavedTab, SharedCatalog,
-        Workspace,
+        CatalogColumnReads, CatalogRefresh, CatalogSettings, Profile, SavedTab, SearchScope,
+        SharedCatalog, Workspace,
     },
     storage::{self, Credentials},
 };
-use std::{collections::BTreeMap, net::TcpListener, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::TcpListener,
+    time::Duration,
+};
 use tempfile::TempDir;
+
+/// The accessibility label of the Connections search field.
+const SEARCH: &str = "Search connections and relations";
 
 fn table(name: &str, kind: RelationKind) -> RelationEntry {
     RelationEntry {
@@ -61,7 +69,7 @@ fn cache(directory: &TempDir, profile: &Profile, schemas: &[(&str, Option<&[Rela
             1,
         );
     }
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
 }
 
@@ -176,8 +184,8 @@ fn reordering_connections_keeps_expanded_schemas_and_the_selected_column(cx: &mu
         Duration::from_secs(10),
         |_, _| app.saved().profiles[0].id == other.id,
     );
-    // Search rebuilds the tree in the same saved order.
-    app.fill_labelled(cx, "Search relations", "bookings");
+    // Search rebuilds the tree in the same saved order. Both names match.
+    app.fill_labelled(cx, SEARCH, "r");
     app.update(cx, |window, _| {
         assert!(
             window.find(connection_row(other.id)).bounds().top()
@@ -706,7 +714,7 @@ fn the_search_field_has_equal_gaps_above_and_below_at_each_zoom(cx: &mut TestApp
         );
         app.update(cx, |window, _| {
             let header = bounds_of(window, "sidebar-header");
-            let search = bounds_of(window, "Search relations");
+            let search = bounds_of(window, SEARCH);
             let row = window.find(connection_row(profile.id)).bounds();
             let above = search.top() - header.bottom();
             let below = row.top() - search.bottom();
@@ -714,14 +722,22 @@ fn the_search_field_has_equal_gaps_above_and_below_at_each_zoom(cx: &mut TestApp
                 (above - below).abs() <= gpui_kit::px(0.5),
                 "The gap above the search ({above:?}) must match the gap below it ({below:?})"
             );
+            // The scope button is centered under New connection. New
+            // connection has the compact size of the Sign-ins header actions.
+            let add = bounds_of(window, "add-connection");
+            let scope = bounds_of(window, "search-scope");
+            assert!((add.center().x - scope.center().x).abs() <= gpui_kit::px(0.5));
+            assert!((scope.center().y - search.center().y).abs() <= gpui_kit::px(0.5));
+            assert!(search.right() < scope.left());
         });
     }
 }
 
 #[gpui_kit::test]
 fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppContext) {
-    let first = offline_profile("First");
-    let second = offline_profile("Second");
+    // The names do not contain the searches, so no connection matches by name.
+    let first = offline_profile("Alpha");
+    let second = offline_profile("Bravo");
     let directory = tempfile::tempdir().unwrap();
     let many: Vec<_> = (0..600)
         .map(|n| table(&format!("t{n:03}"), RelationKind::Table))
@@ -752,7 +768,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
         MemoryCredentials::default(),
     );
 
-    app.fill_labelled(cx, "Search relations", "orders");
+    app.fill_labelled(cx, SEARCH, "orders");
     wait_shows(&app, cx, "orders");
     wait_shows(&app, cx, "orders_2020");
     app.update(cx, |window, _| {
@@ -761,7 +777,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
     });
 
     for search in ["t", "wide.t"] {
-        app.fill_labelled(cx, "Search relations", search);
+        app.fill_labelled(cx, SEARCH, search);
         app.wait_until(
             cx,
             "the match limit",
@@ -789,7 +805,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
         assert!(!shows(window, "Refine your search"));
     });
 
-    app.fill_labelled(cx, "Search relations", "");
+    app.fill_labelled(cx, SEARCH, "");
     app.wait_until(
         cx,
         "the search to end",
@@ -842,7 +858,7 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
         "`integrations`.`bookings`",
         "tions.book",
     ] {
-        app.fill_labelled(cx, "Search relations", search);
+        app.fill_labelled(cx, SEARCH, search);
         wait_shows(&app, cx, "bookings");
         app.update(cx, |window, _| {
             assert!(labelled(window, "finance").is_none());
@@ -858,17 +874,17 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
         }
     }
 
-    app.fill_labelled(cx, "Search relations", "integrations.daily");
+    app.fill_labelled(cx, SEARCH, "integrations.daily");
     wait_shows(&app, cx, "daily");
     app.update(cx, |window, _| {
         assert!(labelled(window, "bookings").is_none())
     });
 
-    app.fill_labelled(cx, "Search relations", "bookings");
+    app.fill_labelled(cx, SEARCH, "bookings");
     wait_shows(&app, cx, "bookings_other");
     wait_shows(&app, cx, "bookings_archive");
 
-    app.fill_labelled(cx, "Search relations", "missing.bookings");
+    app.fill_labelled(cx, SEARCH, "missing.bookings");
     app.update(cx, |window, _| {
         assert!(labelled(window, "integrations").is_none());
         assert!(labelled(window, "bookings").is_none());
@@ -877,46 +893,210 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
-fn expanding_a_connection_without_search_matches_shows_a_notice(cx: &mut TestAppContext) {
-    let profile = offline_profile("Warehouse");
+fn search_finds_connections_and_hides_connections_without_matches(cx: &mut TestAppContext) {
+    let warehouse = offline_profile("Warehouse");
+    let analytics = offline_profile("Analytics");
     let directory = tempfile::tempdir().unwrap();
-    avia(&directory, &profile);
+    avia(&directory, &warehouse);
+    cache(
+        &directory,
+        &analytics,
+        &[("sales", Some(&[table("orders", RelationKind::Table)]))],
+    );
     let app = TestApp::launch_in(
         cx,
         directory,
-        workspace(vec![profile.clone()]),
+        workspace(vec![warehouse.clone(), analytics.clone()]),
         MemoryCredentials::default(),
     );
+    let rows = |window: &mut gpui_kit::Window| {
+        (
+            window.try_find(connection_row(warehouse.id)).is_some(),
+            window.try_find(connection_row(analytics.id)).is_some(),
+        )
+    };
 
-    app.fill_labelled(cx, "Search relations", "missing.bookings");
-    app.toggle_connection(cx, profile.id);
+    // No connection has a match: one notice replaces the tree.
+    app.fill_labelled(cx, SEARCH, "missing.bookings");
     wait_shows(&app, cx, "No matches");
+    app.update(cx, |window, _| assert_eq!(rows(window), (false, false)));
+
+    // A connection that matches by name shows all its schemas.
+    app.fill_labelled(cx, SEARCH, "ANALYT");
+    app.wait_for(cx, connection_row(analytics.id));
     app.update(cx, |window, _| {
-        assert!(labelled(window, "avia").is_none());
-        assert!(labelled(window, "bookings").is_none());
+        assert_eq!(rows(window), (false, true));
+        assert!(labelled(window, "No matches").is_none());
+    });
+    app.toggle_connection(cx, analytics.id);
+    wait_shows(&app, cx, "sales");
+
+    // A relation match shows only its connection.
+    app.fill_labelled(cx, SEARCH, "bookings");
+    wait_shows(&app, cx, "bookings");
+    app.update(cx, |window, _| assert_eq!(rows(window), (true, false)));
+
+    // Escape and the clear button end the search.
+    app.press(cx, "escape");
+    app.wait_for(cx, connection_row(analytics.id));
+    app.update(cx, |window, _| {
+        assert_eq!(rows(window), (true, true));
+        assert_eq!(
+            labelled(window, SEARCH).and_then(|input| input.value().map(str::to_owned)),
+            Some(String::new())
+        );
+    });
+    app.fill_labelled(cx, SEARCH, "orders");
+    app.wait_gone(cx, connection_row(warehouse.id));
+    app.click_labelled(cx, "Clear");
+    app.wait_for(cx, connection_row(warehouse.id));
+    app.update(cx, |window, _| assert_eq!(rows(window), (true, true)));
+    assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+fn search_scope_limits_the_connections_and_is_saved(cx: &mut TestAppContext) {
+    let first = offline_profile("First");
+    let second = offline_profile("Second");
+    let third = offline_profile("Third");
+    let directory = tempfile::tempdir().unwrap();
+    for profile in [&first, &second, &third] {
+        cache(
+            &directory,
+            profile,
+            &[("sales", Some(&[table("orders", RelationKind::Table)]))],
+        );
+    }
+    let mut saved = workspace(vec![first.clone(), second.clone(), third.clone()]);
+    saved.tabs.push(SavedTab::new(1, Some(second.id)));
+    saved.tabs.push(SavedTab::new(1, Some(third.id)));
+    let app = TestApp::launch_in(cx, directory, saved, MemoryCredentials::default());
+    let rows = |window: &mut gpui_kit::Window| {
+        [&first, &second, &third]
+            .map(|profile| window.try_find(connection_row(profile.id)).is_some())
+    };
+    let scope_label = |window: &mut gpui_kit::Window| {
+        labelled_starting(window, "Search in: ")
+            .first()
+            .and_then(|element| element.label().map(str::to_owned))
+    };
+    app.update(cx, |window, _| {
+        assert_eq!(
+            scope_label(window).as_deref(),
+            Some("Search in: All connections")
+        )
     });
 
-    app.toggle_connection(cx, profile.id);
+    app.fill_labelled(cx, SEARCH, "orders");
     app.wait_until(
         cx,
-        "the connection to collapse",
+        "matches in each connection",
         Duration::from_secs(10),
-        |window, _| labelled(window, "No matches").is_none(),
+        |window, _| rows(window) == [true, true, true],
     );
-    app.toggle_connection(cx, profile.id);
-    wait_shows(&app, cx, "No matches");
 
-    app.fill_labelled(cx, "Search relations", "avia.bookings");
-    wait_shows(&app, cx, "bookings");
+    // The Current connection scope follows the active tab.
+    app.click_labelled(cx, "Search in: All connections");
+    app.choose(cx, "popup-menu", "Current connection");
+    app.wait_gone(cx, connection_row(second.id));
     app.update(cx, |window, _| {
-        assert!(labelled(window, "No matches").is_none())
+        assert_eq!(rows(window), [true, false, false]);
+        assert_eq!(
+            scope_label(window).as_deref(),
+            Some("Search in: Current connection")
+        );
     });
-    app.fill_labelled(cx, "Search relations", "");
-    wait_shows(&app, cx, "avia");
+    app.wait_saved(cx, "the Current connection scope", |workspace| {
+        workspace.search_scope == SearchScope::Current
+    });
+    app.fill_labelled(cx, SEARCH, "");
+    app.click(cx, connection_row(second.id));
+    app.fill_labelled(cx, SEARCH, "orders");
+    app.wait_for(cx, connection_row(second.id));
     app.update(cx, |window, _| {
-        assert!(labelled(window, "No matches").is_none())
+        assert_eq!(rows(window), [false, true, false])
+    });
+
+    // Picked connections. Unchecking the last one searches all again.
+    app.click_labelled(cx, "Search in: Current connection");
+    app.choose(cx, "popup-menu", "First");
+    app.wait_for(cx, connection_row(first.id));
+    app.click_labelled(cx, "Search in: First");
+    app.choose(cx, "popup-menu", "Third");
+    app.wait_for(cx, connection_row(third.id));
+    app.update(cx, |window, _| {
+        assert_eq!(rows(window), [true, false, true]);
+        assert_eq!(
+            scope_label(window).as_deref(),
+            Some("Search in: 2 connections")
+        );
+    });
+    app.wait_saved(cx, "the picked connections", |workspace| {
+        workspace.search_scope == SearchScope::Connections(BTreeSet::from([first.id, third.id]))
+    });
+    // The scope applies only to a search.
+    app.press(cx, "escape");
+    app.wait_for(cx, connection_row(second.id));
+    app.fill_labelled(cx, SEARCH, "orders");
+    app.wait_gone(cx, connection_row(second.id));
+    for name in ["First", "Third"] {
+        let label = scope_label_of(&app, cx);
+        app.click_labelled(cx, &label);
+        app.choose(cx, "popup-menu", name);
+    }
+    app.wait_for(cx, connection_row(second.id));
+    app.update(cx, |window, _| {
+        assert_eq!(rows(window), [true, true, true]);
+        assert_eq!(
+            scope_label(window).as_deref(),
+            Some("Search in: All connections")
+        );
+    });
+    app.wait_saved(cx, "the All connections scope", |workspace| {
+        workspace.search_scope == SearchScope::All
     });
     assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+fn deleting_the_only_searched_connection_searches_all_connections(cx: &mut TestAppContext) {
+    let kept = offline_profile("Kept");
+    let deleted = offline_profile("Deleted");
+    let directory = tempfile::tempdir().unwrap();
+    for profile in [&kept, &deleted] {
+        cache(
+            &directory,
+            profile,
+            &[("sales", Some(&[table("orders", RelationKind::Table)]))],
+        );
+    }
+    let mut saved = workspace(vec![kept.clone(), deleted.clone()]);
+    saved.search_scope = SearchScope::Connections(BTreeSet::from([deleted.id]));
+    let app = TestApp::launch_in(cx, directory, saved, MemoryCredentials::default());
+
+    app.fill_labelled(cx, SEARCH, "orders");
+    app.wait_for(cx, connection_row(deleted.id));
+    app.update(cx, |window, _| {
+        assert!(window.try_find(connection_row(kept.id)).is_none())
+    });
+    app.context_menu(cx, connection_row(deleted.id));
+    app.choose(cx, "popup-menu", "Delete");
+    app.click(cx, "confirm-delete-connection");
+    // The search now reads the cache of the kept connection.
+    app.wait_for(cx, connection_row(kept.id));
+    wait_shows(&app, cx, "orders");
+    app.wait_saved(cx, "the All connections scope", |workspace| {
+        workspace.search_scope == SearchScope::All
+    });
+}
+
+fn scope_label_of(app: &TestApp, cx: &mut TestAppContext) -> String {
+    app.update(cx, |window, _| {
+        labelled_starting(window, "Search in: ")
+            .first()
+            .and_then(|element| element.label().map(str::to_owned))
+            .unwrap()
+    })
 }
 
 #[gpui_kit::test]
@@ -930,9 +1110,6 @@ fn plain_notices_align_with_the_parent_label_at_each_zoom(cx: &mut TestAppContex
         let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
         expand_connection(&app, cx, &profile);
         wait_shows(&app, cx, "avia");
-        let connection_left = app.update(cx, |window, _| {
-            bounds_of(window, &format!("c\u{1f}{}\u{1f}label", profile.id)).left()
-        });
         app.click_labelled(cx, "avia");
         wait_shows(&app, cx, "bookings");
         let schema_left = app.update(cx, |window, _| {
@@ -955,17 +1132,16 @@ fn plain_notices_align_with_the_parent_label_at_each_zoom(cx: &mut TestAppContex
                 "Schema notice is too far right at scale {scale}"
             );
         });
-        app.fill_labelled(cx, "Search relations", "missing.bookings");
+        // A notice without a parent starts at the text of the search field:
+        // after the field border and the padding of a medium field.
+        app.fill_labelled(cx, SEARCH, "missing.bookings");
         wait_shows(&app, cx, "No matches");
         app.update(cx, |window, _| {
-            let notice = bounds_of(
-                window,
-                &format!("c\u{1f}{}\u{1f}notice\u{1f}label", profile.id),
-            );
-            assert_eq!(
-                notice.left(),
-                connection_left,
-                "Connection notice is too far right at scale {scale}"
+            let notice = bounds_of(window, "search-empty\u{1f}label");
+            let field = bounds_of(window, SEARCH);
+            assert!(
+                (notice.left() - field.left() - gpui_kit::px(11.)).abs() <= gpui_kit::px(0.5),
+                "Search notice {notice:?} must start at the text of {field:?} at scale {scale}"
             );
         });
         assert_eq!(app.credentials.reads(), 0);
@@ -1092,10 +1268,10 @@ fn deleting_a_connection_deletes_its_cache(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     avia(&directory, &kept);
     avia(&directory, &deleted);
-    let workspace_file = directory.path().join("workspace.json");
+    let local = directory.path().to_path_buf();
     let (kept_cache, deleted_cache) = (
-        storage::catalog_path(&workspace_file, kept.id),
-        storage::catalog_path(&workspace_file, deleted.id),
+        storage::catalog_cache_path(&local, kept.id),
+        storage::catalog_cache_path(&local, deleted.id),
     );
     let app = TestApp::launch_in(
         cx,
@@ -1169,9 +1345,9 @@ fn the_search_limit_does_not_apply_without_a_search(cx: &mut TestAppContext) {
         assert!(!shows(window, "Refine your search"));
     });
     // The 600th schema is in the tree: a search for its table finds it.
-    app.fill_labelled(cx, "Search relations", "schema_599");
+    app.fill_labelled(cx, SEARCH, "schema_599");
     wait_shows(&app, cx, "schema_599");
-    app.fill_labelled(cx, "Search relations", "");
+    app.fill_labelled(cx, SEARCH, "");
     app.wait_until(cx, "the full tree", Duration::from_secs(10), |window, _| {
         labelled(window, "schema_000").is_some() && !shows(window, "Refine your search")
     });
@@ -1196,7 +1372,7 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
     // A click selects the row and focuses the tree. Down moves to the next row.
     app.click_labelled(cx, "booking_id bigint");
     app.press(cx, "down");
-    app.press(cx, "cmd-c");
+    app.press(cx, "secondary-c");
     app.settle(cx);
     assert_eq!(
         cx.read_from_clipboard()
@@ -1210,6 +1386,33 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
         "the inserted column",
         Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql == "`gate`",
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[gpui_kit::test]
+fn application_edit_menu_copies_the_selected_catalog_name(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate string");
+    app.click_labelled(cx, "gate string");
+    app.click(cx, "application-menu");
+    app.choose_in_submenu(cx, "Edit", "Copy");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("gate")
     );
 }
 
@@ -1384,12 +1587,12 @@ fn hiding_or_replacing_connections_clears_the_catalog_selection(cx: &mut TestApp
     app.click_labelled(cx, "bookings");
     wait_shows(&app, cx, "gate string");
 
-    for exit in ["cmd-b", "show-connections", "show-sign-ins"] {
+    for exit in ["secondary-b", "show-connections", "show-sign-ins"] {
         app.click_labelled(cx, "booking_id bigint");
         app.update(cx, |window, _| {
             assert_eq!(selected_tree_rows(window), ["booking_id bigint"]);
         });
-        if exit == "cmd-b" {
+        if exit == "secondary-b" {
             app.press(cx, exit);
         } else {
             // Selection must clear even when focus left the sidebar already.
@@ -1472,11 +1675,11 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
         })
     };
     let before = row_height(&app, cx);
-    app.press(cx, "cmd-=");
+    app.press(cx, "secondary-=");
     app.settle(cx);
     let after = row_height(&app, cx);
     assert!(after > before, "{before} -> {after}");
-    app.press(cx, "cmd--");
+    app.press(cx, "secondary--");
     app.click(cx, "activity-errors");
     let errors = app.copy_activity(cx);
     assert!(!errors.contains("Started a schema refresh"), "{errors}");
@@ -1484,9 +1687,9 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
     // ⇧⌘U opens and closes Activity too.
-    app.press(cx, "cmd-shift-u");
+    app.press(cx, "secondary-shift-u");
     app.wait_for(cx, "activity");
-    app.press(cx, "cmd-shift-u");
+    app.press(cx, "secondary-shift-u");
     app.wait_gone(cx, "activity");
 
     // A refresh error does not mark the connection as having an unread
@@ -1546,7 +1749,7 @@ fn a_tooltip_shows_only_a_cut_name_or_a_comment(cx: &mut TestAppContext) {
         )]),
         1,
     );
-    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
     let app = TestApp::launch_in(
         cx,
@@ -1622,7 +1825,7 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
     wait_shows(&app, cx, "avia");
 
     // A search expands the schemas with matches. Collapse closes them too.
-    app.fill_labelled(cx, "Search relations", "book");
+    app.fill_labelled(cx, SEARCH, "book");
     wait_shows(&app, cx, "bookings");
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Collapse");
@@ -1893,7 +2096,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
     assert_eq!(tooltip(&app, cx).as_deref(), Some("In use"));
-    app.update(cx, |window, cx| {
+    app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
             Some("Closing")
@@ -1902,14 +2105,11 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
             label(window, "status-tooltip-Host").as_deref(),
             Some("Host: 127.0.0.1")
         );
-        let title = bounds_of(window, "status-tooltip-title");
         let status = bounds_of(window, "status-tooltip-status");
         let detail = bounds_of(window, "status-tooltip-metadata");
-        assert!(status.left() > title.right());
-        assert!(status.top() < title.bottom());
-        assert_eq!(title.left(), detail.left());
-        assert!(detail.top() > title.bottom());
-        assert_tooltip_header_center(window, cx, "status-tooltip-status");
+        assert_tooltip_status_below(window);
+        assert_eq!(status.left(), detail.left());
+        assert!(detail.top() >= status.bottom());
     });
 
     // The pointer stays on the row. The open tooltip changes only its status.
@@ -1949,8 +2149,8 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     let second = offline_profile("Large");
     let directory = tempfile::tempdir().unwrap();
     avia(&directory, &first);
-    let workspace_file = directory.path().join("workspace.json");
-    let private = storage::catalog_path(&workspace_file, first.id);
+    let local = directory.path().to_path_buf();
+    let private = storage::catalog_cache_path(&local, first.id);
     let credentials = MemoryCredentials::default();
     for profile in [&first, &second] {
         credentials
@@ -2046,7 +2246,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     let lake = app.saved().shared_catalogs[0].clone();
     assert_eq!(lake.name, "Lake");
     assert_eq!(lake.settings.exclude, ["scratch"]);
-    let shared = storage::catalog_path(&workspace_file, lake.id);
+    let shared = storage::catalog_cache_path(&local, lake.id);
     app.wait_until(cx, "the moved cache", Duration::from_secs(10), |_, _| {
         shared.exists() && !private.exists()
     });
@@ -2214,7 +2414,7 @@ fn the_demo_catalog_supports_search_columns_and_copy(cx: &mut TestAppContext) {
             .as_deref(),
         Some("`avia`.`bookings`")
     );
-    app.fill_labelled(cx, "Search relations", "finance.payments");
+    app.fill_labelled(cx, SEARCH, "finance.payments");
     app.click_labelled(cx, "payments");
     app.wait_until(
         cx,
@@ -2222,7 +2422,7 @@ fn the_demo_catalog_supports_search_columns_and_copy(cx: &mut TestAppContext) {
         Duration::from_secs(10),
         |window, _| labelled(window, "payment_id bigint").is_some(),
     );
-    app.fill_labelled(cx, "Search relations", "avia.flight_events");
+    app.fill_labelled(cx, SEARCH, "avia.flight_events");
     app.click_labelled(cx, "flight_events");
     app.wait_until(
         cx,

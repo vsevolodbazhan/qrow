@@ -10,7 +10,8 @@ pub(in crate::ui) struct ConversationEditor {
 
 pub(super) const CONVERSATION_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "conversation",
-    label: "Conversation Name",
+    title: "Rename Conversation",
+    label: "Name",
     tooltip: "Rename conversation",
     form: |this| {
         this.assistant_state
@@ -227,6 +228,7 @@ impl Qrow {
         while let Some(first) = self.assistant_state.first_messages.pop_front() {
             self.restore_first_message(first, window, cx);
         }
+        self.finish_assistant_replies(None, None, cx);
     }
 
     pub(super) fn restore_first_message(
@@ -343,7 +345,7 @@ impl Qrow {
 
     /// Opens a new query tab for a new conversation. Codex creates the
     /// conversation when you send the first message.
-    pub(super) fn create_assistant_conversation(
+    pub(in crate::ui) fn create_assistant_conversation(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -627,7 +629,7 @@ impl Qrow {
 
     /// Shows a conversation. A closed conversation stays detached until its
     /// next message needs a query tab.
-    pub(super) fn select_assistant_thread(
+    pub(in crate::ui) fn select_assistant_thread(
         &mut self,
         id: &str,
         window: &mut Window,

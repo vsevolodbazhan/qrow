@@ -2,7 +2,6 @@ use crate::model::{
     CatalogColumnReads, CatalogRefresh, CatalogSettings, ConnectionLifecycle, Profile,
     SharedCatalog,
 };
-use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::ActiveTheme;
 use uuid::Uuid;
 pub(super) mod transfer;
@@ -44,9 +43,7 @@ impl RefreshMode {
         match self {
             Self::Disabled => "Never introspect schemas.",
             Self::Manual => "Introspect schemas on demand.",
-            Self::WhileConnected => {
-                "Introspect schemas on demand and periodically while a tab is connected."
-            }
+            Self::WhileConnected => "Introspect schemas on demand and on a schedule.",
         }
     }
 
@@ -153,6 +150,58 @@ pub(super) const FIELD_IDS: [&str; 16] = [
     "connection-response-timeout",
     "connection-trino-schema",
 ];
+/// The errors of the text fields that every connection needs, by index in
+/// [`FIELD_IDS`], in field order. Save shows all of them at once.
+pub(super) fn field_errors(values: &[String]) -> Vec<(usize, String)> {
+    let mut errors = Vec::new();
+    let name = values[0].trim();
+    if name.is_empty() {
+        errors.push((0, "Give this connection a name.".to_owned()));
+    } else if name.chars().count() > crate::model::MAX_PROFILE_NAME {
+        errors.push((
+            0,
+            format!(
+                "Connection name must be {} characters or fewer.",
+                crate::model::MAX_PROFILE_NAME
+            ),
+        ));
+    }
+    if values[1].trim().is_empty() {
+        errors.push((1, "Enter a host.".to_owned()));
+    }
+    if !values[2].trim().parse::<u16>().is_ok_and(|port| port != 0) {
+        errors.push((2, "Port must be a number from 1 to 65535.".to_owned()));
+    }
+    if values[3].trim().is_empty() {
+        errors.push((3, "Enter a username.".to_owned()));
+    }
+    if values[5].trim().is_empty() {
+        errors.push((5, "Enter an initial database.".to_owned()));
+    }
+    errors
+}
+
+/// The index in [`FIELD_IDS`] of the field that a validation error is
+/// about, or `None` when the error is not about one text field.
+pub(super) fn field_of_error(error: &str) -> Option<usize> {
+    // Only short errors: one line below the field holds them. A JSON error
+    // of the session parameters shows in the footer.
+    const PREFIXES: [(&str, usize); 8] = [
+        ("Give this connection a name", 0),
+        ("Connection name must", 0),
+        ("A connection with this name", 0),
+        ("Enter a host", 1),
+        ("Port must", 2),
+        ("Enter a username", 3),
+        ("Username contains", 3),
+        ("Enter an initial database", 5),
+    ];
+    PREFIXES
+        .iter()
+        .find(|(prefix, _)| error.starts_with(prefix))
+        .map(|(_, field)| *field)
+}
+
 const PASSWORD: &str = "Password";
 const SIGN_IN: &str = "Sign-in";
 const DISCONNECT_AFTER: &str = "Disconnect after";
@@ -634,24 +683,12 @@ fn notes_description(bytes: usize) -> String {
     if counts_notes(bytes) {
         format!(
             "{} of {} bytes. Do not enter secrets.",
-            group_digits(bytes),
-            group_digits(MAX_ASSISTANT_NOTES_BYTES)
+            crate::logs::group_digits(bytes),
+            crate::logs::group_digits(MAX_ASSISTANT_NOTES_BYTES)
         )
     } else {
-        "Sent to the assistant and saved as plain text. Do not enter secrets.".to_owned()
+        "Sent to the assistant as plain text. Omit secrets.".to_owned()
     }
-}
-
-fn group_digits(value: usize) -> String {
-    let digits = value.to_string();
-    let mut grouped = String::new();
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
 }
 
 /// The notes that the assistant reads about the connection.
@@ -661,7 +698,7 @@ pub(super) fn assistant_page(qrow: &WeakEntity<Qrow>) -> SettingPage {
         .group(SettingGroup::new().item(connection_row(
             qrow,
             "Assistant Notes",
-            "Sent to the assistant and saved as plain text. Do not enter secrets.",
+            "Sent to the assistant as plain text. Omit secrets.",
             &["assistant", "notes", "codex", "claude", "context"],
             true,
             |_, form, _, cx| {
@@ -678,7 +715,6 @@ pub(super) fn assistant_page(qrow: &WeakEntity<Qrow>) -> SettingPage {
                             .w_full()
                             .child(
                                 Textarea::new(&form.assistant_notes)
-                                    .focus_ring(false)
                                     .w_full()
                                     .disabled(form.saving.is_some())
                                     .aria_label("Assistant Notes"),
@@ -713,7 +749,6 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             false,
             |_, form, _, _| {
                 Select::new(&form.schema_refresh)
-                    .focus_ring(false)
                     .id("connection-schema-refresh")
                     .w_full()
                     .disabled(form.saving.is_some())
@@ -725,10 +760,10 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             connection_row(
                 qrow,
                 "Refresh Period",
-                "Minutes between automatic schema refreshes, from 5 to 10080.",
+                "Minutes between schema refreshes, from 5 to 10080.",
                 &["schemas", "minutes", "automatic"],
                 false,
-                |_, form, _, _| form_input(form, 12, "Refresh Period in Minutes"),
+                |_, form, _, cx| form_input(form, 12, "Refresh Period in Minutes", cx),
             )
         }))
         .items(browses.then(|| {
@@ -738,19 +773,18 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                 "Minutes before a schema refresh stops, from 1 to 1440.",
                 &["schemas", "minutes"],
                 false,
-                |_, form, _, _| form_input(form, 13, "Refresh Timeout in Minutes"),
+                |_, form, _, cx| form_input(form, 13, "Refresh Timeout in Minutes", cx),
             )
         }))
         .items(browses.then(|| {
             connection_row(
                 qrow,
                 "Column Reads",
-                "Per-relation reads use less driver memory; schema reads send fewer requests.",
+                "One relation saves memory; whole schema saves requests.",
                 &["columns", "memory", "driver", "requests"],
                 false,
                 |_, form, _, _| {
                     Select::new(&form.column_reads)
-                        .focus_ring(false)
                         .id("connection-column-reads")
                         .w_full()
                         .disabled(form.saving.is_some())
@@ -759,65 +793,76 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                 },
             )
         }))
-        .items(browses.then(|| connection_row(
-            qrow,
-            "Schema Catalog",
-            if shared {
-                "Connections that share this catalog must read the same metastore with the same permissions."
-            } else {
-                "Connections that read the same metastore can share one catalog."
-            },
-            &["shared", "catalog", "metastore"],
-            false,
-            |_, form, _, cx| catalog_field(form, cx),
-        )))
-        .items(if browses && shared { vec![connection_row(
+        .items(browses.then(|| {
+            connection_row(
+                qrow,
+                "Schema Catalog",
+                if shared {
+                    "Its connections must see the same metastore."
+                } else {
+                    "Connections on one metastore can share a catalog."
+                },
+                &["shared", "catalog", "metastore"],
+                false,
+                |_, form, _, cx| catalog_field(form, cx),
+            )
+        }))
+        .items(if browses && shared {
+            vec![
+                connection_row(
                     qrow,
                     "Shared Catalog Name",
-                    "Shown in the settings of each connection that uses the catalog.",
+                    "Shown in each connection that uses the catalog.",
                     &["shared", "catalog"],
                     false,
                     |_, form, _, _| {
                         Input::new(&form.shared_name)
-                            .focus_ring(false)
                             .id("connection-shared-catalog-name")
                             .w_full()
                             .disabled(form.saving.is_some())
                             .aria_label("Shared Catalog Name")
                             .into_any_element()
                     },
-                ), connection_row(
+                ),
+                connection_row(
                     qrow,
                     "Preferred Connection",
-                    "Automatic refreshes use this connection first while it is connected.",
+                    "Automatic refreshes use this connection first.",
                     &["shared", "catalog", "refresh"],
                     false,
                     |_, form, _, _| {
                         Select::new(&form.preferred_select)
-                            .focus_ring(false)
                             .id("connection-preferred-catalog-connection")
                             .w_full()
                             .disabled(form.saving.is_some())
                             .accessibility_label("Preferred Connection")
                             .into_any_element()
                     },
-                )] } else { vec![] })
-        .items(browses.then(|| connection_row(
-            qrow,
-            "Visible Schemas",
-            "Patterns separated by commas, for example sales_*. Empty shows all schemas.",
-            &["schemas", "filter", "patterns", "include"],
-            false,
-            |_, form, _, _| form_input(form, 10, "Visible Schemas"),
-        )))
-        .items(browses.then(|| connection_row(
-            qrow,
-            "Hidden Schemas",
-            "Patterns separated by commas. Hides a schema also when Visible Schemas matches it.",
-            &["schemas", "filter", "patterns", "exclude"],
-            false,
-            |_, form, _, _| form_input(form, 11, "Hidden Schemas"),
-        )));
+                ),
+            ]
+        } else {
+            vec![]
+        })
+        .items(browses.then(|| {
+            connection_row(
+                qrow,
+                "Visible Schemas",
+                "Patterns like sales_*. Empty shows all schemas.",
+                &["schemas", "filter", "patterns", "include"],
+                false,
+                |_, form, _, cx| form_input(form, 10, "Visible Schemas", cx),
+            )
+        }))
+        .items(browses.then(|| {
+            connection_row(
+                qrow,
+                "Hidden Schemas",
+                "Patterns like tmp_*. Wins over Visible Schemas.",
+                &["schemas", "filter", "patterns", "exclude"],
+                false,
+                |_, form, _, cx| form_input(form, 11, "Hidden Schemas", cx),
+            )
+        }));
     SettingPage::new("Catalog").resettable(false).group(fields)
 }
 
@@ -846,7 +891,6 @@ fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
         .w_full()
         .child(
             Combobox::new(&form.catalog_select)
-                .focus_ring(false)
                 .w_full()
                 .disabled(form.saving.is_some())
                 .search_placeholder("Search catalogs…")
@@ -904,8 +948,8 @@ mod tests {
             notes_description(NOTES_COUNT_FROM),
             "12,288 of 16,384 bytes. Do not enter secrets."
         );
-        assert_eq!(group_digits(7), "7");
-        assert_eq!(group_digits(1_234_567), "1,234,567");
+        assert_eq!(crate::logs::group_digits(7), "7");
+        assert_eq!(crate::logs::group_digits(1_234_567), "1,234,567");
     }
 
     #[test]

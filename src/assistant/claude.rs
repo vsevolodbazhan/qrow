@@ -16,8 +16,8 @@ use super::{
     MAX_MESSAGE_BYTES, Model, ReasoningEffort, TitleRequest, ToolCall, ToolDefinition, ToolResult,
     Turn, TurnRequest, WORKSPACE_CONTEXT_SEPARATOR, WebSearch, WebSearchStatus,
     codex::{
-        Input, LaunchChild, WriteCommand, clean_title, kill_process_tree, read_stderr_tail,
-        write_protocol_stream,
+        Input, LaunchChild, WriteCommand, WriteFailure, clean_title, kill_process_tree,
+        read_stderr_tail, send_line, write_protocol_stream,
     },
     inbox::{Inbox, Message, ProcessSender, SendError},
     service::ProcessIds,
@@ -34,7 +34,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, RecvTimeoutError, SyncSender, TrySendError},
+        mpsc::{self, SyncSender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -204,6 +204,11 @@ impl ClaudeHarness {
 
     fn spawn(&mut self, arguments: Vec<OsString>) -> Result<Process> {
         let mut command = Command::new(&self.executable);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000 | 0x00000200);
+        }
         command
             .args(arguments)
             .current_dir(&self.cwd)
@@ -794,25 +799,16 @@ impl ClaudeHarness {
             bytes.len() <= MAX_LINE_BYTES,
             "Claude Code message exceeded the protocol size limit"
         );
-        let writer = process
-            .writer
-            .as_ref()
-            .context("Claude Code input is closed")?;
-        let (completed, completion) = mpsc::sync_channel(1);
-        writer
-            .try_send(WriteCommand { bytes, completed })
-            .map_err(|error| match error {
-                TrySendError::Full(_) => anyhow!("Claude Code input is busy"),
-                TrySendError::Disconnected(_) => anyhow!("Claude Code input is closed"),
-            })?;
-        match completion.recv_timeout(self.request_timeout) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => bail!("{error}{}", diagnostic_suffix(process)),
-            Err(RecvTimeoutError::Timeout) => bail!(
+        match send_line(process.writer.as_ref(), bytes, self.request_timeout) {
+            Ok(()) => Ok(()),
+            Err(WriteFailure::Busy) => bail!("Claude Code input is busy"),
+            Err(WriteFailure::Closed) => bail!("Claude Code input is closed"),
+            Err(WriteFailure::Failed(error)) => bail!("{error}{}", diagnostic_suffix(process)),
+            Err(WriteFailure::Timeout) => bail!(
                 "Claude Code did not accept a message within {} seconds",
                 self.request_timeout.as_secs_f32()
             ),
-            Err(RecvTimeoutError::Disconnected) => {
+            Err(WriteFailure::Stopped) => {
                 bail!("Claude Code input closed{}", diagnostic_suffix(process))
             }
         }
@@ -1049,9 +1045,13 @@ impl ClaudeHarness {
             .find(|(_, session)| session.process.source == source)
             .map(|(id, _)| id.clone())?;
         let mut session = self.sessions.remove(&thread)?;
-        let suffix = diagnostic_suffix(&session.process);
         let turn = session.turn.take();
+        // The end of standard output can arrive before the reader of standard
+        // error has the reason. Stopping the process joins that reader, so
+        // read the reason after it.
+        let stderr_tail = Arc::clone(&session.process.stderr_tail);
         self.stop_process(session.process);
+        let suffix = stderr_suffix(&stderr_tail);
         turn.map(|turn| AssistantEvent::TurnCompleted {
             thread_id: thread,
             turn: Turn {
@@ -1440,7 +1440,11 @@ fn text_links(text: &str) -> Vec<super::WebLink> {
 }
 
 fn diagnostic_suffix(process: &Process) -> String {
-    let Ok(tail) = process.stderr_tail.lock() else {
+    stderr_suffix(&process.stderr_tail)
+}
+
+fn stderr_suffix(stderr_tail: &Mutex<VecDeque<u8>>) -> String {
+    let Ok(tail) = stderr_tail.lock() else {
         return String::new();
     };
     let text = String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<_>>())
@@ -1570,7 +1574,13 @@ fn title_description(messages: &[(&'static str, String)]) -> Option<String> {
 
 /// Reads `claude --version` and checks it against `MIN_VERSION`.
 fn check_version(executable: &Path) -> Result<()> {
-    let output = Command::new(executable)
+    let mut command = Command::new(executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command
         .arg("--version")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -1639,7 +1649,7 @@ pub fn delete_saved_session(id: &str) -> Result<()> {
 fn default_config_dir() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
+        .or_else(|| crate::storage::home_dir().map(|home| home.join(".claude")))
 }
 
 fn unix_now() -> i64 {

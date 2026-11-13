@@ -14,22 +14,33 @@ pub type Browser = Arc<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync>;
 pub struct Environment {
     /// `None` shows the built-in demo data and saves nothing.
     workspace: Option<PathBuf>,
+    /// The folder of the caches and transcripts of the workspace. See
+    /// [`storage::local_data_directory`].
+    local: Option<PathBuf>,
     credentials: Arc<dyn Credentials>,
     tokens: Arc<dyn TokenStore>,
     trust: Trust,
     /// `None` opens the default browser of the system.
     browser: Option<Browser>,
+    /// How this copy updates. `None` never checks for updates.
+    updates: Option<Arc<crate::update::Setup>>,
 }
 
 impl Environment {
-    /// The user's workspace, the macOS Keychain, and the system trust store.
+    /// The user's workspace, system secret store, and system trust store.
     pub fn user() -> Self {
         Self {
             workspace: Some(storage::workspace_path()),
+            local: Some(storage::local_data_directory()),
             credentials: Arc::new(Keychain),
             tokens: Arc::new(Keychain),
             trust: Trust::system(),
             browser: None,
+            // Only release builds have an update setup.
+            updates: crate::update::Setup::for_this_build(
+                storage::local_data_directory().join("updates"),
+            )
+            .map(Arc::new),
         }
     }
 
@@ -38,24 +49,41 @@ impl Environment {
     pub fn demo() -> Self {
         Self {
             workspace: None,
+            local: None,
             credentials: Arc::new(Keychain),
             tokens: Arc::new(MemoryTokenStore::default()),
             trust: Trust::system(),
             browser: None,
+            updates: None,
         }
     }
 
     /// A workspace file and a password store chosen by the caller, for
     /// example a temporary directory and synthetic passwords in tests.
-    /// Sign-in tokens stay in memory.
+    /// Caches and transcripts are next to the workspace file. Sign-in tokens
+    /// stay in memory.
     pub fn isolated(workspace: PathBuf, credentials: Arc<dyn Credentials>) -> Self {
         Self {
+            local: Some(
+                workspace
+                    .parent()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(".")),
+            ),
             workspace: Some(workspace),
             credentials,
             tokens: Arc::new(MemoryTokenStore::default()),
             trust: Trust::system(),
             browser: None,
+            updates: None,
         }
+    }
+
+    /// Checks for updates with this setup, for example a local release
+    /// server in tests.
+    pub fn with_updates(mut self, setup: crate::update::Setup) -> Self {
+        self.updates = Some(Arc::new(setup));
+        self
     }
 
     /// Uses these sign-in tokens, certificate authorities, and browser, for
@@ -80,6 +108,11 @@ impl Environment {
         self.workspace.as_ref()
     }
 
+    /// The folder of the caches and transcripts, or `None` for the demo.
+    pub(crate) fn local_directory(&self) -> Option<&PathBuf> {
+        self.local.as_ref()
+    }
+
     pub(crate) fn credentials(&self) -> Arc<dyn Credentials> {
         self.credentials.clone()
     }
@@ -94,5 +127,9 @@ impl Environment {
 
     pub(crate) fn browser(&self) -> Option<Browser> {
         self.browser.clone()
+    }
+
+    pub(crate) fn updates(&self) -> Option<Arc<crate::update::Setup>> {
+        self.updates.clone()
     }
 }

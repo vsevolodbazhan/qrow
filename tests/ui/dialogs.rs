@@ -1,6 +1,6 @@
 use crate::support::{TestApp, bounds_of, label, value};
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
+use gpui_kit::{TestAppContext, px};
 use qrow::{
     build_info,
     model::{CopyFormat, Workspace},
@@ -8,21 +8,54 @@ use qrow::{
 };
 use std::time::Duration;
 
-/// A version line reads `0.1.0` or `0.1.0 (dcc75d4fd874)`.
+/// A version line reads `0.1.0`, `0.1.0 (dcc75d4fd874)`, or, for a release
+/// build, `0.1.0-nightly.20260921.7 (dcc75d4fd874)`.
 fn is_version(text: &str) -> bool {
-    let (number, commit) = text.split_once(' ').unwrap_or((text, ""));
+    let (version, commit) = text.split_once(' ').unwrap_or((text, ""));
+    let (number, channel) = version.split_once('-').unwrap_or((version, ""));
     let parts: Vec<_> = number.split('.').collect();
     let numeric = parts.len() == 3
         && parts
             .iter()
             .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    // A SemVer pre-release: dot-separated, nonempty ASCII alphanumeric identifiers.
+    let channel = version == number
+        || channel.split('.').all(|identifier| {
+            !identifier.is_empty()
+                && identifier
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
     let commit = commit.trim_matches(|c| c == '(' || c == ')');
     numeric
+        && channel
         && (commit.is_empty()
             || (commit.len() == 12
                 && commit
                     .chars()
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())))
+}
+
+#[test]
+fn version_lines_include_release_channels() {
+    for line in [
+        "0.4.0",
+        "0.4.0 (6ca918597182)",
+        "0.4.0-nightly.20261107.39 (6ca918597182)",
+        "1.0.0-rc.1",
+    ] {
+        assert!(is_version(line), "{line}");
+    }
+    for line in [
+        "0.4",
+        "0.4.0-",
+        "0.4.0-nightly..39",
+        "0.4.0-night_ly",
+        "0.4.0 (6CA918597182)",
+        "0.4.0 (6ca9185)",
+    ] {
+        assert!(!is_version(line), "{line}");
+    }
 }
 
 #[gpui_kit::test]
@@ -38,6 +71,7 @@ fn about_shows_the_version_and_closes_with_escape(cx: &mut TestAppContext) {
             );
             let version = label(window, "about-version").unwrap_or_default();
             assert!(is_version(&version), "Not a version line: {version}");
+            assert_eq!(version, build_info::version_label());
         });
         app.press(cx, "escape");
         app.wait_gone(cx, "about-copyright");
@@ -77,8 +111,9 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
         assert!(unit.bounds().left() - input.bounds().left() < window.rem_size() * 4.);
     });
     app.fill(cx, field, "0");
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "disabled replay retention", |workspace| {
         workspace.settings.export_replay_limit_mib == 0
     });
@@ -95,9 +130,24 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
         assert_eq!(value(window, field).as_deref(), Some("1048576"));
     });
     app.fill(cx, field, "300");
-    app.click(cx, "save-settings");
+    app.press(cx, "secondary-w");
     wait_saved(&app, cx, "replay retention", |workspace| {
         workspace.settings.export_replay_limit_mib == 300
+    });
+}
+
+#[gpui_kit::test]
+fn settings_restore_defaults_sits_at_the_right_like_the_dialog_actions(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "reset-settings");
+    app.update(cx, |window, _| {
+        let button = bounds_of(window, "reset-settings");
+        let width = window.viewport_size().width;
+        assert!(
+            width - button.right() < button.left(),
+            "Restore defaults must sit at the right: {button:?} in {width:?}"
+        );
     });
 }
 
@@ -108,8 +158,9 @@ fn copy_format_is_saved(cx: &mut TestAppContext) {
     app.fill_labelled(cx, "Search...", "clipboard");
     app.wait_for(cx, "setting-copy-format");
     app.select(cx, "setting-copy-format", "JSON");
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "the copy format", |workspace| {
         workspace.settings.copy_format == CopyFormat::Json
     });
@@ -128,7 +179,7 @@ fn copy_format_is_saved(cx: &mut TestAppContext) {
 fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, OpenSettings);
-    app.wait_for(cx, "save-settings");
+    app.wait_for(cx, "reset-settings");
     app.update(cx, |window, _| {
         assert_eq!(value(window, "setting-theme").as_deref(), Some("System"));
     });
@@ -220,11 +271,205 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
             Some("Uppercase")
         );
     });
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
+    // Settings apply as they change; ⌘W closes the dialog.
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
     wait_saved(&app, cx, "the restored default fonts", |w| {
         w.settings.editor_font_size == 13.
             && w.settings.assistant_font_size == 14.
-            && w.settings.editor_font_family == "Menlo"
+            && w.settings.editor_font_family == "JetBrains Mono"
+            && w.settings.logs_font_family == "JetBrains Mono"
+            && w.settings.ui_font_family == "IBM Plex Sans"
+            && w.settings.assistant_font_family == "IBM Plex Sans"
     });
+}
+
+#[gpui_kit::test]
+fn smooth_caret_is_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.editor_smooth_caret);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "editor-smooth-caret");
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret enabled", |workspace| {
+        workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "editor-smooth-caret");
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret disabled", |workspace| {
+        !workspace.settings.editor_smooth_caret
+    });
+    app.click(cx, "editor-smooth-caret");
+    wait_saved(&app, cx, "smooth caret enabled again", |workspace| {
+        workspace.settings.editor_smooth_caret
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "smooth caret default", |workspace| {
+        !workspace.settings.editor_smooth_caret
+    });
+}
+
+#[gpui_kit::test]
+fn scrolling_and_panel_motion_are_independent_opt_ins_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.editor_smooth_scrolling);
+    assert!(!app.saved().settings.smooth_transitions);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "smooth-transitions");
+    app.click(cx, "smooth-transitions");
+    wait_saved(&app, cx, "panel transitions enabled", |workspace| {
+        workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+    app.click(cx, "editor-smooth-scrolling");
+    wait_saved(&app, cx, "wheel scrolling enabled", |workspace| {
+        workspace.settings.smooth_transitions
+            && workspace.settings.editor_smooth_scrolling
+            && !workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "smooth");
+    app.wait_for(cx, "smooth-transitions");
+    app.click(cx, "editor-smooth-scrolling");
+    wait_saved(&app, cx, "wheel scrolling disabled", |workspace| {
+        workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "motion defaults", |workspace| {
+        !workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
+    });
+}
+
+#[gpui_kit::test]
+fn composer_motion_options_are_independent_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.assistant_smooth_caret);
+    assert!(!app.saved().settings.assistant_smooth_resize);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "composer");
+    app.wait_for(cx, "assistant-smooth-caret");
+    app.click(cx, "assistant-smooth-caret");
+    wait_saved(&app, cx, "composer caret enabled", |workspace| {
+        workspace.settings.assistant_smooth_caret && !workspace.settings.assistant_smooth_resize
+    });
+    app.click(cx, "assistant-smooth-resize");
+    wait_saved(&app, cx, "composer resize enabled", |workspace| {
+        workspace.settings.assistant_smooth_caret
+            && workspace.settings.assistant_smooth_resize
+            && !workspace.settings.editor_smooth_caret
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "composer");
+    app.wait_for(cx, "assistant-smooth-resize");
+    app.click(cx, "assistant-smooth-caret");
+    wait_saved(&app, cx, "composer caret disabled", |workspace| {
+        !workspace.settings.assistant_smooth_caret && workspace.settings.assistant_smooth_resize
+    });
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "composer defaults", |workspace| {
+        !workspace.settings.assistant_smooth_caret && !workspace.settings.assistant_smooth_resize
+    });
+}
+
+#[gpui_kit::test]
+fn buffered_replies_are_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    assert!(!app.saved().settings.assistant_buffer_replies);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "buffered");
+    app.wait_for(cx, "assistant-buffer-replies");
+    app.click(cx, "assistant-buffer-replies");
+    wait_saved(&app, cx, "buffered replies enabled", |workspace| {
+        workspace.settings.assistant_buffer_replies
+            && !workspace.settings.smooth_transitions
+            && !workspace.settings.assistant_smooth_resize
+    });
+    app.press(cx, "secondary-w");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "buffered");
+    app.wait_for(cx, "assistant-buffer-replies");
+    app.click(cx, "reset-settings");
+    wait_saved(&app, cx, "buffered replies reset", |workspace| {
+        !workspace.settings.assistant_buffer_replies
+    });
+}
+
+#[gpui_kit::test]
+fn settings_controls_end_at_one_right_edge(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "smooth-transitions");
+    app.update(cx, |window, _| {
+        let select = bounds_of(window, "setting-theme");
+        let switch = bounds_of(window, "smooth-transitions");
+        assert!(
+            (select.right() - switch.right()).abs() < px(1.),
+            "the switch ends at {:?}, the select at {:?}",
+            switch.right(),
+            select.right()
+        );
+        assert!(switch.size.width < select.size.width / 2.);
+    });
+}
+
+#[gpui_kit::test]
+fn setting_descriptions_use_a_compact_line_height(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "smooth-transitions");
+    app.update(cx, |window, _| {
+        // 0.875 rem text on 1.25 rem lines, not the 1.618 default.
+        let line = window.rem_size() * 1.25;
+        for title in ["Theme", "Smooth Transitions", "Scale"] {
+            let height = bounds_of(window, &format!("setting-help-{title}"))
+                .size
+                .height;
+            let lines = (height / line).round();
+            assert!(lines >= 1., "{title}: {height:?}");
+            assert!(
+                (height - line * lines).abs() < px(1.),
+                "{title}: {height:?} is not {lines} lines of {line:?}"
+            );
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn a_workspace_of_a_newer_version_keeps_its_settings_and_says_so(cx: &mut TestAppContext) {
+    let mut file = serde_json::to_value(Workspace {
+        version: qrow::model::WORKSPACE_VERSION,
+        ..Workspace::default()
+    })
+    .unwrap();
+    file["written_by"] = "9.9.9".into();
+    file["settings"]["future_option"] = 7.into();
+    let app = TestApp::launch_json(cx, file);
+    app.update(cx, |window, _| {
+        let notice = label(window, "workspace-message").unwrap_or_default();
+        assert!(notice.contains("settings from Qrow 9.9.9"), "{notice}");
+        assert!(notice.contains("workspace.backup.json"), "{notice}");
+    });
+    // A change saves the workspace.
+    app.press(cx, "secondary-j");
+    app.wait_saved(cx, "minimized results", |workspace| {
+        workspace.settings.results_minimized
+    });
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(app.workspace_path()).unwrap()).unwrap();
+    assert_eq!(saved["settings"]["future_option"], 7);
+    assert_eq!(saved["written_by"], build_info::RELEASE_VERSION);
+    assert!(
+        app.workspace_path()
+            .with_file_name("workspace.backup.json")
+            .is_file()
+    );
 }

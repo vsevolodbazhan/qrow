@@ -2,17 +2,19 @@
 
 See [Testing](../docs/testing.md) for `./qtest`, which runs all checks and tests.
 See [Development](../docs/development.md) for hooks, dependency
-maintenance, and binding generation. Build and package commands are in the
-[project README](../README.md#build).
+maintenance, binding generation, and
+[package commands](../docs/development.md#package-the-app). Build commands are
+in the [project README](../README.md#build).
 
 | Path | Purpose |
 | --- | --- |
-| `ci/` | CI maintenance: the deletion of Rust build caches that newer caches replaced. |
-| `qtest/` | The [`./qtest`](../docs/testing.md) command: suite catalog, runner, and command line. |
+| `ci/` | Common test ownership, native build/test adapters, strict evidence verification, and removal of replaced Rust build caches. |
+| `qtest/` | The [`./qtest`](../docs/testing.md#plan-and-execute-checks) command: target definitions, source-bound plans, prepared nextest builds, execution, evidence, and command line. |
 | `core/` | Shared prerequisite checks, the size check, and the dependency policy check. `environment.py` finds the target directory, Docker, and the JDK for the Python scripts. |
 | `e2e/` | Disposable test servers and their downloads, the native driver entry point, synthetic credential cleanup, and the DuckDB CSV reader check. |
-| `package/` | macOS packaging: the app bundle, the zip, the installer DMG and its background, the architecture and minimum-version reader, the version reader, icon conversion, and dependency notices. |
+| `package/` | Native package qualification and packaging: the macOS app bundle, zip, and installer DMG with its background, the Linux archive, the Windows installer and portable archive, the architecture and minimum-version reader, the version reader, icon conversion, and dependency notices. |
 | `perf/` | The launch time, idle memory, and idle CPU probe of the release app (the `perf-app` suite). |
 | `hooks/` | Hook installation and isolated Git snapshot checks. |
+| `local-postgres/` | Start a disposable Postgres server on localhost with synthetic sample data for manual Qrow connection testing. |
 | `generate/` | Reproducible generation of the Thrift bindings and the small application icon. |
 | `tests/` | Automation, fixture, policy, and hook tests. |

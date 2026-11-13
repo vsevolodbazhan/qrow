@@ -46,7 +46,9 @@ fn reset_configurable_defaults(cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.font_family = defaults.font_family;
     theme.font_size = defaults.font_size;
-    theme.mono_font_family = defaults.mono_font_family;
+    // Code in assistant messages and other monospace text uses the bundled
+    // monospace font, like the SQL editor.
+    theme.mono_font_family = crate::model::MONOSPACE_FONT_FAMILY.into();
     theme.mono_font_size = defaults.mono_font_size;
     theme.radius = defaults.radius;
     theme.radius_lg = defaults.radius_lg;
@@ -89,7 +91,132 @@ pub(crate) fn is_available(name: &str, cx: &App) -> bool {
             .is_some_and(|theme| !theme.is_default)
 }
 
+/// The least opacity of the dialog backdrop. Many themes, the GPUI Kit
+/// defaults among them, dim so little that a dialog blends into the window.
+const MIN_OVERLAY_OPACITY_LIGHT: f32 = 0.2;
+const MIN_OVERLAY_OPACITY_DARK: f32 = 0.45;
+
+/// Raise the backdrop of the active theme to the least opacity. The hue of
+/// the theme stays.
+fn strengthen_overlay(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    let least = if theme.is_dark() {
+        MIN_OVERLAY_OPACITY_DARK
+    } else {
+        MIN_OVERLAY_OPACITY_LIGHT
+    };
+    if theme.overlay.a < least {
+        theme.overlay = theme.overlay.alpha(least);
+    }
+}
+
+/// The highest saturation of a SQL comment in a light theme. A more colorful
+/// comment outweighs the SQL around it.
+const MAX_LIGHT_COMMENT_SATURATION: f32 = 0.35;
+
+/// Give saturated SQL comments of a light theme the muted text color. The
+/// GPUI Kit default and macOS Classic paint them in a strong blue.
+fn quiet_light_comments(cx: &mut App) {
+    use gpui_kit::HighlightStyle;
+    use gpui_kit::component::highlighter::HighlightTheme;
+    use std::sync::Arc;
+
+    let theme = Theme::global_mut(cx);
+    if theme.is_dark() {
+        return;
+    }
+    let saturated = theme
+        .highlight_theme
+        .style
+        .syntax
+        .comment
+        .map(HighlightStyle::from)
+        .and_then(|style| style.color)
+        .is_some_and(|color| color.s > MAX_LIGHT_COMMENT_SATURATION);
+    if !saturated {
+        return;
+    }
+    let muted = theme.muted_foreground.to_rgb();
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    let color = format!(
+        "#{:02x}{:02x}{:02x}",
+        channel(muted.r),
+        channel(muted.g),
+        channel(muted.b)
+    );
+    let Ok(comment) = serde_json::from_value(serde_json::json!({ "color": color })) else {
+        return;
+    };
+    let mut highlight: HighlightTheme = (*theme.highlight_theme).clone();
+    highlight.style.syntax.comment = Some(comment);
+    theme.highlight_theme = Arc::new(highlight);
+}
+
+/// Give the SQL keywords that the grammar marks as attributes, like `DESC`,
+/// `ASC`, and `NULLS`, the keyword color, so that all keywords share one
+/// color in each theme.
+fn unify_sql_keywords(cx: &mut App) {
+    use gpui_kit::component::highlighter::HighlightTheme;
+    use std::sync::Arc;
+
+    let theme = Theme::global_mut(cx);
+    let Some(keyword) = theme.highlight_theme.style.syntax.keyword else {
+        return;
+    };
+    let mut highlight: HighlightTheme = (*theme.highlight_theme).clone();
+    highlight.style.syntax.attribute = Some(keyword);
+    theme.highlight_theme = Arc::new(highlight);
+}
+
+/// The least difference in lightness between the rows of a striped table.
+const MIN_STRIPE_LIGHTNESS: f32 = 0.025;
+/// The share of the foreground color in a stripe that a theme makes too faint.
+const STRIPE_FOREGROUND: f32 = 0.045;
+
+/// Make the alternate rows of a dark table faintly visible. Some dark
+/// themes, the GPUI Kit default among them, stripe them in almost the color
+/// of the other rows.
+fn visible_dark_stripes(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+    if !theme.is_dark() {
+        return;
+    }
+    let base: gpui_kit::Hsla = theme.tokens.table.into();
+    let even: gpui_kit::Hsla = theme.tokens.table_even.into();
+    if (even.l - base.l).abs() >= MIN_STRIPE_LIGHTNESS {
+        return;
+    }
+    let stripe = base.blend(theme.foreground.opacity(STRIPE_FOREGROUND));
+    theme.table_even = stripe;
+    theme.tokens.table_even = stripe.into();
+}
+
+/// Give the native parts of every window, like the title bar and its
+/// buttons, the appearance of the theme. The System theme follows macOS.
+fn match_window_appearance(name: &str, cx: &mut App) {
+    let appearance = (name != SYSTEM_THEME).then(|| {
+        if Theme::global(cx).is_dark() {
+            gpui_kit::WindowAppearance::Dark
+        } else {
+            gpui_kit::WindowAppearance::Light
+        }
+    });
+    cx.set_window_appearance(appearance);
+}
+
 pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
+    let applied = apply_theme(name, window, cx);
+    if applied {
+        match_window_appearance(name, cx);
+        strengthen_overlay(cx);
+        quiet_light_comments(cx);
+        unify_sql_keywords(cx);
+        visible_dark_stripes(cx);
+    }
+    applied
+}
+
+fn apply_theme(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
     if name == SYSTEM_THEME {
         reset_configurable_defaults(cx);
         let (light_theme, dark_theme) = {
@@ -123,6 +250,13 @@ pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_comment_color_parses_from_hex() {
+        let style: Result<gpui_kit::component::highlighter::ThemeStyle, _> =
+            serde_json::from_value(serde_json::json!({ "color": "#8c8c8c" }));
+        assert!(style.is_ok());
+    }
 
     #[test]
     fn bundled_theme_sets_parse() {
