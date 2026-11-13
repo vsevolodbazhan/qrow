@@ -7,8 +7,6 @@ use gpui_kit::component::{
 
 /// The height of the Logs and result tabs at 100% UI scale.
 pub(super) const RESULT_TAB_BAR_HEIGHT: f32 = 30.;
-/// The longest part of the query that a result tab tooltip shows.
-const TOOLTIP_SQL_CHARS: usize = 120;
 
 /// The name field of a result tab that the user renames.
 pub(super) struct ResultEditor {
@@ -32,24 +30,6 @@ pub(super) const RESULT_RENAME: tab_view::RenameDialog = tab_view::RenameDialog 
     clear: |this| this.result_form = None,
 };
 
-/// The query on one line, for a tooltip. It reads only the start of the
-/// SQL that the tooltip shows.
-fn sql_summary(sql: &str) -> String {
-    let mut line = String::new();
-    let mut chars = 0;
-    for word in sql.split_whitespace() {
-        for c in (chars > 0).then_some(' ').into_iter().chain(word.chars()) {
-            if chars == TOOLTIP_SQL_CHARS {
-                line.push('…');
-                return line;
-            }
-            line.push(c);
-            chars += 1;
-        }
-    }
-    line
-}
-
 impl Qrow {
     /// Logs and the result tabs of the active query tab.
     pub(super) fn result_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -67,6 +47,8 @@ impl Qrow {
             }
         };
         let tab_id = tab.saved.id;
+        // The query shows in the font of the SQL blocks in Logs.
+        let code_font = SharedString::from(self.settings.logs_font_family.clone());
         let logs = PanelTab::new()
             .min_h(height)
             .max_h(height)
@@ -95,7 +77,7 @@ impl Qrow {
                 let tooltip =
                     StatusTooltip::new(title.clone(), if result.pinned { "Pinned" } else { "" })
                         .when_some(result.sql.as_deref(), |tooltip, sql| {
-                            tooltip.detail(sql_summary(sql))
+                            tooltip.code(sql, code_font.clone())
                         });
                 // Tests find the result that Results shows by a stable ID, also
                 // while Logs is selected.
@@ -393,38 +375,5 @@ impl Qrow {
         // Programmatic close_dialog does not invoke Dialog::on_close.
         window.close_dialog(cx);
         cx.notify();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The summary as one line of all the SQL, cut to the tooltip length.
-    fn reference(sql: &str) -> String {
-        let line = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-        if line.chars().count() <= TOOLTIP_SQL_CHARS {
-            return line;
-        }
-        let mut short: String = line.chars().take(TOOLTIP_SQL_CHARS).collect();
-        short.push('…');
-        short
-    }
-
-    #[::core::prelude::v1::test]
-    fn the_sql_summary_is_one_line_cut_to_the_tooltip_length() {
-        let word = "x".repeat(TOOLTIP_SQL_CHARS / 2);
-        for sql in [
-            String::new(),
-            "  SELECT\n\t1  ".to_owned(),
-            "x".repeat(TOOLTIP_SQL_CHARS),
-            "x".repeat(TOOLTIP_SQL_CHARS + 1),
-            // The space between the words is the last character that fits.
-            format!("{} {}", "x".repeat(TOOLTIP_SQL_CHARS - 1), word),
-            format!("{} {}", "x".repeat(TOOLTIP_SQL_CHARS), word),
-            format!("SELECT '日本😀'\n  FROM t\n{}", "WHERE a = 1\n".repeat(50)),
-        ] {
-            assert_eq!(sql_summary(&sql), reference(&sql), "{sql:?}");
-        }
     }
 }

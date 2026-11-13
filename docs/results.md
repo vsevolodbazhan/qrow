@@ -35,7 +35,9 @@ Right-click a result tab for these commands:
 
 **Copy query** in the result toolbar also copies the statement. It copies the
 statement that Qrow sent, not the current editor text. Point to a result tab
-to see its name and the start of its statement.
+to see its name and the first lines of its statement in a code block. The code
+block uses the Logs font, like the SQL in Logs. If the statement has more
+lines, the code block fades out at the end.
 
 A query tab always has at least one result tab. Closing the last result tab
 creates an empty replacement. The result tab of a running query cannot close.
