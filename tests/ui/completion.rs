@@ -136,6 +136,17 @@ fn ctrl_space_suggests_tables_and_enter_inserts_the_selected_one(cx: &mut TestAp
     let (app, _) = launch(cx, fresh(), &[]);
     complete(&app, cx, "SELECT * FROM avia.");
     assert_eq!(items(&app, cx), ["bookings", "daily"]);
+    // Rows fill the list, so selection and labels reach its right edge.
+    let (list, row) = app.update(cx, |window, _| {
+        (
+            bounds_of(window, "sql-completion"),
+            bounds_of(window, "sql-completion-item-bookings"),
+        )
+    });
+    assert!(
+        list.right() - row.right() < gpui_kit::px(8.),
+        "{list:?} {row:?}"
+    );
     // Fresh metadata has no footer.
     assert!(!app.update(cx, |window, _| {
         window.try_find("sql-completion-footer").is_some()

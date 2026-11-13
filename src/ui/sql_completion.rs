@@ -469,7 +469,9 @@ impl Qrow {
         let typed_width = text_width(window, typed, &names, self.ui_px(13.));
         let layout = self.completion_layout(popup, window, cx);
         // Names in the list start under the name in the editor.
-        let name_inset = self.ui_px(ROW_CHROME - 2. - GAP + 1.);
+        // The border, the padding of the popup and of a row, the icon, and
+        // the gap before the name.
+        let name_inset = self.ui_px(1. + 4. + 8. + 14. + GAP);
         let mut position = point(
             caret.x - typed_width - name_inset,
             caret.y + line_height + self.ui_px(2.),
@@ -808,6 +810,7 @@ impl Qrow {
                 .collect()
         })
         .track_scroll(&popup.scroll)
+        .w_full()
         .h(row_height * count.min(MAX_ROWS) as f32)
     }
 
@@ -1068,6 +1071,7 @@ fn completion_row(
         .role(Role::ListItem)
         .aria_label(shown.clone())
         .aria_selected(selected)
+        .w_full()
         .h(ui(ROW_HEIGHT))
         .px(ui(8.))
         .gap(ui(GAP))
