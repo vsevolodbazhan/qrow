@@ -6,8 +6,8 @@
 # The script downloads the release archive for this processor, verifies the
 # signature of the release checksums with minisign or OpenSSL 3, verifies the
 # checksum of the archive, and installs it into ~/.local. Qrow then updates
-# itself. If neither minisign nor OpenSSL 3 is installed, the script asks
-# before it continues with the checksum only.
+# itself. If neither minisign nor OpenSSL 3 can run, the script asks before
+# it continues with the checksum only.
 #
 # QROW_PREFIX sets another install folder. QROW_DOWNLOAD_URL sets another
 # release folder, for example for tests.
@@ -89,7 +89,7 @@ openssl_verify() {
 # come from standard input, so the question goes to the terminal. Without a
 # terminal, the default answer applies.
 confirm_without_signature() {
-    printf 'qrow: cannot verify the release signature: install minisign or OpenSSL 3 to verify it.\n' >&2
+    printf 'qrow: cannot verify the release signature: install minisign or OpenSSL 3, or make sure that minisign runs.\n' >&2
     printf 'The archive could be compromised.\n' >&2
     if (: </dev/tty) 2>/dev/null; then
         printf 'Continue anyway? [Y/n] ' >/dev/tty
