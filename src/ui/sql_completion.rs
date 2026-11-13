@@ -4,6 +4,7 @@
 //! suggestions; this module owns the popup, its keys, and the reads that it
 //! asks the catalog worker for.
 
+use super::dbt::{DbtLookup, summary};
 use super::{Qrow, ShowCompletions};
 use crate::catalog::Scope;
 use crate::completion::{self, Completion, Item, ItemKind, Need, Request};
@@ -13,9 +14,11 @@ use gpui_kit::component::input::{
     Enter, Escape, IndentInline, MoveDown, MovePageDown, MovePageUp, MoveUp,
 };
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::text::{TextView, TextViewState, TextViewStyle};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -25,6 +28,12 @@ const ROW_HEIGHT: f32 = 26.;
 const MIN_WIDTH: f32 = 320.;
 const MAX_WIDTH: f32 = 440.;
 const DETAILS_WIDTH: f32 = 260.;
+/// The longest description in the details box, in characters: about four
+/// lines. The box shows the start of the first paragraph.
+const DESCRIPTION_CHARS: usize = 140;
+/// The tallest description in the details box, in pixels, for Markdown with
+/// content of any height, like an image.
+const DESCRIPTION_HEIGHT: f32 = 120.;
 /// The padding of the popup and of a row, the icon, and the gaps of a row.
 const ROW_CHROME: f32 = 4. * 2. + 8. * 2. + 14. + 8. + 2.;
 const GAP: f32 = 8.;
@@ -56,6 +65,15 @@ pub(super) struct CompletionPopup {
     scroll: UniformListScrollHandle,
     /// The reads that this popup started, so that it starts each once.
     requested: HashSet<Need>,
+    /// The parsed Markdown of the description in the details box.
+    description: RefCell<Option<Description>>,
+}
+
+/// The Markdown state of a description, kept while its text stays the same.
+struct Description {
+    text: String,
+    state: Entity<TextViewState>,
+    _parsed: Subscription,
 }
 
 impl CompletionPopup {
@@ -232,6 +250,7 @@ impl Qrow {
             requested.insert(need.clone());
             self.refresh_catalog(profile.id, need_scope(need), cx);
         }
+        let description = previous.as_ref().and_then(|popup| popup.description.take());
         let same_list = previous.as_ref().is_some_and(|popup| {
             popup.request.prefix == request.prefix && popup.request.place == request.place
         });
@@ -257,6 +276,7 @@ impl Qrow {
             selected,
             scroll,
             requested,
+            description: RefCell::new(description),
         });
         cx.notify();
     }
@@ -944,17 +964,22 @@ impl Qrow {
     }
 
     /// The box beside the list with what the selected row does not show:
-    /// the comment, and the name or the type when the row cuts or hides
-    /// them. Without such text there is no box.
+    /// the description, and the name or the type when the row cuts or
+    /// hides them. Without such text there is no box.
     fn completion_details(
         &self,
         popup: &CompletionPopup,
         layout: &Layout,
         window: &mut Window,
-        cx: &App,
+        cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let item = popup.completion.items.get(popup.selected)?;
-        let details = DetailsBox::of(item, layout, popup.selected)?;
+        let dbt = self.dbt_lookups().remove(&popup.profile);
+        let details = DetailsBox::of(item, layout, popup.selected, dbt.as_deref())?;
+        let description = details
+            .description
+            .as_deref()
+            .map(|text| description_state(popup, text, cx));
         let theme = cx.theme();
         let code = self.settings.editor_font_family.clone();
         // The text width inside the box: its width less padding and border.
@@ -1005,11 +1030,20 @@ impl Qrow {
                         .w_full()
                         .children(lines.into_iter().map(|line| div().child(line)))
                 }))
-                .children(details.comment.map(|comment| {
+                .children(description.map(|state| {
                     div()
+                        .id("sql-completion-description")
+                        .test_support()
+                        .w_full()
+                        .max_h(self.ui_px(DESCRIPTION_HEIGHT))
+                        .overflow_hidden()
                         .text_size(self.ui_px(13.))
                         .text_color(theme.popover_foreground)
-                        .child(comment)
+                        .child(
+                            TextView::new(&state)
+                                .style(TextViewStyle::default().paragraph_gap(rems(0.)))
+                                .selectable(false),
+                        )
                 }))
                 .into_any_element(),
         )
@@ -1059,17 +1093,53 @@ fn part_lines(text: &str, width: Pixels, mut measure: impl FnMut(&str) -> Pixels
     lines
 }
 
+/// The Markdown state of `text`, the description of the selected row. The
+/// popup keeps it while the text stays the same, so the text parses once.
+fn description_state(
+    popup: &CompletionPopup,
+    text: &str,
+    cx: &mut Context<Qrow>,
+) -> Entity<TextViewState> {
+    let mut description = popup.description.borrow_mut();
+    if let Some(current) = description.as_ref()
+        && current.text == text
+    {
+        return current.state.clone();
+    }
+    let state = cx.new(|cx| TextViewState::markdown(text, cx));
+    // The parse ends after the first frame.
+    let parsed = cx.observe(&state, |_, _, cx| cx.notify());
+    *description = Some(Description {
+        text: text.to_owned(),
+        state: state.clone(),
+        _parsed: parsed,
+    });
+    state
+}
+
 /// What the details box adds to the selected row.
 struct DetailsBox {
     /// The full name, when the row cuts it.
     name: Option<String>,
     /// The kind or the type, when the rows hide them.
     detail: Option<String>,
-    comment: Option<String>,
+    /// The start of the comment, or of the dbt description when there is no
+    /// comment, as Markdown.
+    description: Option<String>,
 }
 
 impl DetailsBox {
-    fn of(item: &Item, layout: &Layout, index: usize) -> Option<Self> {
+    fn of(item: &Item, layout: &Layout, index: usize, dbt: Option<&DbtLookup>) -> Option<Self> {
+        let comment = item
+            .comment
+            .as_deref()
+            .map(str::trim)
+            .filter(|comment| !comment.is_empty());
+        let description = comment.or_else(|| {
+            let (schema, relation) = item.relation.as_ref()?;
+            let column = (item.kind == ItemKind::Column).then_some(item.name.as_str());
+            dbt?.description(schema, relation, column)
+        });
         let details = Self {
             name: layout
                 .cut
@@ -1078,15 +1148,15 @@ impl DetailsBox {
                 .unwrap_or(false)
                 .then(|| shown_name(item)),
             detail: (!layout.details).then(|| item.detail.clone()),
-            comment: item.comment.clone(),
+            description: description.map(|text| summary(text, DESCRIPTION_CHARS).0),
         };
-        (details.name.is_some() || details.detail.is_some() || details.comment.is_some())
+        (details.name.is_some() || details.detail.is_some() || details.description.is_some())
             .then_some(details)
     }
 
     /// The text of the box in one line, for assistive technologies.
     fn label(&self) -> String {
-        [&self.name, &self.detail, &self.comment]
+        [&self.name, &self.detail, &self.description]
             .into_iter()
             .flatten()
             .cloned()
@@ -1332,6 +1402,43 @@ mod tests {
             part_lines("abcdefghij_k", px(4.), measure),
             ["abcd", "efgh", "ij_k"]
         );
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_details_box_shows_the_start_of_a_long_description() {
+        let layout = Layout {
+            width: px(320.),
+            details: true,
+            cut: vec![false],
+        };
+        let item = |comment: &str| Item {
+            kind: ItemKind::Column,
+            name: "account_id".into(),
+            qualifier: None,
+            insert: "account_id".into(),
+            matches: Vec::new(),
+            source: None,
+            detail: "string".into(),
+            relation: Some(("billing".into(), "accounts".into())),
+            comment: Some(comment.into()),
+        };
+        let long = format!(
+            "The account that pays, from `billing.accounts`. {}\n\nOne row for each account.",
+            "It has the plan and the invoices of the account. ".repeat(5)
+        );
+        let details = DetailsBox::of(&item(&long), &layout, 0, None).unwrap();
+        let description = details.description.unwrap();
+        assert!(
+            description.chars().count() <= DESCRIPTION_CHARS + 1,
+            "{description}"
+        );
+        assert!(description.starts_with("The account that pays, from `billing.accounts`. It has"));
+        assert!(description.ends_with('…'), "{description}");
+        // A short description shows in full, and a blank one shows nothing.
+        let short = "The account ID that the billing system uses. Join to billing.accounts on account_id to get the plan and the invoices of the account.";
+        let details = DetailsBox::of(&item(short), &layout, 0, None).unwrap();
+        assert_eq!(details.description.as_deref(), Some(short));
+        assert!(DetailsBox::of(&item("  "), &layout, 0, None).is_none());
     }
 
     #[::core::prelude::v1::test]

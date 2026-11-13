@@ -21,6 +21,12 @@ fn column(name: &str, data_type: &str, comment: Option<&str>) -> CatalogColumn {
     }
 }
 
+/// A long Markdown comment, like the description that dbt writes to the
+/// database.
+const ROUTE: &str = "The **route** of a booking: the `origin` and the `destination` airports, \
+with the stops between them in the order of the flights. Join to `avia.airports` on the codes. \
+A route of a cancelled booking has no stops.\n\n## Filter\n\nFilter on `pdate` first.";
+
 /// Saves a metadata cache for `profile`, read at `read_at`: the schema
 /// `avia` with `bookings` and its columns, and the view `daily` without
 /// columns; and the schema `finance` without tables.
@@ -57,6 +63,7 @@ fn cache(directory: &TempDir, profile: &Profile, read_at: u64, relations: &[&str
             vec![
                 column("booking_id", "BIGINT", None),
                 column("amount", "DECIMAL(12,2)", Some("Total fare.")),
+                column("route", "STRING", Some(ROUTE)),
             ],
         )]),
         read_at,
@@ -207,6 +214,48 @@ fn an_alias_lists_the_columns_with_details_of_the_selected_one(cx: &mut TestAppC
     app.press(cx, "tab");
     app.wait_gone(cx, "sql-completion");
     assert_sql(&app, cx, "SELECT b.amount FROM avia.bookings b");
+}
+
+#[gpui_kit::test]
+fn the_details_box_shows_the_start_of_a_long_description_as_markdown(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    app.type_sql(cx, "SELECT b.rou FROM avia.bookings b");
+    app.update(cx, |window, cx| {
+        for _ in 0.." FROM avia.bookings b".len() {
+            window.press("left", cx);
+        }
+    });
+    app.press(cx, "ctrl-space");
+    app.wait_for(cx, "sql-completion-description");
+    assert_eq!(items(&app, cx), ["route"]);
+    let text = app
+        .update(cx, |window, _| label(window, "sql-completion-details"))
+        .unwrap();
+    // The box has the start of the first paragraph, cut at a word.
+    assert!(
+        text.starts_with("The **route** of a booking: the `origin` and the `destination`"),
+        "{text}"
+    );
+    assert!(text.ends_with('…'), "{text}");
+    assert!(text.chars().count() <= 141, "{text}");
+    assert!(!text.contains("Filter"), "{text}");
+    app.update(cx, |window, _| {
+        let details = bounds_of(window, "sql-completion-details");
+        let description = bounds_of(window, "sql-completion-description");
+        // The Markdown wraps inside the box, in a few lines.
+        assert!(
+            description.right() <= details.right(),
+            "{details:?} {description:?}"
+        );
+        assert!(
+            description.size.height > window.rem_size() * 2.,
+            "{description:?}"
+        );
+        assert!(
+            description.size.height <= gpui_kit::px(120.),
+            "{description:?}"
+        );
+    });
 }
 
 #[gpui_kit::test]
