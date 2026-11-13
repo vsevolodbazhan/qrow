@@ -553,8 +553,8 @@ fn activity_copy_preserves_timestamps_and_error_details(cx: &mut TestAppContext)
     app.qrow
         .update(cx, |qrow, cx| {
             for (seconds, severity, text) in [
-                (86_400, Severity::Info, "Schema refresh started"),
-                (86_401, Severity::Error, "Schema refresh failed\n詳細 🐦"),
+                (86_400, Severity::Info, "Metadata refresh started"),
+                (86_401, Severity::Error, "Metadata refresh failed\n詳細 🐦"),
             ] {
                 let mut entry = ActivityEntry::new(severity, text);
                 entry.timestamp = SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
@@ -568,7 +568,7 @@ fn activity_copy_preserves_timestamps_and_error_details(cx: &mut TestAppContext)
     app.wait_for(cx, "activity");
     app.click(cx, "activity-errors");
 
-    let expected = "[1970-01-02 00:00:01] Schema refresh failed\n詳細 🐦";
+    let expected = "[1970-01-02 00:00:01] Metadata refresh failed\n詳細 🐦";
     assert_eq!(app.copy_activity(cx), expected);
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
     app.click(cx, ("activity-copy", 2u64));
@@ -582,8 +582,8 @@ fn activity_copy_preserves_timestamps_and_error_details(cx: &mut TestAppContext)
     assert_eq!(
         app.copy_activity(cx),
         concat!(
-            "[1970-01-02 00:00:00] Schema refresh started\n",
-            "[1970-01-02 00:00:01] Schema refresh failed\n詳細 🐦",
+            "[1970-01-02 00:00:00] Metadata refresh started\n",
+            "[1970-01-02 00:00:01] Metadata refresh failed\n詳細 🐦",
         )
     );
 }

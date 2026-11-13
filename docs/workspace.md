@@ -157,15 +157,15 @@ stay on the first computer.
 
 Qrow keeps the [schema copy](connections.md#browse-schemas) of each connection
 in a separate file, in the `catalog` folder of the local data directory. The
-file name is the profile identifier. A [shared catalog](connections.md#share-schemas)
-has one file, with the identifier of the shared catalog as its name. A schema
+file name is the profile identifier. [Shared metadata](connections.md#share-metadata)
+has one file, with the identifier of the shared metadata as its name. A schema
 copy contains schema, table, view, and column names, their types, and their
 comments. It does not contain refresh errors. Qrow deletes the file when you
-delete the connection, when the connection joins a shared catalog, or when no
-connection uses the shared catalog any more. Qrow ignores the file of a
+delete the connection, when the connection starts to share metadata, or when no
+connection uses the shared metadata any more. Qrow ignores the file of a
 connection that belongs to another host, port, username, or set of session
 parameters, and makes a new copy. A change to one of these settings does not
-clear a shared catalog. If Qrow cannot open the workspace, it does not write
+clear shared metadata. If Qrow cannot open the workspace, it does not write
 schema copies.
 
 Qrow keeps a compact copy of each [dbt manifest](connections.md#attach-a-dbt-project)
@@ -196,8 +196,8 @@ Qrow loads an earlier workspace, the conversation that was open gets the active
 tab. The other conversations load without a query tab, under the connection
 that was active. An earlier version of Qrow cannot open a version 4
 workspace.
-Workspace version 5 adds shared schema catalogs. Earlier workspaces load
-without shared catalogs. An earlier version of Qrow cannot open a version 5
+Workspace version 5 adds shared metadata. Earlier workspaces load
+without shared metadata. An earlier version of Qrow cannot open a version 5
 workspace.
 Qrow ignores the removed **Schema refresh logs** option of a connection, because
 [Activity](activity.md) always records refreshes. The next save removes the
@@ -249,7 +249,7 @@ next to the workspace, and shows a notice that names the version that saved
 the file. Each save records the version of Qrow that wrote the file.
 
 A setting of an item that you delete, such as a connection or a tab, goes
-with the item. New settings inside the sign-in method or the schema refresh
+with the item. New settings inside the sign-in method or the metadata refresh
 mode of a connection are not kept; the backup copy has them. Versions before
 this behavior do not keep unknown settings and do not make a backup.
 

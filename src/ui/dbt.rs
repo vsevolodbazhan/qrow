@@ -507,7 +507,9 @@ impl Qrow {
                                 Progress::new("connection-dbt-match-ratio-bar")
                                     .xsmall()
                                     .value(percent as f32)
-                                    .accessibility_label("dbt resources that matched the catalog"),
+                                    .accessibility_label(
+                                        "dbt resources that matched cached tables",
+                                    ),
                             ),
                     )
                     // The percentage ends with the bar.
@@ -521,7 +523,7 @@ impl Qrow {
                                 line(
                                     "connection-dbt-matches",
                                     format!(
-                                        "{} of {} dbt resources matched the catalog",
+                                        "{} of {} dbt resources matched cached tables",
                                         group(matched),
                                         group(total)
                                     ),
@@ -543,7 +545,7 @@ impl Qrow {
     fn matches(&self, profile: Uuid, index: &Index, project: &DbtProject) -> MatchResult {
         let note = |text: &str| MatchResult::Note(text.into());
         if !self.profile_browses(profile) {
-            return note("Turn on Schema Refresh to match models with tables.");
+            return note("Turn on metadata refresh to match models with tables.");
         }
         let Some(catalog) = self
             .catalog

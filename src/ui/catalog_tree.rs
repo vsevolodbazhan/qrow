@@ -2324,10 +2324,7 @@ fn render_entry(
                 .is_some_and(|seen| seen.contains(&id))
         }) =>
         {
-            Some((
-                *profile,
-                format!("{name}, schema refresh error, show Activity"),
-            ))
+            Some((*profile, format!("{name}, refresh error, show Activity")))
         }
         _ => None,
     });
@@ -2851,7 +2848,7 @@ fn connection_row(
             ""
         },
         if row.refresh_error {
-            ", schema refresh error"
+            ", refresh error"
         } else {
             ""
         }

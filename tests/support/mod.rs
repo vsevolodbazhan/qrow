@@ -961,7 +961,7 @@ impl TestApp {
     /// Opens the page `title` of the Connection Settings dialog with its
     /// sidebar item.
     pub fn connection_page(&self, cx: &mut TestAppContext, title: &str) {
-        let index = ["General", "Export", "Catalog", "dbt", "Assistant"]
+        let index = ["General", "Export", "Metadata", "dbt", "Assistant"]
             .iter()
             .position(|page| *page == title)
             .unwrap_or_else(|| panic!("No connection page {title}"));

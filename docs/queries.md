@@ -111,7 +111,7 @@ entries.
 Logs show only the work that changes something for the tab. A failed
 keep-alive shows with its SQL and the error, because it closed the session.
 Select **Show activity** on that line to see the other work of the connection.
-Successful keep-alives and schema refreshes show only in
+Successful keep-alives and metadata refreshes show only in
 [Activity](activity.md). Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
 batches.
 
