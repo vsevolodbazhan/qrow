@@ -480,7 +480,7 @@ impl Qrow {
         let window_right = window.viewport_size().width - margin;
         let right = input_bounds.right().min(window_right) - layout.width;
         position.x = position.x.min(right).max(input_bounds.left());
-        let details = self.completion_details(popup, &layout, cx);
+        let details = self.completion_details(popup, &layout, window, cx);
         // The box goes below the list when it does not fit at its right,
         // so the list does not move away from the typed name.
         let beside = position.x + layout.width + self.ui_px(4. + DETAILS_WIDTH) <= window_right;
@@ -950,12 +950,30 @@ impl Qrow {
         &self,
         popup: &CompletionPopup,
         layout: &Layout,
+        window: &mut Window,
         cx: &App,
     ) -> Option<AnyElement> {
         let item = popup.completion.items.get(popup.selected)?;
         let details = DetailsBox::of(item, layout, popup.selected)?;
         let theme = cx.theme();
         let code = self.settings.editor_font_family.clone();
+        // The text width inside the box: its width less padding and border.
+        let inner = self.ui_px(DETAILS_WIDTH - 2. * 12. - 2.);
+        let name_lines = details.name.as_deref().map(|name| {
+            let font = Font {
+                weight: FontWeight::BOLD,
+                ..font(code.clone())
+            };
+            part_lines(name, inner, |text| {
+                text_width(window, text, &font, self.ui_px(13.))
+            })
+        });
+        let detail_lines = details.detail.as_deref().map(|detail| {
+            let font = font(theme.font_family.clone());
+            part_lines(detail, inner, |text| {
+                text_width(window, text, &font, self.ui_px(12.))
+            })
+        });
         Some(
             v_flex()
                 .id("sql-completion-details")
@@ -973,21 +991,20 @@ impl Qrow {
                 .shadow_lg()
                 .text_size(self.ui_px(12.))
                 .text_color(theme.muted_foreground)
-                .children(details.name.clone().map(|name| {
-                    div()
+                .children(name_lines.map(|lines| {
+                    v_flex()
                         .w_full()
                         .font_family(code.clone())
                         .text_size(self.ui_px(13.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme.popover_foreground)
-                        .child(breakable(&name))
+                        .children(lines.into_iter().map(|line| div().child(line)))
                 }))
-                .children(
-                    details
-                        .detail
-                        .clone()
-                        .map(|detail| div().w_full().child(breakable(&detail))),
-                )
+                .children(detail_lines.map(|lines| {
+                    v_flex()
+                        .w_full()
+                        .children(lines.into_iter().map(|line| div().child(line)))
+                }))
                 .children(details.comment.map(|comment| {
                     div()
                         .text_size(self.ui_px(13.))
@@ -999,17 +1016,47 @@ impl Qrow {
     }
 }
 
-/// `text` with zero-width spaces after `_`, `.`, `,`, `<`, and `:`, so that
-/// long names and types wrap between their parts, not inside them.
-fn breakable(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 16);
-    for c in text.chars() {
-        out.push(c);
+/// `text` in lines that fit `width`. A line ends only after `_`, `.`, `,`,
+/// `<`, or `:`, so long names and types break between their parts. A part
+/// wider than `width` breaks between its characters.
+fn part_lines(text: &str, width: Pixels, mut measure: impl FnMut(&str) -> Pixels) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (index, c) in text.char_indices() {
         if matches!(c, '_' | '.' | ',' | '<' | ':') {
-            out.push('\u{200B}');
+            let end = index + c.len_utf8();
+            parts.push(&text[start..end]);
+            start = end;
         }
     }
-    out
+    if start < text.len() {
+        parts.push(&text[start..]);
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for part in parts {
+        let joined = format!("{line}{part}");
+        if line.is_empty() || measure(&joined) <= width {
+            line = joined;
+        } else {
+            lines.push(std::mem::take(&mut line));
+            line = part.to_owned();
+        }
+        // A part that alone is wider than the box breaks between characters.
+        while measure(&line) > width && line.chars().count() > 1 {
+            let mut cut = line.len();
+            while cut > 0 && measure(&line[..cut]) > width {
+                cut = line[..cut].char_indices().last().map_or(0, |(i, _)| i);
+            }
+            let cut = cut.max(line.chars().next().map_or(1, char::len_utf8));
+            lines.push(line[..cut].to_owned());
+            line = line[cut..].to_owned();
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 /// What the details box adds to the selected row.
@@ -1273,12 +1320,18 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn long_names_and_types_wrap_between_their_parts() {
-        assert_eq!(breakable("a_b"), "a_\u{200B}b");
+        // One pixel for each character.
+        let measure = |text: &str| px(text.chars().count() as f32);
         assert_eq!(
-            breakable("map<string,int>"),
-            "map<\u{200B}string,\u{200B}int>"
+            part_lines("map<string,struct<a:timestamp>>", px(12.), measure),
+            ["map<string,", "struct<a:", "timestamp>>"]
         );
-        assert_eq!(breakable("plain"), "plain");
+        assert_eq!(part_lines("short", px(12.), measure), ["short"]);
+        // A part wider than the box breaks between its characters.
+        assert_eq!(
+            part_lines("abcdefghij_k", px(4.), measure),
+            ["abcd", "efgh", "ij_k"]
+        );
     }
 
     #[::core::prelude::v1::test]
