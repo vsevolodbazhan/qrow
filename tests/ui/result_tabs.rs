@@ -2,6 +2,7 @@
 use crate::support::{TestApp, label, labelled};
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
+use std::time::Duration;
 
 /// The labels of the result tabs, in order.
 fn result_tabs(app: &TestApp, cx: &mut TestAppContext) -> Vec<String> {
@@ -120,6 +121,52 @@ fn copy_query_copies_the_statement_that_made_the_result(cx: &mut TestAppContext)
     app.choose(cx, "popup-menu", "Copy query");
     app.settle(cx);
     assert_eq!(copied(cx).as_deref(), Some("SELECT 3"));
+}
+
+#[gpui_kit::test]
+fn a_result_tab_tooltip_shows_the_start_of_its_query_as_code(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    let sql =
+        "  SELECT\n    1 AS one,\n    2 AS two,\n    3 AS three,\n    4 AS four,\n    5 AS five";
+    write_sql(&app, cx, sql);
+    run(&app, cx);
+    app.hover(cx, "result-tab-1");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Result 1")
+        );
+        assert!(window.try_find("status-tooltip-detail").is_none());
+        // The first lines of the statement show with their line breaks and
+        // indent, not on one line.
+        assert_eq!(
+            label(window, "status-tooltip-code").as_deref(),
+            Some("SELECT\n    1 AS one,\n    2 AS two,\n    3 AS three,\n    4 AS four,")
+        );
+        assert!(window.try_find("status-tooltip-code-fade").is_some());
+        // The block starts below the title, at its left edge.
+        let code = window.find("status-tooltip-code");
+        let title = window.find("status-tooltip-title");
+        assert_eq!(code.bounds().left(), title.bounds().left());
+        assert!(code.bounds().top() > title.bounds().bottom());
+    });
+
+    // A short query shows in full, without a fade.
+    app.click(cx, "pin-result");
+    write_sql(&app, cx, "SELECT 2");
+    run(&app, cx);
+    app.hover(cx, "result-tab-2");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-code").as_deref(),
+            Some("SELECT 2")
+        );
+        assert!(window.try_find("status-tooltip-code-fade").is_none());
+    });
 }
 
 #[gpui_kit::test]
