@@ -813,6 +813,14 @@ pub(super) fn summary(text: &str, limit: usize) -> (String, bool) {
         cut = true;
     }
     if cut {
+        // A comma or a dash before the ellipsis looks like a typo.
+        let kept = summary
+            .trim_end_matches([',', ';', ':', '-', '–', '—'])
+            .trim_end()
+            .len();
+        if kept > 0 {
+            summary.truncate(kept);
+        }
         summary.push('…');
     }
     (summary, cut)
@@ -1184,6 +1192,15 @@ mod tests {
             ("Words that…".to_owned(), true)
         );
         assert_eq!(summary("Ünïcödé_wörd", 4), ("Ünïc…".to_owned(), true));
+        // The cut drops a comma or a dash before the ellipsis.
+        assert_eq!(
+            summary("Join on the ids, then filter", 16),
+            ("Join on the ids…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("The day — not the hour", 10),
+            ("The day…".to_owned(), true)
+        );
     }
 
     #[test]
