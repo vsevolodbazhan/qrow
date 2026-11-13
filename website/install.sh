@@ -6,8 +6,8 @@
 # The script downloads the release archive for this processor, verifies the
 # signature of the release checksums with minisign or OpenSSL 3, verifies the
 # checksum of the archive, and installs it into ~/.local. Qrow then updates
-# itself. If neither minisign nor OpenSSL 3 is installed, the script asks
-# before it continues with the checksum only.
+# itself. If neither minisign nor OpenSSL 3 can run, the script asks before
+# it continues with the checksum only.
 #
 # QROW_PREFIX sets another install folder. QROW_DOWNLOAD_URL sets another
 # release folder, for example for tests.
@@ -39,6 +39,13 @@ sha256() {
     else
         fail 'sha256sum or shasum is required'
     fi
+}
+
+# True when minisign runs. A version manager shim, such as a mise shim
+# without a selected version, is on the PATH but cannot run.
+minisign_ready() {
+    command -v minisign >/dev/null 2>&1 || return 1
+    minisign -v >/dev/null 2>&1
 }
 
 # True when OpenSSL can verify a minisign signature: Ed25519 over the
@@ -82,7 +89,7 @@ openssl_verify() {
 # come from standard input, so the question goes to the terminal. Without a
 # terminal, the default answer applies.
 confirm_without_signature() {
-    printf 'qrow: cannot verify the release signature: install minisign or OpenSSL 3 to verify it.\n' >&2
+    printf 'qrow: cannot verify the release signature: install minisign or OpenSSL 3, or make sure that minisign runs.\n' >&2
     printf 'The archive could be compromised.\n' >&2
     if (: </dev/tty) 2>/dev/null; then
         printf 'Continue anyway? [Y/n] ' >/dev/tty
@@ -113,7 +120,7 @@ main() {
 
     fetch "$releases/SHA256SUMS" "$work/SHA256SUMS" || fail 'could not download the release checksums'
     signature=$work/SHA256SUMS.minisig
-    if command -v minisign >/dev/null 2>&1; then
+    if minisign_ready; then
         fetch "$releases/SHA256SUMS.minisig" "$signature" || fail 'could not download the release signature'
         minisign -V -q -m "$work/SHA256SUMS" -P "$QROW_PUBLIC_KEY" || fail 'the release signature is not valid'
     elif openssl_ready; then
