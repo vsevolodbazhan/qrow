@@ -66,6 +66,8 @@ class VariantTests(unittest.TestCase):
         self.assertEqual(builds.nextest_profile([*command, "--cargo-profile", "perf"], {}), "default")
         script = (ROOT / "scripts/testing/linux-secret-service.sh").read_text()
         self.assertIn('--profile "$qrow_profile"', script)
+        # The test must not start before the keyring owns its bus name.
+        self.assertIn("NameHasOwner string:org.freedesktop.secrets", script)
 
     def test_no_prepared_match_fails_without_fallback(self):
         with self.assertRaisesRegex(ValueError, "No prepared build"):

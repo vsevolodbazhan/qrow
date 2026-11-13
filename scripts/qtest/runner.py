@@ -119,7 +119,7 @@ LINUX_APP_LIBS = ("xcb", "fontconfig", "freetype2", "xkbcommon", "xkbcommon-x11"
 def check_requirement(name, options):
     """Return None when the requirement holds, else a fix for the user."""
     fixes = catalog.REQUIREMENTS
-    if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "gnome-keyring-daemon", "xvfb-run", "xdotool"):
+    if name in ("cargo", "uv", "shellcheck", "actionlint", "dbus-run-session", "dbus-send", "gnome-keyring-daemon", "xvfb-run", "xdotool"):
         return None if shutil.which(name) else fixes[name]
     if name == "linux-app-libs":
         # The pkg-config names of the libraries that the application links.
