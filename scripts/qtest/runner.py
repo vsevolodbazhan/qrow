@@ -5,15 +5,18 @@ import datetime
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
+import tomllib
 import uuid
 import xml.etree.ElementTree as ElementTree
 
 import catalog
+import contract
 from process import lease, spawn_options, stop_tree
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,12 +47,70 @@ def _succeeds(command, timeout=20):
         return False
 
 
+def cargo_bin():
+    """The directory where `qtest install` puts tools."""
+    return Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
+
+
+def find_executable(name):
+    """An executable on PATH, else in the Cargo bin directory, which is not always on PATH."""
+    return shutil.which(name) or shutil.which(name, path=str(cargo_bin()))
+
+
 def _tool_version(tool):
+    program, *arguments = tool.version_command
     try:
-        result = subprocess.run(tool.version_command, cwd=ROOT, capture_output=True, text=True, timeout=30)
+        result = subprocess.run([find_executable(program) or program, *arguments], cwd=ROOT,
+                                capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _version_numbers(text):
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def usable_sccache():
+    """The path of an installed sccache at the pinned version or newer, else None."""
+    tool = catalog.TOOLS["sccache"]
+    path = find_executable("sccache")
+    version = _version_numbers(_tool_version(tool)) if path else None
+    return path if version and version >= _version_numbers(tool.version) else None
+
+
+def configured_wrapper(environ):
+    """Whether the user chose a rustc wrapper, in the environment or in a Cargo configuration file."""
+    if "RUSTC_WRAPPER" in environ or "CARGO_BUILD_RUSTC_WRAPPER" in environ:
+        return True
+    for path in contract.cargo_config_paths(ROOT).values():
+        try:
+            configuration = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+            continue
+        if "rustc-wrapper" in configuration.get("build", {}):
+            return True
+    return False
+
+
+def build_cache_environment(environ):
+    """The variables that make Cargo reuse compiled crates through sccache, or {} when it must not.
+
+    Only the processes that qtest starts get them. Plans and prepared builds
+    record the environment of qtest itself, so the cache does not change their
+    identity. Builds in CI run without a build cache. A wrapper that the user
+    chose wins, and an empty RUSTC_WRAPPER turns the cache off. Client-side
+    mode compiles in the process that Cargo starts, so memory limits on a build
+    apply to it. A broken sccache server makes sccache compile without the cache.
+    """
+    if environ.get("CI") or configured_wrapper(environ):
+        return {}
+    path = usable_sccache()
+    if path is None:
+        return {}
+    defaults = {"SCCACHE_CLIENT_SIDE": "1", "SCCACHE_IGNORE_SERVER_IO_ERROR": "1"}
+    return {"RUSTC_WRAPPER": path, **{key: value for key, value in defaults.items() if key not in environ}}
 
 
 LINUX_APP_LIBS = ("xcb", "fontconfig", "freetype2", "xkbcommon", "xkbcommon-x11")
@@ -72,6 +133,9 @@ def check_requirement(name, options):
         if status == "missing":
             return fixes["docker"]
         return None if status == "running" else fixes["docker-running"]
+    if name == "sccache":
+        # The build cache uses a newer sccache too, so a newer one counts as installed.
+        return None if usable_sccache() else fixes[name]
     if name in catalog.TOOLS:
         tool = catalog.TOOLS[name]
         version = _tool_version(tool)
@@ -228,6 +292,7 @@ def junit_report():
 
 def execute(command, env, timeout, log, output):
     """Run one command in its own process group. Returns the exit code, or None on timeout."""
+    env = {**env, **build_cache_environment(env)}
     with log.open("a", encoding="utf-8") as sink:
         sink.write(f"$ {subprocess.list2cmdline(command)}\n")
         sink.flush()

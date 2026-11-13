@@ -209,12 +209,11 @@ def command_install(args):
 def install_archive(tool, archive):
     """Download a prebuilt tool archive, check its digest, and unpack the tool into the Cargo bin directory."""
     import hashlib
-    import os
     import shutil
     import tempfile
     import urllib.request
     from pathlib import Path, PurePosixPath
-    bin_dir = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
+    bin_dir = runner.cargo_bin()
     print(f"[qtest] Downloading {archive.url}", file=sys.stderr)
     with tempfile.TemporaryDirectory() as directory:
         bundle_path = Path(directory) / "tool.tar.gz"

@@ -58,6 +58,38 @@ include the UI.
 These checks do not run real Kyuubi queries or retrieve user credentials.
 The suites with servers run only when you select them.
 
+### Reuse builds across worktrees
+
+Each worktree has its own `target` directory. Without a build cache, the first
+build in a new worktree compiles all dependencies again. `./qtest install`
+installs [sccache](https://github.com/mozilla/sccache), and qtest then uses it
+for its builds. The cache is in the sccache folder of your user account, so all
+checkouts share it. [Check prerequisites](testing.md#check-prerequisites)
+tells when qtest does not use it.
+
+qtest runs sccache in client-side mode (`SCCACHE_CLIENT_SIDE=1`). Each
+compilation runs in the process that Cargo starts. Thus memory limits that you
+set on a build also apply to the compilations.
+
+Plain `cargo` commands do not use the cache. To use it for them too, set these
+variables in your shell profile:
+
+```sh
+export RUSTC_WRAPPER=sccache
+export SCCACHE_CLIENT_SIDE=1
+```
+
+sccache does not cache the crates that Cargo builds incrementally: the `qrow`
+crate and the crates in `vendor/`. It also does not cache procedural macros,
+build scripts, or links. In a different worktree, the crates that depend on
+these crates, or whose build inputs contain the worktree path, can miss the
+cache. In one measurement, a new worktree got 78% cache hits, and the first
+UI test build took 8.5 minutes instead of 11.5 minutes.
+
+Do not set one `CARGO_TARGET_DIR` for many worktrees. Cargo compares file
+times to find changed files, so a worktree can use the build of the `qrow`
+crate or the `vendor/` crates from a different worktree.
+
 ## Check the native UI
 
 Use the release [demo](../README.md#preview) for visual checks without database,
