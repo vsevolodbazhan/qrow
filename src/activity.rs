@@ -17,7 +17,7 @@ use uuid::Uuid;
 /// IDs, so the nil ID cannot be a connection.
 pub const APPLICATION: Uuid = Uuid::nil();
 /// The name of the application log in the source list.
-pub const APPLICATION_NAME: &str = "Application";
+pub const APPLICATION_NAME: &str = "Qrow";
 
 /// The most text that the log of one connection keeps.
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;

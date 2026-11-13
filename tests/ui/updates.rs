@@ -503,7 +503,7 @@ fn activity_shows_update_events_in_the_application_log(cx: &mut TestAppContext) 
     app.update(cx, |window, _| {
         assert_eq!(
             value(window, "activity-connection").as_deref(),
-            Some("Application")
+            Some("Qrow")
         );
     });
     let activity = app.copy_activity(cx);

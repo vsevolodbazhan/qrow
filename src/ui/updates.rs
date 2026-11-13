@@ -615,7 +615,7 @@ impl Qrow {
         cx.notify();
     }
 
-    /// Writes an update event to the Application log of Activity.
+    /// Writes an update event to the Qrow log of Activity.
     fn log_update(&self, severity: Severity, text: String, cx: &mut Context<Self>) {
         let entry = crate::activity::ActivityEntry::new(severity, text).with_source("Updates");
         self.record_activity(crate::activity::APPLICATION, entry, cx);
