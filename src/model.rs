@@ -1093,6 +1093,15 @@ impl Default for Profile {
 }
 
 impl Profile {
+    /// The schema of names without a schema in the SQL of the connection.
+    pub fn default_schema(&self) -> &str {
+        match self.database_type {
+            DatabaseType::Postgres => "public",
+            DatabaseType::Trino => &self.trino_schema,
+            DatabaseType::Kyuubi => &self.database,
+        }
+    }
+
     /// Resolve saved profiles that predate explicit Postgres TLS modes.
     pub fn postgres_ssl_mode(&self) -> PostgresSslMode {
         self.postgres_ssl_mode.unwrap_or(if self.tls {

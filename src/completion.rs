@@ -46,6 +46,8 @@ pub struct Request {
     pub replace: Range<usize>,
     /// The part of the name before the cursor, without quotes.
     pub prefix: String,
+    /// The start of the dotted name at the cursor, with its qualifier.
+    pub start: usize,
     pub place: Place,
     /// The relations of the statement at the cursor.
     pub sources: Vec<Source>,
@@ -269,6 +271,11 @@ pub fn request(sql: &str, offset: usize, database_type: DatabaseType) -> Option<
         parts.insert(0, part);
         index -= 2;
     }
+    let start = if parts.is_empty() {
+        replace.start
+    } else {
+        tokens[index].range.start
+    };
     let previous = tokens[..index].iter().rev().find(|token| !token.is_blank());
     let in_from = clause_is_from(&tokens[..index]);
     let relation = previous.is_some_and(|token| {
@@ -284,6 +291,7 @@ pub fn request(sql: &str, offset: usize, database_type: DatabaseType) -> Option<
     Some(Request {
         replace,
         prefix,
+        start,
         place,
         sources: sources(&tokens, database_type),
     })

@@ -25,6 +25,7 @@ mod setting_row;
 mod settings_view;
 mod settings_window;
 mod sign_in_view;
+mod sql_completion;
 mod sql_files;
 mod status_dot;
 mod status_tooltip;
@@ -109,6 +110,7 @@ actions!(
         SubmitRename,
         CopyCatalogName,
         InsertCatalogName,
+        ShowCompletions,
         MoveConnectionUp,
         MoveConnectionDown,
         Quit
@@ -147,6 +149,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-enter", RunQuery, None),
         KeyBinding::new("alt-secondary-l", FormatSql, None),
         KeyBinding::new("secondary-/", ToggleComment, Some("SqlEditor")),
+        KeyBinding::new("ctrl-space", ShowCompletions, Some("SqlEditor")),
         KeyBinding::new(
             "secondary-enter",
             SendAssistantMessage,
@@ -308,6 +311,7 @@ struct Tab {
     /// pinning the last unpinned result tab makes it ready.
     spare_table: Option<Entity<TableState<Results>>>,
     _subscription: Subscription,
+    _observe: Subscription,
     _run_highlight: Subscription,
     worker: Option<Worker>,
     // The last Run target can differ from the profile selected for the next Run.
@@ -810,6 +814,8 @@ pub struct Qrow {
     tab_form: Option<TabEditor>,
     result_form: Option<result_tabs::ResultEditor>,
     menu: Option<ContextMenu>,
+    /// The autocomplete popup of the SQL editor.
+    completion: Option<sql_completion::CompletionPopup>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
     message: Option<String>,
@@ -1095,6 +1101,7 @@ impl Qrow {
             tab_form: None,
             result_form: None,
             menu: None,
+            completion: None,
             saver,
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
             message,
@@ -1218,6 +1225,9 @@ impl Qrow {
                 .default_value(saved.sql.clone())
         });
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {
+            if matches!(event, InputEvent::Blur) {
+                this.close_completion(cx);
+            }
             if matches!(event, InputEvent::Change) {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) {
                     // Only an assistant edit needs the text: it does not
@@ -1233,6 +1243,16 @@ impl Qrow {
                 this.sql_changed(cx);
             }
         });
+        // The autocomplete popup follows the cursor and the text.
+        let observe = cx.observe(&input, move |this, _, cx| {
+            if this
+                .completion
+                .as_ref()
+                .is_some_and(|popup| popup.tab() == tab_id)
+            {
+                this.update_completion(sql_completion::Trigger::Edit, cx);
+            }
+        });
         let run_highlight = run_highlight::track(&input, cx);
         let table = self.result_table(saved.profile, window, cx);
         Tab {
@@ -1246,6 +1266,7 @@ impl Qrow {
             next_result: 2,
             spare_table: None,
             _subscription: subscription,
+            _observe: observe,
             _run_highlight: run_highlight,
             worker: None,
             worker_profile: None,
@@ -1641,7 +1662,12 @@ impl Qrow {
     /// catalog tool call.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = self.drain_workers(cx);
-        changed |= self.drain_catalogs(cx);
+        if self.drain_catalogs(cx) {
+            changed = true;
+            if self.completion.is_some() {
+                self.update_completion(sql_completion::Trigger::Metadata, cx);
+            }
+        }
         self.sync_dbt();
         changed |= self.drain_dbt(cx);
         self.activity

@@ -1152,6 +1152,7 @@ impl Qrow {
             .on_action(cx.listener(Self::run))
             .on_action(cx.listener(Self::format_sql))
             .on_action(cx.listener(Self::toggle_comment))
+            .on_action(cx.listener(Self::show_completions))
             .on_action(
                 cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
             )
@@ -1364,6 +1365,7 @@ impl Qrow {
                         ))
                     }),
             )
+            .children(self.completion_overlay(window, cx))
             .when_some(self.menu.as_ref(), |el, menu| {
                 el.child(
                     deferred(
@@ -1482,8 +1484,7 @@ impl Render for Qrow {
                     .child(
                         // GPUI Kit's Editor has no ID setter; tests find the
                         // editor through its container.
-                        div()
-                            .id("sql-editor")
+                        self.completion_keys(div().id("sql-editor"), cx)
                             .overflow_hidden()
                             .key_context("SqlEditor")
                             .test_support()

@@ -286,6 +286,56 @@ the command keeps that statement and shows a warning. Unsupported statements
 also stay the same. The command uses the quoting rules of the connection
 type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 
+## Complete names
+
+Press **⌃Space** in the SQL editor to show the schemas, tables, views, and
+columns that can go at the cursor. On Linux and Windows, press **Ctrl+Space**.
+On macOS, **⌃Space** also selects the previous input source when you have more
+than one. To use it in Qrow, change that shortcut in **System Settings →
+Keyboard → Keyboard Shortcuts → Input Sources**.
+
+The list uses the [metadata copy](connections.md#browse-schemas) of the
+connection. It does not run SQL while you type. The list shows:
+
+- After `FROM`, `JOIN`, `INTO`, `UPDATE`, or `TABLE`: the schemas, then the
+  tables and views of the default schema. For Kyuubi, the default schema is
+  the initial database. For Trino, it is the initial schema. For Postgres, it
+  is `public`.
+- After `schema.`: the tables and views of that schema.
+- After `alias.` or `table.`: the columns of that table or view.
+- In other places of a statement: the columns of the tables and views that
+  the statement names after `FROM` and `JOIN`.
+
+Type to filter the list. Names that start with the typed text come first,
+then names that contain it, then names that contain its letters in order.
+Letter case does not matter. Use **↑** and **↓** to select a name, and
+**Enter** or **Tab** to insert it. **Escape** closes the list. The list also
+closes when you type past the name or click outside the list.
+
+Qrow puts a name in quotes only when the name needs them, with the quotes of
+the connection type. A column name that more than one table of the statement
+has goes in with its alias, for example `b.status`. A tag at the right of the
+other columns shows their alias. For the selected column, a box beside the
+list shows its type, its table, and its comment.
+
+When the list needs data that the copy does not have, Qrow reads it, like a
+**Refresh** of that table or schema in the tree. This read can open a
+session. If the read fails, the list shows the error. Press **⌃Space** or
+select **Retry** to read again. A connection without a metadata copy shows
+**No cached tables** and **Refresh**.
+
+When the metadata of a schema in the list is older than the
+[Refresh Period](connections.md#refresh-metadata-automatically) of the
+connection, the list shows `schema is stale` below the names. Press
+**⌃Space** or select **Refresh** to read the schema again.
+
+Limitations:
+
+- The list does not know common table expressions, subqueries, or columns
+  of table functions.
+- The list does not suggest SQL keywords or functions.
+- The list shows at most 200 names. Type more of the name to find others.
+
 ## Syntax
 
 The editor highlights SQL syntax and the full width of the active line. SQL
@@ -293,7 +343,7 @@ keywords such as `DESC` share one keyword color. In light themes with a
 saturated comment color, comments use the muted text color. An empty editor
 shows the hint `Write SQL, then press ⌘↩ to run`. In a narrow editor, the hint
 wraps.
-Autocomplete, schema exploration, and language server features are not available.
+Language server features are not available.
 
 ## Design
 
