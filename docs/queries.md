@@ -316,8 +316,9 @@ closes when you type past the name or click outside the list.
 Qrow puts a name in quotes only when the name needs them, with the quotes of
 the connection type. A column name that more than one table of the statement
 has goes in with its alias, for example `b.status`. A tag at the right of the
-other columns shows their alias. For the selected column, a box beside the
-list shows its type, its table, and its comment.
+other columns shows their alias. When the selected name has a comment, a box
+beside the list shows it. The box also shows a name or a type that the list
+cuts or hides.
 
 When the list needs data that the copy does not have, Qrow reads it, like a
 **Refresh** of that table or schema in the tree. This read can open a

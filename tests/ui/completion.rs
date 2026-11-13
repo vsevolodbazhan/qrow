@@ -147,6 +147,10 @@ fn ctrl_space_suggests_tables_and_enter_inserts_the_selected_one(cx: &mut TestAp
         list.right() - row.right() < gpui_kit::px(8.),
         "{list:?} {row:?}"
     );
+    // The rows show all there is to know, so there is no details box.
+    assert!(!app.update(cx, |window, _| {
+        window.try_find("sql-completion-details").is_some()
+    }));
     // Fresh metadata has no footer.
     assert!(!app.update(cx, |window, _| {
         window.try_find("sql-completion-footer").is_some()
@@ -195,9 +199,10 @@ fn an_alias_lists_the_columns_with_details_of_the_selected_one(cx: &mut TestAppC
     app.wait_for(cx, "sql-completion");
     assert_eq!(items(&app, cx), ["amount"]);
     app.wait_for(cx, "sql-completion-details");
+    // The box adds only what the row does not show: the comment.
     assert_eq!(
         app.update(cx, |window, _| label(window, "sql-completion-details")),
-        Some("amount, decimal(12,2), avia.bookings, Total fare.".into())
+        Some("Total fare.".into())
     );
     app.press(cx, "tab");
     app.wait_gone(cx, "sql-completion");

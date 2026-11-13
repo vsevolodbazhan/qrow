@@ -478,7 +478,7 @@ impl Qrow {
         );
         let right = input_bounds.right() - layout.width - self.ui_px(4.);
         position.x = position.x.min(right).max(input_bounds.left());
-        let details = self.completion_details(popup, cx);
+        let details = self.completion_details(popup, &layout, cx);
         Some(
             deferred(
                 anchored()
@@ -935,13 +935,17 @@ impl Qrow {
         )
     }
 
-    /// The box beside the list with the full name, type, relation, and
-    /// comment of the selected column, or the comment of a table.
-    fn completion_details(&self, popup: &CompletionPopup, cx: &App) -> Option<AnyElement> {
+    /// The box beside the list with what the selected row does not show:
+    /// the comment, and the name or the type when the row cuts or hides
+    /// them. Without such text there is no box.
+    fn completion_details(
+        &self,
+        popup: &CompletionPopup,
+        layout: &Layout,
+        cx: &App,
+    ) -> Option<AnyElement> {
         let item = popup.completion.items.get(popup.selected)?;
-        if item.kind != ItemKind::Column && item.comment.is_none() {
-            return None;
-        }
+        let details = DetailsBox::of(item, layout, popup.selected)?;
         let theme = cx.theme();
         let code = self.settings.editor_font_family.clone();
         Some(
@@ -949,7 +953,7 @@ impl Qrow {
                 .id("sql-completion-details")
                 .test_support()
                 .role(Role::Note)
-                .aria_label(details_label(item))
+                .aria_label(details.label())
                 .w(self.ui_px(DETAILS_WIDTH))
                 .px(self.ui_px(12.))
                 .py(self.ui_px(10.))
@@ -961,54 +965,74 @@ impl Qrow {
                 .shadow_lg()
                 .text_size(self.ui_px(12.))
                 .text_color(theme.muted_foreground)
-                .child(
-                    h_flex()
-                        .items_start()
-                        .justify_between()
-                        .gap(self.ui_px(GAP))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .font_family(code.clone())
-                                .text_size(self.ui_px(13.))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.popover_foreground)
-                                .child(item.name.clone()),
-                        )
-                        .child(div().flex_none().child(item.detail.clone())),
-                )
-                .when_some(item.relation.as_ref(), |details, (schema, relation)| {
-                    details.when(item.kind == ItemKind::Column, |details| {
-                        details.child(
-                            div()
-                                .font_family(code.clone())
-                                .child(format!("{schema}.{relation}")),
-                        )
-                    })
-                })
-                .when_some(item.comment.clone(), |details, comment| {
-                    details.child(
-                        div()
-                            .text_size(self.ui_px(13.))
-                            .text_color(theme.popover_foreground)
-                            .child(comment),
+                .when(details.name.is_some() || details.detail.is_some(), |box_| {
+                    box_.child(
+                        h_flex()
+                            .items_start()
+                            .justify_between()
+                            .gap(self.ui_px(GAP))
+                            .children(details.name.clone().map(|name| {
+                                div()
+                                    .min_w_0()
+                                    .font_family(code.clone())
+                                    .text_size(self.ui_px(13.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.popover_foreground)
+                                    .child(name)
+                            }))
+                            .children(
+                                details
+                                    .detail
+                                    .clone()
+                                    .map(|detail| div().flex_none().child(detail)),
+                            ),
                     )
                 })
+                .children(details.comment.map(|comment| {
+                    div()
+                        .text_size(self.ui_px(13.))
+                        .text_color(theme.popover_foreground)
+                        .child(comment)
+                }))
                 .into_any_element(),
         )
     }
 }
 
-/// The details of `item` in one line, for assistive technologies.
-fn details_label(item: &Item) -> String {
-    let mut parts = vec![item.name.clone(), item.detail.clone()];
-    if item.kind == ItemKind::Column
-        && let Some((schema, relation)) = &item.relation
-    {
-        parts.push(format!("{schema}.{relation}"));
+/// What the details box adds to the selected row.
+struct DetailsBox {
+    /// The full name, when the row cuts it.
+    name: Option<String>,
+    /// The kind or the type, when the rows hide them.
+    detail: Option<String>,
+    comment: Option<String>,
+}
+
+impl DetailsBox {
+    fn of(item: &Item, layout: &Layout, index: usize) -> Option<Self> {
+        let details = Self {
+            name: layout
+                .cut
+                .get(index)
+                .copied()
+                .unwrap_or(false)
+                .then(|| shown_name(item)),
+            detail: (!layout.details).then(|| item.detail.clone()),
+            comment: item.comment.clone(),
+        };
+        (details.name.is_some() || details.detail.is_some() || details.comment.is_some())
+            .then_some(details)
     }
-    parts.extend(item.comment.clone());
-    parts.join(", ")
+
+    /// The text of the box in one line, for assistive technologies.
+    fn label(&self) -> String {
+        [&self.name, &self.detail, &self.comment]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// One row of the list.
@@ -1119,7 +1143,8 @@ fn completion_row(
                     .child(item.detail.clone()),
             )
         })
-        .when(cut, |row| {
+        // The details box shows the full name of the selected row.
+        .when(cut && !selected, |row| {
             row.tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
             })
