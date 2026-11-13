@@ -866,8 +866,9 @@ shows this copy, also when the connection has no session. Connections that
 read the same metastore can [share one copy](#share-metadata). The [assistant](assistant.md#look-up-tables-and-columns)
 can read this copy to find table and column names. The SQL editor uses it to
 [complete names](queries.md#complete-names). Qrow reads the copy
-when you first expand the connection, search the tree, or connect a tab of
-the connection. Qrow does not read the copy or open a session at startup.
+when you first expand the connection, search the tree, connect a tab of the
+connection, or type in a tab of the connection. Reading the copy does not open
+a session. Qrow does not read the copy or open a session at startup.
 
 ### Refresh metadata
 

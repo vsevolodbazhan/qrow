@@ -1228,6 +1228,9 @@ impl Qrow {
             if matches!(event, InputEvent::Blur) {
                 this.close_completion(cx);
             }
+            if matches!(event, InputEvent::Focus) {
+                this.preload_completion(tab_id);
+            }
             if matches!(event, InputEvent::Change) {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) {
                     // Only an assistant edit needs the text: it does not
@@ -1251,6 +1254,8 @@ impl Qrow {
                 .is_some_and(|popup| popup.tab() == tab_id)
             {
                 this.update_completion(sql_completion::Trigger::Edit, cx);
+            } else {
+                this.preload_completion(tab_id);
             }
         });
         let run_highlight = run_highlight::track(&input, cx);

@@ -1,6 +1,6 @@
-//! The autocomplete popup of the SQL editor. ⌃Space opens it with the
-//! schemas, tables, views, and columns that fit the cursor, from the cached
-//! metadata of the tab's connection. [`crate::completion`] finds the
+//! The autocomplete popup of the SQL editor. Tab after a name, or ⌃Space,
+//! opens it with the schemas, tables, views, and columns that fit the
+//! cursor, from the cached metadata of the tab's connection. [`crate::completion`] finds the
 //! suggestions; this module owns the popup, its keys, and the reads that it
 //! asks the catalog worker for.
 
@@ -261,6 +261,24 @@ impl Qrow {
         cx.notify();
     }
 
+    /// Loads the metadata cache of the tab's connection, so that the first
+    /// Tab finds names at once. Reads only the file on this computer.
+    pub(super) fn preload_completion(&mut self, tab: Uuid) {
+        let profile = self
+            .tabs
+            .iter()
+            .find(|candidate| candidate.saved.id == tab)
+            .and_then(|tab| tab.saved.profile)
+            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
+            .filter(|profile| profile.catalog.browses())
+            .map(|profile| profile.id);
+        if let Some(profile) = profile
+            && self.catalog.catalog(profile).is_none()
+        {
+            self.ensure_catalog(profile);
+        }
+    }
+
     pub(super) fn close_completion(&mut self, cx: &mut Context<Self>) {
         if self.completion.take().is_some() {
             cx.notify();
@@ -352,7 +370,7 @@ impl Qrow {
                 }
             }))
             .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
-                this.accept_selected(window, cx);
+                this.tab_completion(window, cx);
             }))
             .capture_action(cx.listener(|this, _: &Escape, _, cx| {
                 if this.active_completion().is_some() {
@@ -360,6 +378,57 @@ impl Qrow {
                     cx.stop_propagation();
                 }
             }))
+    }
+
+    /// Tab: inserts the selected name, runs Refresh or Retry of an open
+    /// list without names, or opens the list after a name. Elsewhere, and
+    /// when no name fits, Tab indents as before.
+    fn tab_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(popup) = self.active_completion() {
+            if !popup.completion.items.is_empty() {
+                self.accept_selected(window, cx);
+            } else if !self.completion_retry_scopes(popup).is_empty() {
+                self.show_completions(&ShowCompletions, window, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
+        let tab = &self.tabs[self.active];
+        let input = tab.input.read(cx);
+        if !input.selected_range().is_empty() {
+            return;
+        }
+        let Some(profile) = tab
+            .saved
+            .profile
+            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
+        else {
+            return;
+        };
+        let after_name = completion::request(&input.value(), input.cursor(), profile.database_type)
+            .is_some_and(|request| {
+                !request.prefix.is_empty()
+                    || matches!(
+                        request.place,
+                        completion::Place::Qualified { .. } | completion::Place::Relation
+                    )
+            });
+        if !after_name || !profile.catalog.browses() {
+            return;
+        }
+        self.update_completion(Trigger::Open, cx);
+        // Tab opens only a list with names, or with a read for them,
+        // including the first load of the cache.
+        let useful = self.active_completion().is_some_and(|popup| {
+            !popup.completion.items.is_empty()
+                || !popup.loaded
+                || (popup.read && !popup.completion.missing.is_empty())
+        });
+        if useful {
+            cx.stop_propagation();
+        } else {
+            self.close_completion(cx);
+        }
     }
 
     fn accept_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {

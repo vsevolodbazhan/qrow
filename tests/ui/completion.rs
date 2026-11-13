@@ -292,3 +292,37 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
         Some("Retry".into())
     );
 }
+
+#[gpui_kit::test]
+fn tab_after_a_name_opens_the_list_and_tab_inserts(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    app.type_sql(cx, "SELECT * FROM avia.bo");
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion");
+    assert_eq!(items(&app, cx), ["bookings"]);
+    app.press(cx, "tab");
+    app.wait_gone(cx, "sql-completion");
+    assert_sql(&app, cx, "SELECT * FROM avia.bookings");
+
+    // After FROM and a space, Tab opens the list too.
+    app.type_sql(cx, "SELECT * FROM ");
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "sql-completion");
+}
+
+#[gpui_kit::test]
+fn tab_indents_where_no_name_fits(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    for sql in ["SELECT 1 ", "SELECT * FROM avia.zzz"] {
+        app.type_sql(cx, sql);
+        app.press(cx, "tab");
+        app.wait_until(cx, "the indent", WAIT, |_, _| {
+            let saved = app.saved().tabs[0].sql.clone();
+            // Tab indents the line or inserts spaces at the cursor.
+            saved.len() > sql.len() && saved.contains(sql.trim_end())
+        });
+        assert!(!app.update(cx, |window, _| window.try_find("sql-completion").is_some()));
+    }
+}
