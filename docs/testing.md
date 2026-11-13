@@ -408,14 +408,22 @@ gap. Give suite names to check only those suites. It exits with code 3 when
 a prerequisite is missing.
 
 `./qtest install` installs the pinned Cargo tools: cargo-nextest,
-cargo-deny, cargo-machete, and cargo-llvm-cov with its LLVM component. Give
-tool names to install only those tools. The [catalog](../scripts/qtest/catalog.py)
-holds the pinned versions and the prebuilt release archives of each tool.
-On Apple silicon Macs and on x86_64 Linux, each tool comes from its archive,
-which takes seconds. On Windows, only cargo-nextest comes from an archive. qtest checks the archive against the SHA-256 digest in
-the catalog. When the download or the check fails, qtest builds the tool from
-source. On other computers, the tools that have no archive for the computer
-build from source.
+cargo-deny, cargo-machete, cargo-llvm-cov with its LLVM component, and the
+sccache build cache. Give tool names to install only those tools. The
+[catalog](../scripts/qtest/catalog.py) holds the pinned versions and the
+prebuilt release archives of each tool. On Apple silicon Macs and on x86_64
+Linux, each tool comes from its archive, which takes seconds. On Windows, only
+cargo-nextest and sccache come from an archive. qtest checks the archive
+against the SHA-256 digest in the catalog. When the download or the check
+fails, qtest builds the tool from source. On other computers, the tools that
+have no archive for the computer build from source.
+
+When sccache is installed, qtest gives it to Cargo as `RUSTC_WRAPPER`, so a
+new worktree reuses the compiled dependencies of other checkouts.
+[Reuse builds across worktrees](development.md#reuse-builds-across-worktrees)
+tells what it caches. qtest does not use sccache when `CI` is set or when you
+set `RUSTC_WRAPPER`. To turn the cache off, set `RUSTC_WRAPPER` to an empty
+value.
 
 Install the script linters separately:
 

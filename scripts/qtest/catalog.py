@@ -103,6 +103,24 @@ TOOLS = {
                                   "b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a"),
              }),
              setup=(("rustup", "component", "add", "llvm-tools-preview"),)),
+        # Not a suite requirement: qtest uses it as a build cache when it is installed.
+        Tool("sccache", "0.19.0", ("sccache", "--version"), "sccache 0.19.0",
+             (("cargo", "install", "--locked", "sccache", "--version", "0.19.0"),),
+             github_archives("mozilla/sccache", "v0.19.0", "{asset}/sccache", {
+                 "macos-aarch64": ("sccache-v0.19.0-aarch64-apple-darwin.tar.gz",
+                                   "a35a0b7d622618774bc1bb8102d72562dfb21e619f88b153b370d7f89bc286af"),
+                 "macos-x86_64": ("sccache-v0.19.0-x86_64-apple-darwin.tar.gz",
+                                  "2db7344bb96de350df79cd9f0124dd4e9baa47b3de2fac1e63e1346b66b20684"),
+                 "linux-x86_64": ("sccache-v0.19.0-x86_64-unknown-linux-musl.tar.gz",
+                                  "aa73c7270c997894038c0d8f0d297865f57569e1687883322bc431713d4bb9dd"),
+                 "linux-aarch64": ("sccache-v0.19.0-aarch64-unknown-linux-musl.tar.gz",
+                                   "3e47fc4a71b1ddd1b4294a0de9d34498922fdf41e3cd0bda5df3954e3d6deb9d"),
+             }) + github_archives("mozilla/sccache", "v0.19.0", "{asset}/sccache.exe", {
+                 "windows-x86_64": ("sccache-v0.19.0-x86_64-pc-windows-msvc.tar.gz",
+                                    "130e4f8eb672e76590e9993c2ab890c4763b88238577bb11d8062158c7698353"),
+                 "windows-aarch64": ("sccache-v0.19.0-aarch64-pc-windows-msvc.tar.gz",
+                                     "a680e8e6058b033cd6ff56d56b2219ca13f1c1a45f50fb3b04f4ed80851f5c2b"),
+             })),
     ]
 }
 

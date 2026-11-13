@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -44,12 +45,48 @@ def _succeeds(command, timeout=20):
         return False
 
 
+def cargo_bin():
+    """The directory where `qtest install` puts tools."""
+    return Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
+
+
+def find_executable(name):
+    """An executable on PATH, else in the Cargo bin directory, which is not always on PATH."""
+    return shutil.which(name) or shutil.which(name, path=str(cargo_bin()))
+
+
 def _tool_version(tool):
+    program, *arguments = tool.version_command
     try:
-        result = subprocess.run(tool.version_command, cwd=ROOT, capture_output=True, text=True, timeout=30)
+        result = subprocess.run([find_executable(program) or program, *arguments], cwd=ROOT,
+                                capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _version_numbers(text):
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def build_cache_environment(environ):
+    """The variables that make Cargo reuse compiled crates through sccache, or {} when it must not.
+
+    Builds in CI run without a build cache. A RUSTC_WRAPPER that the user set
+    wins, and an empty one turns the cache off. Client-side mode compiles in
+    the process that Cargo starts, so memory limits on a build apply to it.
+    A broken sccache server makes sccache compile without the cache.
+    """
+    if environ.get("CI") or "RUSTC_WRAPPER" in environ:
+        return {}
+    tool = catalog.TOOLS["sccache"]
+    path = find_executable("sccache")
+    version = _version_numbers(_tool_version(tool)) if path else None
+    if version is None or version < _version_numbers(tool.version):
+        return {}
+    defaults = {"SCCACHE_CLIENT_SIDE": "1", "SCCACHE_IGNORE_SERVER_IO_ERROR": "1"}
+    return {"RUSTC_WRAPPER": path, **{key: value for key, value in defaults.items() if key not in environ}}
 
 
 LINUX_APP_LIBS = ("xcb", "fontconfig", "freetype2", "xkbcommon", "xkbcommon-x11")

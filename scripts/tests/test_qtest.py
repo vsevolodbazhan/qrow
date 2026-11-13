@@ -658,6 +658,42 @@ class ToolArchiveTests(unittest.TestCase):
         self.assertEqual(self.run_install(tool, True, [None]), [])
 
 
+class BuildCacheTests(unittest.TestCase):
+    def environment(self, environ, version="sccache 0.19.0", path="/tools/sccache"):
+        with patch.object(runner, "find_executable", return_value=path), \
+                patch.object(runner, "_tool_version", return_value=version):
+            return runner.build_cache_environment(environ)
+
+    def test_a_tool_outside_path_is_found_in_the_cargo_bin_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tool = Path(directory) / "bin" / "fake-tool"
+            tool.parent.mkdir()
+            tool.write_text("#!/bin/sh\n")
+            tool.chmod(0o755)
+            with patch.dict(os.environ, {"CARGO_HOME": directory, "PATH": ""}):
+                self.assertEqual(runner.find_executable("fake-tool"), str(tool))
+                self.assertIsNone(runner.find_executable("missing-tool"))
+
+    def test_an_installed_sccache_becomes_the_rustc_wrapper_in_client_side_mode(self):
+        self.assertEqual(self.environment({}), {"RUSTC_WRAPPER": "/tools/sccache", "SCCACHE_CLIENT_SIDE": "1",
+                                                "SCCACHE_IGNORE_SERVER_IO_ERROR": "1"})
+        self.assertEqual(self.environment({}, version="sccache 0.21.3")["RUSTC_WRAPPER"], "/tools/sccache")
+
+    def test_sccache_settings_of_the_user_win(self):
+        self.assertEqual(self.environment({"SCCACHE_CLIENT_SIDE": "0"}),
+                         {"RUSTC_WRAPPER": "/tools/sccache", "SCCACHE_IGNORE_SERVER_IO_ERROR": "1"})
+
+    def test_no_build_cache_without_a_usable_sccache(self):
+        self.assertEqual(self.environment({}, version=None, path=None), {})
+        self.assertEqual(self.environment({}, version="sccache 0.18.2"), {})
+        self.assertEqual(self.environment({}, version="not a version"), {})
+
+    def test_ci_and_a_rustc_wrapper_of_the_user_turn_the_build_cache_off(self):
+        self.assertEqual(self.environment({"CI": "true"}), {})
+        self.assertEqual(self.environment({"RUSTC_WRAPPER": ""}), {})
+        self.assertEqual(self.environment({"RUSTC_WRAPPER": "/usr/bin/ccache"}), {})
+
+
 class CommandLineTests(unittest.TestCase):
     def call(self, *argv):
         stdout, stderr = io.StringIO(), io.StringIO()
