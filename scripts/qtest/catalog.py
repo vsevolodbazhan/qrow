@@ -248,7 +248,7 @@ def suites_for_platform(system):
                    Step(("cargo", "machete")),
                    Step(("cargo", "deny", "--locked", "check")))),
             Suite("native-storage", "OS-specific credential tests with synthetic data.",
-                  ("cargo", "cargo-nextest", *(("dbus-run-session", "gnome-keyring-daemon") if linux else ())),
+                  ("cargo", "cargo-nextest", *(("dbus-run-session", "dbus-send", "gnome-keyring-daemon") if linux else ())),
                   (Step(("sh", "scripts/testing/linux-secret-service.sh")),) if linux else
                   (Step((PYTHON, "scripts/testing/macos-keychain.py")),),
                   explicit_only=True,
@@ -411,6 +411,7 @@ def suites_for_hook(hook, paths):
 
 REQUIREMENTS = {
     "dbus-run-session": "Install D-Bus to run the isolated secret-store test.",
+    "dbus-send": "Install the D-Bus tools to run the isolated secret-store test.",
     "gnome-keyring-daemon": "Install GNOME Keyring to run the isolated secret-store test.",
     "xvfb-run": "Install Xvfb for isolated Linux package smoke checks.",
     "xdotool": "Install xdotool to observe the packaged Linux window.",

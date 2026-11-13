@@ -234,9 +234,10 @@ the real macOS Keychain with a randomly named synthetic item. `native-storage`
 runs both checks on disposable macOS runners and removes the synthetic item.
 
 On Linux, `native-storage` starts a private D-Bus session and a
-temporary GNOME Keyring. It checks password and token storage with synthetic
-values. It needs `dbus-run-session` and `gnome-keyring-daemon`. The test does
-not use the desktop secret store.
+temporary GNOME Keyring. It waits until the keyring is available on that
+session, then checks password and token storage with synthetic values. It
+needs `dbus-run-session`, `dbus-send`, and `gnome-keyring-daemon`. The test
+does not use the desktop secret store.
 
 Kyuubi transfer tests check adaptive request counts and normal preview
 limits on the wire. Worker tests check session reuse after a preset change,
