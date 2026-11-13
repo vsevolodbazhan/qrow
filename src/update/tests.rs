@@ -371,6 +371,27 @@ fn the_windows_installer_runs_silently_into_the_installed_folder() {
 }
 
 #[test]
+fn the_windows_installer_gets_the_folder_without_the_verbatim_prefix() {
+    // Windows `canonicalize` returns verbatim paths. Inno Setup rejects them
+    // and quits without installing.
+    let setup = Path::new(r"C:\Users\me\AppData\Local\Qrow\updates\setup.exe");
+    for (folder, expected) in [
+        (
+            r"\\?\C:\Users\me\AppData\Local\Programs\Qrow",
+            r"/DIR=C:\Users\me\AppData\Local\Programs\Qrow",
+        ),
+        (r"\\?\UNC\server\share\Qrow", r"/DIR=\\server\share\Qrow"),
+        (r"C:\Program Files\Qrow", r"/DIR=C:\Program Files\Qrow"),
+        // A verbatim path without a drive letter has no plain form.
+        (r"\\?\Volume{0b1e}\Qrow", r"/DIR=\\?\Volume{0b1e}\Qrow"),
+    ] {
+        let command = installer_command(setup, Path::new(folder), false);
+        let last = command.get_args().last().unwrap().to_string_lossy();
+        assert_eq!(last, expected, "{folder}");
+    }
+}
+
+#[test]
 fn each_platform_installs_its_own_kind_of_copy() {
     let setup = |install| Setup {
         source: Source::github(),

@@ -353,8 +353,25 @@ pub fn installer_command(setup: &Path, folder: &Path, all_users: bool) -> std::p
             "/CURRENTUSER"
         },
     ]);
-    command.arg(format!("/DIR={}", folder.display()));
+    command.arg(format!(
+        "/DIR={}",
+        without_verbatim_prefix(folder).display()
+    ));
     command
+}
+
+/// `path` without the Windows verbatim prefix that `canonicalize` adds, as
+/// in `\\?\C:\Qrow` or `\\?\UNC\server\share`. Inno Setup rejects a
+/// folder with `?` in its name, so the installer quits without installing.
+fn without_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}").into();
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.into(),
+        _ => path.into(),
+    }
 }
 
 fn block_on<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
