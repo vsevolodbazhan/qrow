@@ -186,6 +186,42 @@ fn hide_toasts(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_next_launch_reports_an_update_that_did_not_install(cx: &mut TestAppContext) {
+    let releases = Releases::start();
+    // Restart to update kept the installer of 0.6.0 for its run after Qrow
+    // quit, and the installer wrote its log. Qrow 0.5.0 starts again.
+    std::fs::create_dir_all(&releases.downloads).unwrap();
+    let installer = releases
+        .downloads
+        .join("Qrow-0.6.0-windows-x86_64-setup.exe");
+    std::fs::write(&installer, b"setup").unwrap();
+    std::fs::write(
+        installer.with_extension("log"),
+        b"Folder names cannot include ?",
+    )
+    .unwrap();
+    let app = TestApp::launch_with_updates(cx, Workspace::default(), releases.setup(homebrew()));
+    app.wait_for(cx, "update-install-failed");
+    app.update(cx, |window, _| {
+        assert!(shows(window, "Update did not install"));
+        assert!(shows(
+            window,
+            "Qrow 0.6.0 did not install. The installer quit before it replaced Qrow 0.5.0."
+        ));
+        assert!(present(window, &"update-install-log".into()));
+        assert!(labelled(window, "Updates, Qrow 0.6.0 did not install.").is_some());
+    });
+    let kept_log = releases.downloads.with_file_name("update-install.log");
+    assert_eq!(
+        std::fs::read(&kept_log).unwrap(),
+        b"Folder names cannot include ?"
+    );
+    assert!(!releases.downloads.exists());
+    // The report does not wait for the first check.
+    assert!(releases.requests().is_empty());
+}
+
+#[gpui_kit::test]
 fn a_failed_check_on_request_reports_the_failure_and_tries_again(cx: &mut TestAppContext) {
     let releases = Releases::start();
     // No release list: the check fails.

@@ -48,6 +48,9 @@ pub(super) struct Updates {
     finish: Option<update::Finish>,
     /// The channel of the check that runs or ran last.
     checked_channel: Option<update::Channel>,
+    /// The update that the last Restart to update did not install, until the
+    /// window reports it.
+    failed_install: Option<update::FailedInstall>,
 }
 
 #[derive(Clone, Default)]
@@ -75,14 +78,16 @@ impl Updates {
                 .map(Arc::new)
         });
         let setup = updater.is_some().then_some(setup).flatten();
-        // Downloads of earlier runs, like a Windows installer that already
-        // ran, are not needed any more.
-        if let Some(setup) = &setup {
-            let _ = std::fs::remove_dir_all(&setup.downloads);
-        }
+        let failed_install = setup.as_ref().and_then(|setup| setup.clean_downloads());
+        let status = match &failed_install {
+            Some(failed) => Status::Failed(format!("Qrow {} did not install.", failed.version)),
+            None => Status::Idle,
+        };
         Self {
             setup,
             updater,
+            status,
+            failed_install,
             ..Self::default()
         }
     }
@@ -245,6 +250,10 @@ impl Qrow {
             return;
         }
         cx.spawn_in(window, async move |weak, cx| {
+            // The window is open now and can show the toast.
+            let _ = weak.update_in(cx, |this, window, cx| {
+                this.report_failed_install(window, cx)
+            });
             cx.background_executor().timer(FIRST_CHECK_DELAY).await;
             loop {
                 let checked = weak.update_in(cx, |this, window, cx| {
@@ -540,6 +549,39 @@ impl Qrow {
         };
         // An action keeps a toast open; update toasts hide like the others.
         window.push_notification(toast.id::<UpdateNotice>().autohide(true), cx);
+    }
+
+    /// Reports an update that the last Restart to update did not install: the
+    /// Windows installer quit before it replaced Qrow.
+    fn report_failed_install(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(failed), Some(setup)) = (
+            self.updates.failed_install.take(),
+            self.updates.setup.clone(),
+        ) else {
+            return;
+        };
+        let version = failed.version;
+        let text = format!(
+            "Qrow {version} did not install. The installer quit before it replaced Qrow {}.",
+            setup.current
+        );
+        let logged = match &failed.log {
+            Some(log) => format!("{text} Installer log: {}", log.display()),
+            None => text.clone(),
+        };
+        self.log_update(Severity::Error, logged, cx);
+        let toast = toast::error("update-install-failed", "Update did not install", text);
+        let toast = match failed.log {
+            Some(log) => toast.action(move |_, _, _| {
+                let log = log.clone();
+                Button::new("update-install-log")
+                    .label(toast::REVEAL_LABEL)
+                    .on_click(move |_, _, cx| cx.reveal_path(&log))
+            }),
+            None => toast,
+        };
+        window.push_notification(toast.id::<UpdateNotice>(), cx);
+        cx.notify();
     }
 
     /// Installs a downloaded update and quits to start it.

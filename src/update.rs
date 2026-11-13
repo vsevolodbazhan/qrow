@@ -146,6 +146,22 @@ impl Setup {
         }
     }
 
+    /// Removes the downloads of earlier runs, like a Windows installer that
+    /// already ran. Returns the update that the last Restart to update did
+    /// not install, and keeps its installer log next to the download folder.
+    pub fn clean_downloads(&self) -> Option<FailedInstall> {
+        let failed = failed_install(&self.downloads, &self.current);
+        let kept_log = self.downloads.with_file_name(INSTALL_LOG);
+        // A log of an earlier failure is old news once Qrow starts without one.
+        let _ = std::fs::remove_file(&kept_log);
+        let failed = failed.map(|(version, log)| FailedInstall {
+            version,
+            log: std::fs::rename(&log, &kept_log).is_ok().then_some(kept_log),
+        });
+        let _ = std::fs::remove_dir_all(&self.downloads);
+        failed
+    }
+
     /// The web page of a release, for copies that the user updates by hand.
     pub fn release_page(&self, version: &Version) -> String {
         format!(
@@ -153,6 +169,49 @@ impl Setup {
             version.tag()
         )
     }
+}
+
+/// The name of the kept log of an installer that did not install, next to
+/// the download folder.
+pub const INSTALL_LOG: &str = "update-install.log";
+
+/// An update that Restart to update started but that did not install.
+#[derive(Debug, PartialEq)]
+pub struct FailedInstall {
+    pub version: Version,
+    /// The log of the installer, when it wrote one.
+    pub log: Option<PathBuf>,
+}
+
+/// The newest Windows installer in `downloads` that is newer than `current`,
+/// and the path of its log. Restart to update keeps the installer there for
+/// the run after Qrow quits. A successful run starts the new version, so an
+/// installer that is still newer than the running version did not install.
+fn failed_install(downloads: &Path, current: &Version) -> Option<(Version, PathBuf)> {
+    std::fs::read_dir(downloads)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let installer = entry.path();
+            let version = installer_version(installer.file_name()?.to_str()?)?;
+            Some((version, installer))
+        })
+        .filter(|(version, _)| version > current)
+        .max_by(|left, right| left.0.cmp(&right.0))
+        .map(|(version, installer)| (version, installer_log(&installer)))
+}
+
+/// The version in the name of a Windows installer, as
+/// [`Install::asset_name`] makes it.
+fn installer_version(name: &str) -> Option<Version> {
+    let name = name.strip_prefix("Qrow-")?.strip_suffix("-setup.exe")?;
+    let (version, _arch) = name.rsplit_once("-windows-")?;
+    Version::parse(version)
+}
+
+/// The log that the installer `setup` writes next to itself.
+fn installer_log(setup: &Path) -> PathBuf {
+    setup.with_extension("log")
 }
 
 /// A verified update asset in a temporary folder. Dropping it removes the file.
@@ -311,7 +370,7 @@ pub fn apply(download: &Download, install: &Install) -> Result<Finish> {
         Install::WindowsInstaller { folder } => {
             // The installer runs after Qrow quits, when the temporary download
             // is gone, so it moves next to that folder. The next launch
-            // removes it.
+            // removes it, or reports it when it did not install.
             let name = download
                 .path
                 .file_name()
@@ -324,7 +383,12 @@ pub fn apply(download: &Download, install: &Install) -> Result<Finish> {
                 .join(name);
             std::fs::copy(&download.path, &kept).context("Could not keep the installer")?;
             let all_users = !install::writable(folder);
-            Ok(Finish::Run(installer_command(&kept, folder, all_users)))
+            Ok(Finish::Run(installer_command(
+                &kept,
+                folder,
+                all_users,
+                &installer_log(&kept),
+            )))
         }
         Install::Managed(_) => bail!("Another program updates this copy of Qrow"),
         // Only some platforms install this kind of copy; elsewhere the
@@ -336,10 +400,15 @@ pub fn apply(download: &Download, install: &Install) -> Result<Finish> {
     }
 }
 
-/// The silent run of the Windows installer `setup` into `folder`.
-/// `/QROWRELAUNCH=1` makes it start Qrow when it is done. An install for all
-/// users asks Windows for administrator rights.
-pub fn installer_command(setup: &Path, folder: &Path, all_users: bool) -> std::process::Command {
+/// The silent run of the Windows installer `setup` into `folder`, with its
+/// log in `log`. `/QROWRELAUNCH=1` makes it start Qrow when it is done. An
+/// install for all users asks Windows for administrator rights.
+pub fn installer_command(
+    setup: &Path,
+    folder: &Path,
+    all_users: bool,
+    log: &Path,
+) -> std::process::Command {
     let mut command = std::process::Command::new(setup);
     command.args([
         "/VERYSILENT",
@@ -357,6 +426,7 @@ pub fn installer_command(setup: &Path, folder: &Path, all_users: bool) -> std::p
         "/DIR={}",
         without_verbatim_prefix(folder).display()
     ));
+    command.arg(format!("/LOG={}", without_verbatim_prefix(log).display()));
     command
 }
 

@@ -179,6 +179,13 @@ the package. If a check fails, Qrow keeps the installed version. After
 **Restart to update**, Qrow asks before it stops running work, saves the
 workspace, and starts the new version.
 
+If the Windows installer stops before it replaces Qrow, Qrow shows
+**Update did not install** at the next start and writes the error to the
+Qrow log in Activity. Qrow keeps the installer log as `update-install.log`
+in the [local data directory](workspace.md#saved-state). Select
+**Reveal in File Explorer** to find it. The next check offers the update
+again.
+
 The check sends requests to `api.github.com` and `github.com`. A download
 also goes to the GitHub server that stores release files. The requests
 contain the Qrow version and no workspace data. Development builds do not

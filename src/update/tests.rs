@@ -348,8 +348,9 @@ fn the_windows_installer_runs_silently_into_the_installed_folder() {
     let setup =
         Path::new("C:/Users/me/AppData/Local/Qrow/updates/Qrow-0.6.0-windows-x86_64-setup.exe");
     let folder = Path::new("C:/Program Files/Qrow");
+    let log = Path::new("C:/Users/me/AppData/Local/Qrow/updates/setup.log");
     for (all_users, scope) in [(false, "/CURRENTUSER"), (true, "/ALLUSERS")] {
-        let command = installer_command(setup, folder, all_users);
+        let command = installer_command(setup, folder, all_users, log);
         assert_eq!(command.get_program(), setup.as_os_str());
         let arguments: Vec<_> = command
             .get_args()
@@ -365,6 +366,7 @@ fn the_windows_installer_runs_silently_into_the_installed_folder() {
                 "/QROWRELAUNCH=1",
                 scope,
                 "/DIR=C:/Program Files/Qrow",
+                "/LOG=C:/Users/me/AppData/Local/Qrow/updates/setup.log",
             ]
         );
     }
@@ -385,10 +387,97 @@ fn the_windows_installer_gets_the_folder_without_the_verbatim_prefix() {
         // A verbatim path without a drive letter has no plain form.
         (r"\\?\Volume{0b1e}\Qrow", r"/DIR=\\?\Volume{0b1e}\Qrow"),
     ] {
-        let command = installer_command(setup, Path::new(folder), false);
-        let last = command.get_args().last().unwrap().to_string_lossy();
-        assert_eq!(last, expected, "{folder}");
+        let command = installer_command(setup, Path::new(folder), false, Path::new(folder));
+        let arguments: Vec<_> = command.get_args().collect();
+        let folder_argument = arguments[arguments.len() - 2].to_string_lossy();
+        assert_eq!(folder_argument, expected, "{folder}");
+        let log_argument = arguments[arguments.len() - 1].to_string_lossy();
+        assert_eq!(
+            log_argument.strip_prefix("/LOG="),
+            expected.strip_prefix("/DIR=")
+        );
     }
+}
+
+/// A setup of the running version 0.5.0 with downloads in `folder/updates`.
+fn setup_in(folder: &Path) -> Setup {
+    Setup {
+        source: Source::github(),
+        current: current(),
+        install: Install::Managed(Manager::Other),
+        arch: "x86_64".into(),
+        downloads: folder.join("updates"),
+    }
+}
+
+#[test]
+fn the_next_launch_reports_an_installer_that_did_not_install() {
+    let folder = tempfile::tempdir().unwrap();
+    let setup = setup_in(folder.path());
+    let downloads = &setup.downloads;
+    std::fs::create_dir_all(downloads.join("qrow-update-abc")).unwrap();
+    for name in [
+        "Qrow-0.4.0-windows-x86_64-setup.exe",
+        "Qrow-0.6.0-nightly.20261112.58-windows-aarch64-setup.exe",
+        "Qrow-0.6.0-nightly.20261112.58-windows-aarch64-setup.log",
+        "Qrow-0.5.1-windows-x86_64-setup.exe",
+        "notes.txt",
+    ] {
+        std::fs::write(downloads.join(name), name).unwrap();
+    }
+    let kept_log = folder.path().join(INSTALL_LOG);
+    // The newest installer that is newer than the running version.
+    assert_eq!(
+        setup.clean_downloads(),
+        Some(FailedInstall {
+            version: Version::parse("0.6.0-nightly.20261112.58").unwrap(),
+            log: Some(kept_log.clone()),
+        })
+    );
+    assert_eq!(
+        std::fs::read_to_string(&kept_log).unwrap(),
+        "Qrow-0.6.0-nightly.20261112.58-windows-aarch64-setup.log"
+    );
+    assert!(!downloads.exists());
+    // The next launch has no news and removes the old log.
+    assert_eq!(setup.clean_downloads(), None);
+    assert!(!kept_log.exists());
+}
+
+#[test]
+fn an_installer_of_the_running_version_or_an_older_one_is_no_news() {
+    let folder = tempfile::tempdir().unwrap();
+    let setup = setup_in(folder.path());
+    std::fs::create_dir_all(&setup.downloads).unwrap();
+    for name in [
+        "Qrow-0.5.0-windows-x86_64-setup.exe",
+        "Qrow-0.5.0-windows-x86_64-setup.log",
+        "Qrow-0.4.9-windows-x86_64-setup.exe",
+    ] {
+        std::fs::write(setup.downloads.join(name), name).unwrap();
+    }
+    assert_eq!(setup.clean_downloads(), None);
+    assert!(!setup.downloads.exists());
+    assert!(!folder.path().join(INSTALL_LOG).exists());
+}
+
+#[test]
+fn a_failed_install_without_a_log_is_still_reported() {
+    let folder = tempfile::tempdir().unwrap();
+    let setup = setup_in(folder.path());
+    std::fs::create_dir_all(&setup.downloads).unwrap();
+    std::fs::write(
+        setup.downloads.join("Qrow-0.6.0-windows-x86_64-setup.exe"),
+        "",
+    )
+    .unwrap();
+    assert_eq!(
+        setup.clean_downloads(),
+        Some(FailedInstall {
+            version: Version::parse("0.6.0").unwrap(),
+            log: None,
+        })
+    );
 }
 
 #[test]
