@@ -66,7 +66,7 @@ class WebsiteInstallScriptTest(unittest.TestCase):
         self.publish({"x86_64": archive(b"qrow x86_64"), "aarch64": archive(b"qrow aarch64")})
         self.machine("x86_64")
         # A stand-in for minisign records its arguments, so the test does not depend on the real tool.
-        self.tool("minisign", '#!/bin/sh\nprintf "%s\\n" "$@" > "$QROW_TEST_LOG"\n')
+        self.tool("minisign", '#!/bin/sh\n[ "$1" = -v ] && exit 0\nprintf "%s\\n" "$@" > "$QROW_TEST_LOG"\n')
 
     def tool(self, name, source):
         path = self.tools / name
@@ -208,7 +208,7 @@ class WebsiteInstallScriptTest(unittest.TestCase):
         self.assertFalse((self.prefix / "bin/qrow").exists())
 
         self.publish({"x86_64": archive(b"qrow x86_64")})
-        self.tool("minisign", "#!/bin/sh\nexit 1\n")
+        self.tool("minisign", '#!/bin/sh\n[ "$1" = -v ] && exit 0\nexit 1\n')
         result = self.install()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("signature is not valid", result.stderr)
@@ -253,6 +253,25 @@ class WebsiteInstallScriptTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(f"not for Qrow {VERSION}", result.stderr)
         self.assertFalse((self.prefix / "bin/qrow").exists())
+
+    def broken_minisign(self):
+        """A version manager shim without a selected version, as mise makes."""
+        self.tool("minisign", "#!/bin/sh\necho 'mise ERROR No version is set for shim: minisign' >&2\nexit 1\n")
+
+    def test_a_minisign_that_cannot_run_counts_as_missing(self):
+        self.with_openssl()
+        self.broken_minisign()
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.prefix / "bin/qrow").read_bytes(), b"qrow x86_64")
+        self.assertNotIn("cannot verify", result.stderr)
+
+        self.without_signature_tools()
+        (self.tools / "openssl").unlink()
+        self.broken_minisign()
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cannot verify the release signature", result.stderr)
 
     def test_an_openssl_that_cannot_verify_counts_as_missing(self):
         self.without_signature_tools()

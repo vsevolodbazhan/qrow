@@ -41,6 +41,13 @@ sha256() {
     fi
 }
 
+# True when minisign runs. A version manager shim, such as a mise shim
+# without a selected version, is on the PATH but cannot run.
+minisign_ready() {
+    command -v minisign >/dev/null 2>&1 || return 1
+    minisign -v >/dev/null 2>&1
+}
+
 # True when OpenSSL can verify a minisign signature: Ed25519 over the
 # BLAKE2b-512 hash of the file. OpenSSL 1.1 and LibreSSL cannot.
 openssl_ready() {
@@ -113,7 +120,7 @@ main() {
 
     fetch "$releases/SHA256SUMS" "$work/SHA256SUMS" || fail 'could not download the release checksums'
     signature=$work/SHA256SUMS.minisig
-    if command -v minisign >/dev/null 2>&1; then
+    if minisign_ready; then
         fetch "$releases/SHA256SUMS.minisig" "$signature" || fail 'could not download the release signature'
         minisign -V -q -m "$work/SHA256SUMS" -P "$QROW_PUBLIC_KEY" || fail 'the release signature is not valid'
     elif openssl_ready; then
