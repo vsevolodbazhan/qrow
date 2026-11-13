@@ -89,7 +89,7 @@ def run_hardware(root, value, manifest, base, output):
         with runner.lease([f"cargo:{runner.target_dir().resolve()}"]):
             hardware = contract.plan(root, value["target"], list(CI_HARDWARE), "native")
             prepared = builds.Prepared(manifest, hardware, root, base / "renderer-probe-prepared", output)
-            step = catalog.nextest("binary(gpui_macos) & test(=" + PROBE + ")",
+            step = catalog.nextest("test(=" + PROBE + ")",
                                    *catalog.RENDERER_FLAGS, "--no-capture")
             command = prepared.command(runner.render_command(step, options, None, []))
             capability = probe(runner.execute, log, output, command, options["env"])

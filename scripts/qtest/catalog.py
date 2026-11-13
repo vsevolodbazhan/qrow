@@ -183,7 +183,7 @@ APP = ("cargo", "linux-app-libs")
 
 RENDERER_FLAGS = ("--package", "qrow", "--package", "gpui-pre-macos",
                   "--features", "gpui-kit/test-support", "--lib")
-RENDERER_UNITS = ("binary(gpui_macos) & ((test(/^opengl_renderer::/) & "
+RENDERER_UNITS = ("((test(/^opengl_renderer::/) & "
                   "not test(/^opengl_renderer::tests::/) & not test(hardware_capability_probe)) | "
                   "test(/^renderer::tests::/) | test(/^software_renderer::tests::/))")
 
@@ -202,7 +202,7 @@ def suites_for_platform(system):
                   platforms=MACOS_ONLY, explicit_only=True),
             Suite("opengl-renderer", "Strict hardware Core OpenGL shader and pixel checks.",
                   ("cargo", "cargo-nextest"),
-                  (nextest("binary(gpui_macos) & test(/^opengl_renderer::/)", *RENDERER_FLAGS),),
+                  (nextest("test(/^opengl_renderer::/)", *RENDERER_FLAGS),),
                   platforms=MACOS_ONLY, explicit_only=True),
             Suite("software-ui", "CPU rendering and native input in an isolated packaged demo.",
                   ("cargo", "uv", "xcode", "desktop"),
