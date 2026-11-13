@@ -476,16 +476,24 @@ impl Qrow {
             caret.x - typed_width - name_inset,
             caret.y + line_height + self.ui_px(2.),
         );
-        let right = input_bounds.right() - layout.width - self.ui_px(4.);
+        let margin = px(8.);
+        let window_right = window.viewport_size().width - margin;
+        let right = input_bounds.right().min(window_right) - layout.width;
         position.x = position.x.min(right).max(input_bounds.left());
         let details = self.completion_details(popup, &layout, cx);
+        // The box goes below the list when it does not fit at its right,
+        // so the list does not move away from the typed name.
+        let beside = position.x + layout.width + self.ui_px(4. + DETAILS_WIDTH) <= window_right;
         Some(
             deferred(
                 anchored()
                     .position(position)
                     .snap_to_window_with_margin(px(8.))
                     .child(
-                        h_flex()
+                        div()
+                            .flex()
+                            .when(beside, |group| group.flex_row())
+                            .when(!beside, |group| group.flex_col())
                             .items_start()
                             .gap(self.ui_px(4.))
                             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -965,29 +973,21 @@ impl Qrow {
                 .shadow_lg()
                 .text_size(self.ui_px(12.))
                 .text_color(theme.muted_foreground)
-                .when(details.name.is_some() || details.detail.is_some(), |box_| {
-                    box_.child(
-                        h_flex()
-                            .items_start()
-                            .justify_between()
-                            .gap(self.ui_px(GAP))
-                            .children(details.name.clone().map(|name| {
-                                div()
-                                    .min_w_0()
-                                    .font_family(code.clone())
-                                    .text_size(self.ui_px(13.))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.popover_foreground)
-                                    .child(name)
-                            }))
-                            .children(
-                                details
-                                    .detail
-                                    .clone()
-                                    .map(|detail| div().flex_none().child(detail)),
-                            ),
-                    )
-                })
+                .children(details.name.clone().map(|name| {
+                    div()
+                        .w_full()
+                        .font_family(code.clone())
+                        .text_size(self.ui_px(13.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.popover_foreground)
+                        .child(breakable(&name))
+                }))
+                .children(
+                    details
+                        .detail
+                        .clone()
+                        .map(|detail| div().w_full().child(breakable(&detail))),
+                )
                 .children(details.comment.map(|comment| {
                     div()
                         .text_size(self.ui_px(13.))
@@ -997,6 +997,19 @@ impl Qrow {
                 .into_any_element(),
         )
     }
+}
+
+/// `text` with zero-width spaces after `_`, `.`, `,`, `<`, and `:`, so that
+/// long names and types wrap between their parts, not inside them.
+fn breakable(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    for c in text.chars() {
+        out.push(c);
+        if matches!(c, '_' | '.' | ',' | '<' | ':') {
+            out.push('\u{200B}');
+        }
+    }
+    out
 }
 
 /// What the details box adds to the selected row.
@@ -1101,10 +1114,10 @@ fn completion_row(
         .gap(ui(GAP))
         .rounded(theme.radius)
         .cursor_pointer()
-        .when(selected, |row| {
-            row.bg(theme.accent).text_color(theme.accent_foreground)
+        .when(selected, |row| row.bg(theme.tokens.list_active))
+        .when(!selected, |row| {
+            row.hover(|row| row.bg(theme.tokens.list_hover))
         })
-        .when(!selected, |row| row.hover(|row| row.bg(theme.muted)))
         .child(
             Icon::new(icon)
                 .size(ui(14.))
@@ -1257,6 +1270,16 @@ fn stale_tooltip(schemas: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn long_names_and_types_wrap_between_their_parts() {
+        assert_eq!(breakable("a_b"), "a_\u{200B}b");
+        assert_eq!(
+            breakable("map<string,int>"),
+            "map<\u{200B}string,\u{200B}int>"
+        );
+        assert_eq!(breakable("plain"), "plain");
+    }
 
     #[::core::prelude::v1::test]
     fn an_error_shows_the_relation_name_in_code_font() {
