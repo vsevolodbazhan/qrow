@@ -171,6 +171,15 @@ fn a_quoted_name_matches_without_its_quotes() {
 }
 
 #[test]
+fn a_closed_quoted_name_before_the_cursor_is_the_name_to_replace() {
+    let (text, request) = at("SELECT b.\"sta\"| FROM t b", DatabaseType::Postgres);
+    assert_eq!(request.prefix, "sta");
+    assert_eq!(&text[request.replace], "\"sta\"");
+    let (_, request) = at("SELECT `a``b`|", KYUUBI);
+    assert_eq!(request.prefix, "a`b");
+}
+
+#[test]
 fn sources_have_their_schemas_and_aliases() {
     let (_, request) = at(
         "SELECT | FROM avia.bookings AS b JOIN flight_events f ON f.x = b.x, `cold`.t WHERE 1 = 1",
@@ -379,6 +388,14 @@ fn names_are_quoted_only_when_they_need_it() {
     assert_eq!(sql_name("Mixed Case", KYUUBI), "`Mixed Case`");
     assert_eq!(sql_name("1st", DatabaseType::Postgres), "\"1st\"");
     assert_eq!(sql_name("a`b", KYUUBI), "`a``b`");
+    // Each dialect has reserved words of its own.
+    assert_eq!(
+        sql_name("returning", DatabaseType::Postgres),
+        "\"returning\""
+    );
+    assert_eq!(sql_name("returning", KYUUBI), "returning");
+    assert_eq!(sql_name("unnest", DatabaseType::Trino), "\"unnest\"");
+    assert_eq!(sql_name("filter", KYUUBI), "`filter`");
     let catalog = catalog(NOW - 60);
     let completion = suggest(Some(&catalog), "SELECT * FROM avia.Mi|");
     assert_eq!(completion.items[0].insert, "`Mixed Case`");

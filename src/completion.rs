@@ -176,6 +176,86 @@ const RESERVED: [&str; 78] = [
     "WITH",
 ];
 
+/// Reserved words of one dialect that [`RESERVED`] does not have.
+fn reserved_in(database_type: DatabaseType) -> &'static [&'static str] {
+    match database_type {
+        DatabaseType::Postgres => &[
+            "ANALYSE",
+            "ANALYZE",
+            "ASYMMETRIC",
+            "AUTHORIZATION",
+            "BINARY",
+            "COLLATION",
+            "CONCURRENTLY",
+            "CURRENT_CATALOG",
+            "CURRENT_ROLE",
+            "CURRENT_SCHEMA",
+            "DEFERRABLE",
+            "DO",
+            "FREEZE",
+            "ILIKE",
+            "INITIALLY",
+            "ISNULL",
+            "LOCALTIME",
+            "LOCALTIMESTAMP",
+            "NOTNULL",
+            "ONLY",
+            "OVERLAPS",
+            "PLACING",
+            "RETURNING",
+            "SIMILAR",
+            "SYMMETRIC",
+            "SYSTEM_USER",
+            "TABLESAMPLE",
+            "VARIADIC",
+            "VERBOSE",
+            "WINDOW",
+        ],
+        DatabaseType::Trino => &[
+            "ALTER",
+            "CUBE",
+            "CURRENT_CATALOG",
+            "CURRENT_PATH",
+            "CURRENT_ROLE",
+            "CURRENT_SCHEMA",
+            "DEALLOCATE",
+            "DESCRIBE",
+            "ESCAPE",
+            "EXECUTE",
+            "EXTRACT",
+            "GROUPING",
+            "JSON_ARRAY",
+            "JSON_EXISTS",
+            "JSON_OBJECT",
+            "JSON_QUERY",
+            "JSON_TABLE",
+            "JSON_VALUE",
+            "LISTAGG",
+            "LOCALTIME",
+            "LOCALTIMESTAMP",
+            "NORMALIZE",
+            "PREPARE",
+            "RECURSIVE",
+            "ROLLUP",
+            "SKIP",
+            "TRIM",
+            "UESCAPE",
+            "UNNEST",
+            "VALUES",
+        ],
+        // Spark SQL with ANSI reserved keywords.
+        DatabaseType::Kyuubi => &[
+            "AUTHORIZATION",
+            "ESCAPE",
+            "FILTER",
+            "ONLY",
+            "OVERLAPS",
+            "TIME",
+            "UNKNOWN",
+        ],
+    }
+}
+
 fn is_word(text: &str, words: &[&str]) -> bool {
     words.iter().any(|word| text.eq_ignore_ascii_case(word))
 }
@@ -240,13 +320,18 @@ pub fn request(sql: &str, offset: usize, database_type: DatabaseType) -> Option<
                 }
             }
             Kind::Identifier => {
+                // Inside the quotes or right after the closing quote, the
+                // quoted name is the name at the cursor.
                 let quote = token.text.chars().next()?;
-                let typed = &sql[token.range.start + quote.len_utf8()..offset];
-                if offset < token.range.end || !closed(token.text) {
-                    prefix = typed.to_owned();
-                    replace = token.range.clone();
-                    before = index;
-                }
+                let end = if offset == token.range.end && closed(token.text) {
+                    offset - quote.len_utf8()
+                } else {
+                    offset
+                };
+                let typed = &sql[token.range.start + quote.len_utf8()..end];
+                prefix = typed.replace(&format!("{quote}{quote}"), &quote.to_string());
+                replace = token.range.clone();
+                before = index;
             }
             Kind::Plain if name_part(token.text, token.kind, database_type).is_some() => {
                 prefix = sql[token.range.start..offset].to_owned();
@@ -842,6 +927,7 @@ pub fn sql_name(name: &str, database_type: DatabaseType) -> String {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !is_word(name, &RESERVED)
+        && !is_word(name, reserved_in(database_type))
         // Postgres and Trino fold names without quotes to lowercase.
         && (database_type == DatabaseType::Kyuubi || !name.chars().any(|c| c.is_ascii_uppercase()));
     if plain {

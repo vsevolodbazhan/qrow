@@ -124,7 +124,7 @@ impl Qrow {
     fn completion_retry_scopes(&self, popup: &CompletionPopup) -> Vec<Scope> {
         let scopes: Vec<Scope> = if !popup.read {
             vec![Scope::Connection]
-        } else if popup.completion.items.is_empty() && !popup.completion.errors.is_empty() {
+        } else if !popup.completion.errors.is_empty() {
             popup
                 .completion
                 .errors
@@ -749,28 +749,59 @@ impl Qrow {
         popup: &CompletionPopup,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let stale = &popup.completion.stale;
-        if stale.is_empty() {
-            return None;
-        }
         let theme = cx.theme();
+        let completion = &popup.completion;
+        let reads = |need: &Need| self.catalog.reads(popup.profile, &need_scope(need));
+        // A read that failed comes first, then a read in progress, then
+        // stale schemas.
+        let failed = completion
+            .errors
+            .iter()
+            .find(|(need, _)| !reads(need))
+            .cloned();
+        let loading = completion
+            .missing
+            .iter()
+            .find(|need| {
+                reads(need) || (popup.requested.contains(*need) && !failed_need(completion, need))
+            })
+            .cloned();
+        let stale = &completion.stale;
         let refreshing = stale.iter().any(|schema| {
             self.catalog
                 .reads(popup.profile, &Scope::Schema(schema.clone()))
         });
-        let message = match (refreshing, stale.as_slice()) {
-            (true, [schema]) => vec![
-                Text::Plain("Refreshing ".into()),
-                Text::Code(schema.clone()),
-                Text::Plain("…".into()),
-            ],
-            (true, schemas) => vec![Text::Plain(format!(
-                "Refreshing {} schemas…",
-                schemas.len()
-            ))],
-            (false, [schema]) => vec![Text::Code(schema.clone()), Text::Plain(" is stale".into())],
-            (false, schemas) => vec![Text::Plain(format!("{} schemas are stale", schemas.len()))],
-        };
+        let (slot, message, action): (Slot, Vec<Text>, Option<(&'static str, String)>) =
+            if let Some((need, error)) = failed {
+                (
+                    Slot::Alert,
+                    need_text("Could not load", &need, ""),
+                    Some(("Retry", first_line(&error))),
+                )
+            } else if let Some(need) = loading {
+                (Slot::Spinner, need_text("Loading", &need, "…"), None)
+            } else if refreshing {
+                let message = match stale.as_slice() {
+                    [schema] => vec![
+                        Text::Plain("Refreshing ".into()),
+                        Text::Code(schema.clone()),
+                        Text::Plain("…".into()),
+                    ],
+                    schemas => vec![Text::Plain(format!(
+                        "Refreshing {} schemas…",
+                        schemas.len()
+                    ))],
+                };
+                (Slot::Spinner, message, None)
+            } else if !stale.is_empty() {
+                let message = match stale.as_slice() {
+                    [schema] => vec![Text::Code(schema.clone()), Text::Plain(" is stale".into())],
+                    schemas => vec![Text::Plain(format!("{} schemas are stale", schemas.len()))],
+                };
+                (Slot::Dot, message, Some(("Refresh", stale_tooltip(stale))))
+            } else {
+                return None;
+            };
         let label = plain(&message);
         Some(
             h_flex()
@@ -795,14 +826,17 @@ impl Qrow {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .map(|slot| {
-                            if refreshing {
-                                slot.child(Spinner::new().xsmall().color(theme.muted_foreground))
-                            } else {
-                                slot.child(
-                                    div().size(self.ui_px(6.)).rounded_full().bg(theme.warning),
-                                )
+                        .map(|cell| match slot {
+                            Slot::Spinner => {
+                                cell.child(Spinner::new().xsmall().color(theme.muted_foreground))
                             }
+                            Slot::Dot => cell
+                                .child(div().size(self.ui_px(6.)).rounded_full().bg(theme.warning)),
+                            Slot::Alert => cell.child(
+                                Icon::new(IconName::CircleAlert)
+                                    .size(self.ui_px(14.))
+                                    .text_color(theme.warning),
+                            ),
                         }),
                 )
                 .child(
@@ -813,13 +847,13 @@ impl Qrow {
                         .whitespace_nowrap()
                         .child(self.texts(message, cx).flex_nowrap()),
                 )
-                .when(!refreshing, |footer| {
+                .when_some(action, |footer, (label, tooltip)| {
                     footer.child(
-                        Button::new("sql-completion-refresh-stale")
+                        Button::new("sql-completion-footer-action")
                             .link()
                             .xsmall()
-                            .label("Refresh")
-                            .tooltip(stale_tooltip(stale))
+                            .label(label)
+                            .tooltip(tooltip)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.show_completions(&ShowCompletions, window, cx);
                             })),
@@ -1029,6 +1063,32 @@ fn shown_name(item: &Item) -> String {
         Some(qualifier) => format!("{qualifier}.{}", item.name),
         None => item.name.clone(),
     }
+}
+
+/// What the cell before the footer text shows.
+#[derive(Clone, Copy)]
+enum Slot {
+    Spinner,
+    Dot,
+    Alert,
+}
+
+fn failed_need(completion: &Completion, need: &Need) -> bool {
+    completion.errors.iter().any(|(failed, _)| failed == need)
+}
+
+/// "`verb` columns of `schema.table``end`", for the footer.
+fn need_text(verb: &str, need: &Need, end: &str) -> Vec<Text> {
+    let (what, name) = match need {
+        Need::Schemas => return vec![Text::Plain(format!("{verb} schemas{end}"))],
+        Need::Relations(schema) => ("tables of", schema.clone()),
+        Need::Columns(schema, relation) => ("columns of", format!("{schema}.{relation}")),
+    };
+    let mut parts = vec![Text::Plain(format!("{verb} {what} ")), Text::Code(name)];
+    if !end.is_empty() {
+        parts.push(Text::Plain(end.into()));
+    }
+    parts
 }
 
 /// The read that gives `need`.

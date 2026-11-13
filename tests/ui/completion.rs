@@ -264,3 +264,31 @@ fn long_names_widen_the_list_up_to_its_limit(cx: &mut TestAppContext) {
     assert!(width > gpui_kit::px(320.), "{width:?}");
     assert!(app.update(cx, |window, _| labelled(window, long).is_some()));
 }
+
+#[gpui_kit::test]
+fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    let tail = " FROM avia.bookings b JOIN avia.daily d";
+    app.type_sql(cx, &format!("SELECT am{tail}"));
+    app.update(cx, |window, cx| {
+        for _ in 0..tail.len() {
+            window.press("left", cx);
+        }
+    });
+    app.press(cx, "ctrl-space");
+    app.wait_for(cx, "sql-completion");
+    assert_eq!(items(&app, cx), ["amount"]);
+    // The columns of `daily` are not cached, and the connection is out of
+    // reach, so their read fails.
+    app.wait_until(cx, "the failed read", WAIT, |window, _| {
+        label(window, "sql-completion-footer").as_deref()
+            == Some("Could not load columns of avia.daily")
+    });
+    assert_eq!(
+        app.update(cx, |window, _| label(
+            window,
+            "sql-completion-footer-action"
+        )),
+        Some("Retry".into())
+    );
+}
