@@ -146,6 +146,22 @@ impl Setup {
         }
     }
 
+    /// Removes the downloads of earlier runs, like a Windows installer that
+    /// already ran. Returns the update that the last Restart to update did
+    /// not install, and keeps its installer log next to the download folder.
+    pub fn clean_downloads(&self) -> Option<FailedInstall> {
+        let failed = failed_install(&self.downloads, &self.current);
+        let kept_log = self.downloads.with_file_name(INSTALL_LOG);
+        // A log of an earlier failure is old news once Qrow starts without one.
+        let _ = std::fs::remove_file(&kept_log);
+        let failed = failed.map(|(version, log)| FailedInstall {
+            version,
+            log: std::fs::rename(&log, &kept_log).is_ok().then_some(kept_log),
+        });
+        let _ = std::fs::remove_dir_all(&self.downloads);
+        failed
+    }
+
     /// The web page of a release, for copies that the user updates by hand.
     pub fn release_page(&self, version: &Version) -> String {
         format!(
@@ -153,6 +169,51 @@ impl Setup {
             version.tag()
         )
     }
+}
+
+/// The name of the kept log of an installer that did not install, next to
+/// the download folder.
+pub const INSTALL_LOG: &str = "update-install.log";
+
+/// An update that Restart to update started but that did not install.
+#[derive(Debug, PartialEq)]
+pub struct FailedInstall {
+    pub version: Version,
+    /// The log of the installer, when it wrote one.
+    pub log: Option<PathBuf>,
+}
+
+/// A Windows installer in `downloads` that ran but did not install, and its
+/// log. Restart to update keeps the installer there for the run after Qrow
+/// quits, and the installer writes its log when it starts. A restart that
+/// the user cancels leaves no log. A successful run starts the new version,
+/// so a log next to the installer of another version means that the install
+/// failed. A switch of channel can install a lower version, so any other
+/// version counts.
+fn failed_install(downloads: &Path, current: &Version) -> Option<(Version, PathBuf)> {
+    std::fs::read_dir(downloads)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let installer = entry.path();
+            let version = installer_version(installer.file_name()?.to_str()?)?;
+            let log = installer_log(&installer);
+            (version != *current && log.is_file()).then_some((version, log))
+        })
+        .max_by(|left, right| left.0.cmp(&right.0))
+}
+
+/// The version in the name of a Windows installer, as
+/// [`Install::asset_name`] makes it.
+fn installer_version(name: &str) -> Option<Version> {
+    let name = name.strip_prefix("Qrow-")?.strip_suffix("-setup.exe")?;
+    let (version, _arch) = name.rsplit_once("-windows-")?;
+    Version::parse(version)
+}
+
+/// The log that the installer `setup` writes next to itself.
+fn installer_log(setup: &Path) -> PathBuf {
+    setup.with_extension("log")
 }
 
 /// A verified update asset in a temporary folder. Dropping it removes the file.
@@ -311,7 +372,7 @@ pub fn apply(download: &Download, install: &Install) -> Result<Finish> {
         Install::WindowsInstaller { folder } => {
             // The installer runs after Qrow quits, when the temporary download
             // is gone, so it moves next to that folder. The next launch
-            // removes it.
+            // removes it, or reports it when it did not install.
             let name = download
                 .path
                 .file_name()
@@ -324,7 +385,12 @@ pub fn apply(download: &Download, install: &Install) -> Result<Finish> {
                 .join(name);
             std::fs::copy(&download.path, &kept).context("Could not keep the installer")?;
             let all_users = !install::writable(folder);
-            Ok(Finish::Run(installer_command(&kept, folder, all_users)))
+            Ok(Finish::Run(installer_command(
+                &kept,
+                folder,
+                all_users,
+                &installer_log(&kept),
+            )))
         }
         Install::Managed(_) => bail!("Another program updates this copy of Qrow"),
         // Only some platforms install this kind of copy; elsewhere the
@@ -336,10 +402,15 @@ pub fn apply(download: &Download, install: &Install) -> Result<Finish> {
     }
 }
 
-/// The silent run of the Windows installer `setup` into `folder`.
-/// `/QROWRELAUNCH=1` makes it start Qrow when it is done. An install for all
-/// users asks Windows for administrator rights.
-pub fn installer_command(setup: &Path, folder: &Path, all_users: bool) -> std::process::Command {
+/// The silent run of the Windows installer `setup` into `folder`, with its
+/// log in `log`. `/QROWRELAUNCH=1` makes it start Qrow when it is done. An
+/// install for all users asks Windows for administrator rights.
+pub fn installer_command(
+    setup: &Path,
+    folder: &Path,
+    all_users: bool,
+    log: &Path,
+) -> std::process::Command {
     let mut command = std::process::Command::new(setup);
     command.args([
         "/VERYSILENT",
@@ -353,8 +424,26 @@ pub fn installer_command(setup: &Path, folder: &Path, all_users: bool) -> std::p
             "/CURRENTUSER"
         },
     ]);
-    command.arg(format!("/DIR={}", folder.display()));
+    command.arg(format!(
+        "/DIR={}",
+        without_verbatim_prefix(folder).display()
+    ));
+    command.arg(format!("/LOG={}", without_verbatim_prefix(log).display()));
     command
+}
+
+/// `path` without the Windows verbatim prefix that `canonicalize` adds, as
+/// in `\\?\C:\Qrow` or `\\?\UNC\server\share`. Inno Setup rejects a
+/// folder with `?` in its name, so the installer quits without installing.
+fn without_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}").into();
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.into(),
+        _ => path.into(),
+    }
 }
 
 fn block_on<T>(future: impl Future<Output = Result<T>>) -> Result<T> {
