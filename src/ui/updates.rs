@@ -580,7 +580,8 @@ impl Qrow {
             }),
             None => toast,
         };
-        window.push_notification(toast.id::<UpdateNotice>(), cx);
+        // An action keeps a toast open; this one hides like the others.
+        window.push_notification(toast.id::<UpdateNotice>().autohide(true), cx);
         cx.notify();
     }
 

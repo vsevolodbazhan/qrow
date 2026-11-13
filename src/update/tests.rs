@@ -426,7 +426,7 @@ fn the_next_launch_reports_an_installer_that_did_not_install() {
         std::fs::write(downloads.join(name), name).unwrap();
     }
     let kept_log = folder.path().join(INSTALL_LOG);
-    // The newest installer that is newer than the running version.
+    // The installer that ran: only it has a log.
     assert_eq!(
         setup.clean_downloads(),
         Some(FailedInstall {
@@ -462,7 +462,8 @@ fn an_installer_of_the_running_version_or_an_older_one_is_no_news() {
 }
 
 #[test]
-fn a_failed_install_without_a_log_is_still_reported() {
+fn a_cancelled_restart_is_no_news() {
+    // The user kept working: the installer never ran and wrote no log.
     let folder = tempfile::tempdir().unwrap();
     let setup = setup_in(folder.path());
     std::fs::create_dir_all(&setup.downloads).unwrap();
@@ -471,11 +472,29 @@ fn a_failed_install_without_a_log_is_still_reported() {
         "",
     )
     .unwrap();
+    assert_eq!(setup.clean_downloads(), None);
+    assert!(!setup.downloads.exists());
+}
+
+#[test]
+fn a_failed_switch_to_a_lower_stable_version_is_reported() {
+    // A switch from a nightly build to stable can install a stable release
+    // with the same core version, which sorts below the nightly build.
+    let folder = tempfile::tempdir().unwrap();
+    let mut setup = setup_in(folder.path());
+    setup.current = Version::parse("0.6.0-nightly.20261112.58").unwrap();
+    std::fs::create_dir_all(&setup.downloads).unwrap();
+    for name in [
+        "Qrow-0.6.0-windows-x86_64-setup.exe",
+        "Qrow-0.6.0-windows-x86_64-setup.log",
+    ] {
+        std::fs::write(setup.downloads.join(name), name).unwrap();
+    }
     assert_eq!(
         setup.clean_downloads(),
         Some(FailedInstall {
             version: Version::parse("0.6.0").unwrap(),
-            log: None,
+            log: Some(folder.path().join(INSTALL_LOG)),
         })
     );
 }

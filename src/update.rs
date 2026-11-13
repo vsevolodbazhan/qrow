@@ -183,10 +183,13 @@ pub struct FailedInstall {
     pub log: Option<PathBuf>,
 }
 
-/// The newest Windows installer in `downloads` that is newer than `current`,
-/// and the path of its log. Restart to update keeps the installer there for
-/// the run after Qrow quits. A successful run starts the new version, so an
-/// installer that is still newer than the running version did not install.
+/// A Windows installer in `downloads` that ran but did not install, and its
+/// log. Restart to update keeps the installer there for the run after Qrow
+/// quits, and the installer writes its log when it starts. A restart that
+/// the user cancels leaves no log. A successful run starts the new version,
+/// so a log next to the installer of another version means that the install
+/// failed. A switch of channel can install a lower version, so any other
+/// version counts.
 fn failed_install(downloads: &Path, current: &Version) -> Option<(Version, PathBuf)> {
     std::fs::read_dir(downloads)
         .ok()?
@@ -194,11 +197,10 @@ fn failed_install(downloads: &Path, current: &Version) -> Option<(Version, PathB
         .filter_map(|entry| {
             let installer = entry.path();
             let version = installer_version(installer.file_name()?.to_str()?)?;
-            Some((version, installer))
+            let log = installer_log(&installer);
+            (version != *current && log.is_file()).then_some((version, log))
         })
-        .filter(|(version, _)| version > current)
         .max_by(|left, right| left.0.cmp(&right.0))
-        .map(|(version, installer)| (version, installer_log(&installer)))
 }
 
 /// The version in the name of a Windows installer, as

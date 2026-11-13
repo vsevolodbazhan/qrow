@@ -219,6 +219,11 @@ fn the_next_launch_reports_an_update_that_did_not_install(cx: &mut TestAppContex
     assert!(!releases.downloads.exists());
     // The report does not wait for the first check.
     assert!(releases.requests().is_empty());
+    // The toast hides like the others, although it has an action.
+    hide_toasts(cx);
+    app.update(cx, |window, _| {
+        assert!(!present(window, &"update-install-failed".into()))
+    });
 }
 
 #[gpui_kit::test]
