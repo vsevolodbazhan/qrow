@@ -659,10 +659,49 @@ class ToolArchiveTests(unittest.TestCase):
 
 
 class BuildCacheTests(unittest.TestCase):
-    def environment(self, environ, version="sccache 0.19.0", path="/tools/sccache"):
+    def environment(self, environ, version="sccache 0.19.0", path="/tools/sccache", configured=False):
         with patch.object(runner, "find_executable", return_value=path), \
-                patch.object(runner, "_tool_version", return_value=version):
-            return runner.build_cache_environment(environ)
+                patch.object(runner, "_tool_version", return_value=version), \
+                patch.object(runner.contract, "cargo_config_paths", return_value={}):
+            if configured:
+                return runner.build_cache_environment(environ)
+            with patch.object(runner, "configured_wrapper", return_value="RUSTC_WRAPPER" in environ):
+                return runner.build_cache_environment(environ)
+
+    def test_a_wrapper_in_the_cargo_configuration_wins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.toml"
+            config.write_text('[build]\nrustc-wrapper = "/usr/bin/ccache"\n')
+            with patch.object(runner.contract, "cargo_config_paths", return_value={"cargo-home/config.toml": config}):
+                self.assertTrue(runner.configured_wrapper({}))
+            config.write_text('[build]\njobs = 2\n')
+            with patch.object(runner.contract, "cargo_config_paths", return_value={"cargo-home/config.toml": config}):
+                self.assertFalse(runner.configured_wrapper({}))
+        with patch.object(runner.contract, "cargo_config_paths", return_value={}):
+            self.assertTrue(runner.configured_wrapper({"CARGO_BUILD_RUSTC_WRAPPER": "ccache"}))
+        self.assertEqual(self.environment({"CARGO_BUILD_RUSTC_WRAPPER": "ccache"}, configured=True), {})
+
+    def test_a_newer_sccache_counts_as_installed(self):
+        with patch.object(runner, "find_executable", return_value="/tools/sccache"), \
+                patch.object(runner, "_tool_version", return_value="sccache 0.21.0"):
+            self.assertIsNone(runner.check_requirement("sccache", {}))
+        with patch.object(runner, "find_executable", return_value=None):
+            self.assertEqual(runner.check_requirement("sccache", {}), catalog.REQUIREMENTS["sccache"])
+
+    def test_only_started_processes_get_the_build_cache(self):
+        # Plans record the environment of qtest. The cache must not change it.
+        script = "import os; print(os.environ.get('RUSTC_WRAPPER'))"
+        environ = {key: value for key, value in os.environ.items()
+                   if key not in ("CI", "RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER")}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(runner, "usable_sccache", return_value="/tools/sccache"), \
+                patch.object(runner, "configured_wrapper", return_value=False), \
+                patch.dict(os.environ, environ, clear=True):
+            log = Path(directory) / "step.log"
+            self.assertEqual(runner.execute([sys.executable, "-c", script], dict(os.environ), 60, log,
+                                            runner.Output(quiet=True)), 0)
+            self.assertIn("/tools/sccache", log.read_text(encoding="utf-8"))
+            self.assertNotIn("RUSTC_WRAPPER", os.environ)
 
     def test_a_tool_outside_path_is_found_in_the_cargo_bin_directory(self):
         with tempfile.TemporaryDirectory() as directory:

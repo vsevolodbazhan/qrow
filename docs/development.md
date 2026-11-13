@@ -79,10 +79,11 @@ export RUSTC_WRAPPER=sccache
 export SCCACHE_CLIENT_SIDE=1
 ```
 
-sccache does not cache the `qrow` crate, procedural macros, build scripts,
-or links. Crates whose build inputs contain the worktree path, for example
-through `CARGO_MANIFEST_DIR` or `OUT_DIR`, can miss the cache in a different
-worktree. In one measurement, a new worktree got 78% cache hits, and the first
+sccache does not cache the crates that Cargo builds incrementally: the `qrow`
+crate and the crates in `vendor/`. It also does not cache procedural macros,
+build scripts, or links. In a different worktree, the crates that depend on
+these crates, or whose build inputs contain the worktree path, can miss the
+cache. In one measurement, a new worktree got 78% cache hits, and the first
 UI test build took 8.5 minutes instead of 11.5 minutes.
 
 Do not set one `CARGO_TARGET_DIR` for many worktrees. Cargo compares file
