@@ -29,10 +29,10 @@ elif [ ! -d "$QROW_E2E_BUNDLE" ]; then
         sh scripts/package/macos.sh
     QROW_DIST_DIR="$QROW_E2E_ARTIFACTS/package" uv run --locked python scripts/core/size.py
 fi
-test -f "$QROW_E2E_BUNDLE/Contents/Info.plist" && test -x "$QROW_E2E_BUNDLE/Contents/MacOS/qrow" || {
+if [ ! -f "$QROW_E2E_BUNDLE/Contents/Info.plist" ] || [ ! -x "$QROW_E2E_BUNDLE/Contents/MacOS/qrow" ]; then
     echo "Invalid renderer test application bundle." >&2
     exit 1
-}
+fi
 if [ "${1:-}" = --prepare ]; then exit 0; fi
 qrow_renderer="${QROW_E2E_RENDERER:-software}"
 case "$qrow_renderer" in
