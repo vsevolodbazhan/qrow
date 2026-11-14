@@ -588,7 +588,7 @@ fn suggestions_show_the_start_of_dbt_descriptions(cx: &mut TestAppContext) {
                     window.press("left", cx);
                 }
             });
-            app.press(cx, "ctrl-space");
+            app.press(cx, "tab");
             app.wait_until(cx, expected, TIMEOUT, |window, _| {
                 label(window, "sql-completion-details")
                     .is_some_and(|text| text.starts_with(expected))

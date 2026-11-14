@@ -290,10 +290,7 @@ type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 
 Press **Tab** after a name, a dot, or `FROM` and a space to show the
 schemas, tables, views, and columns that can go at the cursor. In other
-places, and when no name fits, **Tab** indents. You can also press **⌃Space**
-anywhere in a statement. On Linux and Windows, press **Ctrl+Space**. On
-macOS, **⌃Space** also selects the previous input source when you have more
-than one input source. Then **⌃Space** does not reach Qrow; use **Tab**.
+places, and when no name fits, **Tab** indents.
 
 The list uses the [metadata copy](connections.md#browse-schemas) of the
 connection. It does not run SQL while you type. The list shows:
@@ -325,14 +322,15 @@ characters. The box also shows a name or a type that the list cuts or hides.
 
 When the list needs data that the copy does not have, Qrow reads it, like a
 **Refresh** of that table or schema in the tree. This read can open a
-session. If the read fails, the list shows the error. Press **⌃Space**, or
-**Tab** when the list has no names, or select **Retry** to read again. A connection without a metadata copy shows
-**No cached tables** and **Refresh**.
+session. If the read fails, the list shows the error. Press **Tab** when the
+list has no names, or select **Retry**, to read again. For a connection that
+Qrow never read, the list shows **No cached tables**. Press **Tab** or select
+**Refresh** to read it.
 
 When the metadata of a schema in the list is older than the
 [Refresh Period](connections.md#refresh-metadata-automatically) of the
-connection, the list shows `schema is stale` below the names. Press
-**⌃Space** or select **Refresh** to read the schema again.
+connection, the list shows `schema is stale` below the names. Select
+**Refresh** to read the schema again.
 
 Limitations:
 

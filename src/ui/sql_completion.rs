@@ -1,11 +1,10 @@
-//! The autocomplete popup of the SQL editor. Tab after a name, or ⌃Space,
-//! opens it with the schemas, tables, views, and columns that fit the
+//! The autocomplete popup of the SQL editor. Tab after a name opens it with the schemas, tables, views, and columns that fit the
 //! cursor, from the cached metadata of the tab's connection. [`crate::completion`] finds the
 //! suggestions; this module owns the popup, its keys, and the reads that it
 //! asks the catalog worker for.
 
+use super::Qrow;
 use super::dbt::{DbtLookup, summary};
-use super::{Qrow, ShowCompletions};
 use crate::catalog::Scope;
 use crate::completion::{self, Completion, Item, ItemKind, Need, Request};
 use gpui_kit::assets::IconName;
@@ -114,13 +113,8 @@ struct Layout {
 }
 
 impl Qrow {
-    /// ⌃Space: opens the popup, or runs its Refresh or Retry when it is open.
-    pub(super) fn show_completions(
-        &mut self,
-        _: &ShowCompletions,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Refresh or Retry of the open popup, or the popup when it is closed.
+    fn refresh_completion(&mut self, cx: &mut Context<Self>) {
         let tab = self.tabs[self.active].saved.id;
         if let Some(popup) = self.completion.as_ref().filter(|popup| popup.tab == tab) {
             let profile = popup.profile;
@@ -408,7 +402,7 @@ impl Qrow {
             if !popup.completion.items.is_empty() {
                 self.accept_selected(window, cx);
             } else if !self.completion_retry_scopes(popup).is_empty() {
-                self.show_completions(&ShowCompletions, window, cx);
+                self.refresh_completion(cx);
                 cx.stop_propagation();
             }
             return;
@@ -438,10 +432,12 @@ impl Qrow {
         }
         self.update_completion(Trigger::Open, cx);
         // Tab opens only a list with names, or with a read for them,
-        // including the first load of the cache.
+        // including the first load of the cache and the Refresh of a
+        // connection that Qrow never read.
         let useful = self.active_completion().is_some_and(|popup| {
             !popup.completion.items.is_empty()
                 || !popup.loaded
+                || !popup.read
                 || (popup.read && !popup.completion.missing.is_empty())
         });
         if useful {
@@ -774,8 +770,8 @@ impl Qrow {
                             .small()
                             .icon(IconName::RefreshCw)
                             .label(label)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_completions(&ShowCompletions, window, cx);
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_completion(cx);
                             })),
                     ),
                 )
@@ -954,8 +950,8 @@ impl Qrow {
                             .xsmall()
                             .label(label)
                             .tooltip(tooltip)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_completions(&ShowCompletions, window, cx);
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_completion(cx);
                             })),
                     )
                 })

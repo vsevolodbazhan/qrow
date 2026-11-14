@@ -1152,7 +1152,6 @@ impl Qrow {
             .on_action(cx.listener(Self::run))
             .on_action(cx.listener(Self::format_sql))
             .on_action(cx.listener(Self::toggle_comment))
-            .on_action(cx.listener(Self::show_completions))
             .on_action(
                 cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
             )

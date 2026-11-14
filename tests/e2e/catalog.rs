@@ -999,13 +999,13 @@ fn autocomplete_reads_the_metadata_on_request_and_inserts_quoted_names(cx: &mut 
 
     // The connection has no metadata copy yet, so the list offers Refresh.
     app.type_sql(cx, &format!("SELECT * FROM {schema}.se"));
-    app.press(cx, "ctrl-space");
+    app.press(cx, "tab");
     app.wait_until(cx, "the empty state", QUERY_TIMEOUT, |window, _| {
         crate::support::label(window, "sql-completion-notice").as_deref()
             == Some("No cached tables")
     });
-    // The shortcut runs Refresh, and the list then shows the view.
-    app.press(cx, "ctrl-space");
+    // Tab runs Refresh, and the list then shows the view.
+    app.press(cx, "tab");
     app.wait_until(cx, "the view", QUERY_TIMEOUT, |window, _| {
         labelled(window, "select")
             .is_some_and(|row| format!("{:?}", row.path().last()).contains("sql-completion-item-"))
@@ -1020,7 +1020,7 @@ fn autocomplete_reads_the_metadata_on_request_and_inserts_quoted_names(cx: &mut 
 
     // An alias gives the columns of its table.
     app.type_sql(cx, &format!("SELECT * FROM {schema}.bookings b WHERE b.ga"));
-    app.press(cx, "ctrl-space");
+    app.press(cx, "tab");
     app.wait_until(cx, "the column", QUERY_TIMEOUT, |window, _| {
         labelled(window, "gate").is_some()
     });

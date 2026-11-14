@@ -101,10 +101,10 @@ fn fresh() -> Option<u64> {
     Some(qrow::catalog::now())
 }
 
-/// Types `sql` in the editor and presses ⌃Space.
+/// Types `sql` in the editor and presses Tab.
 fn complete(app: &TestApp, cx: &mut TestAppContext, sql: &str) {
     app.type_sql(cx, sql);
-    app.press(cx, "ctrl-space");
+    app.press(cx, "tab");
     app.wait_for(cx, "sql-completion");
 }
 
@@ -139,7 +139,7 @@ fn items(app: &TestApp, cx: &mut TestAppContext) -> Vec<String> {
 }
 
 #[gpui_kit::test]
-fn ctrl_space_suggests_tables_and_enter_inserts_the_selected_one(cx: &mut TestAppContext) {
+fn tab_after_a_dot_suggests_tables_and_enter_inserts_the_selected_one(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, fresh(), &[]);
     complete(&app, cx, "SELECT * FROM avia.");
     assert_eq!(items(&app, cx), ["bookings", "daily"]);
@@ -192,9 +192,6 @@ fn after_from_the_popup_lists_schemas_then_tables_of_the_default_schema(cx: &mut
 #[gpui_kit::test]
 fn an_alias_lists_the_columns_with_details_of_the_selected_one(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, fresh(), &[]);
-    complete(&app, cx, "SELECT b.");
-    app.press(cx, "escape");
-    app.wait_gone(cx, "sql-completion");
     // The statement names the table after the cursor.
     app.type_sql(cx, "SELECT b.am FROM avia.bookings b");
     app.update(cx, |window, cx| {
@@ -202,7 +199,7 @@ fn an_alias_lists_the_columns_with_details_of_the_selected_one(cx: &mut TestAppC
             window.press("left", cx);
         }
     });
-    app.press(cx, "ctrl-space");
+    app.press(cx, "tab");
     app.wait_for(cx, "sql-completion");
     assert_eq!(items(&app, cx), ["amount"]);
     app.wait_for(cx, "sql-completion-details");
@@ -225,7 +222,7 @@ fn the_details_box_shows_the_start_of_a_long_description_as_markdown(cx: &mut Te
             window.press("left", cx);
         }
     });
-    app.press(cx, "ctrl-space");
+    app.press(cx, "tab");
     app.wait_for(cx, "sql-completion-description");
     assert_eq!(items(&app, cx), ["route"]);
     let text = app
@@ -265,8 +262,7 @@ fn typing_past_the_name_or_leaving_the_editor_closes_the_popup(cx: &mut TestAppC
     app.update(cx, |window, cx| window.input(" ", cx));
     app.wait_gone(cx, "sql-completion");
 
-    app.press(cx, "ctrl-space");
-    app.wait_for(cx, "sql-completion");
+    complete(&app, cx, "SELECT * FROM avia.b");
     app.click_labelled(cx, "Search connections and relations");
     app.wait_gone(cx, "sql-completion");
 }
@@ -280,8 +276,8 @@ fn stale_metadata_shows_a_footer_whose_refresh_reads_the_schema(cx: &mut TestApp
         app.update(cx, |window, _| label(window, "sql-completion-footer")),
         Some("avia is stale".into())
     );
-    // The shortcut runs Refresh while the popup is open.
-    app.press(cx, "ctrl-space");
+    // Tab inserts a name; Refresh reads the schema again.
+    app.click(cx, "sql-completion-footer-action");
     app.wait_until(cx, "the refresh of avia", WAIT, |_, _| true);
     let activity = app.activity(cx, profile.id);
     assert!(
@@ -340,7 +336,7 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
             window.press("left", cx);
         }
     });
-    app.press(cx, "ctrl-space");
+    app.press(cx, "tab");
     app.wait_for(cx, "sql-completion");
     assert_eq!(items(&app, cx), ["amount"]);
     // The columns of `daily` are not cached, and the connection is out of
@@ -362,6 +358,10 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
 fn tab_after_a_name_opens_the_list_and_tab_inserts(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, fresh(), &[]);
     app.type_sql(cx, "SELECT * FROM avia.bo");
+    // ⌃Space is not a shortcut of the list.
+    app.press(cx, "ctrl-space");
+    app.settle(cx);
+    assert!(app.update(cx, |window, _| window.try_find("sql-completion").is_none()));
     app.press(cx, "tab");
     app.wait_for(cx, "sql-completion");
     assert_eq!(items(&app, cx), ["bookings"]);

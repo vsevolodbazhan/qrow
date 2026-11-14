@@ -110,7 +110,6 @@ actions!(
         SubmitRename,
         CopyCatalogName,
         InsertCatalogName,
-        ShowCompletions,
         MoveConnectionUp,
         MoveConnectionDown,
         Quit
@@ -149,7 +148,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-enter", RunQuery, None),
         KeyBinding::new("alt-secondary-l", FormatSql, None),
         KeyBinding::new("secondary-/", ToggleComment, Some("SqlEditor")),
-        KeyBinding::new("ctrl-space", ShowCompletions, Some("SqlEditor")),
         KeyBinding::new(
             "secondary-enter",
             SendAssistantMessage,
