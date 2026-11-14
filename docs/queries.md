@@ -290,7 +290,9 @@ type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 
 Press **Tab** after a name, a dot, or `FROM` and a space to show the
 schemas, tables, views, and columns that can go at the cursor. In other
-places, and when no name fits, **Tab** indents.
+places, and when no name fits, **Tab** indents. To stop suggestions, turn
+off **Autocomplete** in the Editor section of
+[Settings](workspace.md#appearance-and-layout).
 
 The list uses the [metadata copy](connections.md#browse-schemas) of the
 connection. It does not run SQL while you type. The list shows:

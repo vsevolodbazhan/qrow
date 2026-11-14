@@ -2976,6 +2976,7 @@ impl Qrow {
         self.settings.editor_line_height = settings.editor_line_height;
         self.settings.editor_smooth_caret = settings.editor_smooth_caret;
         self.settings.editor_smooth_scrolling = settings.editor_smooth_scrolling;
+        self.settings.editor_autocomplete = settings.editor_autocomplete;
         self.settings.smooth_transitions = settings.smooth_transitions;
         self.set_editor_tab_size(settings.editor_tab_size, cx);
         self.settings.assistant.sql_keyword_case = settings.assistant.sql_keyword_case;

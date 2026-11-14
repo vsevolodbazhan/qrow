@@ -175,6 +175,9 @@ pub struct Settings {
     pub editor_smooth_caret: bool,
     /// Ease discrete mouse-wheel steps in the SQL editor.
     pub editor_smooth_scrolling: bool,
+    /// Suggest names from the cached metadata when Tab follows a name in
+    /// the SQL editor.
+    pub editor_autocomplete: bool,
     /// Fade content when switching tabs and panels.
     pub smooth_transitions: bool,
     pub logs_font_family: String,
@@ -216,6 +219,7 @@ impl Default for Settings {
             editor_tab_size: 2,
             editor_smooth_caret: false,
             editor_smooth_scrolling: false,
+            editor_autocomplete: true,
             smooth_transitions: false,
             logs_font_family: MONOSPACE_FONT_FAMILY.into(),
             logs_font_size: 13.,

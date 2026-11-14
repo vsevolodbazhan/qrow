@@ -7,6 +7,7 @@ use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
     model::{CatalogSettings, Profile, SavedTab, Workspace},
     storage::{self, Credentials as _},
+    ui::OpenSettings,
 };
 use std::{collections::BTreeMap, net::TcpListener, time::Duration};
 use tempfile::TempDir;
@@ -472,6 +473,41 @@ fn tab_after_a_name_opens_the_list_and_tab_inserts(cx: &mut TestAppContext) {
     app.wait_for(cx, "sql-completion");
     app.press(cx, "escape");
     app.wait_gone(cx, "sql-completion");
+}
+
+#[gpui_kit::test]
+fn autocomplete_turned_off_closes_the_list_and_tab_indents(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    assert!(app.saved().settings.editor_autocomplete);
+    complete(&app, cx, "SELECT * FROM avia.bo");
+    app.wait_for(cx, "sql-completion");
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "autocomplete");
+    app.wait_for(cx, "editor-autocomplete");
+    app.click(cx, "editor-autocomplete");
+    app.wait_saved(cx, "autocomplete off", |workspace| {
+        !workspace.settings.editor_autocomplete
+    });
+    app.wait_gone(cx, "sql-completion");
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+
+    let sql = "SELECT * FROM avia.bo";
+    app.type_sql(cx, sql);
+    app.press(cx, "tab");
+    app.wait_until(cx, "the indent", WAIT, |_, _| {
+        let saved = app.saved().tabs[0].sql.clone();
+        saved.len() > sql.len() && saved.contains(sql)
+    });
+    assert!(app.update(cx, |window, _| window.try_find("sql-completion").is_none()));
+
+    // Reset turns it on again.
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "reset-settings");
+    app.click(cx, "reset-settings");
+    app.wait_saved(cx, "autocomplete on", |workspace| {
+        workspace.settings.editor_autocomplete
+    });
 }
 
 #[gpui_kit::test]

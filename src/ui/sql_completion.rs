@@ -407,6 +407,9 @@ impl Qrow {
     /// list without names, or opens the list after a name. Elsewhere, and
     /// when no name fits, Tab indents as before.
     fn tab_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.settings.editor_autocomplete {
+            return;
+        }
         if let Some(popup) = self.active_completion() {
             if !popup.completion.items.is_empty() {
                 self.accept_selected(window, cx);
