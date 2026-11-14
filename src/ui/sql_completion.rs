@@ -82,6 +82,15 @@ impl CompletionPopup {
     }
 }
 
+/// A state of the popup without a list.
+struct Notice {
+    title: &'static str,
+    message: Vec<Text>,
+    action: Option<(&'static str, &'static str)>,
+    /// Whether the title has the warning icon.
+    warning: bool,
+}
+
 /// What the popup shows when it has no suggestions.
 enum Body {
     Items,
@@ -662,7 +671,7 @@ impl Qrow {
         let shell = match body {
             Body::Items => shell
                 .child(self.completion_rows(popup, layout, window, cx))
-                .children(self.completion_footer(popup, cx)),
+                .children(self.completion_footer(popup, layout, window, cx)),
             Body::Loading(message) => shell.child(
                 h_flex()
                     .id("sql-completion-loading")
@@ -679,31 +688,48 @@ impl Qrow {
                             .flex_none()
                             .child(Spinner::new().xsmall().color(theme.muted_foreground)),
                     )
-                    .child(self.texts(message, cx)),
+                    .child({
+                        // The border and the padding of the popup and of
+                        // the row, the spinner, and its gap.
+                        let room = layout.width - px(2.) - self.ui_px(8. + 16. + 14. + GAP);
+                        self.text_line("sql-completion-loading-text", message, room, window, cx)
+                    }),
             ),
             Body::Failed { title, message } => shell.child(self.completion_notice(
-                title,
-                Some(message),
-                Some(("sql-completion-retry", "Retry")),
-                true,
+                Notice {
+                    title,
+                    message,
+                    action: Some(("sql-completion-retry", "Retry")),
+                    warning: true,
+                },
+                layout,
+                window,
                 cx,
             )),
             Body::NotRead => shell.child(self.completion_notice(
-                "No cached tables",
-                Some(vec![Text::Plain(
-                    "Refresh the schemas of this connection to get suggestions.".into(),
-                )]),
-                Some(("sql-completion-refresh", "Refresh")),
-                false,
+                Notice {
+                    title: "No cached tables",
+                    message: vec![Text::Plain(
+                        "Refresh the schemas of this connection to get suggestions.".into(),
+                    )],
+                    action: Some(("sql-completion-refresh", "Refresh")),
+                    warning: false,
+                },
+                layout,
+                window,
                 cx,
             )),
             Body::Off => shell.child(self.completion_notice(
-                "No cached tables",
-                Some(vec![Text::Plain(
-                    "Turn on metadata refresh in the connection settings.".into(),
-                )]),
-                None,
-                false,
+                Notice {
+                    title: "No cached tables",
+                    message: vec![Text::Plain(
+                        "Turn on metadata refresh in the connection settings.".into(),
+                    )],
+                    action: None,
+                    warning: false,
+                },
+                layout,
+                window,
                 cx,
             )),
             Body::NoSuggestions => shell.child(
@@ -723,15 +749,24 @@ impl Qrow {
         shell.into_any_element()
     }
 
-    /// A title, one line, and an optional button: the states without a list.
+    /// A title, a message, and an optional button: the states without a
+    /// list.
     fn completion_notice(
         &self,
-        title: &'static str,
-        message: Option<Vec<Text>>,
-        action: Option<(&'static str, &'static str)>,
-        warning: bool,
+        notice: Notice,
+        layout: &Layout,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let Notice {
+            title,
+            message,
+            action,
+            warning,
+        } = notice;
+        // The border and the padding of the popup and of the notice.
+        let room = layout.width - px(2.) - self.ui_px(8. + 16.);
+        let message = self.texts(message, room, window, cx);
         let theme = cx.theme();
         let profile = self.active_completion().map(|popup| popup.profile);
         v_flex()
@@ -754,16 +789,14 @@ impl Qrow {
                     })
                     .child(title),
             )
-            .when_some(message, |notice, message| {
-                notice.child(
-                    div()
-                        .id("sql-completion-message")
-                        .test_support()
-                        .text_size(self.ui_px(12.))
-                        .text_color(theme.muted_foreground)
-                        .child(self.texts(message, cx)),
-                )
-            })
+            .child(
+                div()
+                    .id("sql-completion-message")
+                    .test_support()
+                    .text_size(self.ui_px(12.))
+                    .text_color(theme.muted_foreground)
+                    .child(message),
+            )
             .when_some(action.zip(profile), |notice, ((id, label), _)| {
                 notice.child(
                     h_flex().child(
@@ -780,37 +813,105 @@ impl Qrow {
             })
     }
 
-    /// Text with names in the code font. Plain text wraps between its
-    /// words; a name wider than the popup is cut at the end.
-    fn texts(&self, parts: Vec<Text>, cx: &App) -> Div {
-        let theme = cx.theme();
-        let code_font = self.settings.editor_font_family.clone();
+    /// Text with names in the code font, at 12 px, in lines of `room`.
+    /// Plain text wraps between its words. A name wider than `room` is cut
+    /// at the end and shows its full text in a tooltip.
+    fn texts(&self, parts: Vec<Text>, room: Pixels, window: &mut Window, cx: &App) -> Div {
+        let code_font = font(self.settings.editor_font_family.clone());
+        let mut items: Vec<AnyElement> = Vec::new();
+        for (index, part) in parts.into_iter().enumerate() {
+            match part {
+                // Each word with its space is an item of the row, so the
+                // row wraps between words.
+                Text::Plain(text) => items.extend(text.split_inclusive(' ').map(|word| {
+                    div()
+                        .whitespace_nowrap()
+                        .child(word.to_owned())
+                        .into_any_element()
+                })),
+                Text::Code(text) => {
+                    let cut = self.code_width(window, &text, &code_font) > room + px(0.5);
+                    items.push(
+                        self.code_chip(text.clone(), cx)
+                            .id(("sql-completion-name", index))
+                            .max_w_full()
+                            .truncate()
+                            .when(cut, |chip| {
+                                chip.tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(text.clone())
+                                        .build(window, cx)
+                                })
+                            })
+                            .into_any_element(),
+                    );
+                }
+            }
+        }
         div()
             .w_full()
             .flex()
             .flex_wrap()
             .items_center()
-            .children(parts.into_iter().flat_map(|part| -> Vec<Div> {
-                match part {
-                    // Each word with its space is an item of the row, so
-                    // the row wraps between words.
-                    Text::Plain(text) => text
-                        .split_inclusive(' ')
-                        .map(|word| div().whitespace_nowrap().child(word.to_owned()))
-                        .collect(),
-                    Text::Code(text) => vec![
-                        div()
-                            .max_w_full()
-                            .truncate()
-                            .font_family(code_font.clone())
-                            .px(self.ui_px(4.))
-                            .rounded(self.ui_px(4.))
-                            .bg(theme.muted)
-                            .text_color(theme.foreground)
-                            .child(text),
-                    ],
+            .children(items)
+    }
+
+    /// Text with names in the code font, at 12 px, on one line of `room`.
+    /// Text wider than `room` is cut and shows its full text in a tooltip.
+    fn text_line(
+        &self,
+        id: &'static str,
+        parts: Vec<Text>,
+        room: Pixels,
+        window: &mut Window,
+        cx: &App,
+    ) -> AnyElement {
+        let ui_font = font(cx.theme().font_family.clone());
+        let code_font = font(self.settings.editor_font_family.clone());
+        let width = parts.iter().fold(px(0.), |width, part| {
+            width
+                + match part {
+                    Text::Plain(text) => text_width(window, text, &ui_font, self.ui_px(12.)),
+                    Text::Code(text) => self.code_width(window, text, &code_font),
                 }
+        });
+        let full = plain(&parts);
+        let cut = width > room + px(0.5);
+        div()
+            .id(id)
+            .test_support()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .flex()
+            .items_center()
+            .children(parts.into_iter().map(|part| match part {
+                Text::Plain(text) => div().flex_none().child(text),
+                Text::Code(text) => self.code_chip(text, cx).min_w_0().truncate(),
             }))
+            .when(cut, |line| {
+                line.tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+                })
+            })
+            .into_any_element()
+    }
+
+    /// A name in the code font, on a muted background.
+    fn code_chip(&self, text: String, cx: &App) -> Div {
+        let theme = cx.theme();
+        div()
+            .font_family(self.settings.editor_font_family.clone())
+            .px(self.ui_px(4.))
+            .rounded(self.ui_px(4.))
+            .bg(theme.muted)
+            .text_color(theme.foreground)
+            .child(text)
+    }
+
+    /// The width of a name chip: the name and its padding.
+    fn code_width(&self, window: &mut Window, text: &str, code_font: &Font) -> Pixels {
+        text_width(window, text, code_font, self.ui_px(12.)) + self.ui_px(8.)
     }
 
     fn completion_rows(
@@ -856,9 +957,10 @@ impl Qrow {
     fn completion_footer(
         &self,
         popup: &CompletionPopup,
+        layout: &Layout,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let theme = cx.theme();
         let completion = &popup.completion;
         let reads = |need: &Need| self.catalog.reads(popup.profile, &need_scope(need));
         // A read that failed comes first, then a read in progress, then
@@ -912,6 +1014,16 @@ impl Qrow {
                 return None;
             };
         let label = plain(&message);
+        // The footer spans the popup inside its border. Its padding, the
+        // slot and its gap, and the action with its gap leave the room of
+        // the message.
+        let action_width = action.as_ref().map_or(px(0.), |(label, _)| {
+            let ui_font = font(cx.theme().font_family.clone());
+            text_width(window, label, &ui_font, window.rem_size() * 0.75) + self.ui_px(GAP)
+        });
+        let room = layout.width - px(2.) - self.ui_px(24. + 14. + GAP) - action_width;
+        let line = self.text_line("sql-completion-footer-text", message, room, window, cx);
+        let theme = cx.theme();
         Some(
             h_flex()
                 .id("sql-completion-footer")
@@ -948,14 +1060,7 @@ impl Qrow {
                             ),
                         }),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(self.texts(message, cx).flex_nowrap()),
-                )
+                .child(line)
                 .when_some(action, |footer, (label, tooltip)| {
                     footer.child(
                         Button::new("sql-completion-footer-action")

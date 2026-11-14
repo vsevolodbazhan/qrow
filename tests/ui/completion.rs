@@ -360,6 +360,46 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
     );
 }
 
+/// Hovers `id` until GPUI opens its tooltip, and returns whether it did.
+fn hover_shows_tooltip(app: &TestApp, cx: &mut TestAppContext, id: &'static str) -> bool {
+    app.hover(cx, id);
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| window.try_find("tooltip").is_some())
+}
+
+#[gpui_kit::test]
+fn a_cut_table_name_in_the_footer_shows_in_full_on_hover(cx: &mut TestAppContext) {
+    let long = "customer_lifetime_value_by_acquisition_channel_and_region_v2";
+    let (app, _) = launch(cx, fresh(), &[long]);
+    let tail = format!(" FROM avia.bookings b JOIN avia.{long} d");
+    app.type_sql(cx, &format!("SELECT am{tail}"));
+    app.update(cx, |window, cx| {
+        for _ in 0..tail.len() {
+            window.press("left", cx);
+        }
+    });
+    app.press(cx, "tab");
+    let message = format!("Could not load columns of {long}");
+    app.wait_until(cx, "the failed read", WAIT, |window, _| {
+        label(window, "sql-completion-footer").as_deref() == Some(message.as_str())
+    });
+    app.update(cx, |window, _| {
+        let footer = bounds_of(window, "sql-completion-footer");
+        let text = bounds_of(window, "sql-completion-footer-text");
+        assert!(text.right() <= footer.right(), "{footer:?} {text:?}");
+    });
+    assert!(hover_shows_tooltip(&app, cx, "sql-completion-footer-text"));
+}
+
+#[gpui_kit::test]
+fn a_footer_that_fits_has_no_tooltip(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, Some(1), &[]);
+    complete(&app, cx, "SELECT * FROM avia.");
+    app.wait_for(cx, "sql-completion-footer");
+    assert!(!hover_shows_tooltip(&app, cx, "sql-completion-footer-text"));
+}
+
 #[gpui_kit::test]
 fn tab_after_a_name_opens_the_list_and_tab_inserts(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, fresh(), &[]);
