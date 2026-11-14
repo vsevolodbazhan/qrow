@@ -550,6 +550,88 @@ fn column_tooltips_show_dbt_descriptions_and_database_comments(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+fn suggestions_show_the_start_of_dbt_descriptions(cx: &mut TestAppContext) {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&dbt_manifest::generate(&shape())).unwrap();
+    value["nodes"][dbt_manifest::model_id(1)]["columns"]["id"]["description"] =
+        "A **booking** identifier. ".repeat(20).into();
+    value["nodes"][dbt_manifest::model_id(1)]["columns"]["col_001"]["description"] =
+        "The `cost` of a booking.".into();
+    value["nodes"][dbt_manifest::model_id(1)]["description"] = format!(
+        "One row for each booking, in its last state. {}\n\n## Filter\n\nFilter on `pdate`.",
+        "The partner sends the booking, and the clicks add the search. ".repeat(4)
+    )
+    .into();
+    let columns = [("ID", None), ("col_001", Some("Database comment"))]
+        .into_iter()
+        .map(|(name, comment)| qrow::catalog::CatalogColumn {
+            name: name.into(),
+            data_type: "BIGINT".into(),
+            comment: comment.map(str::to_owned),
+        })
+        .collect();
+    let (app, _, _) = launch_project_with_columns(
+        cx,
+        &serde_json::to_vec(&value).unwrap(),
+        DbtRefresh::Manual,
+        columns,
+    );
+    let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
+    let alias = dbt_manifest::model_alias(1);
+    // Types `sql` and then `tail` after the cursor, and returns the text of
+    // the details box once it starts with `expected`.
+    let details =
+        |app: &TestApp, cx: &mut TestAppContext, sql: &str, tail: &str, expected: &str| {
+            app.type_sql(cx, &format!("{sql}{tail}"));
+            app.update(cx, |window, cx| {
+                for _ in 0..tail.len() {
+                    window.press("left", cx);
+                }
+            });
+            app.press(cx, "tab");
+            app.wait_until(cx, expected, TIMEOUT, |window, _| {
+                label(window, "sql-completion-details")
+                    .is_some_and(|text| text.starts_with(expected))
+            });
+            let text = app
+                .update(cx, |window, _| label(window, "sql-completion-details"))
+                .unwrap();
+            app.press(cx, "escape");
+            app.wait_gone(cx, "sql-completion");
+            text
+        };
+    // A column without a database comment shows the start of its dbt
+    // description, as Markdown.
+    let text = details(
+        &app,
+        cx,
+        "SELECT m.ID",
+        &format!(" FROM {schema}.{alias} m"),
+        "A **booking** identifier. A **booking**",
+    );
+    assert!(text.ends_with('…') && text.chars().count() <= 141, "{text}");
+    // The dbt description comes before the database comment.
+    let text = details(
+        &app,
+        cx,
+        "SELECT m.col_0",
+        &format!(" FROM {schema}.{alias} m"),
+        "The `cost` of a booking.",
+    );
+    assert_eq!(text, "The `cost` of a booking.");
+    // A table shows the start of the description of its model.
+    let text = details(
+        &app,
+        cx,
+        &format!("SELECT * FROM {schema}.{alias}"),
+        "",
+        "One row for each booking, in its last state. The partner",
+    );
+    assert!(text.ends_with('…') && text.chars().count() <= 141, "{text}");
+    assert!(!text.contains("Filter"), "{text}");
+}
+
+#[gpui_kit::test]
 fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     let bytes = dbt_manifest::generate(&shape());
     let index = qrow::dbt::parse(&bytes).unwrap();

@@ -976,3 +976,58 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
         labelled(window, "cached_id bigint").is_some()
     });
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn autocomplete_reads_the_metadata_on_request_and_inserts_quoted_names(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let schema = format!("qrow_complete_{}", uuid::Uuid::new_v4().simple());
+    let (mut workspace, credentials) =
+        kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    workspace.profiles[0].catalog.include = vec![schema.clone()];
+    workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
+    app.run_complete(
+        cx,
+        &format!("CREATE TABLE {schema}.bookings (id INT, gate STRING) USING parquet"),
+    );
+    app.run_complete(
+        cx,
+        &format!("CREATE VIEW {schema}.`select` AS SELECT 42 AS id"),
+    );
+
+    // The connection has no metadata copy yet, so the list offers Refresh.
+    app.type_sql(cx, &format!("SELECT * FROM {schema}.se"));
+    app.press(cx, "tab");
+    app.wait_until(cx, "the empty state", QUERY_TIMEOUT, |window, _| {
+        crate::support::label(window, "sql-completion-notice").as_deref()
+            == Some("No cached metadata")
+    });
+    // Tab runs Refresh, and the list then shows the view.
+    app.press(cx, "tab");
+    app.wait_until(cx, "the view", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "select")
+            .is_some_and(|row| format!("{:?}", row.path().last()).contains("sql-completion-item-"))
+    });
+    app.press(cx, "enter");
+    let sql = format!("SELECT * FROM {schema}.`select`");
+    app.wait_until(cx, "the quoted view name", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.run_complete(cx, &sql);
+    app.wait_cell(cx, 0, 1, "42");
+
+    // An alias gives the columns of its table.
+    app.type_sql(cx, &format!("SELECT * FROM {schema}.bookings b WHERE b.ga"));
+    app.press(cx, "tab");
+    app.wait_until(cx, "the column", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "gate").is_some()
+    });
+    app.press(cx, "enter");
+    let sql = format!("SELECT * FROM {schema}.bookings b WHERE b.gate");
+    app.wait_until(cx, "the column name", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}

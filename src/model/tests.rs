@@ -822,6 +822,7 @@ fn settings_restore_defaults_and_stay_within_supported_bounds() {
         editor_tab_size: 0,
         editor_smooth_caret: false,
         editor_smooth_scrolling: false,
+        editor_autocomplete: true,
         smooth_transitions: false,
         logs_font_family: "   ".into(),
         logs_font_size: f32::NAN,

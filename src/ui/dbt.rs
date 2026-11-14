@@ -680,6 +680,37 @@ impl DbtLookup {
         Some(self.index.entry(*self.relations.get(&key)?))
     }
 
+    /// The dbt description of the table `relation` in `schema`, or of its
+    /// column `column`, with the same letter case rules as relations. A
+    /// column name that the resource has twice has no description.
+    pub(super) fn description(
+        &self,
+        schema: &str,
+        relation: &str,
+        column: Option<&str>,
+    ) -> Option<&str> {
+        let entry = self.relation(schema, relation)?;
+        let description = match column {
+            None => entry.description.as_ref(),
+            Some(column) => {
+                let same = |name: &str| {
+                    if self.exact {
+                        name == column
+                    } else {
+                        name.to_lowercase() == column.to_lowercase()
+                    }
+                };
+                let mut matches = entry.columns.iter().filter(|c| same(&c.name));
+                let found = matches.next()?;
+                if matches.next().is_some() {
+                    return None;
+                }
+                found.description.as_ref()
+            }
+        };
+        Some(description.trim()).filter(|text| !text.is_empty())
+    }
+
     /// Column descriptions, with the same letter case rules as relations.
     pub(super) fn column_descriptions(
         &self,
@@ -748,7 +779,7 @@ pub(super) fn resource_label<'a>(index: &'a Index, entry: &'a Entry) -> &'a str 
 /// characters, and whether it drops a part of `text`. The tooltip shows it
 /// as Markdown, so the cut is outside a code span, a link, and strong text
 /// when the text has such a place.
-fn summary(text: &str, limit: usize) -> (String, bool) {
+pub(super) fn summary(text: &str, limit: usize) -> (String, bool) {
     let text = text.trim();
     let paragraph = text.split("\n\n").next().unwrap_or_default();
     let words: Vec<&str> = paragraph.split_whitespace().collect();
@@ -782,6 +813,14 @@ fn summary(text: &str, limit: usize) -> (String, bool) {
         cut = true;
     }
     if cut {
+        // A comma or a dash before the ellipsis looks like a typo.
+        let kept = summary
+            .trim_end_matches([',', ';', ':', '-', '–', '—'])
+            .trim_end()
+            .len();
+        if kept > 0 {
+            summary.truncate(kept);
+        }
         summary.push('…');
     }
     (summary, cut)
@@ -1153,6 +1192,15 @@ mod tests {
             ("Words that…".to_owned(), true)
         );
         assert_eq!(summary("Ünïcödé_wörd", 4), ("Ünïc…".to_owned(), true));
+        // The cut drops a comma or a dash before the ellipsis.
+        assert_eq!(
+            summary("Join on the ids, then filter", 16),
+            ("Join on the ids…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("The day — not the hour", 10),
+            ("The day…".to_owned(), true)
+        );
     }
 
     #[test]

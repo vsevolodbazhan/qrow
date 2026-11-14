@@ -160,6 +160,32 @@ pub fn tokens_for(
     tokens
 }
 
+/// The name that a token gives: a quoted identifier without its quotes, or a
+/// name without quotes. Postgres folds names without quotes to lowercase.
+/// `None` for other tokens.
+pub fn name_part(text: &str, kind: Kind, database_type: DatabaseType) -> Option<String> {
+    match kind {
+        Kind::Identifier => {
+            let quote = text.chars().next()?;
+            let inner = text.strip_prefix(quote)?;
+            Some(
+                inner
+                    .strip_suffix(quote)
+                    .unwrap_or(inner)
+                    .replace(&format!("{quote}{quote}"), &quote.to_string()),
+            )
+        }
+        Kind::Plain if text.starts_with(|c: char| c.is_alphabetic() || c == '_') => {
+            Some(if database_type == DatabaseType::Postgres {
+                text.to_lowercase()
+            } else {
+                text.to_owned()
+            })
+        }
+        _ => None,
+    }
+}
+
 /// The opening delimiter and end of a Postgres dollar-quoted string.
 fn dollar_quote_end(sql: &str, start: usize) -> Option<(usize, Option<usize>)> {
     let suffix = &sql[start + 1..];

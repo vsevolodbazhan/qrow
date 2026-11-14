@@ -18,7 +18,9 @@ Conversations, Editor, and Logs have **Font Family**, **Font Size**, and **Line
 Height**. The interface font applies to controls and results. Editor also has
 **Tab Size**, the number of spaces for each indent level. The default is 2. The
 Tab key and SQL that Qrow formats for the assistant and **Format** use this
-size. The editor indents with spaces. **SQL Keyword Case** is the last Editor
+size. The editor indents with spaces. **Autocomplete** is on by default. When
+it is off, the Tab key only indents and the editor does not
+[complete names](queries.md#complete-names). **SQL Keyword Case** is the last Editor
 setting. It applies to **Format** and SQL that the [assistant](assistant.md)
 writes.
 Find and Replace buttons show tooltips with their available shortcuts.

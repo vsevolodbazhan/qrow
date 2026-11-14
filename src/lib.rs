@@ -4,6 +4,7 @@ mod assets;
 pub mod assistant;
 pub mod build_info;
 pub mod catalog;
+pub mod completion;
 pub mod connector;
 pub mod dbt;
 pub mod export;
