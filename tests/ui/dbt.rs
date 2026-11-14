@@ -610,15 +610,15 @@ fn suggestions_show_the_start_of_dbt_descriptions(cx: &mut TestAppContext) {
         "A **booking** identifier. A **booking**",
     );
     assert!(text.ends_with('…') && text.chars().count() <= 141, "{text}");
-    // The database comment comes before the dbt description.
+    // The dbt description comes before the database comment.
     let text = details(
         &app,
         cx,
         "SELECT m.col_0",
         &format!(" FROM {schema}.{alias} m"),
-        "Database comment",
+        "The `cost` of a booking.",
     );
-    assert_eq!(text, "Database comment");
+    assert_eq!(text, "The `cost` of a booking.");
     // A table shows the start of the description of its model.
     let text = details(
         &app,

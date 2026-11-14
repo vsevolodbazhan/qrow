@@ -1123,22 +1123,23 @@ struct DetailsBox {
     name: Option<String>,
     /// The kind or the type, when the rows hide them.
     detail: Option<String>,
-    /// The start of the comment, or of the dbt description when there is no
-    /// comment, as Markdown.
+    /// The start of the dbt description, or of the comment when there is no
+    /// dbt description, as Markdown. A dbt description is usually the more
+    /// complete text.
     description: Option<String>,
 }
 
 impl DetailsBox {
     fn of(item: &Item, layout: &Layout, index: usize, dbt: Option<&DbtLookup>) -> Option<Self> {
-        let comment = item
-            .comment
-            .as_deref()
-            .map(str::trim)
-            .filter(|comment| !comment.is_empty());
-        let description = comment.or_else(|| {
-            let (schema, relation) = item.relation.as_ref()?;
+        let dbt_description = item.relation.as_ref().and_then(|(schema, relation)| {
             let column = (item.kind == ItemKind::Column).then_some(item.name.as_str());
             dbt?.description(schema, relation, column)
+        });
+        let description = dbt_description.or_else(|| {
+            item.comment
+                .as_deref()
+                .map(str::trim)
+                .filter(|comment| !comment.is_empty())
         });
         let details = Self {
             name: layout
