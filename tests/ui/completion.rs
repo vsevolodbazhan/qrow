@@ -310,6 +310,13 @@ fn a_connection_without_cached_metadata_offers_refresh(cx: &mut TestAppContext) 
     assert!(app.update(cx, |window, _| {
         window.try_find("sql-completion-refresh").is_some()
     }));
+    // The message wraps inside the popup instead of running past its edge.
+    app.update(cx, |window, _| {
+        let popup = bounds_of(window, "sql-completion");
+        let message = bounds_of(window, "sql-completion-message");
+        assert!(message.right() <= popup.right(), "{popup:?} {message:?}");
+        assert!(message.size.height > gpui_kit::px(24.), "{message:?}");
+    });
 }
 
 #[gpui_kit::test]
@@ -342,8 +349,7 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
     // The columns of `daily` are not cached, and the connection is out of
     // reach, so their read fails.
     app.wait_until(cx, "the failed read", WAIT, |window, _| {
-        label(window, "sql-completion-footer").as_deref()
-            == Some("Could not load columns of avia.daily")
+        label(window, "sql-completion-footer").as_deref() == Some("Could not load columns of daily")
     });
     assert_eq!(
         app.update(cx, |window, _| label(

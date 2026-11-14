@@ -747,7 +747,7 @@ impl Qrow {
                     .font_weight(FontWeight::MEDIUM)
                     .when(warning, |row| {
                         row.child(
-                            Icon::new(IconName::CircleAlert)
+                            Icon::new(IconName::TriangleAlert)
                                 .size(self.ui_px(14.))
                                 .text_color(theme.warning),
                         )
@@ -757,6 +757,8 @@ impl Qrow {
             .when_some(message, |notice, message| {
                 notice.child(
                     div()
+                        .id("sql-completion-message")
+                        .test_support()
                         .text_size(self.ui_px(12.))
                         .text_color(theme.muted_foreground)
                         .child(self.texts(message, cx)),
@@ -778,24 +780,35 @@ impl Qrow {
             })
     }
 
-    /// Text with names in the code font.
+    /// Text with names in the code font. Plain text wraps between its
+    /// words; a name wider than the popup is cut at the end.
     fn texts(&self, parts: Vec<Text>, cx: &App) -> Div {
         let theme = cx.theme();
         let code_font = self.settings.editor_font_family.clone();
         div()
+            .w_full()
             .flex()
             .flex_wrap()
             .items_center()
-            .children(parts.into_iter().map(|part| {
+            .children(parts.into_iter().flat_map(|part| -> Vec<Div> {
                 match part {
-                    Text::Plain(text) => div().child(text),
-                    Text::Code(text) => div()
-                        .font_family(code_font.clone())
-                        .px(self.ui_px(4.))
-                        .rounded(self.ui_px(4.))
-                        .bg(theme.muted)
-                        .text_color(theme.foreground)
-                        .child(text),
+                    // Each word with its space is an item of the row, so
+                    // the row wraps between words.
+                    Text::Plain(text) => text
+                        .split_inclusive(' ')
+                        .map(|word| div().whitespace_nowrap().child(word.to_owned()))
+                        .collect(),
+                    Text::Code(text) => vec![
+                        div()
+                            .max_w_full()
+                            .truncate()
+                            .font_family(code_font.clone())
+                            .px(self.ui_px(4.))
+                            .rounded(self.ui_px(4.))
+                            .bg(theme.muted)
+                            .text_color(theme.foreground)
+                            .child(text),
+                    ],
                 }
             }))
     }
@@ -929,7 +942,7 @@ impl Qrow {
                             Slot::Dot => cell
                                 .child(div().size(self.ui_px(6.)).rounded_full().bg(theme.warning)),
                             Slot::Alert => cell.child(
-                                Icon::new(IconName::CircleAlert)
+                                Icon::new(IconName::TriangleAlert)
                                     .size(self.ui_px(14.))
                                     .text_color(theme.warning),
                             ),
@@ -1302,12 +1315,14 @@ fn failed_need(completion: &Completion, need: &Need) -> bool {
     completion.errors.iter().any(|(failed, _)| failed == need)
 }
 
-/// "`verb` columns of `schema.table``end`", for the footer.
+/// "`verb` columns of `table``end`", for the footer.
 fn need_text(verb: &str, need: &Need, end: &str) -> Vec<Text> {
     let (what, name) = match need {
         Need::Schemas => return vec![Text::Plain(format!("{verb} schemas{end}"))],
         Need::Relations(schema) => ("tables of", schema.clone()),
-        Need::Columns(schema, relation) => ("columns of", format!("{schema}.{relation}")),
+        // The table alone: the statement names its schema, and a long
+        // schema name would push the table out of the footer.
+        Need::Columns(_, relation) => ("columns of", relation.clone()),
     };
     let mut parts = vec![Text::Plain(format!("{verb} {what} ")), Text::Code(name)];
     if !end.is_empty() {
