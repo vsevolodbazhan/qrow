@@ -1002,7 +1002,7 @@ fn autocomplete_reads_the_metadata_on_request_and_inserts_quoted_names(cx: &mut 
     app.press(cx, "tab");
     app.wait_until(cx, "the empty state", QUERY_TIMEOUT, |window, _| {
         crate::support::label(window, "sql-completion-notice").as_deref()
-            == Some("No cached tables")
+            == Some("No cached metadata")
     });
     // Tab runs Refresh, and the list then shows the view.
     app.press(cx, "tab");

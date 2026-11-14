@@ -305,7 +305,7 @@ fn a_connection_without_cached_metadata_offers_refresh(cx: &mut TestAppContext) 
     let (app, _) = launch(cx, None, &[]);
     complete(&app, cx, "SELECT * FROM ");
     app.wait_until(cx, "the empty state", WAIT, |window, _| {
-        label(window, "sql-completion-notice").as_deref() == Some("No cached tables")
+        label(window, "sql-completion-notice").as_deref() == Some("No cached metadata")
     });
     assert!(app.update(cx, |window, _| {
         window.try_find("sql-completion-refresh").is_some()
@@ -316,6 +316,16 @@ fn a_connection_without_cached_metadata_offers_refresh(cx: &mut TestAppContext) 
         let message = bounds_of(window, "sql-completion-message");
         assert!(message.right() <= popup.right(), "{popup:?} {message:?}");
         assert!(message.size.height > gpui_kit::px(24.), "{message:?}");
+        // The message lines are as tall as the title line, so the space
+        // above and below the message is the same.
+        let title = bounds_of(window, "sql-completion-title");
+        let lines = message.size.height / title.size.height;
+        assert!(
+            (lines - lines.round()).abs() < 0.01,
+            "{title:?} {message:?}"
+        );
+        let button = bounds_of(window, "sql-completion-refresh");
+        assert!(button.top() - message.bottom() >= message.top() - title.bottom());
     });
 }
 

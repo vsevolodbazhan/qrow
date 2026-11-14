@@ -324,7 +324,7 @@ When the list needs data that the copy does not have, Qrow reads it, like a
 **Refresh** of that table or schema in the tree. This read can open a
 session. If the read fails, the list shows the error. Press **Tab** when the
 list has no names, or select **Retry**, to read again. For a connection that
-Qrow never read, the list shows **No cached tables**. Press **Tab** or select
+Qrow never read, the list shows **No cached metadata**. Press **Tab** or select
 **Refresh** to read it.
 
 When the metadata of a schema in the list is older than the

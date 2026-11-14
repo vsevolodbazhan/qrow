@@ -708,7 +708,7 @@ impl Qrow {
             )),
             Body::NotRead => shell.child(self.completion_notice(
                 Notice {
-                    title: "No cached tables",
+                    title: "No cached metadata",
                     message: vec![Text::Plain(
                         "Refresh the schemas of this connection to get suggestions.".into(),
                     )],
@@ -721,7 +721,7 @@ impl Qrow {
             )),
             Body::Off => shell.child(self.completion_notice(
                 Notice {
-                    title: "No cached tables",
+                    title: "No cached metadata",
                     message: vec![Text::Plain(
                         "Turn on metadata refresh in the connection settings.".into(),
                     )],
@@ -775,9 +775,13 @@ impl Qrow {
             .role(Role::Status)
             .aria_label(title)
             .p(self.ui_px(8.))
-            .gap(self.ui_px(6.))
+            // One line height for the title and the message, like toasts,
+            // so that the space above and below the message is the same.
+            .line_height(rems(1.25))
             .child(
                 h_flex()
+                    .id("sql-completion-title")
+                    .test_support()
                     .gap(self.ui_px(GAP))
                     .font_weight(FontWeight::MEDIUM)
                     .when(warning, |row| {
@@ -799,15 +803,12 @@ impl Qrow {
             )
             .when_some(action.zip(profile), |notice, ((id, label), _)| {
                 notice.child(
-                    h_flex().child(
-                        Button::new(id)
-                            .outline()
-                            .small()
-                            .icon(IconName::RefreshCw)
-                            .label(label)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                    h_flex().mt(self.ui_px(8.)).child(
+                        Button::new(id).small().label(label).on_click(cx.listener(
+                            |this, _, _, cx| {
                                 this.refresh_completion(cx);
-                            })),
+                            },
+                        )),
                     ),
                 )
             })
