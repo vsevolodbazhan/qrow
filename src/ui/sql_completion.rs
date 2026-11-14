@@ -880,6 +880,8 @@ impl Qrow {
         div()
             .id(id)
             .test_support()
+            // The size that `width` measures, whatever the parent sets.
+            .text_size(self.ui_px(12.))
             .flex_1()
             .min_w_0()
             .overflow_hidden()

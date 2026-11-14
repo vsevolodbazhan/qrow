@@ -6,9 +6,9 @@ use gpui_kit::test::TestWindowExt as _;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
     model::{CatalogSettings, Profile, SavedTab, Workspace},
-    storage,
+    storage::{self, Credentials as _},
 };
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, net::TcpListener, time::Duration};
 use tempfile::TempDir;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -400,6 +400,47 @@ fn a_cut_table_name_in_the_footer_shows_in_full_on_hover(cx: &mut TestAppContext
         assert!(text.right() <= footer.right(), "{footer:?} {text:?}");
     });
     assert!(hover_shows_tooltip(&app, cx, "sql-completion-footer-text"));
+}
+
+#[gpui_kit::test]
+fn the_loading_row_draws_its_text_at_the_measured_size(cx: &mut TestAppContext) {
+    // A listening socket holds the read in its loading state without server
+    // responses or access to a user's connection.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        ..profile()
+    };
+    let directory = tempfile::tempdir().unwrap();
+    cache(&directory, &profile, fresh().unwrap(), &[]);
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+        credentials,
+    );
+    complete(&app, cx, "SELECT d. FROM avia.daily d");
+    app.wait_for(cx, "sql-completion-loading-text");
+    let loading = app.update(cx, |window, _| {
+        bounds_of(window, "sql-completion-loading-text").size.height
+    });
+    // The footer draws the same kind of text at the size that both measure.
+    let (app, _) = launch(cx, Some(1), &[]);
+    complete(&app, cx, "SELECT * FROM avia.");
+    app.wait_for(cx, "sql-completion-footer-text");
+    let footer = app.update(cx, |window, _| {
+        bounds_of(window, "sql-completion-footer-text").size.height
+    });
+    assert_eq!(loading, footer);
 }
 
 #[gpui_kit::test]
