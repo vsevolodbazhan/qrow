@@ -71,7 +71,7 @@ class ValidationGraphTests(unittest.TestCase):
         self.assertIn('set "UV_NO_DEV=1"', read("qtest.cmd"))
         self.assertIn("setlocal", read("qtest.cmd"))
 
-    def test_pull_requests_qualify_one_target_and_the_merge_queue_qualifies_all(self):
+    def test_pull_requests_qualify_linux_and_renderer_macos_and_the_merge_queue_qualifies_all(self):
         supported = [name for name, target in platforms.TARGETS.items() if target.supported]
         self.assertIn("merge_group:", read(TEST))
         self.assertEqual(platforms.tier("pull_request"), "pr")
@@ -79,7 +79,7 @@ class ValidationGraphTests(unittest.TestCase):
         for event in ("push", "schedule", "workflow_dispatch"):
             self.assertEqual(platforms.tier(event), "full")
         self.assertEqual(platforms.tier("pull_request", full=True), "full")
-        self.assertEqual(platforms.native_targets("pr"), ["linux-x86_64"])
+        self.assertEqual(platforms.native_targets("pr"), ["macos-arm64", "linux-x86_64"])
         self.assertNotIn("windows-x86_64", platforms.native_targets("pr"))
         for selected in ("merge", "full"):
             self.assertIn("windows-x86_64", platforms.native_targets(selected))
@@ -100,7 +100,8 @@ class ValidationGraphTests(unittest.TestCase):
             value.update({key.replace("_", "-"): {"result": result} for key, result in overrides.items()})
             return value
         full = platforms.native_targets("full")
-        platforms.gate(results(test_linux_x86_64="success"), ["linux-x86_64"], "pr", "pull_request")
+        platforms.gate(results(test_linux_x86_64="success", test_macos_arm64="success"),
+                       platforms.native_targets("pr"), "pr", "pull_request")
         platforms.gate(results(), [], "static", "pull_request")
         everything = {f"test_{name.replace('-', '_')}": "success" for name in full}
         platforms.gate(results(**everything), full, "full", "push")
@@ -260,7 +261,7 @@ class ValidationGraphTests(unittest.TestCase):
         # Production lint/package builds run in the build phase. Measurements
         # run once per baseline host in full mode. Local convenience suites
         # partition into CI suites instead of running again.
-        owned.update({"clippy-native", "package", "linux-package", "windows-package", "perf-ui", "perf-e2e", "perf-package",
+        owned.update({"opengl-renderer", "opengl-ui", "perf-renderers", "clippy-native", "package", "linux-package", "windows-package", "perf-ui", "perf-e2e", "perf-package",
                       "perf-kyuubi", "perf-postgres", "perf-trino"})
         equivalents = {"unit": {"coverage", "app-unit"}, "postgres": {"postgres-core", "postgres-ui"},
                        "trino": {"trino-core", "trino-ui"}, "perf-app": {"perf-package"}}

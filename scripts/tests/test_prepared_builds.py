@@ -31,6 +31,18 @@ class VariantTests(unittest.TestCase):
         self.assertIn("--run-ignored", runtime)
         self.assertIn("ci", runtime)
 
+    def test_package_aliases_preserve_both_packages_and_share_a_prepared_variant(self):
+        first = ["cargo", "nextest", "run", "-p", "qrow", "-p", "gpui-pre-macos", "--lib"]
+        second = ["cargo", "nextest", "run", "--package", "gpui-pre-macos", "--package", "qrow", "--lib"]
+        flags, _, runtime = builds.split(first)
+        self.assertEqual(flags, ["--package", "gpui-pre-macos", "--package", "qrow"])
+        self.assertEqual(flags, builds.split(second)[0])
+        self.assertNotIn("--package", runtime)
+        key = contract.digest(flags)[:16]
+        self.assertIn("--binaries-metadata", builds.reuse(first, {key: ["--binaries-metadata", "prepared.json"]}))
+        with self.assertRaisesRegex(ValueError, "No prepared"):
+            builds.reuse(first, {contract.digest(["--package", "qrow"])[:16]: []})
+
     def test_backend_and_connector_suites_share_one_no_ui_archive(self):
         value = contract.plan(ROOT, targets.host_target().name, ["backend", "postgres-core", "trino-core"], "docker")
         variants = builds.variants(value)

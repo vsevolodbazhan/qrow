@@ -21,9 +21,12 @@ def split(command):
     if list(command[:3]) != ["cargo", "nextest", "run"]:
         raise ValueError("Expected cargo nextest run")
     build, selection, runtime = [], [], []
+    packages = set()
     args = iter(command[3:])
     for arg in args:
-        if arg in VALUE_FLAGS:
+        if arg in ("-p", "--package"):
+            packages.add(next(args))
+        elif arg in VALUE_FLAGS:
             build.extend((arg, next(args)))
         elif arg in BOOL_FLAGS:
             build.append(arg)
@@ -46,6 +49,8 @@ def split(command):
     for arg in args:
         values[arg] = next(args) if arg in VALUE_FLAGS else None
     build = [item for flag in sorted(values) for item in ((flag, values[flag]) if values[flag] is not None else (flag,))]
+    for package in sorted(packages):
+        build.extend(("--package", package))
     filters, retained = [], []
     args = iter(runtime)
     for arg in args:

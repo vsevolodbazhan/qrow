@@ -189,7 +189,7 @@ Runs on `main` finish so they can save build caches.
 
 The test and release workflows share one validation graph. Common tests run
 once, and native compilation overlaps them. Each native test consumes the
-build of the same target. A pull request tests Linux x86-64 natively. A pull
+build of the same target. A pull request tests Linux x86-64 and macOS ARM64 natively. A pull
 request that changes only documentation or other static paths runs only the
 static checks. `main`
 and release candidates test all four targets, including Intel macOS, in full
@@ -229,7 +229,8 @@ them. The background is light because Finder draws the icon labels in black on
 a background picture, also in the dark appearance. The background has a 1x and
 a 2x version, so it stays sharp on Retina displays.
 During packaging, the writable image uses a temporary mount that Finder does
-not show. The script ejects the image before it creates the compressed DMG.
+not show. The script flushes the image metadata and ejects the image before it creates
+the compressed DMG. It does not run a system-wide disk sync.
 If macOS reports that the image is busy, the script makes at most 10 eject
 attempts. After three attempts, it uses forced ejection. A persistent error
 fails packaging. The `linux` jobs download the qualified Ubuntu 24.04 archives for x86-64 and

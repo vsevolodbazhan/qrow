@@ -34,6 +34,12 @@ and [Zed](https://zed.dev/).
 - The packages are not code-signed, so macOS and Windows show a warning on
   first open.
 - macOS first. Windows and Linux are supported but can have rough edges.
+- macOS 12+ selects Metal when a device is available, hardware Core OpenGL 3.3+
+  otherwise, and CPU rendering if OpenGL initialization fails. No legacy
+  OpenGL 2.1 context is used. `QROW_RENDERER=software` selects CPU rendering.
+  OpenGL uses grayscale text antialiasing and a 128 MiB texture atlas; images
+  must fit a 2046×2046 tile. Fallback renderers do not support video surfaces.
+  CPU gradients use sRGB interpolation, including Oklab requests.
 
 ## Installation
 
@@ -121,6 +127,11 @@ workspace:
 ```sh
 cargo run --locked --bin qrow -- --demo
 ```
+
+On macOS, `QROW_RENDERER=auto|metal|opengl|software` selects the renderer.
+An explicit GPU choice reports initialization failures. Automatic fallback
+applies at startup; drawing failures do not switch the backend.
+`QROW_SOFTWARE_RENDERER=1` selects CPU rendering if `QROW_RENDERER` is unset.
 
 ## Documentation
 

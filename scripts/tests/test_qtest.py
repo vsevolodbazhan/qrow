@@ -101,7 +101,7 @@ class CatalogTests(unittest.TestCase):
                 self.assertNotIn("macos", suite.requires)
                 self.assertTrue(set(suite.platforms) <= set(catalog.PLATFORM_NAMES))
         macos = [name for name, suite in catalog.SUITES.items() if suite.platforms == ("macos",)]
-        self.assertEqual(macos, ["native-font", "native-ui", "native-assistant", "perf-ui", "perf-e2e", "perf-app", "perf-package", "package", "desktop"])
+        self.assertEqual(macos, ["opengl-unit", "opengl-renderer", "software-ui", "opengl-ui", "perf-renderers", "native-font", "native-ui", "native-assistant", "perf-ui", "perf-e2e", "perf-app", "perf-package", "package", "desktop"])
 
     def test_coverage_serializes_shared_budget_tests_without_changing_selection(self):
         coverage = catalog.SUITES["coverage"]

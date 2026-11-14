@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qtest"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
 import contract  # noqa: E402
 from targets import TARGETS  # noqa: E402
 
@@ -26,10 +27,10 @@ PREPARED = ("backend", "headless-ui", "server-ui")
 # server-ui compiles the same UI-test dependencies as headless-ui. It restores
 # that cache and does not save one, so each cache keeps a single saving job.
 CACHES = {"server-ui": "headless-ui"}
-# Pull requests qualify one native target for fast feedback. main and release
+# Pull requests qualify Linux plus the macOS renderer path. main and release
 # candidates qualify all supported targets. A merge queue would too, but this
 # personal-account repository cannot have one.
-PR_TARGETS = ("linux-x86_64",)
+PR_TARGETS = ("linux-x86_64", "macos-arm64")
 # A test job name uses hyphens: test-macos-x86-64 tests macos-x86_64.
 TEST_JOB = "test-{}"
 
@@ -118,7 +119,7 @@ def suites(target, full=False):
     # Full mode adds measurements elsewhere, not another functional test set.
     if target.system == "windows":
         return ["windows-unit", "windows-storage", "package-smoke"]
-    return ["native-storage", "package-smoke", *(["native-font", "native-ui", "native-assistant", "desktop"]
+    return ["native-storage", "package-smoke", *(["native-font", "native-ui", "native-assistant", "desktop", "opengl-unit", "software-ui"]
                                                  if target.system == "macos" else [])]
 
 
@@ -204,6 +205,10 @@ def verify(directory, sha, full=False, targets=None):
                 manifest.get("identity") != builds.identity(value) or
                 manifest.get("assets", {}).get("target/package/" + receipt.get("archive", "")) != receipt["sha256"]):
             raise ValueError("Prepared build or package identity mismatch")
+        if TARGETS[name].system == "macos":
+            import opengl
+            opengl.verify_hardware(json.loads((path.parent / "renderer-result.json").read_text()),
+                                   value, builds.sha256(manifest_path))
         # Windows also publishes the qualified files as a portable archive.
         if TARGETS[name].system == "windows" and (
                 len(receipt.get("portable_sha256", "")) != 64 or

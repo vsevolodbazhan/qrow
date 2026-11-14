@@ -62,6 +62,14 @@ class MatrixGateTests(unittest.TestCase):
             manifest_path = directory / 'build-manifest.json'
             contract.atomic_json(manifest_path, manifest)
             result['build_manifest_sha256'] = builds.sha256(manifest_path)
+            if target.system == 'macos':
+                reason = 'hardware OpenGL Core pixel format unavailable (10002)'
+                hardware = dict(source_sha=sha, snapshot=value['snapshot'], target=target.name,
+                                build_manifest_sha256=result['build_manifest_sha256'], status='passed', exit_code=0,
+                                capability=dict(available=False, reason=reason),
+                                suites=[dict(name=name, status='skipped', reason='Hardware OpenGL unavailable: ' + reason)
+                                        for name in ('opengl-renderer', 'opengl-ui')])
+                (directory / 'renderer-result.json').write_text(json.dumps(hardware))
             for name, data in [('plan', value), ('result', result), ('receipt', receipt)]:
                 (directory / f'{name}.json').write_text(json.dumps(data))
         return sha
@@ -75,6 +83,21 @@ class MatrixGateTests(unittest.TestCase):
                 (root / 'linux-arm64/result.json').unlink()
                 with self.assertRaisesRegex(ValueError, 'Missing'):
                     platforms.verify(root, sha, full)
+
+    def test_macos_evidence_requires_the_optional_hardware_phase(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sha = self.evidence(root)
+            path = root / 'macos-arm64/renderer-result.json'
+            original = path.read_text()
+            path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                platforms.verify(root, sha)
+            changed = json.loads(original)
+            changed['build_manifest_sha256'] = 'different'
+            path.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError, 'Renderer prepared'):
+                platforms.verify(root, sha)
 
     def test_windows_evidence_needs_the_digest_of_the_built_portable_archive(self):
         for change in ('missing', 'different'):
@@ -97,11 +120,11 @@ class MatrixGateTests(unittest.TestCase):
             sha = self.evidence(root)
             # Evidence of other targets is unexpected in a pull request run.
             with self.assertRaisesRegex(ValueError, 'unexpected'):
-                platforms.verify(root, sha, targets=['linux-x86_64'])
-            for name in ('linux-arm64', 'macos-arm64', 'macos-x86_64', 'windows-x86_64', 'windows-arm64'):
+                platforms.verify(root, sha, targets=platforms.native_targets('pr'))
+            for name in set(platforms.native_targets('full')) - set(platforms.native_targets('pr')):
                 for path in (root / name).iterdir():
                     path.unlink()
-            platforms.verify(root, sha, targets=['linux-x86_64'])
+            platforms.verify(root, sha, targets=platforms.native_targets('pr'))
             with self.assertRaisesRegex(ValueError, 'Missing'):
                 platforms.verify(root, sha)
             for targets in (['macos-arm64'], ['linux-x86_64', 'unknown-target']):

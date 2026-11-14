@@ -6,6 +6,7 @@ import io
 import os
 from pathlib import Path
 import select
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -59,7 +60,8 @@ class WebsiteInstallScriptTest(unittest.TestCase):
         for name in COMMANDS:
             os.symlink(shutil.which(name), self.tools / name)
         checksum = shutil.which("sha256sum") or shutil.which("shasum")
-        os.symlink(checksum, self.tools / Path(checksum).name)
+        # macOS shasum uses Apple's Perl dispatcher, which needs the real path.
+        self.tool(Path(checksum).name, '#!/bin/sh\nexec ' + shlex.quote(checksum) + ' "$@"\n')
         self.prefix = self.root / "home/.local"
         self.script = SCRIPT
         self.signature = "untrusted comment: synthetic\nAAAA\ntrusted comment: Qrow release v{version}\nAAAA\n"

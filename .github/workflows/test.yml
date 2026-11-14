@@ -266,6 +266,10 @@ jobs:
         with:
           name: candidate-macos-arm64
           path: target/package
+      - name: Prepare desktop work area
+        run: |
+          defaults write com.apple.dock autohide -bool true
+          if pgrep -x Dock >/dev/null; then killall Dock; fi
       - run: ./qtest install cargo-nextest
       - env:
           FULL: ${{ needs.plan.outputs.full }}
@@ -380,6 +384,10 @@ jobs:
         with:
           name: candidate-macos-x86_64
           path: target/package
+      - name: Prepare desktop work area
+        run: |
+          defaults write com.apple.dock autohide -bool true
+          if pgrep -x Dock >/dev/null; then killall Dock; fi
       - run: ./qtest install cargo-nextest
       - env:
           FULL: ${{ needs.plan.outputs.full }}

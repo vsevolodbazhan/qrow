@@ -75,7 +75,8 @@ def build(full, target_name=None):
     value = contract.plan(ROOT, target.name, selectors, runtime)
     contract.atomic_json(BASE / "plan.json", value)
     measurement = full and target.name == "macos-arm64"
-    preparation = contract.plan(ROOT, target.name, selectors + (["perf-ui", "perf-e2e"] if measurement else []), runtime)
+    preparation = contract.plan(ROOT, target.name, selectors + (["opengl-renderer", "opengl-ui"] if target.system == "macos" else []) +
+                                (["perf-ui", "perf-e2e"] if measurement else []), runtime)
     if cli.install_tools(["cargo-nextest"]):
         raise ValueError("Cannot install nextest")
     builds.prepare(preparation, ROOT, PREPARED, runner.Output(False))
@@ -152,8 +153,13 @@ def test(full):
     cli.print_summary(result)
     if result["exit_code"]:
         raise ValueError("Native tests failed")
+    if host_target().system == "macos":
+        import opengl
+        hardware = opengl.run_hardware(ROOT, value, PREPARED / "manifest.json", BASE, runner.Output(False))
     if full and host_target().name == "macos-arm64":
-        checked(["run", "perf-ui", "perf-e2e", "perf-package", "--runtime", "native", "--report-only",
+        checked(["run", "perf-ui", "perf-e2e", "perf-package",
+                 *(["perf-renderers"] if hardware["capability"]["available"] else []),
+                 "--runtime", "native", "--report-only",
                  "--reuse-builds", str(PREPARED / "manifest.json")])
 
 

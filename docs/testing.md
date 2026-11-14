@@ -129,6 +129,12 @@ accept a test filter.
 | `package-smoke` | Inspect and launch the extracted package. | A built package; on Linux, Xvfb and xdotool |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
+| `opengl-unit` * | GPU-independent OpenGL and CPU compositor/startup tests. | macOS, Cargo, cargo-nextest |
+| `software-ui` | Native CPU demo pixels and input. | macOS desktop, Xcode tools |
+| `opengl-renderer` * | Strict hardware Core OpenGL context, shader, and pixel tests. | macOS, hardware OpenGL, cargo-nextest |
+| `opengl-ui` | Strict hardware OpenGL native demo pixels and input. | macOS desktop, hardware OpenGL |
+| `perf-renderers` | Optional native CPU/OpenGL release measurements. | macOS desktop, hardware OpenGL |
+
 The suites do the same checks on macOS and Linux. `clippy` lints the core
 library without the application. `clippy-app`, `unit`, and `ui` build the
 application. On Linux, they need the desktop libraries that the README lists.
@@ -251,6 +257,45 @@ commands without results, failures, and successful or rejected cursor drains.
 A Docker backend test checks actual Spark collection behavior with executor
 evidence before the first fetch. It also checks restoration for explicit
 and absent settings, and the collection mode of the next normal query.
+
+## Check CPU rendering
+
+`./qtest run opengl-unit` checks atlas, scene encoding, limits, CPU composition,
+and renderer startup policy without a GPU. It is required in macOS plans.
+`./qtest run software-ui` checks native CPU demo input, copied Unicode SQL,
+editor and result pixels, scrolling, splitters, and the window lifecycle.
+It needs Accessibility and Screen Recording, as the desktop suite does.
+
+Local native suites build isolated release packages. In prepared CI, they
+reuse the source-bound candidate ZIP and native driver without compiling.
+They disable update checks and preserve the user's workspace and clipboard.
+
+## Check OpenGL rendering
+
+`./qtest run opengl-renderer opengl-ui` is strict: it requires hardware Core
+OpenGL 3.3+, GLSL 3.30 and 14 vertex attributes. It checks context limits,
+shader output, pixels, and the same native demo scenarios as `software-ui`.
+Explicit local suites never skip because of a CI environment variable.
+
+macOS CI prepares these tests with the required binaries. After the strict
+native contract passes, a separate prepared nextest probe creates the production
+CGL context and checks limits. Only CGL error 10002 (no hardware pixel format)
+allows recorded hardware-suite skips. Probe preparation, timeout, crash,
+malformed markers, shader failures and drawing failures fail the native job.
+The offline gate requires `renderer-result.json`, bound to the same source
+snapshot, target and prepared manifest. Missing or mismatched evidence fails.
+`contract.verify()` still requires every suite in the strict plan to pass;
+GPU-independent and CPU native suites cannot be skipped.
+
+Pull requests qualify macOS ARM64 as well as Linux to run this coverage.
+Hosted macOS runners hide the Dock to preserve the fixed 992×652-point native
+test window and 16-point margins. Local Dock settings remain unchanged.
+A hardware skip provides no GPU validation; use a physical Mac for that evidence.
+
+`./qtest run perf-renderers` provides optional local native release measurements
+of CPU and OpenGL composition and scrolling. Full macOS ARM64 CI runs it as
+report-only when the hardware probe succeeds. It needs a real desktop and GPU;
+no frame-rate improvement is claimed from instance-upload size alone.
 
 ## Trino tests
 

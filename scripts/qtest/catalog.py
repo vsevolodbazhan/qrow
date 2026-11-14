@@ -181,6 +181,13 @@ MACOS_ONLY = ("macos",)
 # requirement always holds.
 APP = ("cargo", "linux-app-libs")
 
+RENDERER_FLAGS = ("--package", "qrow", "--package", "gpui-pre-macos",
+                  "--features", "gpui-kit/test-support", "--lib")
+RENDERER_UNITS = ("((test(/^opengl_renderer::/) & "
+                  "not test(/^opengl_renderer::tests::/) & not test(hardware_capability_probe)) | "
+                  "test(/^renderer::tests::/) | test(/^software_renderer::tests::/))")
+
+
 def suites_for_platform(system):
     """Resolve suite commands from the requested OS, independently of this host."""
     linux = system == "linux"
@@ -190,6 +197,31 @@ def suites_for_platform(system):
     return {
         suite.name: suite
         for suite in [
+            Suite("opengl-unit", "GPU-independent OpenGL limits, atlas, scene, CPU composition and startup policy.",
+                  ("cargo", "cargo-nextest"), (nextest(RENDERER_UNITS, *RENDERER_FLAGS),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("opengl-renderer", "Strict hardware Core OpenGL shader and pixel checks.",
+                  ("cargo", "cargo-nextest"),
+                  (nextest("test(/^opengl_renderer::/)", *RENDERER_FLAGS),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("software-ui", "CPU rendering and native input in an isolated packaged demo.",
+                  ("cargo", "uv", "xcode", "desktop"),
+                  (Step(("sh", "scripts/e2e/software.sh"),
+                        env=(("QROW_E2E_ARTIFACTS", "{artifacts}/software-ui"),)),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("opengl-ui", "Strict hardware Core OpenGL rendering and native input.",
+                  ("cargo", "uv", "xcode", "desktop"),
+                  (Step(("sh", "scripts/e2e/software.sh"),
+                        env=(("QROW_E2E_ARTIFACTS", "{artifacts}/opengl-ui"),
+                             ("QROW_E2E_RENDERER", "opengl"))),),
+                  platforms=MACOS_ONLY, explicit_only=True),
+            Suite("perf-renderers", "Native release CPU/OpenGL composition and scrolling measurements.",
+                  ("cargo", "uv", "xcode", "desktop"),
+                  (Step(("sh", "scripts/e2e/software.sh", "--prepare"),
+                        env=(("QROW_E2E_ARTIFACTS", "{artifacts}/perf-renderers"),)),
+                   Step((PYTHON, "scripts/perf/renderers.py"),
+                        env=(("QROW_E2E_ARTIFACTS", "{artifacts}/perf-renderers"),), timeout=15 * 60)),
+                  platforms=MACOS_ONLY, explicit_only=True),
             Suite("windows-unit", "Portable core tests on Windows; server E2E needs Linux Docker.",
                   ("cargo", "cargo-nextest"),
                   (nextest("kind(lib)", "--no-default-features", "--lib"),),
