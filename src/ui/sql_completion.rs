@@ -45,6 +45,7 @@ const MIN_LABEL: f32 = 48.;
 const FOOTER_INSET: f32 = 6.;
 const FOOTER_BUTTON_HEIGHT: f32 = 20.;
 const FOOTER_BUTTON_PADDING: f32 = 6.;
+const FOOTER_BUTTON_GAP: f32 = 4.;
 
 /// Why the popup changes.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1045,7 +1046,7 @@ impl Qrow {
                 let message = match stale.as_slice() {
                     [schema] => loading_text(Some(schema.clone())),
                     schemas => vec![Text::Plain(format!(
-                        "Loading metadata of {} schemas…",
+                        "Loading metadata for {} schemas…",
                         schemas.len()
                     ))],
                 };
@@ -1069,10 +1070,17 @@ impl Qrow {
         // the message.
         let ui_font = font(cx.theme().font_family.clone());
         // A button is its label, its padding, and its border.
+        // The text and the buttons have a gap between them, and the
+        // buttons a smaller gap between each other.
         let action_width = actions.iter().fold(px(0.), |width, action| {
+            let gap = if width == px(0.) {
+                GAP
+            } else {
+                FOOTER_BUTTON_GAP
+            };
             width
                 + text_width(window, action.label(), &ui_font, window.rem_size() * 0.75)
-                + self.ui_px(2. * FOOTER_BUTTON_PADDING + GAP)
+                + self.ui_px(2. * FOOTER_BUTTON_PADDING + gap)
                 + px(2.)
         });
         let room =
@@ -1111,30 +1119,43 @@ impl Qrow {
                         .child(slot.dot(cx)),
                 )
                 .child(line)
-                .children(actions.into_iter().map(|action| {
-                    let profile = popup.profile;
-                    let button = Button::new(action.id())
-                        .xsmall()
-                        .h(self.ui_px(FOOTER_BUTTON_HEIGHT))
-                        .px(self.ui_px(FOOTER_BUTTON_PADDING))
-                        .label(action.label());
-                    match action {
-                        FooterAction::Retry => button.on_click(cx.listener(|this, _, _, cx| {
-                            this.refresh_completion(cx);
-                        })),
-                        FooterAction::Refresh(tooltip) => button
-                            .when_some(tooltip, |button, tooltip| button.tooltip(tooltip))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.refresh_completion(cx);
+                .when(!actions.is_empty(), |footer| {
+                    footer.child(
+                        h_flex()
+                            .id("sql-completion-footer-actions")
+                            .test_support()
+                            .flex_none()
+                            .gap(self.ui_px(FOOTER_BUTTON_GAP))
+                            .children(actions.into_iter().map(|action| {
+                                let profile = popup.profile;
+                                let button = Button::new(action.id())
+                                    .xsmall()
+                                    .h(self.ui_px(FOOTER_BUTTON_HEIGHT))
+                                    .px(self.ui_px(FOOTER_BUTTON_PADDING))
+                                    .label(action.label());
+                                match action {
+                                    FooterAction::Retry => {
+                                        button.on_click(cx.listener(|this, _, _, cx| {
+                                            this.refresh_completion(cx);
+                                        }))
+                                    }
+                                    FooterAction::Refresh(tooltip) => button
+                                        .when_some(tooltip, |button, tooltip| {
+                                            button.tooltip(tooltip)
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.refresh_completion(cx);
+                                        })),
+                                    FooterAction::ShowActivity => {
+                                        button.on_click(cx.listener(move |this, _, window, cx| {
+                                            this.close_completion(cx);
+                                            this.open_activity(Some(profile), window, cx);
+                                        }))
+                                    }
+                                }
                             })),
-                        FooterAction::ShowActivity => {
-                            button.on_click(cx.listener(move |this, _, window, cx| {
-                                this.close_completion(cx);
-                                this.open_activity(Some(profile), window, cx);
-                            }))
-                        }
-                    }
-                }))
+                    )
+                })
                 .into_any_element(),
         )
     }
@@ -1529,12 +1550,15 @@ impl FooterAction {
     }
 }
 
-/// "Loading metadata: `name`", or "Loading metadata…" for the schemas of
+/// "Loading metadata for `name`", or "Loading metadata…" for the schemas of
 /// the connection. The spinner shows the progress, so a message that ends
 /// with a name has no ellipsis.
 fn loading_text(name: Option<String>) -> Vec<Text> {
     match name {
-        Some(name) => vec![Text::Plain("Loading metadata: ".into()), Text::Code(name)],
+        Some(name) => vec![
+            Text::Plain("Loading metadata for ".into()),
+            Text::Code(name),
+        ],
         None => vec![Text::Plain("Loading metadata…".into())],
     }
 }

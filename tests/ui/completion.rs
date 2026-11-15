@@ -334,7 +334,7 @@ fn the_refresh_of_a_stale_schema_says_loading(cx: &mut TestAppContext) {
     complete(&app, cx, "SELECT * FROM avia.");
     app.click(cx, "sql-completion-footer-action");
     app.wait_until(cx, "the refresh", WAIT, |window, _| {
-        label(window, "sql-completion-footer").as_deref() == Some("Loading metadata: avia")
+        label(window, "sql-completion-footer").as_deref() == Some("Loading metadata for avia")
     });
 }
 
@@ -528,6 +528,17 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
         cx,
         "sql-completion-footer-action"
     ));
+    // The two buttons sit closer to each other than to the text.
+    app.update(cx, |window, _| {
+        let retry = bounds_of(window, "sql-completion-footer-action");
+        let activity = bounds_of(window, "sql-completion-footer-activity");
+        let text = bounds_of(window, "sql-completion-footer-text");
+        assert_eq!(activity.left() - retry.right(), gpui_kit::px(4.));
+        assert!(
+            retry.left() - text.right() >= gpui_kit::px(8.),
+            "{text:?} {retry:?}"
+        );
+    });
     app.click(cx, "sql-completion-footer-activity");
     app.wait_for(cx, "activity");
     assert!(app.update(cx, |window, _| window.try_find("sql-completion").is_none()));
@@ -639,7 +650,7 @@ fn the_loading_row_draws_its_text_at_the_measured_size(cx: &mut TestAppContext) 
     app.wait_for(cx, "sql-completion-loading-text");
     assert_eq!(
         app.update(cx, |window, _| label(window, "sql-completion-loading")),
-        Some("Loading metadata: avia.daily".into())
+        Some("Loading metadata for avia.daily".into())
     );
     let loading = app.update(cx, |window, _| {
         bounds_of(window, "sql-completion-loading-text").size.height
