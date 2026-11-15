@@ -49,12 +49,25 @@ pub struct Request {
     /// The start of the dotted name at the cursor, with its qualifier.
     pub start: usize,
     pub place: Place,
+    /// Whether a column name can start at the cursor: after SELECT, WHERE,
+    /// AND, a comma, a comparison, and other words that an expression
+    /// follows.
+    pub column_start: bool,
     /// The relations of the statement at the cursor.
     pub sources: Vec<Source>,
 }
 
 /// Words after which a table name follows.
 const RELATION_WORDS: [&str; 5] = ["FROM", "JOIN", "INTO", "UPDATE", "TABLE"];
+
+/// Words after which an expression, often a column name, follows.
+const COLUMN_WORDS: [&str; 14] = [
+    "SELECT", "WHERE", "AND", "OR", "ON", "BY", "HAVING", "SET", "WHEN", "THEN", "ELSE", "NOT",
+    "DISTINCT", "QUALIFY",
+];
+
+/// Signs after which an expression follows.
+const COLUMN_SIGNS: [&str; 9] = [",", "(", "=", "<>", "!=", "<", ">", "<=", ">="];
 
 /// Words that end the table list of a FROM clause.
 const CLAUSE_WORDS: [&str; 14] = [
@@ -366,6 +379,12 @@ pub fn request(sql: &str, offset: usize, database_type: DatabaseType) -> Option<
     let relation = previous.is_some_and(|token| {
         token.is(&RELATION_WORDS) || (token.kind == Kind::Plain && token.text == "," && in_from)
     });
+    let column_start = parts.is_empty()
+        && !relation
+        && previous.is_some_and(|token| {
+            token.is(&COLUMN_WORDS)
+                || (token.kind == Kind::Plain && COLUMN_SIGNS.contains(&token.text))
+        });
     let place = if !parts.is_empty() {
         Place::Qualified { parts, relation }
     } else if relation {
@@ -378,6 +397,7 @@ pub fn request(sql: &str, offset: usize, database_type: DatabaseType) -> Option<
         prefix,
         start,
         place,
+        column_start,
         sources: sources(&tokens, database_type),
     })
 }
@@ -862,6 +882,13 @@ impl<'a> Builder<'a> {
             .take(MAX_ITEMS)
             .map(|(_, item)| item)
             .collect();
+        // A stale schema matters only when the list shows names from it.
+        let items = &self.completion.items;
+        self.completion.stale.retain(|schema| {
+            items
+                .iter()
+                .any(|item| item.relation.as_ref().is_some_and(|(of, _)| of == schema))
+        });
         self.completion
     }
 }

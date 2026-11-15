@@ -92,7 +92,7 @@ enum Body {
     Items,
     Loading(Vec<Text>),
     Failed {
-        title: String,
+        title: Vec<Text>,
         detail: String,
     },
     /// The connection has no cached metadata.
@@ -103,6 +103,7 @@ enum Body {
 }
 
 /// A part of a message: plain text or a name in code font.
+#[derive(Clone)]
 enum Text {
     Plain(String),
     Code(String),
@@ -454,8 +455,9 @@ impl Qrow {
         }
     }
 
-    /// Whether the cursor of the active tab follows a name, a dot, or `FROM `
-    /// with nothing selected, in a tab whose connection reads metadata.
+    /// Whether the cursor of the active tab follows a name, a dot, `FROM `,
+    /// or a word or sign that a column follows (`WHERE `, `, `), with
+    /// nothing selected, in a tab whose connection reads metadata.
     fn completion_fits(&self, cx: &App) -> bool {
         let tab = &self.tabs[self.active];
         let input = tab.input.read(cx);
@@ -473,6 +475,7 @@ impl Qrow {
             && completion::request(&input.value(), input.cursor(), profile.database_type)
                 .is_some_and(|request| {
                     !request.prefix.is_empty()
+                        || request.column_start
                         || matches!(
                             request.place,
                             completion::Place::Qualified { .. } | completion::Place::Relation
@@ -498,20 +501,33 @@ impl Qrow {
             ),
             Body::NotRead => (
                 NotificationType::Info,
-                "No cached metadata".to_owned(),
+                vec![Text::Plain("No cached metadata".into())],
                 "Refresh the schemas of this connection to get suggestions.".to_owned(),
                 Some(("sql-completion-refresh", "Refresh")),
             ),
             Body::Off => (
                 NotificationType::Info,
-                "No cached metadata".to_owned(),
+                vec![Text::Plain("No cached metadata".into())],
                 "Turn on metadata refresh in the connection settings.".to_owned(),
                 None,
             ),
             _ => return,
         };
         self.close_completion(cx);
-        let mut toast = toast::notice(kind, "sql-completion-toast", title, Some(detail.into()));
+        let title = title
+            .into_iter()
+            .map(|part| match part {
+                Text::Plain(text) => (text, false),
+                Text::Code(text) => (text, true),
+            })
+            .collect();
+        let mut toast = toast::notice_with_names(
+            kind,
+            "sql-completion-toast",
+            title,
+            self.settings.editor_font_family.clone().into(),
+            Some(detail.into()),
+        );
         if let Some((id, label)) = action
             && !scopes.is_empty()
         {
@@ -717,7 +733,7 @@ impl Qrow {
         if !popup.read {
             if let Some((_, error)) = popup.completion.errors.first() {
                 return Body::Failed {
-                    title: "Could not load schemas".into(),
+                    title: vec![Text::Plain("Could not load schemas".into())],
                     detail: first_line(error),
                 };
             }
@@ -736,23 +752,19 @@ impl Qrow {
         match (need, error) {
             // The statement names the schema, so the title names only the
             // table.
-            (Need::Columns(_, relation), Some(error)) if !reading => Body::Failed {
-                title: format!("Could not load columns of {relation}"),
+            (Need::Columns(..) | Need::Relations(_), Some(error)) if !reading => Body::Failed {
+                title: need_text("Could not load", need),
                 detail: first_line(error),
             },
-            (Need::Relations(schema), Some(error)) if !reading => Body::Failed {
-                title: format!("Could not load tables of {schema}"),
-                detail: first_line(error),
-            },
+            // The spinner shows the progress, so a name ends the message
+            // without an ellipsis.
             (Need::Columns(schema, relation), _) => Body::Loading(vec![
                 Text::Plain("Loading columns of ".into()),
                 Text::Code(format!("{schema}.{relation}")),
-                Text::Plain("…".into()),
             ]),
             (Need::Relations(schema), _) => Body::Loading(vec![
                 Text::Plain("Loading tables of ".into()),
                 Text::Code(schema.clone()),
-                Text::Plain("…".into()),
             ]),
             (Need::Schemas, _) => Body::Loading(vec![Text::Plain("Loading schemas…".into())]),
         }
@@ -963,20 +975,20 @@ impl Qrow {
             if let Some((need, error)) = failed {
                 (
                     Slot::Alert,
-                    need_text("Could not load", &need, ""),
+                    need_text("Could not load", &need),
                     Some(("Retry", first_line(&error))),
                 )
             } else if let Some(need) = loading {
-                (Slot::Spinner, need_text("Loading", &need, "…"), None)
+                (Slot::Spinner, need_text("Loading", &need), None)
             } else if refreshing {
+                // The words of the other reads, which the tree also uses.
                 let message = match stale.as_slice() {
                     [schema] => vec![
-                        Text::Plain("Refreshing ".into()),
+                        Text::Plain("Loading tables of ".into()),
                         Text::Code(schema.clone()),
-                        Text::Plain("…".into()),
                     ],
                     schemas => vec![Text::Plain(format!(
-                        "Refreshing {} schemas…",
+                        "Loading tables of {} schemas…",
                         schemas.len()
                     ))],
                 };
@@ -1398,19 +1410,18 @@ fn failed_need(completion: &Completion, need: &Need) -> bool {
 }
 
 /// "`verb` columns of `table``end`", for the footer.
-fn need_text(verb: &str, need: &Need, end: &str) -> Vec<Text> {
+/// "`verb` columns of `name`", or "`verb` schemas…". A message that ends
+/// with a name has no ellipsis.
+fn need_text(verb: &str, need: &Need) -> Vec<Text> {
     let (what, name) = match need {
-        Need::Schemas => return vec![Text::Plain(format!("{verb} schemas{end}"))],
+        Need::Schemas if verb == "Loading" => return vec![Text::Plain("Loading schemas…".into())],
+        Need::Schemas => return vec![Text::Plain(format!("{verb} schemas"))],
         Need::Relations(schema) => ("tables of", schema.clone()),
         // The table alone: the statement names its schema, and a long
         // schema name would push the table out of the footer.
         Need::Columns(_, relation) => ("columns of", relation.clone()),
     };
-    let mut parts = vec![Text::Plain(format!("{verb} {what} ")), Text::Code(name)];
-    if !end.is_empty() {
-        parts.push(Text::Plain(end.into()));
-    }
-    parts
+    vec![Text::Plain(format!("{verb} {what} ")), Text::Code(name)]
 }
 
 /// The read that gives `need`.

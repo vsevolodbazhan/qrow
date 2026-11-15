@@ -25,6 +25,73 @@ pub(super) fn notice(
     })
 }
 
+/// A toast whose title shows names in `code_font`, like the editor. Each
+/// part of `title` is text, or a name when its flag is true. Long titles
+/// wrap between words.
+pub(super) fn notice_with_names(
+    kind: NotificationType,
+    id: &'static str,
+    title: Vec<(String, bool)>,
+    code_font: SharedString,
+    detail: Option<SharedString>,
+) -> Notification {
+    let label: SharedString = title
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect::<String>()
+        .into();
+    Notification::new()
+        .with_type(kind)
+        .content(move |_, _, cx| {
+            let muted = cx.theme().muted;
+            let mut parts: Vec<AnyElement> = Vec::new();
+            for (text, name) in &title {
+                if *name {
+                    parts.push(
+                        div()
+                            .font_family(code_font.clone())
+                            .font_weight(FontWeight::NORMAL)
+                            .px(rems(0.25))
+                            .rounded(rems(0.25))
+                            .bg(muted)
+                            .max_w_full()
+                            .truncate()
+                            .child(text.clone())
+                            .into_any_element(),
+                    );
+                } else {
+                    // Each word with its space is an item, so the title wraps
+                    // between words.
+                    parts.extend(text.split_inclusive(' ').map(|word| {
+                        div()
+                            .whitespace_nowrap()
+                            .child(word.to_owned())
+                            .into_any_element()
+                    }));
+                }
+            }
+            body(kind, id)
+                .test_support()
+                .child(
+                    div()
+                        .id("title")
+                        .test_support()
+                        .role(Role::Label)
+                        .aria_label(label.clone())
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .children(parts),
+                )
+                .when_some(detail.clone(), |body, detail| {
+                    body.child(detail_line("detail", detail))
+                })
+                .into_any_element()
+        })
+}
+
 /// An error toast: the failed operation as the title, the cause below it.
 pub(super) fn error(
     id: &'static str,

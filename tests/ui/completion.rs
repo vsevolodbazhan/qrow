@@ -318,6 +318,26 @@ fn stale_metadata_shows_a_footer_whose_refresh_reads_the_schema(cx: &mut TestApp
     );
 }
 
+#[gpui_kit::test]
+fn a_stale_schema_shows_only_when_the_list_has_its_names(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, Some(1), &[]);
+    complete(&app, cx, "SELECT * FROM fin");
+    assert_eq!(items(&app, cx), ["finance"]);
+    assert!(app.update(cx, |window, _| {
+        window.try_find("sql-completion-footer").is_none()
+    }));
+}
+
+#[gpui_kit::test]
+fn the_refresh_of_a_stale_schema_says_loading(cx: &mut TestAppContext) {
+    let (app, _listener) = launch_held(cx, Some(1));
+    complete(&app, cx, "SELECT * FROM avia.");
+    app.click(cx, "sql-completion-footer-action");
+    app.wait_until(cx, "the refresh", WAIT, |window, _| {
+        label(window, "sql-completion-footer").as_deref() == Some("Loading tables of avia")
+    });
+}
+
 /// The title of the suggestion toast, when one shows.
 fn toast_title(window: &mut gpui_kit::Window) -> Option<String> {
     window.try_find("sql-completion-toast")?;
@@ -446,7 +466,7 @@ fn the_loading_row_draws_its_text_at_the_measured_size(cx: &mut TestAppContext) 
     app.wait_for(cx, "sql-completion-loading-text");
     assert_eq!(
         app.update(cx, |window, _| label(window, "sql-completion-loading")),
-        Some("Loading columns of avia.daily…".into())
+        Some("Loading columns of avia.daily".into())
     );
     let loading = app.update(cx, |window, _| {
         bounds_of(window, "sql-completion-loading-text").size.height
@@ -525,6 +545,15 @@ fn autocomplete_turned_off_closes_the_list_and_tab_indents(cx: &mut TestAppConte
     app.wait_saved(cx, "autocomplete on", |workspace| {
         workspace.settings.editor_autocomplete
     });
+}
+
+#[gpui_kit::test]
+fn tab_after_where_shows_the_columns_of_the_statement(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    complete(&app, cx, "SELECT * FROM avia.bookings\nWHERE ");
+    assert_eq!(items(&app, cx), ["booking_id", "amount", "route"]);
+    app.press(cx, "enter");
+    assert_sql(&app, cx, "SELECT * FROM avia.bookings\nWHERE booking_id");
 }
 
 #[gpui_kit::test]

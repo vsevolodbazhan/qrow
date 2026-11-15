@@ -121,6 +121,32 @@ fn a_name_after_from_or_join_is_a_relation() {
 }
 
 #[test]
+fn a_column_starts_after_words_and_signs_that_an_expression_follows() {
+    for sql in [
+        "SELECT |",
+        "SELECT * FROM a WHERE |",
+        "select * from a\nwhere |",
+        "SELECT * FROM a WHERE x = 1 AND |",
+        "SELECT a, | FROM t",
+        "SELECT * FROM a JOIN b ON |",
+        "SELECT * FROM a WHERE x = |",
+        "SELECT * FROM a ORDER BY |",
+        "SELECT count(| FROM t",
+    ] {
+        assert!(at(sql, KYUUBI).1.column_start, "{sql}");
+    }
+    for sql in [
+        "SELECT 1 |",
+        "SELECT * FROM a |",
+        "SELECT * FROM |",
+        "SELECT * FROM a, |",
+        "SELECT a.|",
+    ] {
+        assert!(!at(sql, KYUUBI).1.column_start, "{sql}");
+    }
+}
+
+#[test]
 fn the_request_replaces_the_whole_name_at_the_cursor() {
     let (text, request) = at("SELECT * FROM avia.fl|ights", KYUUBI);
     assert_eq!(&text[request.replace.clone()], "flights");
@@ -356,6 +382,10 @@ fn metadata_older_than_the_refresh_period_is_stale() {
     assert_eq!(completion.stale, ["avia"]);
     let completion = suggest(Some(&catalog), "SELECT b.| FROM avia.bookings b");
     assert_eq!(completion.stale, ["avia"]);
+    // A list that shows no name from the stale schema does not report it.
+    let completion = suggest(Some(&catalog), "SELECT * FROM fina|");
+    assert_eq!(names(&completion), ["finance"]);
+    assert!(completion.stale.is_empty());
 }
 
 #[test]

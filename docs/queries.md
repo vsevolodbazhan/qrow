@@ -289,7 +289,9 @@ type: Spark SQL, Postgres, or Trino. Quoted text keeps its exact content.
 ## Complete names
 
 Press **Tab** after a name, a dot, or `FROM` and a space to show the
-schemas, tables, views, and columns that can go at the cursor. In other
+schemas, tables, views, and columns that can go at the cursor. Press
+**Tab** after `SELECT`, `WHERE`, `AND`, `ON`, `BY`, a comma, or a comparison
+and a space to show the columns of the tables in the statement. In other
 places, and when no name fits, **Tab** indents. To stop suggestions, turn
 off **Autocomplete** in the Editor section of
 [Settings](workspace.md#appearance-and-layout).
