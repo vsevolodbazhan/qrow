@@ -297,7 +297,9 @@ off **Autocomplete** in the Editor section of
 [Settings](workspace.md#appearance-and-layout).
 
 The list uses the [metadata copy](connections.md#browse-schemas) of the
-connection. It does not run SQL while you type. The list shows:
+connection. It does not run SQL while you type. While **Autocomplete** is
+on, the editor loads the copy from this computer when it gets focus. While
+**Autocomplete** is off, the editor does not load the copy. The list shows:
 
 - After `FROM`, `JOIN`, `INTO`, `UPDATE`, or `TABLE`: the schemas, then the
   tables and views of the default schema. For Kyuubi, the default schema is

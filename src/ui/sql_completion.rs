@@ -325,8 +325,13 @@ impl Qrow {
     }
 
     /// Loads the metadata cache of the tab's connection, so that the first
-    /// Tab finds names at once. Reads only the file on this computer.
+    /// Tab finds names at once. Reads only the file on this computer, and
+    /// only while Autocomplete is on: with it off, the first Tab after it
+    /// turns on loads the cache.
     pub(super) fn preload_completion(&mut self, tab: Uuid) {
+        if !self.settings.editor_autocomplete {
+            return;
+        }
         let profile = self
             .tabs
             .iter()

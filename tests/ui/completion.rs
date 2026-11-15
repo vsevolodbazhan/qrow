@@ -690,6 +690,63 @@ fn a_failed_refresh_from_the_toast_shows_its_error(cx: &mut TestAppContext) {
     assert_eq!(reads, 3, "{activity}");
 }
 
+#[gpui_kit::test]
+fn autocomplete_off_loads_no_metadata_and_the_first_tab_after_it_turns_on_suggests(
+    cx: &mut TestAppContext,
+) {
+    let profile = profile();
+    let directory = tempfile::tempdir().unwrap();
+    cache(&directory, &profile, qrow::catalog::now(), &[]);
+    let mut workspace = Workspace {
+        tabs: vec![SavedTab::new(1, Some(profile.id))],
+        profiles: vec![profile.clone()],
+        ..Workspace::default()
+    };
+    workspace.settings.editor_autocomplete = false;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    let holds = |app: &TestApp, cx: &mut TestAppContext| {
+        app.qrow
+            .update(cx, |qrow, _| qrow.holds_catalog(profile.id))
+            .unwrap()
+    };
+    // Focus and edits of the editor load nothing while Autocomplete is off.
+    app.type_sql(cx, "SELECT * FROM avia.bo");
+    app.settle(cx);
+    assert!(!holds(&app, cx));
+
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "autocomplete");
+    app.wait_for(cx, "editor-autocomplete");
+    app.click(cx, "editor-autocomplete");
+    app.wait_saved(cx, "autocomplete on", |workspace| {
+        workspace.settings.editor_autocomplete
+    });
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "reset-settings");
+
+    // The first Tab loads the cache. The list can show its loading row
+    // first, then the names.
+    app.type_sql(cx, "SELECT * FROM avia.bo");
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion");
+    app.wait_until(cx, "the cached names", WAIT, |window, _| {
+        labelled(window, "bookings").is_some()
+    });
+    assert_eq!(items(&app, cx), ["bookings"]);
+    assert!(holds(&app, cx));
+
+    // With Autocomplete on, a focus of the editor loads the cache before
+    // the first Tab.
+    let (app, profile) = launch(cx, fresh(), &[]);
+    app.click(cx, "sql-editor");
+    app.settle(cx);
+    assert!(
+        app.qrow
+            .update(cx, |qrow, _| qrow.holds_catalog(profile.id))
+            .unwrap()
+    );
+}
+
 /// Moves the cursor to the start of the editor text.
 fn move_to_start(app: &TestApp, cx: &mut TestAppContext) {
     app.press(
