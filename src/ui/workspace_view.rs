@@ -438,7 +438,7 @@ impl Qrow {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .when(!tab.busy && !authenticating, |el| {
+            .when(!tab.busy, |el| {
                 let button = Button::new("run")
                     .primary()
                     .small()
@@ -455,7 +455,7 @@ impl Qrow {
                     .on_click(cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)));
                 el.child(button)
             })
-            .when(tab.busy || authenticating, |el| {
+            .when(tab.busy, |el| {
                 el.child(
                     Button::new("cancel")
                         .small()

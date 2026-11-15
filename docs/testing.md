@@ -307,7 +307,8 @@ The suite then runs the same disposable coordinator with OAuth2
 and a synthetic confidential client. An injectable browser follows the
 coordinator and provider redirects over verified HTTPS. Tests check that connection selection does not start
 sign-in. A query starts sign-in when necessary. Tests also check browser
-progress and cancellation in the connection toolbar, token reuse without a
+progress and cancellation in the connection toolbar, cancellation while the
+browser launcher is blocked, retry before the old launcher returns, token reuse without a
 saved sign-in, and renewal without another browser login.
 The fixture provider uses only synthetic accounts and an HTTPS callback at
 Trino. The storage namespace stays alive during the OAuth2 restart.
