@@ -541,18 +541,20 @@ impl Qrow {
     ) {
         // The list at the cursor reads again what failed. Read here only
         // what it does not read, so one click starts each read once.
+        let mut started: Vec<Scope> = Vec::new();
         let tab = &self.tabs[self.active];
         if tab.saved.profile == Some(profile) && self.settings.editor_autocomplete {
             let input = tab.input.clone();
             input.update(cx, |input, cx| input.focus(window, cx));
             if self.completion_fits(cx) {
                 self.update_completion(Trigger::Open, cx);
+                started = self
+                    .active_completion()
+                    .filter(|popup| popup.profile == profile)
+                    .map(|popup| popup.requested.iter().map(need_scope).collect())
+                    .unwrap_or_default();
             }
         }
-        let started: Vec<Scope> = self
-            .active_completion()
-            .map(|popup| popup.requested.iter().map(need_scope).collect())
-            .unwrap_or_default();
         for scope in scopes {
             if !started.contains(scope) && !self.catalog.reads(profile, scope) {
                 self.read_for_completion(profile, scope.clone(), cx);
