@@ -884,3 +884,130 @@ fn the_cap_keeps_the_best_ranks_and_the_stale_schemas_that_it_shows() {
             .all(|item| item.kind == ItemKind::Schema)
     );
 }
+
+/// The statement at `offset` as the first implementation of [`request`]
+/// found it: from an index of the whole text, else between the `;` before
+/// and after the cursor.
+fn first_statement_at(sql: &str, offset: usize, database_type: DatabaseType) -> Range<usize> {
+    crate::sql::statement_range_at_for(sql, offset, database_type)
+        .filter(|range| range.start <= offset && offset <= range.end)
+        .unwrap_or_else(|| {
+            let mut start = 0;
+            let mut end = sql.len();
+            for (range, kind) in tokens_for(sql, database_type) {
+                if kind != Kind::Separator {
+                    continue;
+                }
+                if range.end <= offset {
+                    start = range.end;
+                } else {
+                    end = range.start;
+                    break;
+                }
+            }
+            start..end
+        })
+}
+
+/// Pieces of generated SQL: quotes, comments, dollar quotes, escapes of
+/// each dialect, separators, and non-ASCII text.
+const SQL_PARTS: [&str; 40] = [
+    "SELECT ", "a", "b.c", " FROM ", "t x", " WHERE ", ";", ";", ";", "\n", "\n", " ", "\t", "'",
+    "\"", "`", "''", "$$", "$a$", "$a", "$", "--", "/*", "*/", "\\", "E'", "e'", "U&'", "u&\"",
+    "日本", "é", "(", ")", ", ", "1.5", "_x", "\r\n", "\u{3000}", "-", "*",
+];
+
+/// SQL of up to `parts` pieces.
+fn generated_sql(random: &mut Random, parts: usize) -> String {
+    let count = random.below(parts + 1);
+    (0..count).map(|_| *random.pick(&SQL_PARTS)).collect()
+}
+
+fn char_boundary(random: &mut Random, sql: &str) -> usize {
+    let boundaries: Vec<usize> = sql
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain([sql.len()])
+        .collect();
+    *random.pick(&boundaries)
+}
+
+#[test]
+fn kept_statements_find_the_statement_of_a_new_read_after_edits() {
+    let mut random = Random(0xfeed_5eed_0003);
+    let mut checks = 0;
+    for document in 0..240 {
+        let database_type = [KYUUBI, DatabaseType::Postgres, DatabaseType::Trino][document % 3];
+        let mut statements = Statements::new(database_type);
+        let mut sql = generated_sql(&mut random, 60);
+        for _ in 0..25 {
+            for _ in 0..1 + random.below(4) {
+                let offset = char_boundary(&mut random, &sql);
+                let expected = first_statement_at(&sql, offset, database_type);
+                // A request also changes the text of the index, so the
+                // first request after an edit checks the read after it.
+                let request = if random.chance(50) {
+                    statements.request(&sql, offset)
+                } else {
+                    statements.set_text(&sql);
+                    assert_eq!(
+                        statements.statement_at(offset),
+                        expected,
+                        "{sql:?} at {offset} in {database_type:?}"
+                    );
+                    statements.request(&sql, offset)
+                };
+                assert_eq!(
+                    request,
+                    request_in(&sql, offset, database_type, expected),
+                    "{sql:?} at {offset} in {database_type:?}"
+                );
+                checks += 1;
+            }
+            // An edit: an insert, a delete, or both, anywhere.
+            let start = char_boundary(&mut random, &sql);
+            let end = if random.chance(40) {
+                let end = char_boundary(&mut random, &sql);
+                end.max(start)
+            } else {
+                start
+            };
+            let insert = if random.chance(70) {
+                generated_sql(&mut random, 3)
+            } else {
+                String::new()
+            };
+            sql.replace_range(start..end, &insert);
+            if random.chance(3) {
+                sql = generated_sql(&mut random, 60);
+            }
+        }
+    }
+    assert!(checks > 10_000, "{checks} checks");
+}
+
+#[test]
+fn kept_statements_read_only_up_to_the_statement_at_the_cursor() {
+    let line = "SELECT a FROM t WHERE b = 'x; y';\n";
+    let mut sql = line.repeat(1_000);
+    let mut statements = Statements::new(KYUUBI);
+    // A cursor in the first statement reads only that statement.
+    statements.request(&sql, 10);
+    assert_eq!(statements.statements.len(), 1);
+    assert_eq!(statements.read, line.len() - 1);
+    // A cursor at the end reads all statements.
+    statements.request(&sql, sql.len());
+    assert_eq!(statements.statements.len(), 1_000);
+    // An edit at the end keeps the statements before it.
+    sql.push_str("SELECT * FROM fl");
+    statements.request(&sql, sql.len());
+    assert_eq!(statements.statements.len(), 1_001);
+    assert_eq!(
+        *statements.statements.last().unwrap(),
+        sql.len() - 16..sql.len()
+    );
+    // An edit in the first statement keeps none.
+    sql.insert(7, 'x');
+    statements.request(&sql, 8);
+    assert_eq!(statements.statements.len(), 1);
+}

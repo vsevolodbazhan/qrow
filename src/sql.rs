@@ -53,10 +53,39 @@ pub fn tokens_for(
     sql: &str,
     database_type: crate::model::DatabaseType,
 ) -> Vec<(Range<usize>, Kind)> {
-    let bytes = sql.as_bytes();
-    let mut tokens = vec![];
-    let mut i = 0;
-    while i < bytes.len() {
+    Tokens::new(sql, 0, database_type).collect()
+}
+
+/// The tokens of an SQL text from a byte offset, one at a time. The
+/// offset must be 0 or the end of a token of the whole text, for example
+/// the end of a `;`: the tokens from there are then the tokens that
+/// [`tokens_for`] gives for the whole text.
+pub struct Tokens<'a> {
+    sql: &'a str,
+    next: usize,
+    database_type: DatabaseType,
+}
+
+impl<'a> Tokens<'a> {
+    pub fn new(sql: &'a str, start: usize, database_type: DatabaseType) -> Self {
+        Self {
+            sql,
+            next: start,
+            database_type,
+        }
+    }
+}
+
+impl Iterator for Tokens<'_> {
+    type Item = (Range<usize>, Kind);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (sql, database_type) = (self.sql, self.database_type);
+        let bytes = sql.as_bytes();
+        let mut i = self.next;
+        if i >= bytes.len() {
+            return None;
+        }
         let start = i;
         let kind = if bytes[i..].starts_with(b"--") {
             while i < bytes.len() && bytes[i] != b'\n' {
@@ -155,9 +184,9 @@ pub fn tokens_for(
                 Kind::Plain
             }
         };
-        tokens.push((start..i, kind));
+        self.next = i;
+        Some((start..i, kind))
     }
-    tokens
 }
 
 /// The name that a token gives: a quoted identifier without its quotes, or a

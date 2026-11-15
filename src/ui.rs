@@ -837,6 +837,10 @@ pub struct Qrow {
     /// suggestions last started a read. Until the next report, the read
     /// counts as running, so the list does not show the last error.
     completion_reads: std::collections::HashMap<Uuid, u64>,
+    /// The statements of the editor text of the query tab that last asked
+    /// for suggestions, so that a cursor move or an edit does not read the
+    /// whole SQL again.
+    completion_statements: Option<(Uuid, crate::completion::Statements)>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
     message: Option<String>,
@@ -1124,6 +1128,7 @@ impl Qrow {
             menu: None,
             completion: None,
             completion_reads: std::collections::HashMap::new(),
+            completion_statements: None,
             saver,
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
             message,

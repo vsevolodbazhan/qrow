@@ -202,10 +202,7 @@ impl Qrow {
             self.close_completion(cx);
             return;
         };
-        let input = tab.input.read(cx);
-        let text = input.value();
-        let cursor = input.cursor();
-        let Some(request) = completion::request(&text, cursor, profile.database_type) else {
+        let Some(request) = self.completion_request(profile.database_type, cx) else {
             self.close_completion(cx);
             return;
         };
@@ -300,6 +297,31 @@ impl Qrow {
             description: RefCell::new(description),
         });
         cx.notify();
+    }
+
+    /// The request at the cursor of the active tab. The statements of the
+    /// editor text stay between calls, so that a call reads only the SQL
+    /// that changed since the last call, up to the statement at the cursor.
+    fn completion_request(
+        &mut self,
+        database_type: crate::model::DatabaseType,
+        cx: &App,
+    ) -> Option<Request> {
+        let tab = &self.tabs[self.active];
+        let input = tab.input.read(cx);
+        let statements = match &mut self.completion_statements {
+            Some((id, statements))
+                if *id == tab.saved.id && statements.database_type() == database_type =>
+            {
+                statements
+            }
+            slot => {
+                &mut slot
+                    .insert((tab.saved.id, completion::Statements::new(database_type)))
+                    .1
+            }
+        };
+        statements.request(&input.value(), input.cursor())
     }
 
     /// Loads the metadata cache of the tab's connection, so that the first
@@ -460,10 +482,9 @@ impl Qrow {
     /// Whether the cursor of the active tab follows a name, a dot, `FROM `,
     /// or a word or sign that a column follows (`WHERE `, `, `), with
     /// nothing selected, in a tab whose connection reads metadata.
-    fn completion_fits(&self, cx: &App) -> bool {
+    fn completion_fits(&mut self, cx: &App) -> bool {
         let tab = &self.tabs[self.active];
-        let input = tab.input.read(cx);
-        if !input.selected_range().is_empty() {
+        if !tab.input.read(cx).selected_range().is_empty() {
             return false;
         }
         let Some(profile) = tab
@@ -473,16 +494,19 @@ impl Qrow {
         else {
             return false;
         };
-        profile.catalog.browses()
-            && completion::request(&input.value(), input.cursor(), profile.database_type)
-                .is_some_and(|request| {
-                    !request.prefix.is_empty()
-                        || request.column_start
-                        || matches!(
-                            request.place,
-                            completion::Place::Qualified { .. } | completion::Place::Relation
-                        )
-                })
+        if !profile.catalog.browses() {
+            return false;
+        }
+        let database_type = profile.database_type;
+        self.completion_request(database_type, cx)
+            .is_some_and(|request| {
+                !request.prefix.is_empty()
+                    || request.column_start
+                    || matches!(
+                        request.place,
+                        completion::Place::Qualified { .. } | completion::Place::Relation
+                    )
+            })
     }
 
     /// Closes a list that has no names and only reports a problem, and shows

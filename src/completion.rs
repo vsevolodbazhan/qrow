@@ -11,6 +11,9 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+mod statements;
+pub use statements::Statements;
+
 /// The most suggestions that one request gives.
 pub const MAX_ITEMS: usize = 200;
 
@@ -293,12 +296,19 @@ impl Token<'_> {
 }
 
 /// The request at byte `offset` of `sql`, or `None` when the cursor is in a
-/// comment or a string.
+/// comment or a string. To read many requests of an editor text that
+/// changes, keep a [`Statements`] instead.
 pub fn request(sql: &str, offset: usize, database_type: DatabaseType) -> Option<Request> {
-    let offset = offset.min(sql.len());
-    let statement = crate::sql::statement_range_at_for(sql, offset, database_type)
-        .filter(|range| range.start <= offset && offset <= range.end)
-        .unwrap_or_else(|| statement_around(sql, offset, database_type));
+    Statements::new(database_type).request(sql, offset)
+}
+
+/// The request at `offset` in `statement`, the statement at the cursor.
+fn request_in(
+    sql: &str,
+    offset: usize,
+    database_type: DatabaseType,
+    statement: Range<usize>,
+) -> Option<Request> {
     let tokens: Vec<Token> = tokens_for(&sql[statement.clone()], database_type)
         .into_iter()
         .map(|(range, kind)| {
@@ -402,25 +412,6 @@ pub fn request(sql: &str, offset: usize, database_type: DatabaseType) -> Option<
         column_start,
         sources: sources(&tokens, database_type),
     })
-}
-
-/// The statement around `offset` when the statement index has none, for
-/// example after the last semicolon.
-fn statement_around(sql: &str, offset: usize, database_type: DatabaseType) -> Range<usize> {
-    let mut start = 0;
-    let mut end = sql.len();
-    for (range, kind) in tokens_for(sql, database_type) {
-        if kind != Kind::Separator {
-            continue;
-        }
-        if range.end <= offset {
-            start = range.end;
-        } else {
-            end = range.start;
-            break;
-        }
-    }
-    start..end
 }
 
 /// Whether a quoted token has its closing quote.

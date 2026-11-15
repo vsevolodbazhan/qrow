@@ -689,3 +689,106 @@ fn a_failed_refresh_from_the_toast_shows_its_error(cx: &mut TestAppContext) {
         .count();
     assert_eq!(reads, 3, "{activity}");
 }
+
+/// Moves the cursor to the start of the editor text.
+fn move_to_start(app: &TestApp, cx: &mut TestAppContext) {
+    app.press(
+        cx,
+        if cfg!(target_os = "macos") {
+            "cmd-up"
+        } else {
+            "ctrl-home"
+        },
+    );
+}
+
+/// Moves the cursor to the end of the editor text.
+fn move_to_end(app: &TestApp, cx: &mut TestAppContext) {
+    app.press(
+        cx,
+        if cfg!(target_os = "macos") {
+            "cmd-down"
+        } else {
+            "ctrl-end"
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn the_list_follows_edits_after_other_statements_and_closes_away_from_the_name(
+    cx: &mut TestAppContext,
+) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    // Statements before the cursor, with `;` in a string and in a comment.
+    let head = "SELECT 'a;b' AS x; -- c;\nSELECT 1 /* ; */;\n";
+    complete(&app, cx, &format!("{head}SELECT * FROM avia."));
+    assert_eq!(items(&app, cx), ["bookings", "daily"]);
+    // Typing filters the list, and Backspace widens it again.
+    app.update(cx, |window, cx| window.input("b", cx));
+    app.wait_until(cx, "the filtered list", WAIT, |window, _| {
+        labelled(window, "daily").is_none()
+    });
+    assert_eq!(items(&app, cx), ["bookings"]);
+    app.press(cx, "backspace");
+    app.wait_until(cx, "the full list", WAIT, |window, _| {
+        labelled(window, "daily").is_some()
+    });
+    // Down moves the selection, and the list stays.
+    app.press(cx, "down");
+    app.settle(cx);
+    assert_eq!(items(&app, cx), ["bookings", "daily"]);
+    app.press(cx, "enter");
+    app.wait_gone(cx, "sql-completion");
+    assert_sql(&app, cx, &format!("{head}SELECT * FROM avia.daily"));
+
+    // A move of the cursor away from the name closes the list.
+    app.press(cx, "backspace");
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion");
+    app.press(cx, "home");
+    app.wait_gone(cx, "sql-completion");
+}
+
+#[gpui_kit::test]
+fn an_edit_above_the_cursor_changes_what_tab_reads(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    let sql = "SELECT 1;\nSELECT * FROM avia.b";
+    complete(&app, cx, sql);
+    assert_eq!(items(&app, cx), ["bookings"]);
+    app.press(cx, "escape");
+    app.wait_gone(cx, "sql-completion");
+    // A quote at the start makes the rest of the SQL a string, so Tab at
+    // the end indents.
+    move_to_start(&app, cx);
+    app.update(cx, |window, cx| window.input("'", cx));
+    move_to_end(&app, cx);
+    app.press(cx, "tab");
+    app.wait_until(cx, "the indent", WAIT, |_, _| {
+        let saved = app.saved().tabs[0].sql.clone();
+        saved.starts_with('\'') && saved.len() > sql.len() + 1
+    });
+    assert!(app.update(cx, |window, _| window.try_find("sql-completion").is_none()));
+    // Without the quote and the indent, Tab after the name opens the
+    // list again.
+    move_to_start(&app, cx);
+    app.press(cx, "delete");
+    move_to_end(&app, cx);
+    for _ in 0..8 {
+        if editor_text(&app, cx) == sql {
+            break;
+        }
+        app.press(cx, "backspace");
+    }
+    assert_eq!(editor_text(&app, cx), sql);
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion");
+    assert_eq!(items(&app, cx), ["bookings"]);
+}
+
+/// The text of the SQL editor.
+fn editor_text(app: &TestApp, cx: &mut TestAppContext) -> String {
+    app.update(cx, |window, _| {
+        crate::support::assistant::editor_text(window)
+    })
+    .unwrap_or_default()
+}
