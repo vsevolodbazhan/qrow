@@ -1324,19 +1324,20 @@ fn shared_sign_ins_offer_only_oidc(cx: &mut TestAppContext) {
 fn trino_external_authentication_progress_can_be_cancelled_before_connect(cx: &mut TestAppContext) {
     use crate::support::trino_protocol::{Reply, Server};
     use qrow::model::DatabaseType;
-    let mut replies = vec![Reply { status: 401, body: String::new(), headers: "WWW-Authenticate: Bearer x_redirect_server=\"{origin}/browser\", x_token_server=\"{origin}/token\"\r\n".into() }];
-    replies.extend((0..300).map(|_| Reply::page(serde_json::json!({"nextUri":"{origin}/token"}))));
+    let replies = vec![Reply { status: 401, body: String::new(), headers: "WWW-Authenticate: Bearer x_redirect_server=\"{origin}/browser\", x_token_server=\"{origin}/token\"\r\n".into() }];
     let mut server = Server::new(true, replies);
     server.profile.authentication = Authentication::TrinoExternal;
     let mut tab = SavedTab::new(1, Some(server.profile.id));
     tab.sql = "SELECT 42".into();
     let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let browser_opens = opens.clone();
+    let (release, released) = std::sync::mpsc::channel();
+    let released = std::sync::Mutex::new(released);
     let app = TestApp::launch_with_sign_ins(
         cx,
         Workspace {
             profiles: vec![server.profile.clone()],
-            tabs: vec![tab],
+            tabs: vec![tab, SavedTab::new(2, Some(server.profile.id))],
             ..Workspace::default()
         },
         MemoryCredentials::default(),
@@ -1344,14 +1345,37 @@ fn trino_external_authentication_progress_can_be_cancelled_before_connect(cx: &m
             trust(),
             Some(Arc::new(move |_| {
                 browser_opens.fetch_add(1, Ordering::SeqCst);
+                // Model a launcher that stays blocked after its window closes.
+                released
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(60))?;
                 Ok(())
             })),
         ),
     );
     app.click(cx, "run");
     app.wait_status(cx, "Waiting for browser sign-in");
+    app.wait_until(cx, "blocked browser launcher", WAIT, |_, _| {
+        opens.load(Ordering::SeqCst) == 1
+    });
+    // Another tab can share the connection without waiting for this sign-in.
+    // Its toolbar must not offer a Cancel button that cannot stop anything.
+    app.click_labelled(cx, "Query 2");
+    app.wait_for(cx, "run");
+    app.update(cx, |window, _| {
+        assert!(!present(window, &"cancel".into()));
+        assert!(present(
+            window,
+            &"connection-authentication-progress".into()
+        ));
+    });
+    app.click_starting(cx, "Query 1");
     app.click(cx, "cancel");
     app.wait_status(cx, "Cancelled");
+    app.wait_for(cx, "run");
+    app.wait_gone(cx, "connection-authentication-progress");
+    release.send(()).unwrap();
     assert_eq!(opens.load(Ordering::SeqCst), 1);
     assert_eq!(app.saved().profiles[0].database_type, DatabaseType::Trino);
 }

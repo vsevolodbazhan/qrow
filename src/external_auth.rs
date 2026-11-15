@@ -428,11 +428,21 @@ struct Waiter {
 }
 impl Drop for Waiter {
     fn drop(&mut self) {
-        let _state = self.entry.state.lock_unpoisoned();
+        let mut state = self.entry.state.lock_unpoisoned();
         if self.flight.waiters.fetch_sub(1, Ordering::SeqCst) == 1 {
             self.flight.cancel.store(true, Ordering::SeqCst);
+            // A browser launcher can remain blocked after its window closes.
+            // Waiting ends with the last caller, not with the launcher. Keep
+            // a replacement flight intact if this waiter belongs to an old one.
+            if state
+                .flight
+                .as_ref()
+                .is_some_and(|flight| Arc::ptr_eq(flight, &self.flight))
+            {
+                state.flight = None;
+            }
         }
-        drop(_state);
+        drop(state);
         self.control.progress(false);
         self.shared.changed();
     }
@@ -589,6 +599,50 @@ mod tests {
         } else {
             Ok(())
         }
+    }
+    #[test]
+    fn last_cancelled_waiter_releases_status_before_browser_returns() {
+        let (service, profile, source) = setup();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancellation = cancelled.clone();
+        let leader = source.clone().with_control(Control::new(
+            Arc::new(move || cancellation.load(Ordering::SeqCst)),
+            Arc::new(|_| {}),
+        ));
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let waiter = thread::spawn(move || {
+            leader.authenticate(None, Duration::from_secs(5), move |_| {
+                entered_tx.send(()).unwrap();
+                released.recv().unwrap();
+                Ok(Zeroizing::new("stale".into()))
+            })
+        });
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(service.status(profile.id), Status::Waiting);
+        let old_flight = source.entry.state.lock().unwrap().flight.clone().unwrap();
+        cancelled.store(true, Ordering::SeqCst);
+        assert!(waiter.join().unwrap().unwrap_err().is::<Cancelled>());
+        // Keep the old browser blocked through a successful new sign-in.
+        assert_eq!(service.status(profile.id), Status::SignedOut);
+        assert_eq!(
+            source
+                .authenticate(None, Duration::from_secs(2), |_| {
+                    Ok(Zeroizing::new("fresh".into()))
+                })
+                .unwrap()
+                .as_str(),
+            "fresh"
+        );
+        release.send(()).unwrap();
+        // Synchronize with publication of the old job's result.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while old_flight.result.lock().unwrap().is_none() {
+            assert!(Instant::now() < deadline);
+            thread::yield_now();
+        }
+        assert_eq!(source.cached().unwrap().unwrap().as_str(), "fresh");
+        assert_eq!(service.status(profile.id), Status::SignedIn);
     }
     #[test]
     fn cache_isolated_by_connection_endpoint_username_and_authentication() {

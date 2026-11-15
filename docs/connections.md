@@ -368,6 +368,9 @@ The query toolbar shows **Waiting for Trino authentication…** while a query
 or schema refresh waits for sign-in. Queries show **Waiting for browser sign-in…**.
 Click **Cancel** to stop the active query's wait, even before a query cursor exists;
 other requests for the connection can continue their shared authentication.
+An idle query tab shows **Run** while another request waits for sign-in.
+When the last request stops, the authentication indicator clears. You can retry
+before the previous browser launcher returns.
 A red connection dot opens Activity for that connection when authentication fails.
 
 Trino tokens are opaque. Qrow keeps them only in memory. Sessions of the same

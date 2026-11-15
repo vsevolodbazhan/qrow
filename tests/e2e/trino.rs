@@ -452,6 +452,8 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT current_user AS value".into();
     let other = crate::support::offline_profile("Other connection");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let browser_attempts = attempts.clone();
     let app = TestApp::launch_with_sign_ins(
         cx,
         Workspace {
@@ -464,8 +466,9 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
         SignIns::new(
             trust,
             Some(Arc::new(move |url| {
+                let attempt = browser_attempts.fetch_add(1, Ordering::SeqCst);
                 browser_entered.store(true, Ordering::SeqCst);
-                let deadline = Instant::now() + Duration::from_secs(15);
+                let deadline = Instant::now() + Duration::from_secs(60);
                 while !browser_release.load(Ordering::SeqCst) {
                     anyhow::ensure!(
                         Instant::now() < deadline,
@@ -473,6 +476,7 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
                     );
                     std::thread::sleep(Duration::from_millis(10));
                 }
+                anyhow::ensure!(attempt != 0, "Synthetic closed browser");
                 browser(url)
             })),
         ),
@@ -498,6 +502,21 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
     app.wait_status(cx, "Waiting for browser sign-in");
     app.wait_for(cx, "connection-authentication-progress");
     app.wait_for(cx, "cancel");
+    app.wait_until(
+        cx,
+        "blocked browser launcher",
+        Duration::from_secs(5),
+        |_, _| entered.load(Ordering::SeqCst),
+    );
+    app.click(cx, "cancel");
+    app.wait_status(cx, "Cancelled");
+    app.wait_gone(cx, "connection-authentication-progress");
+    app.wait_for(cx, "run");
+    // Retry before the old browser callback returns.
+    app.click(cx, "run");
+    app.wait_until(cx, "new browser attempt", Duration::from_secs(5), |_, _| {
+        attempts.load(Ordering::SeqCst) == 2
+    });
     release.store(true, Ordering::SeqCst);
     app.wait_gone(cx, "connection-authentication-progress");
     app.wait_status(cx, "Complete");
