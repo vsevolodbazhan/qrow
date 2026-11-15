@@ -728,12 +728,12 @@ impl Qrow {
             || (!popup.read && waits)
             || self.catalog.reads(popup.profile, &Scope::Connection)
         {
-            return Body::Loading(vec![Text::Plain("Loading schemas…".into())]);
+            return Body::Loading(need_text("Loading", &Need::Schemas));
         }
         if !popup.read {
             if let Some((_, error)) = popup.completion.errors.first() {
                 return Body::Failed {
-                    title: vec![Text::Plain("Could not load schemas".into())],
+                    title: need_text("Could not load", &Need::Schemas),
                     detail: first_line(error),
                 };
             }
@@ -759,10 +759,9 @@ impl Qrow {
             // The spinner shows the progress, so a name ends the message
             // without an ellipsis.
             (Need::Columns(schema, relation), _) => {
-                Body::Loading(loading_text(format!("{schema}.{relation}")))
+                Body::Loading(metadata_text("Loading", format!("{schema}.{relation}")))
             }
-            (Need::Relations(schema), _) => Body::Loading(loading_text(schema.clone())),
-            (Need::Schemas, _) => Body::Loading(vec![Text::Plain("Loading schemas…".into())]),
+            (Need::Relations(_) | Need::Schemas, _) => Body::Loading(need_text("Loading", need)),
         }
     }
 
@@ -975,11 +974,11 @@ impl Qrow {
                     Some(("Retry", first_line(&error))),
                 )
             } else if let Some(need) = loading {
-                (Slot::Spinner, loading_need_text(&need), None)
+                (Slot::Spinner, need_text("Loading", &need), None)
             } else if refreshing {
                 // The words of the other reads.
                 let message = match stale.as_slice() {
-                    [schema] => loading_text(schema.clone()),
+                    [schema] => metadata_text("Loading", schema.clone()),
                     schemas => vec![Text::Plain(format!(
                         "Loading metadata of {} schemas…",
                         schemas.len()
@@ -1402,33 +1401,23 @@ fn failed_need(completion: &Completion, need: &Need) -> bool {
     completion.errors.iter().any(|(failed, _)| failed == need)
 }
 
-/// "Loading metadata: `name`". All reads of one schema or table use these
-/// words, so the message ends with the name and has no ellipsis.
-fn loading_text(name: String) -> Vec<Text> {
-    vec![Text::Plain("Loading metadata: ".into()), Text::Code(name)]
+/// "`verb` metadata: `name`". All messages about one schema or table use
+/// these words. The message ends with the name and has no ellipsis.
+fn metadata_text(verb: &str, name: String) -> Vec<Text> {
+    vec![Text::Plain(format!("{verb} metadata: ")), Text::Code(name)]
 }
 
-/// The loading message of `need`, for the footer. It names the table alone:
-/// the statement names its schema, and a long schema name would push the
-/// table out of the footer.
-fn loading_need_text(need: &Need) -> Vec<Text> {
-    match need {
-        Need::Schemas => vec![Text::Plain("Loading schemas…".into())],
-        Need::Relations(schema) => loading_text(schema.clone()),
-        Need::Columns(_, relation) => loading_text(relation.clone()),
-    }
-}
-
-/// "`verb` columns of `name`", or "`verb` schemas".
+/// The message about `need`: "`verb` metadata: `name`", or, for the
+/// schemas of the connection, "Loading metadata…" and "`verb` metadata".
+/// A table shows without its schema: the statement names the schema, and a
+/// long schema name would push the table out of the footer.
 fn need_text(verb: &str, need: &Need) -> Vec<Text> {
-    let (what, name) = match need {
-        Need::Schemas => return vec![Text::Plain(format!("{verb} schemas"))],
-        Need::Relations(schema) => ("tables of", schema.clone()),
-        // The table alone: the statement names its schema, and a long
-        // schema name would push the table out of the footer.
-        Need::Columns(_, relation) => ("columns of", relation.clone()),
-    };
-    vec![Text::Plain(format!("{verb} {what} ")), Text::Code(name)]
+    match need {
+        Need::Schemas if verb == "Loading" => vec![Text::Plain("Loading metadata…".into())],
+        Need::Schemas => vec![Text::Plain(format!("{verb} metadata"))],
+        Need::Relations(schema) => metadata_text(verb, schema.clone()),
+        Need::Columns(_, relation) => metadata_text(verb, relation.clone()),
+    }
 }
 
 /// The read that gives `need`.

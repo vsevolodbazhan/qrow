@@ -353,7 +353,7 @@ fn a_failed_load_closes_the_list_and_shows_a_toast_with_retry(cx: &mut TestAppCo
     app.type_sql(cx, "SELECT d. FROM avia.daily d");
     app.press(cx, "tab");
     app.wait_until(cx, "the failed load", WAIT, |window, _| {
-        toast_title(window).as_deref() == Some("Could not load columns of daily")
+        toast_title(window).as_deref() == Some("Could not load metadata: daily")
     });
     assert!(app.update(cx, |window, _| {
         window.try_find("sql-completion").is_none()
@@ -381,7 +381,7 @@ fn a_connection_without_cached_metadata_shows_a_toast_with_refresh(cx: &mut Test
     // Refresh reads the connection and shows the list at the cursor again.
     app.click(cx, "sql-completion-refresh");
     app.wait_until(cx, "the read", WAIT, |window, _| {
-        label(window, "sql-completion-loading").as_deref() == Some("Loading schemas…")
+        label(window, "sql-completion-loading").as_deref() == Some("Loading metadata…")
             && toast_title(window).is_none()
     });
 }
@@ -416,7 +416,7 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
     // The columns of `daily` are not cached, and the connection is out of
     // reach, so their read fails.
     app.wait_until(cx, "the failed read", WAIT, |window, _| {
-        label(window, "sql-completion-footer").as_deref() == Some("Could not load columns of daily")
+        label(window, "sql-completion-footer").as_deref() == Some("Could not load metadata: daily")
     });
     assert_eq!(
         app.update(cx, |window, _| label(
@@ -447,7 +447,7 @@ fn a_cut_table_name_in_the_footer_shows_in_full_on_hover(cx: &mut TestAppContext
         }
     });
     app.press(cx, "tab");
-    let message = format!("Could not load columns of {long}");
+    let message = format!("Could not load metadata: {long}");
     app.wait_until(cx, "the failed read", WAIT, |window, _| {
         label(window, "sql-completion-footer").as_deref() == Some(message.as_str())
     });
@@ -583,7 +583,7 @@ fn a_failed_refresh_from_the_toast_shows_its_error(cx: &mut TestAppContext) {
     app.click(cx, "sql-completion-refresh");
     app.wait_until(cx, "the error", WAIT, |window, _| {
         window.try_find("sql-completion").is_none()
-            && toast_title(window).as_deref() == Some("Could not load schemas")
+            && toast_title(window).as_deref() == Some("Could not load metadata")
             && window.try_find("sql-completion-retry").is_some()
     });
     // Tab reads the connection again, and the read fails again.
