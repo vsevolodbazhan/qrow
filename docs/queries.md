@@ -351,6 +351,11 @@ When the metadata of a schema in the list is older than the
 connection, the list shows `schema is stale` below the names. Select
 **Refresh** to read the schema again.
 
+A schema that Qrow read and that has no tables or views is dimmed in the
+list and says **empty schema**. You can still insert it. After the name of
+such a schema and a dot, **Tab** shows **No tables or views in** and the
+schema name in place of names, with the same status line as other lists.
+
 The status line of the list has a dot, with the same colors as the dots of
 connections: blue while Qrow reads metadata, yellow for stale metadata, and
 red for a failed read.

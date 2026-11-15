@@ -1011,3 +1011,42 @@ fn kept_statements_read_only_up_to_the_statement_at_the_cursor() {
     statements.request(&sql, 8);
     assert_eq!(statements.statements.len(), 1);
 }
+
+#[test]
+fn a_schema_without_tables_is_marked_empty() {
+    let mut read = catalog(NOW);
+    read.apply_relations("cold", None, Vec::new(), NOW);
+    let completion = suggest(Some(&read), "SELECT * FROM |");
+    let schema = |name: &str| {
+        completion
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap()
+            .clone()
+    };
+    assert!(schema("cold").empty);
+    assert_eq!(schema("cold").detail, "empty schema");
+    assert!(!schema("avia").empty);
+    assert_eq!(schema("avia").detail, "schema");
+    // After its name, with or without a prefix, the list shows the schema
+    // in place of names, and reads nothing.
+    for sql in ["SELECT * FROM cold.|", "SELECT * FROM cold.ev|"] {
+        let completion = suggest(Some(&read), sql);
+        assert!(completion.items.is_empty(), "{sql}");
+        assert!(completion.missing.is_empty(), "{sql}");
+        assert_eq!(completion.empty_schema.as_deref(), Some("cold"), "{sql}");
+    }
+    // A schema that Qrow has not read is not empty: the list reads it.
+    let completion = suggest(Some(&catalog(NOW)), "SELECT * FROM cold.|");
+    assert_eq!(completion.empty_schema, None);
+    assert_eq!(completion.missing, [Need::Relations("cold".into())]);
+}
+
+#[test]
+fn a_stale_empty_schema_is_stale_in_its_own_list() {
+    let mut read = catalog(NOW - 3_601);
+    read.apply_relations("cold", None, Vec::new(), NOW - 3_601);
+    let completion = suggest(Some(&read), "SELECT * FROM cold.|");
+    assert_eq!(completion.stale, ["cold"]);
+}
