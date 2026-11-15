@@ -563,9 +563,15 @@ fn a_failed_refresh_from_the_toast_shows_its_error(cx: &mut TestAppContext) {
     app.wait_until(cx, "the second error", WAIT, |window, _| {
         window.try_find("sql-completion").is_none() && toast_title(window).is_some()
     });
+    // Retry in the toast reads it once more.
+    app.click(cx, "sql-completion-retry");
+    app.settle(cx);
+    app.wait_until(cx, "the third error", WAIT, |window, _| {
+        window.try_find("sql-completion").is_none() && toast_title(window).is_some()
+    });
     let activity = app.activity(cx, profile.id);
     let reads = activity
         .matches("Started a metadata refresh of the connection")
         .count();
-    assert_eq!(reads, 2, "{activity}");
+    assert_eq!(reads, 3, "{activity}");
 }
