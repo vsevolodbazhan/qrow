@@ -15,6 +15,7 @@ use crate::update::{self, Download, Manager, Setup, Updater, Version};
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::Icon;
 use gpui_kit::component::notification::Notification;
+use std::rc::Rc;
 
 /// The first automatic check waits until the window has settled.
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
@@ -522,32 +523,33 @@ impl Qrow {
         }
         self.updates.announced = Some(version.clone());
         let detail = self.updates.instruction().map(SharedString::from);
-        let toast = toast::notice(
+        let action = match self.updates.command() {
+            Some(command) => toast::ToastAction {
+                id: "update-copy-command",
+                label: "Copy command",
+                primary: false,
+                on_click: Rc::new(move |_, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(command.clone()))
+                }),
+            },
+            None => {
+                let page = setup.release_page(version);
+                toast::ToastAction {
+                    id: "update-open-release",
+                    label: "Open release",
+                    primary: false,
+                    on_click: Rc::new(move |_, cx| cx.open_url(&page)),
+                }
+            }
+        };
+        let toast = toast::notice_with_actions(
             NotificationType::Info,
             "update-available",
             "Update available",
+            None,
             detail,
+            vec![action],
         );
-        let toast = match self.updates.command() {
-            Some(command) => toast.action(move |_, _, _| {
-                let command = command.clone();
-                Button::new("update-copy-command")
-                    .label("Copy command")
-                    .on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(command.clone()))
-                    })
-            }),
-            None => {
-                let page = setup.release_page(version);
-                toast.action(move |_, _, _| {
-                    let page = page.clone();
-                    Button::new("update-open-release")
-                        .label("Open release")
-                        .on_click(move |_, _, cx| cx.open_url(&page))
-                })
-            }
-        };
-        // An action keeps a toast open; update toasts hide like the others.
         window.push_notification(toast.id::<UpdateNotice>().autohide(true), cx);
     }
 
@@ -570,17 +572,24 @@ impl Qrow {
             None => text.clone(),
         };
         self.log_update(Severity::Error, logged, cx);
-        let toast = toast::error("update-install-failed", "Update did not install", text);
-        let toast = match failed.log {
-            Some(log) => toast.action(move |_, _, _| {
-                let log = log.clone();
-                Button::new("update-install-log")
-                    .label(toast::REVEAL_LABEL)
-                    .on_click(move |_, _, cx| cx.reveal_path(&log))
-            }),
-            None => toast,
-        };
-        // An action keeps a toast open; this one hides like the others.
+        let actions = failed
+            .log
+            .map(|log| toast::ToastAction {
+                id: "update-install-log",
+                label: toast::REVEAL_LABEL,
+                primary: false,
+                on_click: Rc::new(move |_, cx| cx.reveal_path(&log)),
+            })
+            .into_iter()
+            .collect();
+        let toast = toast::notice_with_actions(
+            NotificationType::Error,
+            "update-install-failed",
+            "Update did not install",
+            None,
+            Some(text.into()),
+            actions,
+        );
         window.push_notification(toast.id::<UpdateNotice>().autohide(true), cx);
         cx.notify();
     }
@@ -630,11 +639,20 @@ impl Qrow {
                             // The next download of this version announces
                             // it again.
                             this.updates.announced = None;
+                            // Activity has the error of the installer.
+                            let show_activity = toast::show_activity(
+                                "update-failed-activity",
+                                cx.entity().downgrade(),
+                                crate::activity::APPLICATION,
+                            );
                             window.push_notification(
-                                toast::error(
+                                toast::notice_with_actions(
+                                    NotificationType::Error,
                                     "update-failed",
                                     "Could not install the update",
-                                    error,
+                                    None,
+                                    None,
+                                    vec![show_activity],
                                 )
                                 .id::<UpdateNotice>(),
                                 cx,
@@ -770,21 +788,22 @@ fn progress_toast(status: &Status) -> Option<Notification> {
 
 /// The toast of a downloaded update, with **Restart to update**.
 fn ready_toast(version: &Version, owner: WeakEntity<Qrow>) -> Notification {
-    toast::notice(
+    let restart = toast::ToastAction {
+        id: "update-restart",
+        label: "Restart to update",
+        primary: true,
+        on_click: Rc::new(move |window, cx| {
+            let _ = owner.update(cx, |this, cx| this.restart_to_update(window, cx));
+        }),
+    };
+    toast::notice_with_actions(
         NotificationType::Info,
         "update-ready",
         "Update ready",
+        None,
         Some(format!("Qrow {version} starts after a restart.").into()),
+        vec![restart],
     )
-    .action(move |_, _, _| {
-        let owner = owner.clone();
-        Button::new("update-restart")
-            .primary()
-            .label("Restart to update")
-            .on_click(move |_, window, cx| {
-                let _ = owner.update(cx, |this, cx| this.restart_to_update(window, cx));
-            })
-    })
     .id::<UpdateNotice>()
     .autohide(true)
 }

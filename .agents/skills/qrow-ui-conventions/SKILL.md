@@ -66,8 +66,10 @@ Peer surfaces must look and behave the same.
 - **Toasts.** Build every toast with `src/ui/toast.rs`. Each toast has a type
   icon (success, info, warning, or error) and a bold title that names the
   event, for example "Could not save SQL file". Details go on the lines
-  below the title. One action shares the row with the text; two or more
-  actions go on a row below it. Toasts hide after 5 seconds. Only toasts
+  below the title. Actions go on a row below the text, aligned left with
+  it. A toast shows only text that Qrow writes: the error of a database,
+  the system, or a library goes to Activity, and the toast has **Show
+  activity**. Toasts hide after 5 seconds. Only toasts
   about a background export stay until the user closes them. Toasts start
   below the query tabs.
 

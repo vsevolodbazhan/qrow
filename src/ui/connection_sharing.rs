@@ -55,6 +55,32 @@ impl Qrow {
                 let pasted = PastedConnection { sign_in };
                 self.open_profile_editor(profile, true, Some(pasted), window, cx);
             }
+            // The message is ours. A cause, like the text of the JSON
+            // parser, goes to Activity.
+            Err(error) if error.chain().count() > 1 => {
+                let entry = crate::activity::ActivityEntry::new(
+                    Severity::Error,
+                    format!("Could not paste connection. {error} {}", error.root_cause()),
+                )
+                .with_source("Connections");
+                self.record_activity(crate::activity::APPLICATION, entry, cx);
+                let show_activity = toast::show_activity(
+                    "paste-connection-activity",
+                    cx.entity().downgrade(),
+                    crate::activity::APPLICATION,
+                );
+                window.push_notification(
+                    toast::notice_with_actions(
+                        toast::NotificationType::Error,
+                        "paste-connection-toast",
+                        "Could not paste connection",
+                        None,
+                        Some(error.to_string().into()),
+                        vec![show_activity],
+                    ),
+                    cx,
+                );
+            }
             Err(error) => window.push_notification(
                 toast::error(
                     "paste-connection-toast",

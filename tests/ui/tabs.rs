@@ -1127,10 +1127,10 @@ fn sql_file_import_and_save_round_trip(cx: &mut TestAppContext) {
         let reveal = window.find("reveal-sql-file");
         assert_eq!(reveal.label(), Some(REVEAL_LABEL));
         assert!(reveal.visible());
-        // The action shares the row with the text instead of adding a row.
-        assert!(reveal.bounds().left() >= notice.bounds().right());
-        assert!(reveal.bounds().top() < heading.bounds().bottom());
-        assert!(reveal.bounds().bottom() > detail.bounds().top());
+        // The action goes on a row below the text, aligned left with it.
+        assert!(reveal.bounds().top() >= heading.bounds().bottom());
+        assert_eq!(reveal.bounds().left(), detail.bounds().left());
+        assert!(reveal.bounds().right() <= notice.bounds().right());
         // The notification starts below the query tabs, not over them.
         assert!(detail.bounds().top() > window.find("query-toolbar").bounds().top());
     });
@@ -1202,6 +1202,40 @@ fn sql_file_cancel_and_failures_keep_existing_tabs(cx: &mut TestAppContext) {
     );
     wait_tabs(&app, cx, id, &[("Original", "SELECT 1")]);
     assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+fn a_failed_save_names_the_file_and_keeps_the_error_in_activity(cx: &mut TestAppContext) {
+    let profile = offline_profile("SQL files");
+    let id = profile.id;
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![tab(id, "Original", "SELECT 1")],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("missing/query.sql");
+    app.press(cx, "secondary-shift-s");
+    let target = path.clone();
+    cx.simulate_new_path_selection(|_| Some(target));
+    app.wait_for(cx, "sql-file-error-toast");
+    app.update(cx, |window, _| {
+        let toast = window.within("sql-file-error-toast");
+        assert_eq!(toast.find("title").label(), Some("Could not save SQL file"));
+        assert_eq!(toast.find("filename").label(), Some("query.sql"));
+        // The error of the system is not in the toast.
+        assert!(toast.try_find("detail").is_none());
+    });
+    app.click(cx, "show-activity");
+    app.wait_for(cx, "activity");
+    // The toast closes, so it no longer covers the Activity header.
+    app.wait_gone(cx, "sql-file-error-toast");
+    let activity = app.copy_activity(cx);
+    let entry = format!("Could not save SQL file: {}: ", path.display());
+    assert!(activity.contains(&entry), "{activity}");
 }
 
 fn sql_file_notifications(

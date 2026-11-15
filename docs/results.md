@@ -187,7 +187,9 @@ these options selects **Custom**. The dialog does not show a text preview.
 
 **Copy** puts up to 10 MiB of text on the clipboard. It includes all rows
 and columns, and downloads or reruns the query when needed. If the text exceeds
-the limit, the clipboard does not change. You can save the downloaded result
+the limit, the clipboard does not change. If a copy fails, a notification
+shows **Could not copy results**. Select **Show activity** to see the cause
+in the **Qrow** log of [Activity](activity.md). You can save the downloaded result
 to a file. Parquet is available only as a file. **Save** opens the native save
 panel. Tab separators use the `.tsv` extension. Other separators
 use `.csv`. After a save, a notification shows the row count and the file
@@ -364,8 +366,8 @@ get all rows after that, reopen Export and choose **Copy** or **Save**.
 
 After download completion, writer cancellation and errors affect only that
 file. They cannot cancel a later query. A writer error stays in a notification
-and keeps the completed spool. **Retry…** opens the form and uses that
-spool without running SQL. You can change the format or destination.
+and keeps the completed spool. **Retry…** opens the form, which shows the
+error, and uses that spool without running SQL. You can change the format or destination.
 **Dismiss** releases this job's handle.
 
 A new export automatically uses the tab's retained spool. You can choose

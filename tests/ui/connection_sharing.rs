@@ -272,6 +272,32 @@ fn pasting_other_text_explains_why_and_adds_nothing(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn invalid_connection_settings_keep_the_parser_error_in_activity(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.write_to_clipboard(ClipboardItem::new_string(
+        r#"{"qrow_connection": 1, "name": "Team", "port": "ten"}"#.into(),
+    ));
+    app.dispatch(cx, qrow::ui::PasteConnection);
+    // The toast shows only our words.
+    assert_eq!(
+        toast_detail(&app, cx, "paste-connection-toast"),
+        "The connection settings are not valid."
+    );
+    app.click(cx, "paste-connection-activity");
+    app.wait_for(cx, "activity");
+    // The toast closes, so it no longer covers the Activity header.
+    app.wait_gone(cx, "paste-connection-toast");
+    let activity = app.copy_activity(cx);
+    assert!(
+        activity.contains(
+            "Could not paste connection. The connection settings are not valid. invalid type"
+        ),
+        "{activity}"
+    );
+}
+
+#[gpui_kit::test]
 fn a_pasted_connection_without_a_username_asks_for_one_on_save(cx: &mut TestAppContext) {
     let (workspace, credentials) = workspace();
     let app = TestApp::launch_with(cx, workspace, credentials);

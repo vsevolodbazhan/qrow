@@ -9,8 +9,10 @@ concurrently.
 Select a connection, then use **File → Import SQL file…** (**⌘O**) to open
 a UTF-8 SQL file. The file opens in a new query tab under that
 connection. The tab uses the file name without its extension. Duplicate
-names get a copy suffix. Import does not run SQL. An unreadable file shows
-an error and does not add a tab.
+names get a copy suffix. Import does not run SQL. If Qrow cannot read the
+file, a notification shows the file name, and Qrow does not add a tab.
+Select **Show activity** in the notification to see the error in the
+**Qrow** log of [Activity](activity.md).
 
 Right-click a tab and select **Save as SQL file…** to save its full SQL text.
 Press **⇧⌘S** to save the active tab.
@@ -20,7 +22,8 @@ On Linux and Windows, use Ctrl in place of ⌘.
 After a save, a notification shows the file name. Use **Reveal in Finder**
 to locate the file. On Windows, the action is **Reveal in File Explorer**. On
 Linux, it is **Open Containing Folder**. The notification closes after 5 seconds. Point to it to
-keep it open.
+keep it open. If the save fails, a notification shows the file name. Select
+**Show activity** to see the error in the **Qrow** log.
 
 Tabs and files are separate copies. Workspace autosave does not change an
 imported or saved file. Use **Save as SQL file…** again to write later edits.

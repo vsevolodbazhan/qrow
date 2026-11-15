@@ -144,7 +144,10 @@ impl SharedConnection<serde_json::Value> {
             "These connection settings come from a newer version of Qrow. Update Qrow, then try again."
         );
         let shared: Self = serde_json::from_value(value)
-            .map_err(|error| anyhow::anyhow!("The connection settings are not valid: {error}."))?;
+            // The message says what is wrong; the cause is for Activity.
+            .map_err(|error| {
+                anyhow::Error::new(error).context("The connection settings are not valid.")
+            })?;
         let (authentication, sign_in) = match shared.authentication {
             SharedAuthentication::Password => (Authentication::Password, None),
             SharedAuthentication::TrinoExternal => (Authentication::TrinoExternal, None),

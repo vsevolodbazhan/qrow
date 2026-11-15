@@ -4,7 +4,7 @@
 //! asks the catalog worker for.
 
 use super::dbt::{DbtLookup, summary};
-use super::toast::{self, NotificationType};
+use super::toast::{self, NotificationType, SHOW_ACTIVITY};
 use super::{Qrow, text_width};
 use crate::catalog::Scope;
 use crate::completion::{self, Completion, Item, ItemKind, Need, Request};
@@ -530,6 +530,7 @@ impl Qrow {
             toast::ToastAction {
                 id,
                 label,
+                primary: false,
                 on_click: Rc::new(move |window, cx| {
                     let _ = owner.update(cx, |this, cx| {
                         this.retry_completion(profile, &scopes, window, cx);
@@ -537,18 +538,7 @@ impl Qrow {
                 }),
             }
         };
-        let show_activity = {
-            let owner = owner.clone();
-            toast::ToastAction {
-                id: "sql-completion-activity",
-                label: SHOW_ACTIVITY,
-                on_click: Rc::new(move |window, cx| {
-                    let _ = owner.update(cx, |this, cx| {
-                        this.open_activity(Some(profile), window, cx);
-                    });
-                }),
-            }
-        };
+        let show_activity = toast::show_activity("sql-completion-activity", owner.clone(), profile);
         let can_retry = !scopes.is_empty();
         // The toast says what failed in our words. The error of the
         // database or the system is in Activity.
@@ -1490,9 +1480,6 @@ impl FooterAction {
         }
     }
 }
-
-/// The label of the action that opens the Activity of the connection.
-const SHOW_ACTIVITY: &str = "Show activity";
 
 /// "Loading metadata: `name`", or "Loading metadata…" for the schemas of
 /// the connection. The spinner shows the progress, so a message that ends

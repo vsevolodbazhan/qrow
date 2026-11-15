@@ -1430,7 +1430,10 @@ impl SharedSignIn {
             "These sign-in settings come from a newer version of Qrow. Update Qrow, then try again."
         );
         let shared: Self = serde_json::from_value(value)
-            .map_err(|error| anyhow::anyhow!("The sign-in settings are not complete: {error}."))?;
+            // The message says what is wrong; the cause is for Activity.
+            .map_err(|error| {
+                anyhow::Error::new(error).context("The sign-in settings are not complete.")
+            })?;
         let sign_in = SignIn {
             name: shared.name.trim().to_owned(),
             provider: shared.provider,

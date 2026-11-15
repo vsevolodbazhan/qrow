@@ -1082,6 +1082,7 @@ impl Qrow {
             }),
         ];
         let activity = cx.new(|cx| activity_view::ActivityView::new(window, cx));
+        cx.set_global(toast::FailureSink(cx.weak_entity()));
         // The saved dbt indexes are in the local data directory, which the
         // workspace lock protects. Without a saved workspace, they stay in
         // memory.
