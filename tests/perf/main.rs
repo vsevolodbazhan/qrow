@@ -794,13 +794,38 @@ fn key_and_frame(app: &TestApp, cx: &mut TestAppContext, keys: &[&str]) -> (f64,
     (median_ms(&work), median_ms(&frame))
 }
 
+/// Presses `key` once and draws the frame after it.
+fn key_and_frame_once(app: &TestApp, cx: &mut TestAppContext, name: &str) {
+    let mut key = Keystroke::parse(name).expect("a keystroke");
+    if name.chars().count() == 1 {
+        key.key_char = Some(name.into());
+    }
+    app.update(cx, |window, cx| window.dispatch_keystroke(key, cx));
+    app.update(cx, |window, cx| window.draw(cx).clear(cx));
+}
+
 fn report_keys(probe: &str, (work, frame): (f64, f64)) {
     report(&format!("{probe}.work"), work, "ms", 50.);
     report(&format!("{probe}.frame"), frame, "ms", 50.);
 }
 
-/// Opens the list of suggestions with Tab.
-fn open_completion(app: &TestApp, cx: &mut TestAppContext) {
+/// The rows of the list of suggestions that the window shows, or none
+/// while the list is closed.
+fn completion_rows(app: &TestApp, cx: &mut TestAppContext) -> Vec<String> {
+    app.update(cx, |window, cx| {
+        window.render_frame(cx);
+        let mut rows: Vec<String> = support::elements(window)
+            .into_iter()
+            .filter_map(|element| element.path().last().map(|id| format!("{id:?}")))
+            .filter(|id| id.contains("sql-completion-item-"))
+            .collect();
+        rows.sort();
+        rows
+    })
+}
+
+/// Opens the list of suggestions with Tab. Returns its rows.
+fn open_completion(app: &TestApp, cx: &mut TestAppContext) -> Vec<String> {
     app.press(cx, "tab");
     app.wait_until(
         cx,
@@ -815,6 +840,21 @@ fn open_completion(app: &TestApp, cx: &mut TestAppContext) {
             })
         },
     );
+    completion_rows(app, cx)
+}
+
+/// A probe of the open list must end with the list open, else it measured
+/// the editor without the list.
+fn assert_completion_open(app: &TestApp, cx: &mut TestAppContext, probe: &str) {
+    assert!(
+        !completion_rows(app, cx).is_empty(),
+        "the list of suggestions closed during {probe}"
+    );
+}
+
+fn assert_completion_closed(app: &TestApp, cx: &mut TestAppContext, probe: &str) {
+    let rows = completion_rows(app, cx);
+    assert!(rows.is_empty(), "{probe} opened the list: {rows:?}");
 }
 
 #[gpui_kit::test]
@@ -827,21 +867,30 @@ fn completion_tables(cx: &mut TestAppContext) {
             &format!("ui.completion.closed_keystroke_{tables}"),
             key_and_frame(&app, cx, &["f", "backspace"]),
         );
-        open_completion(&app, cx);
-        // Each key changes the names of the list.
+        assert_completion_closed(&app, cx, "closed_keystroke");
+        let schemas = open_completion(&app, cx);
+        // Each key changes the names of the list: schemas, then tables.
+        key_and_frame_once(&app, cx, "f");
+        let tables_shown = completion_rows(&app, cx);
+        assert!(!tables_shown.is_empty() && tables_shown != schemas);
+        key_and_frame_once(&app, cx, "backspace");
+        assert_eq!(completion_rows(&app, cx), schemas);
         report_keys(
             &format!("ui.completion.keystroke_{tables}"),
             key_and_frame(&app, cx, &["f", "backspace"]),
         );
+        assert_eq!(completion_rows(&app, cx), schemas);
         report_keys(
             &format!("ui.completion.move_{tables}"),
             key_and_frame(&app, cx, &["down"]),
         );
+        assert_completion_open(&app, cx, "move");
         // Escape and Tab: the list opens again.
         report_keys(
             &format!("ui.completion.open_{tables}"),
             key_and_frame(&app, cx, &["escape", "tab"]),
         );
+        assert_completion_open(&app, cx, "open");
     }
 }
 
@@ -860,10 +909,12 @@ fn completion_columns(cx: &mut TestAppContext) {
         "ui.completion.columns_keystroke_2x1000",
         key_and_frame(&app, cx, &["a", "backspace"]),
     );
+    assert_completion_open(&app, cx, "columns_keystroke");
     report_keys(
         "ui.completion.columns_move_2x1000",
         key_and_frame(&app, cx, &["down"]),
     );
+    assert_completion_open(&app, cx, "columns_move");
 }
 
 #[gpui_kit::test]
@@ -877,12 +928,15 @@ fn completion_in_one_megabyte_of_sql(cx: &mut TestAppContext) {
         "ui.completion.closed_keystroke_1mb",
         key_and_frame(&app, cx, &["f", "backspace"]),
     );
+    assert_completion_closed(&app, cx, "closed_keystroke_1mb");
     open_completion(&app, cx);
     report_keys(
         "ui.completion.keystroke_1mb",
         key_and_frame(&app, cx, &["f", "backspace"]),
     );
+    assert_completion_open(&app, cx, "keystroke_1mb");
     report_keys("ui.completion.move_1mb", key_and_frame(&app, cx, &["down"]));
+    assert_completion_open(&app, cx, "move_1mb");
     // A blink of the caret while the list is open: the editor reports a
     // change, but the text and the cursor stay the same.
     let blink = |cx: &mut TestAppContext| {
@@ -899,7 +953,9 @@ fn completion_in_one_megabyte_of_sql(cx: &mut TestAppContext) {
         median_ms(&samples)
     };
     report("ui.completion.blink_open_1mb", blink(cx), "ms", 50.);
+    assert_completion_open(&app, cx, "blink_open_1mb");
     app.press(cx, "escape");
+    assert_completion_closed(&app, cx, "escape");
     report("ui.completion.blink_closed_1mb", blink(cx), "ms", 50.);
 }
 
@@ -918,4 +974,5 @@ fn completion_tab_indent_in_one_megabyte_of_sql(cx: &mut TestAppContext) {
         "ui.completion.indent_tab_1mb",
         key_and_frame(&app, cx, &["tab"]),
     );
+    assert_completion_closed(&app, cx, "indent_tab_1mb");
 }
