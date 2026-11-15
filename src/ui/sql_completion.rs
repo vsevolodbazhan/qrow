@@ -1103,13 +1103,11 @@ impl Qrow {
                         FooterAction::Retry => button.on_click(cx.listener(|this, _, _, cx| {
                             this.refresh_completion(cx);
                         })),
-                        FooterAction::Refresh(tooltip) => {
-                            button
-                                .tooltip(tooltip)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.refresh_completion(cx);
-                                }))
-                        }
+                        FooterAction::Refresh(tooltip) => button
+                            .when_some(tooltip, |button, tooltip| button.tooltip(tooltip))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_completion(cx);
+                            })),
                         FooterAction::ShowActivity => {
                             button.on_click(cx.listener(move |this, _, window, cx| {
                                 this.close_completion(cx);
@@ -1472,8 +1470,9 @@ fn failed_need(completion: &Completion, need: &Need) -> bool {
 enum FooterAction {
     /// Reads the failed metadata again.
     Retry,
-    /// Reads the stale schemas again. The tooltip names them.
-    Refresh(String),
+    /// Reads the stale schemas again. With more than one schema, the
+    /// footer shows only their count, so the tooltip names them.
+    Refresh(Option<String>),
     /// Opens the Activity of the connection, which has the error.
     ShowActivity,
 }
@@ -1546,16 +1545,26 @@ fn plain(parts: &[Text]) -> String {
         .collect()
 }
 
-fn stale_tooltip(schemas: &[String]) -> String {
+fn stale_tooltip(schemas: &[String]) -> Option<String> {
     match schemas {
-        [schema] => format!("Refresh {schema}"),
-        schemas => format!("Refresh {}", schemas.join(", ")),
+        // The footer shows the name.
+        [_] => None,
+        schemas => Some(format!("Refresh {}", schemas.join(", "))),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn refresh_names_the_schemas_only_when_the_footer_counts_them() {
+        assert_eq!(stale_tooltip(&["avia".into()]), None);
+        assert_eq!(
+            stale_tooltip(&["avia".into(), "sales".into()]).as_deref(),
+            Some("Refresh avia, sales")
+        );
+    }
 
     #[::core::prelude::v1::test]
     fn long_names_and_types_wrap_between_their_parts() {

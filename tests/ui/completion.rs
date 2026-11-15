@@ -572,6 +572,12 @@ fn a_footer_that_fits_has_no_tooltip(cx: &mut TestAppContext) {
     complete(&app, cx, "SELECT * FROM avia.");
     app.wait_for(cx, "sql-completion-footer");
     assert!(!hover_shows_tooltip(&app, cx, "sql-completion-footer-text"));
+    // The footer names the one stale schema, so Refresh has no tooltip.
+    assert!(!hover_shows_tooltip(
+        &app,
+        cx,
+        "sql-completion-footer-action"
+    ));
 }
 
 #[gpui_kit::test]
