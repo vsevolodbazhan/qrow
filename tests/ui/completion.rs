@@ -334,7 +334,7 @@ fn the_refresh_of_a_stale_schema_says_loading(cx: &mut TestAppContext) {
     complete(&app, cx, "SELECT * FROM avia.");
     app.click(cx, "sql-completion-footer-action");
     app.wait_until(cx, "the refresh", WAIT, |window, _| {
-        label(window, "sql-completion-footer").as_deref() == Some("Loading tables of avia")
+        label(window, "sql-completion-footer").as_deref() == Some("Loading metadata: avia")
     });
 }
 
@@ -466,7 +466,7 @@ fn the_loading_row_draws_its_text_at_the_measured_size(cx: &mut TestAppContext) 
     app.wait_for(cx, "sql-completion-loading-text");
     assert_eq!(
         app.update(cx, |window, _| label(window, "sql-completion-loading")),
-        Some("Loading columns of avia.daily".into())
+        Some("Loading metadata: avia.daily".into())
     );
     let loading = app.update(cx, |window, _| {
         bounds_of(window, "sql-completion-loading-text").size.height
