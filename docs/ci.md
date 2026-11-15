@@ -96,7 +96,7 @@ suite selections.
 | `common-backend` | Prepare one core integration executable. Use Docker to test Kyuubi, Postgres, and Trino connectors and workers, including authentication, TLS, cancellation, and transport scenarios. No GPUI build is required. |
 | `common-headless-ui` | Run application Clippy, application unit tests, doctests, and portable headless UI tests. These need no server. In full mode, repeat the UI timing regressions with the same binaries. |
 | `common-server-ui` | Run the headless UI scenarios with all three server types: the e2e suite against Kyuubi, and the Postgres and Trino window scenarios. |
-| `common-performance` | Build the SQL, dbt, and export benchmarks in one Cargo request and enforce their existing budgets. |
+| `common-performance` | Build the SQL, completion, dbt, and export benchmarks in one Cargo request and enforce their existing budgets. |
 | `common-required` | Require every common job to succeed. Verify the exact suite set, commit, target, and nonempty nextest reports. Missing, cancelled, duplicate, stale, or failed results stop native tests. |
 
 The two UI jobs run in parallel. They prepare their own test binaries with

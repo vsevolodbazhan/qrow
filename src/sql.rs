@@ -53,7 +53,14 @@ pub fn tokens_for(
     sql: &str,
     database_type: crate::model::DatabaseType,
 ) -> Vec<(Range<usize>, Kind)> {
-    Tokens::new(sql, 0, database_type).collect()
+    let mut tokens = vec![];
+    let mut i = 0;
+    while i < sql.len() {
+        let (end, kind) = token_at(sql, i, database_type);
+        tokens.push((i..end, kind));
+        i = end;
+    }
+    tokens
 }
 
 /// The tokens of an SQL text from a byte offset, one at a time. The
@@ -80,113 +87,118 @@ impl Iterator for Tokens<'_> {
     type Item = (Range<usize>, Kind);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (sql, database_type) = (self.sql, self.database_type);
-        let bytes = sql.as_bytes();
-        let mut i = self.next;
-        if i >= bytes.len() {
+        let start = self.next;
+        if start >= self.sql.len() {
             return None;
         }
-        let start = i;
-        let kind = if bytes[i..].starts_with(b"--") {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            Kind::Comment
-        } else if bytes[i..].starts_with(b"/*") {
-            i += 2;
-            let mut depth = 1;
-            while i < bytes.len() && depth > 0 {
-                if bytes[i..].starts_with(b"/*") {
-                    depth += 1;
-                    i += 2;
-                } else if bytes[i..].starts_with(b"*/") {
-                    depth -= 1;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-            Kind::Comment
-        } else if database_type != crate::model::DatabaseType::Trino
-            && bytes[i] == b'$'
-            && dollar_quote_end(sql, i).is_some()
-        {
-            let (delimiter_end, string_end) = dollar_quote_end(sql, i).unwrap();
-            i = string_end.unwrap_or(bytes.len()).max(delimiter_end);
-            Kind::String
-        } else if matches!(bytes[i], b'\'' | b'"' | b'`')
-            || (database_type != DatabaseType::Kyuubi
-                && matches!(bytes[i], b'U' | b'u')
-                && bytes.get(i + 1) == Some(&b'&')
-                && matches!(bytes.get(i + 2), Some(b'\'' | b'"')))
-        {
-            if matches!(bytes[i], b'U' | b'u') {
+        let (end, kind) = token_at(self.sql, start, self.database_type);
+        self.next = end;
+        Some((start..end, kind))
+    }
+}
+
+/// The end and the kind of the token that starts at byte `start` of `sql`.
+/// It is inline in the loops of the tokenizer, which run on large SQL.
+#[inline(always)]
+fn token_at(sql: &str, start: usize, database_type: DatabaseType) -> (usize, Kind) {
+    let bytes = sql.as_bytes();
+    let mut i = start;
+    let kind = if bytes[i..].starts_with(b"--") {
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        Kind::Comment
+    } else if bytes[i..].starts_with(b"/*") {
+        i += 2;
+        let mut depth = 1;
+        while i < bytes.len() && depth > 0 {
+            if bytes[i..].starts_with(b"/*") {
+                depth += 1;
                 i += 2;
-            }
-            let quote = bytes[i];
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\\'
-                    && quote != b'`'
-                    && (database_type == crate::model::DatabaseType::Kyuubi
-                        || (database_type == crate::model::DatabaseType::Postgres
-                            && quote == b'\''
-                            && start > 0
-                            && matches!(bytes[start - 1], b'E' | b'e')))
-                {
-                    i = (i + 2).min(bytes.len());
-                } else if bytes[i] == quote {
-                    i += 1;
-                    if i < bytes.len() && bytes[i] == quote {
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-            if quote == b'`'
-                || (quote == b'"' && database_type != crate::model::DatabaseType::Kyuubi)
-            {
-                Kind::Identifier
+            } else if bytes[i..].starts_with(b"*/") {
+                depth -= 1;
+                i += 2;
             } else {
-                Kind::String
-            }
-        } else if bytes[i].is_ascii_digit() {
-            i += 1;
-            while i < bytes.len()
-                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.' || bytes[i] == b'_')
-            {
                 i += 1;
             }
-            Kind::Number
-        } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] >= 128 {
-            i += sql[i..].chars().next().unwrap().len_utf8();
-            while i < bytes.len() {
-                let c = sql[i..].chars().next().unwrap();
-                if !c.is_alphanumeric() && c != '_' {
+        }
+        Kind::Comment
+    } else if database_type != crate::model::DatabaseType::Trino
+        && bytes[i] == b'$'
+        && dollar_quote_end(sql, i).is_some()
+    {
+        let (delimiter_end, string_end) = dollar_quote_end(sql, i).unwrap();
+        i = string_end.unwrap_or(bytes.len()).max(delimiter_end);
+        Kind::String
+    } else if matches!(bytes[i], b'\'' | b'"' | b'`')
+        || (database_type != DatabaseType::Kyuubi
+            && matches!(bytes[i], b'U' | b'u')
+            && bytes.get(i + 1) == Some(&b'&')
+            && matches!(bytes.get(i + 2), Some(b'\'' | b'"')))
+    {
+        if matches!(bytes[i], b'U' | b'u') {
+            i += 2;
+        }
+        let quote = bytes[i];
+        i += 1;
+        while i < bytes.len() {
+            if bytes[i] == b'\\'
+                && quote != b'`'
+                && (database_type == crate::model::DatabaseType::Kyuubi
+                    || (database_type == crate::model::DatabaseType::Postgres
+                        && quote == b'\''
+                        && start > 0
+                        && matches!(bytes[start - 1], b'E' | b'e')))
+            {
+                i = (i + 2).min(bytes.len());
+            } else if bytes[i] == quote {
+                i += 1;
+                if i < bytes.len() && bytes[i] == quote {
+                    i += 1;
+                } else {
                     break;
                 }
-                i += c.len_utf8();
-            }
-            Kind::Plain
-        } else if bytes[i].is_ascii_whitespace() {
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            } else {
                 i += 1;
             }
-            Kind::Plain
+        }
+        if quote == b'`' || (quote == b'"' && database_type != crate::model::DatabaseType::Kyuubi) {
+            Kind::Identifier
         } else {
+            Kind::String
+        }
+    } else if bytes[i].is_ascii_digit() {
+        i += 1;
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.' || bytes[i] == b'_')
+        {
             i += 1;
-            if bytes[start] == b';' {
-                Kind::Separator
-            } else {
-                Kind::Plain
+        }
+        Kind::Number
+    } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] >= 128 {
+        i += sql[i..].chars().next().unwrap().len_utf8();
+        while i < bytes.len() {
+            let c = sql[i..].chars().next().unwrap();
+            if !c.is_alphanumeric() && c != '_' {
+                break;
             }
-        };
-        self.next = i;
-        Some((start..i, kind))
-    }
+            i += c.len_utf8();
+        }
+        Kind::Plain
+    } else if bytes[i].is_ascii_whitespace() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        Kind::Plain
+    } else {
+        i += 1;
+        if bytes[start] == b';' {
+            Kind::Separator
+        } else {
+            Kind::Plain
+        }
+    };
+    (i, kind)
 }
 
 /// The name that a token gives: a quoted identifier without its quotes, or a

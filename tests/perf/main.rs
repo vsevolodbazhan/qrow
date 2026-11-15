@@ -704,3 +704,218 @@ fn assistant_large_reply(cx: &mut TestAppContext) {
         50.,
     );
 }
+
+/// A cached catalog like a large warehouse: 500 schemas, and the schema
+/// `default` with `tables` tables. The first two tables have 1,000 columns.
+fn completion_catalog(cx: &mut TestAppContext, tables: usize, sql: String) -> TestApp {
+    use qrow::catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind};
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    let mut catalog = Catalog::new(&profile);
+    let mut schemas: Vec<String> = (0..500).map(|n| format!("schema_{n:03}")).collect();
+    schemas.push("default".into());
+    let now = qrow::catalog::now();
+    catalog.apply_schemas(schemas, &Default::default(), now);
+    let names: Vec<String> = (0..tables).map(|n| format!("fact_table_{n:06}")).collect();
+    catalog.apply_relations(
+        "default",
+        None,
+        names
+            .iter()
+            .map(|name| RelationEntry {
+                name: name.clone(),
+                kind: RelationKind::Table,
+                comment: Some("One row for each event of the day.".into()),
+            })
+            .collect(),
+        now,
+    );
+    let columns = names
+        .iter()
+        .take(2)
+        .map(|name| {
+            let columns = (0..1000)
+                .map(|n| CatalogColumn {
+                    name: format!("measure_column_{n:04}"),
+                    data_type: "DECIMAL(12,2)".into(),
+                    comment: Some("The amount in the currency of the booking.".into()),
+                })
+                .collect();
+            (name.clone(), columns)
+        })
+        .collect();
+    catalog.apply_columns("default", None, columns, now);
+    let path = qrow::storage::catalog_cache_path(directory.path(), profile.id);
+    qrow::storage::save_catalog(&path, &catalog).unwrap();
+    let workspace = Workspace {
+        tabs: vec![SavedTab {
+            sql,
+            ..SavedTab::new(1, Some(profile.id))
+        }],
+        profiles: vec![profile.clone()],
+        ..Workspace::default()
+    };
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    // The window has the cache when the sidebar shows its schemas.
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the cached schemas",
+        std::time::Duration::from_secs(20),
+        |window, _| support::labelled(window, "schema_000").is_some(),
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-down");
+    app.press(cx, "cmd-right");
+    app
+}
+
+/// Presses `keys` in turn. Returns the median time of the key work and of
+/// the frame after it, drawn like the window does.
+fn key_and_frame(app: &TestApp, cx: &mut TestAppContext, keys: &[&str]) -> (f64, f64) {
+    app.update(cx, |window, cx| window.draw(cx).clear(cx));
+    let mut work = Vec::new();
+    let mut frame = Vec::new();
+    for round in 0..46 {
+        let name = keys[round % keys.len()];
+        let mut key = Keystroke::parse(name).expect("a keystroke");
+        if name.chars().count() == 1 {
+            key.key_char = Some(name.into());
+        }
+        let started = Instant::now();
+        app.update(cx, |window, cx| window.dispatch_keystroke(key, cx));
+        let dispatched = started.elapsed();
+        app.update(cx, |window, cx| window.draw(cx).clear(cx));
+        if round >= 6 {
+            work.push(dispatched);
+            frame.push(started.elapsed() - dispatched);
+        }
+    }
+    (median_ms(&work), median_ms(&frame))
+}
+
+fn report_keys(probe: &str, (work, frame): (f64, f64)) {
+    report(&format!("{probe}.work"), work, "ms", 50.);
+    report(&format!("{probe}.frame"), frame, "ms", 50.);
+}
+
+/// Opens the list of suggestions with Tab.
+fn open_completion(app: &TestApp, cx: &mut TestAppContext) {
+    app.press(cx, "tab");
+    app.wait_until(
+        cx,
+        "the suggestions",
+        std::time::Duration::from_secs(20),
+        |window, _| {
+            support::elements(window).into_iter().any(|element| {
+                element
+                    .path()
+                    .last()
+                    .is_some_and(|id| format!("{id:?}").contains("sql-completion-item-"))
+            })
+        },
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn completion_tables(cx: &mut TestAppContext) {
+    for tables in [1_000, 20_000, 100_000] {
+        let app = completion_catalog(cx, tables, "SELECT * FROM ".into());
+        // The same keys in the editor without the list.
+        report_keys(
+            &format!("ui.completion.closed_keystroke_{tables}"),
+            key_and_frame(&app, cx, &["f", "backspace"]),
+        );
+        open_completion(&app, cx);
+        // Each key changes the names of the list.
+        report_keys(
+            &format!("ui.completion.keystroke_{tables}"),
+            key_and_frame(&app, cx, &["f", "backspace"]),
+        );
+        report_keys(
+            &format!("ui.completion.move_{tables}"),
+            key_and_frame(&app, cx, &["down"]),
+        );
+        // Escape and Tab: the list opens again.
+        report_keys(
+            &format!("ui.completion.open_{tables}"),
+            key_and_frame(&app, cx, &["escape", "tab"]),
+        );
+    }
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn completion_columns(cx: &mut TestAppContext) {
+    let tail = " FROM fact_table_000000 a JOIN fact_table_000001 b ON a.id = b.id";
+    let app = completion_catalog(cx, 1_000, format!("SELECT me{tail}"));
+    app.update(cx, |window, cx| {
+        for _ in 0..tail.len() {
+            window.press("left", cx);
+        }
+    });
+    open_completion(&app, cx);
+    report_keys(
+        "ui.completion.columns_keystroke_2x1000",
+        key_and_frame(&app, cx, &["a", "backspace"]),
+    );
+    report_keys(
+        "ui.completion.columns_move_2x1000",
+        key_and_frame(&app, cx, &["down"]),
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn completion_in_one_megabyte_of_sql(cx: &mut TestAppContext) {
+    let line = "SELECT route, COUNT(*) FROM flights WHERE note = '日本語; safe' GROUP BY route;\n";
+    let mut sql = line.repeat(1_000_000 / line.len() + 1);
+    sql.push_str("SELECT * FROM ");
+    let app = completion_catalog(cx, 1_000, sql);
+    report_keys(
+        "ui.completion.closed_keystroke_1mb",
+        key_and_frame(&app, cx, &["f", "backspace"]),
+    );
+    open_completion(&app, cx);
+    report_keys(
+        "ui.completion.keystroke_1mb",
+        key_and_frame(&app, cx, &["f", "backspace"]),
+    );
+    report_keys("ui.completion.move_1mb", key_and_frame(&app, cx, &["down"]));
+    // A blink of the caret while the list is open: the editor reports a
+    // change, but the text and the cursor stay the same.
+    let blink = |cx: &mut TestAppContext| {
+        let samples: Vec<_> = (0..12)
+            .map(|_| {
+                let started = Instant::now();
+                cx.executor()
+                    .advance_clock(std::time::Duration::from_millis(500));
+                cx.run_until_parked();
+                started.elapsed()
+            })
+            .skip(2)
+            .collect();
+        median_ms(&samples)
+    };
+    report("ui.completion.blink_open_1mb", blink(cx), "ms", 50.);
+    app.press(cx, "escape");
+    report("ui.completion.blink_closed_1mb", blink(cx), "ms", 50.);
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn completion_tab_indent_in_one_megabyte_of_sql(cx: &mut TestAppContext) {
+    // Tab at the start of a line indents. No list opens.
+    let line = "SELECT route, COUNT(*) FROM flights WHERE note = '日本語; safe' GROUP BY route;\n";
+    let sql = line.repeat(1_000_000 / line.len() + 1);
+    let app = completion_catalog(cx, 1_000, sql);
+    report_keys(
+        "ui.completion.indent_char_1mb",
+        key_and_frame(&app, cx, &[" "]),
+    );
+    report_keys(
+        "ui.completion.indent_tab_1mb",
+        key_and_frame(&app, cx, &["tab"]),
+    );
+}
