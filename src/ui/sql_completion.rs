@@ -9,7 +9,7 @@ use super::{Qrow, text_width};
 use crate::catalog::Scope;
 use crate::completion::{self, Completion, Item, ItemKind, Need, Request};
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{
     Enter, Escape, IndentInline, MoveDown, MovePageDown, MovePageUp, MoveUp,
 };
@@ -38,6 +38,10 @@ const DESCRIPTION_HEIGHT: f32 = 120.;
 /// The padding of the popup and of a row, the icon, and the gaps of a row.
 const ROW_CHROME: f32 = 4. * 2. + 8. * 2. + 14. + 8. + 2.;
 const GAP: f32 = 8.;
+/// The space around a footer button: above, below, and to the right.
+const FOOTER_INSET: f32 = 6.;
+const FOOTER_BUTTON_HEIGHT: f32 = 20.;
+const FOOTER_BUTTON_PADDING: f32 = 6.;
 
 /// Why the popup changes.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -905,7 +909,7 @@ impl Qrow {
             .items_center()
             .children(parts.into_iter().map(|part| match part {
                 Text::Plain(text) => div().flex_none().child(text),
-                Text::Code(text) => self.code_chip(text, cx).min_w_0().truncate(),
+                Text::Code(text) => self.code_name(text, cx).min_w_0().truncate(),
             }))
             .when(cut, |line| {
                 line.tooltip(move |window, cx| {
@@ -916,20 +920,17 @@ impl Qrow {
     }
 
     /// A name in the code font, on a muted background.
-    fn code_chip(&self, text: String, cx: &App) -> Div {
-        let theme = cx.theme();
+    /// A name in the code font. It has no padding, so a line that starts
+    /// with a name aligns with the names of the rows.
+    fn code_name(&self, text: String, cx: &App) -> Div {
         div()
             .font_family(self.settings.editor_font_family.clone())
-            .px(self.ui_px(4.))
-            .rounded(self.ui_px(4.))
-            .bg(theme.muted)
-            .text_color(theme.foreground)
+            .text_color(cx.theme().foreground)
             .child(text)
     }
 
-    /// The width of a name chip: the name and its padding.
     fn code_width(&self, window: &mut Window, text: &str, code_font: &Font) -> Pixels {
-        text_width(window, text, code_font, self.ui_px(12.)) + self.ui_px(8.)
+        text_width(window, text, code_font, self.ui_px(12.))
     }
 
     fn completion_rows(
@@ -1037,12 +1038,15 @@ impl Qrow {
         // slot and its gap, and the action with its gap leave the room of
         // the message.
         let ui_font = font(cx.theme().font_family.clone());
+        // A button is its label, its padding, and its border.
         let action_width = actions.iter().fold(px(0.), |width, action| {
             width
                 + text_width(window, action.label(), &ui_font, window.rem_size() * 0.75)
-                + self.ui_px(GAP)
+                + self.ui_px(2. * FOOTER_BUTTON_PADDING + GAP)
+                + px(2.)
         });
-        let room = layout.width - px(2.) - self.ui_px(24. + 14. + GAP) - action_width;
+        let room =
+            layout.width - px(2.) - self.ui_px(12. + FOOTER_INSET + 14. + GAP) - action_width;
         let line = self.text_line("sql-completion-footer-text", message, room, window, cx);
         let theme = cx.theme();
         Some(
@@ -1054,8 +1058,12 @@ impl Qrow {
                 .mt(self.ui_px(4.))
                 .mx(self.ui_px(-4.))
                 .mb(self.ui_px(-4.))
-                .px(self.ui_px(12.))
-                .h(self.ui_px(ROW_HEIGHT))
+                // The slot and the text start where the icons and the
+                // names of the rows start.
+                .pl(self.ui_px(12.))
+                .pr(self.ui_px(FOOTER_INSET))
+                // The border and the button with the inset above and below.
+                .h(px(1.) + self.ui_px(FOOTER_BUTTON_HEIGHT + 2. * FOOTER_INSET))
                 .gap(self.ui_px(GAP))
                 .border_t_1()
                 .border_color(theme.border)
@@ -1063,6 +1071,8 @@ impl Qrow {
                 .text_color(theme.muted_foreground)
                 .child(
                     div()
+                        .id("slot")
+                        .test_support()
                         .size(self.ui_px(14.))
                         .flex_none()
                         .flex()
@@ -1085,8 +1095,9 @@ impl Qrow {
                 .children(actions.into_iter().map(|action| {
                     let profile = popup.profile;
                     let button = Button::new(action.id())
-                        .link()
                         .xsmall()
+                        .h(self.ui_px(FOOTER_BUTTON_HEIGHT))
+                        .px(self.ui_px(FOOTER_BUTTON_PADDING))
                         .label(action.label());
                     match action {
                         FooterAction::Retry => button.on_click(cx.listener(|this, _, _, cx| {
@@ -1385,13 +1396,16 @@ fn completion_row(
             row.hover(|row| row.bg(theme.tokens.list_hover))
         })
         .child(
-            Icon::new(icon)
-                .size(ui(14.))
-                .flex_none()
-                .text_color(theme.muted_foreground),
+            div().id("icon").test_support().flex_none().child(
+                Icon::new(icon)
+                    .size(ui(14.))
+                    .text_color(theme.muted_foreground),
+            ),
         )
         .child(
             div()
+                .id("name")
+                .test_support()
                 .flex_1()
                 .min_w_0()
                 .overflow_hidden()

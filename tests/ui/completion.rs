@@ -575,6 +575,32 @@ fn a_footer_that_fits_has_no_tooltip(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_footer_lines_up_with_the_rows_and_its_button_has_even_space(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, Some(1), &[]);
+    complete(&app, cx, "SELECT * FROM avia.");
+    app.wait_for(cx, "sql-completion-footer-action");
+    app.update(cx, |window, _| {
+        let row = "sql-completion-item-bookings";
+        let icon = window.within(row).find("icon").bounds();
+        let name = window.within(row).find("name").bounds();
+        let slot = window.within("sql-completion-footer").find("slot").bounds();
+        let footer = bounds_of(window, "sql-completion-footer");
+        // The message starts with the name of the schema, in the code font.
+        let text = bounds_of(window, "sql-completion-footer-text");
+        let button = bounds_of(window, "sql-completion-footer-action");
+        assert_eq!(slot.left(), icon.left(), "{slot:?} {icon:?}");
+        assert_eq!(text.left(), name.left(), "{text:?} {name:?}");
+        // Below the border at the top of the footer.
+        let above = button.top() - footer.top() - gpui_kit::px(1.);
+        let below = footer.bottom() - button.bottom();
+        let right = footer.right() - button.right();
+        assert_eq!(above, below, "{footer:?} {button:?}");
+        assert_eq!(above, right, "{footer:?} {button:?}");
+        assert!(above >= gpui_kit::px(6.), "{footer:?} {button:?}");
+    });
+}
+
+#[gpui_kit::test]
 fn tab_after_a_name_opens_the_list_and_tab_inserts(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, fresh(), &[]);
     app.type_sql(cx, "SELECT * FROM avia.bo");

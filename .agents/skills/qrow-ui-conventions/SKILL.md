@@ -72,6 +72,13 @@ Peer surfaces must look and behave the same.
   activity**. Toasts hide after 5 seconds. Only toasts
   about a background export stay until the user closes them. Toasts start
   below the query tabs.
+- **Buttons, not links.** An action is a button, also in a status line or a
+  footer. Do not use link buttons. A button in a bar has the same space
+  above, below, and at its outer edge.
+- **Footers line up with their rows.** The icon and the text of a footer or
+  status line start at the same x as the icons and the text of the rows
+  above it. A name in such a line uses the code font without a chip, so
+  the text does not move to the right.
 
 ## Known UI bug classes
 
