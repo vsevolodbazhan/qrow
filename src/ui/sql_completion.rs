@@ -4,6 +4,7 @@
 //! asks the catalog worker for.
 
 use super::dbt::{DbtLookup, summary};
+use super::status_dot::DotStatus;
 use super::toast::{self, NotificationType, SHOW_ACTIVITY};
 use super::{Qrow, text_width};
 use crate::catalog::Scope;
@@ -13,7 +14,6 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{
     Enter, Escape, IndentInline, MoveDown, MovePageDown, MovePageUp, MoveUp,
 };
-use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewState, TextViewStyle};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -38,6 +38,9 @@ const DESCRIPTION_HEIGHT: f32 = 120.;
 /// The padding of the popup and of a row, the icon, and the gaps of a row.
 const ROW_CHROME: f32 = 4. * 2. + 8. * 2. + 14. + 8. + 2.;
 const GAP: f32 = 8.;
+/// The least room for a cut kind or type, about five characters and an
+/// ellipsis. With less room, the row hides it.
+const MIN_LABEL: f32 = 48.;
 /// The space around a footer button: above, below, and to the right.
 const FOOTER_INSET: f32 = 6.;
 const FOOTER_BUTTON_HEIGHT: f32 = 20.;
@@ -118,10 +121,27 @@ enum Text {
 /// The measured layout of the list.
 struct Layout {
     width: Pixels,
-    /// Whether the kinds and types at the right of the rows show.
-    details: bool,
+    /// How each row shows its kind or type at the right.
+    labels: Vec<RowLabel>,
     /// Whether the list cuts each name.
     cut: Vec<bool>,
+}
+
+/// How a row shows its kind or type, and its alias tag, at the right.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RowLabel {
+    Full,
+    /// Cut with an ellipsis to this width.
+    Cut(Pixels),
+    /// Not enough room beside the name, even for the start of the label.
+    Hidden,
+}
+
+impl RowLabel {
+    /// Whether the details box shows the label of the selected row.
+    fn short(self) -> bool {
+        self != Self::Full
+    }
 }
 
 impl Qrow {
@@ -719,9 +739,10 @@ impl Qrow {
         }
     }
 
-    /// The width of the list, and which labels show. The list grows to fit
-    /// the longest name, hides the labels at the right of all rows when one
-    /// name does not fit beside its label, then cuts the names.
+    /// The width of the list, and how each row shows its label. The list
+    /// grows to fit the longest name and its label. In a row that does not
+    /// fit, the name keeps its room: the label is cut, or hidden when less
+    /// than `MIN_LABEL` is left, and then the name is cut.
     fn completion_layout(&self, popup: &CompletionPopup, window: &mut Window, cx: &App) -> Layout {
         let names = self.completion_font(cx);
         let labels = font(cx.theme().font_family.clone());
@@ -749,21 +770,21 @@ impl Qrow {
         let width = (widest + chrome)
             .max(self.ui_px(MIN_WIDTH))
             .min(self.ui_px(MAX_WIDTH));
-        let details = rows
-            .iter()
-            .all(|(name, label)| *name + gap + *label + chrome <= width);
-        let cut = rows
+        let room = width - chrome;
+        let (labels, cut) = rows
             .iter()
             .map(|(name, label)| {
-                let label = if details { gap + *label } else { px(0.) };
-                *name + label + chrome > width + px(0.5)
+                let left = room - *name - gap;
+                if *label <= left + px(0.5) {
+                    (RowLabel::Full, false)
+                } else if left >= self.ui_px(MIN_LABEL) {
+                    (RowLabel::Cut(left), false)
+                } else {
+                    (RowLabel::Hidden, *name > room + px(0.5))
+                }
             })
-            .collect();
-        Layout {
-            width,
-            details,
-            cut,
-        }
+            .unzip();
+        Layout { width, labels, cut }
     }
 
     fn completion_body(&self, popup: &CompletionPopup) -> Body {
@@ -845,9 +866,14 @@ impl Qrow {
                     .text_color(theme.muted_foreground)
                     .child(
                         div()
+                            .id("slot")
+                            .test_support()
                             .size(self.ui_px(14.))
                             .flex_none()
-                            .child(Spinner::new().xsmall().color(theme.muted_foreground)),
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(DotStatus::Working.dot(cx)),
                     )
                     .child({
                         // The border and the padding of the popup and of
@@ -945,7 +971,7 @@ impl Qrow {
         let items: Vec<Item> = popup.completion.items.clone();
         let selected = popup.selected;
         let cut = layout.cut.clone();
-        let details = layout.details;
+        let labels = layout.labels.clone();
         let qrow = cx.entity().downgrade();
         let names_font = SharedString::from(self.settings.editor_font_family.clone());
         let scale = self.settings.ui_scale;
@@ -957,7 +983,7 @@ impl Qrow {
                         index,
                         index == selected,
                         cut[index],
-                        details,
+                        labels[index],
                         &names_font,
                         scale,
                         qrow.clone(),
@@ -1001,15 +1027,19 @@ impl Qrow {
             self.catalog
                 .reads(popup.profile, &Scope::Schema(schema.clone()))
         });
-        let (slot, message, actions): (Slot, Vec<Text>, Vec<FooterAction>) =
+        let (slot, message, actions): (DotStatus, Vec<Text>, Vec<FooterAction>) =
             if let Some((need, _)) = failed {
                 (
-                    Slot::Alert,
+                    DotStatus::Error,
                     failed_text(need_name(&need)),
                     vec![FooterAction::Retry, FooterAction::ShowActivity],
                 )
             } else if let Some(need) = loading {
-                (Slot::Spinner, loading_text(need_name(&need)), Vec::new())
+                (
+                    DotStatus::Working,
+                    loading_text(need_name(&need)),
+                    Vec::new(),
+                )
             } else if refreshing {
                 // The words of the other reads.
                 let message = match stale.as_slice() {
@@ -1019,14 +1049,14 @@ impl Qrow {
                         schemas.len()
                     ))],
                 };
-                (Slot::Spinner, message, Vec::new())
+                (DotStatus::Working, message, Vec::new())
             } else if !stale.is_empty() {
                 let message = match stale.as_slice() {
                     [schema] => vec![Text::Code(schema.clone()), Text::Plain(" is stale".into())],
                     schemas => vec![Text::Plain(format!("{} schemas are stale", schemas.len()))],
                 };
                 (
-                    Slot::Dot,
+                    DotStatus::Attention,
                     message,
                     vec![FooterAction::Refresh(stale_tooltip(stale))],
                 )
@@ -1078,18 +1108,7 @@ impl Qrow {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .map(|cell| match slot {
-                            Slot::Spinner => {
-                                cell.child(Spinner::new().xsmall().color(theme.muted_foreground))
-                            }
-                            Slot::Dot => cell
-                                .child(div().size(self.ui_px(6.)).rounded_full().bg(theme.warning)),
-                            Slot::Alert => cell.child(
-                                Icon::new(IconName::TriangleAlert)
-                                    .size(self.ui_px(14.))
-                                    .text_color(theme.warning),
-                            ),
-                        }),
+                        .child(slot.dot(cx)),
                 )
                 .child(line)
                 .children(actions.into_iter().map(|action| {
@@ -1305,7 +1324,11 @@ impl DetailsBox {
                 .copied()
                 .unwrap_or(false)
                 .then(|| shown_name(item)),
-            detail: (!layout.details).then(|| item.detail.clone()),
+            detail: layout
+                .labels
+                .get(index)
+                .is_some_and(|label| label.short())
+                .then(|| item.detail.clone()),
             description: description.map(|text| summary(text, DESCRIPTION_CHARS).0),
         };
         (details.name.is_some() || details.detail.is_some() || details.description.is_some())
@@ -1330,7 +1353,7 @@ fn completion_row(
     index: usize,
     selected: bool,
     cut: bool,
-    details: bool,
+    label: RowLabel,
     names_font: &SharedString,
     scale: f32,
     qrow: WeakEntity<Qrow>,
@@ -1376,7 +1399,16 @@ fn completion_row(
         ));
     }
     let id = SharedString::from(format!("sql-completion-item-{shown}"));
-    let full = shown.clone();
+    let cut_label = match label {
+        RowLabel::Cut(width) => Some(width),
+        RowLabel::Full | RowLabel::Hidden => None,
+    };
+    // A cut name, or else a cut type, shows in full on hover.
+    let tooltip = if cut {
+        Some(SharedString::from(shown.clone()))
+    } else {
+        cut_label.map(|_| SharedString::from(item.detail.clone()))
+    };
     h_flex()
         .id(ElementId::Name(id))
         .test_support()
@@ -1412,16 +1444,20 @@ fn completion_row(
                 .font_family(names_font.clone())
                 .child(StyledText::new(shown).with_highlights(highlights)),
         )
-        .when(details, |row| {
+        .when(label != RowLabel::Hidden, |row| {
             row.child(
                 h_flex()
+                    .id("label")
+                    .test_support()
                     .flex_none()
+                    .when_some(cut_label, |labels, width| labels.w(width).overflow_hidden())
                     .gap(ui(6.))
                     .text_size(ui(12.))
                     .text_color(theme.muted_foreground)
                     .when_some(item.source.clone(), |labels, source| {
                         labels.child(
                             div()
+                                .flex_none()
                                 .px(ui(5.))
                                 .rounded(ui(4.))
                                 .bg(theme.muted)
@@ -1431,13 +1467,20 @@ fn completion_row(
                                 .child(source),
                         )
                     })
-                    .child(item.detail.clone()),
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(item.detail.clone()),
+                    ),
             )
         })
-        // The details box shows the full name of the selected row.
-        .when(cut && !selected, |row| {
+        // The details box shows the full name and type of the selected row.
+        .when_some(tooltip.filter(|_| !selected), |row, tooltip| {
             row.tooltip(move |window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+                gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
             })
         })
         .on_click(move |_, window, cx| {
@@ -1452,14 +1495,6 @@ fn shown_name(item: &Item) -> String {
         Some(qualifier) => format!("{qualifier}.{}", item.name),
         None => item.name.clone(),
     }
-}
-
-/// What the cell before the footer text shows.
-#[derive(Clone, Copy)]
-enum Slot {
-    Spinner,
-    Dot,
-    Alert,
 }
 
 fn failed_need(completion: &Completion, need: &Need) -> bool {
@@ -1586,7 +1621,7 @@ mod tests {
     fn the_details_box_shows_the_start_of_a_long_description() {
         let layout = Layout {
             width: px(320.),
-            details: true,
+            labels: vec![RowLabel::Full],
             cut: vec![false],
         };
         let item = |comment: &str| Item {

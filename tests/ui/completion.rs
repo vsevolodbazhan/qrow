@@ -2,7 +2,7 @@
 //! connection that no test reaches.
 use crate::support::{MemoryCredentials, TestApp, bounds_of, label, labelled, offline_profile};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{InputEvent as _, TestAppContext};
+use gpui_kit::{ElementId, InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
     model::{CatalogSettings, Profile, SavedTab, Workspace},
@@ -408,6 +408,94 @@ fn long_names_widen_the_list_up_to_its_limit(cx: &mut TestAppContext) {
     assert!(app.update(cx, |window, _| labelled(window, long).is_some()));
 }
 
+/// Saves the table `avia.wide` with `columns`, read now, and opens the
+/// list of its columns after `SELECT`.
+fn complete_wide(cx: &mut TestAppContext, columns: Vec<CatalogColumn>) -> TestApp {
+    let profile = profile();
+    let directory = tempfile::tempdir().unwrap();
+    let read_at = qrow::catalog::now();
+    let mut catalog = Catalog::new(&profile);
+    catalog.apply_schemas(vec!["avia".into()], &CatalogSettings::default(), read_at);
+    let wide = RelationEntry {
+        name: "wide".into(),
+        kind: RelationKind::Table,
+        comment: None,
+    };
+    catalog.apply_relations("avia", None, vec![wide], read_at);
+    catalog.apply_columns(
+        "avia",
+        Some("wide"),
+        BTreeMap::from([("wide".into(), columns)]),
+        read_at,
+    );
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
+    storage::save_catalog(&path, &catalog).unwrap();
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+    );
+    let tail = " FROM avia.wide";
+    app.type_sql(cx, &format!("SELECT {tail}"));
+    app.update(cx, |window, cx| {
+        for _ in 0..tail.len() {
+            window.press("left", cx);
+        }
+    });
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion");
+    app
+}
+
+#[gpui_kit::test]
+fn a_long_type_is_cut_in_its_row_and_other_rows_keep_their_types(cx: &mut TestAppContext) {
+    let long_name = "health_score_weighted_by_product_usage_and_support_volume";
+    let long_type =
+        "MAP<STRING,STRUCT<FIRST_SEEN_AT:TIMESTAMP,LAST_SEEN_AT:TIMESTAMP,SOURCE_SYSTEM:STRING>>";
+    let app = complete_wide(
+        cx,
+        vec![
+            column("snapshot_date", "DATE", None),
+            column("attributes", long_type, None),
+            column(long_name, "DECIMAL(5,2)", None),
+        ],
+    );
+    let row = |name: &str| format!("sql-completion-item-{name}");
+    app.update(cx, |window, _| {
+        // A type that fits shows in full.
+        let short = window.within(row("snapshot_date")).find("label").bounds();
+        // The long type takes the room that its name leaves, cut.
+        let attributes = bounds_of(window, &row("attributes"));
+        let name = window.within(row("attributes")).find("name").bounds();
+        let cut = window.within(row("attributes")).find("label").bounds();
+        assert!(cut.left() > name.left(), "{name:?} {cut:?}");
+        assert!(cut.right() <= attributes.right(), "{attributes:?} {cut:?}");
+        assert!(cut.size.width > short.size.width, "{short:?} {cut:?}");
+        // The long name leaves no room for its type.
+        assert!(window.within(row(long_name)).try_find("label").is_none());
+    });
+    // A cut type shows in full on hover; a type that fits does not.
+    assert!(hover_shows_tooltip(&app, cx, row("attributes")));
+    assert!(!hover_shows_tooltip(&app, cx, row("snapshot_date")));
+    // The box shows the full type of the selected row.
+    let index = items(&app, cx)
+        .iter()
+        .position(|item| item == "attributes")
+        .unwrap();
+    for _ in 0..index {
+        app.press(cx, "down");
+    }
+    app.wait_until(cx, "the full type in the box", WAIT, |window, _| {
+        label(window, "sql-completion-details")
+            .is_some_and(|text| text.eq_ignore_ascii_case(long_type))
+    });
+}
+
 #[gpui_kit::test]
 fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, fresh(), &[]);
@@ -513,7 +601,7 @@ fn a_name_that_fits_in_the_toast_has_no_tooltip(cx: &mut TestAppContext) {
 }
 
 /// Hovers `id` until GPUI opens its tooltip, and returns whether it did.
-fn hover_shows_tooltip(app: &TestApp, cx: &mut TestAppContext, id: &'static str) -> bool {
+fn hover_shows_tooltip(app: &TestApp, cx: &mut TestAppContext, id: impl Into<ElementId>) -> bool {
     app.hover(cx, id);
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);

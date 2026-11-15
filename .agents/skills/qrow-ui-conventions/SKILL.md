@@ -79,6 +79,11 @@ Peer surfaces must look and behave the same.
   status line start at the same x as the icons and the text of the rows
   above it. A name in such a line uses the code font without a chip, so
   the text does not move to the right.
+- **Status dots, not spinners.** A status line shows its state with a dot
+  from `src/ui/status_dot.rs`, with the colors of the connection dots: blue
+  for work in progress, yellow for attention, red for an error. Do not mix
+  a spinner or an icon with these dots. Known gap: the catalog tree still
+  shows a spinner while a schema or table loads.
 
 ## Known UI bug classes
 

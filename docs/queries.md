@@ -329,6 +329,11 @@ description of the table or column instead, when it has one. The box shows
 Markdown, and only the start of the first paragraph, up to about 140
 characters. The box also shows a name or a type that the list cuts or hides.
 
+Each row shows the kind or the type of its name at the right. When a row is
+too narrow, the list cuts the type first. If the name leaves almost no space,
+the row does not show the type. Point to a row to see a cut name or type in
+full.
+
 When the list needs data that the copy does not have, Qrow reads it, like a
 **Refresh** of that table or schema in the tree. This read can open a
 session. If the read fails and the list has no names, the list closes and
@@ -345,6 +350,10 @@ When the metadata of a schema in the list is older than the
 [Refresh Period](connections.md#refresh-metadata-automatically) of the
 connection, the list shows `schema is stale` below the names. Select
 **Refresh** to read the schema again.
+
+The status line of the list has a dot, with the same colors as the dots of
+connections: blue while Qrow reads metadata, yellow for stale metadata, and
+red for a failed read.
 
 Limitations:
 
