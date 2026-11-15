@@ -284,6 +284,17 @@ fn invalid_connection_settings_keep_the_parser_error_in_activity(cx: &mut TestAp
         toast_detail(&app, cx, "paste-connection-toast"),
         "The connection settings are not valid."
     );
+    // The lines have a gap between them, and the buttons have the same
+    // gap on screen plus a little for the descenders of the last line. The
+    // old 10 pt space above the buttons made that gap nearly twice as large.
+    app.update(cx, |window, _| {
+        let toast = window.within("paste-connection-toast");
+        let title = toast.find("title").bounds();
+        let detail = toast.find("detail").bounds();
+        let actions = toast.find("actions").bounds();
+        assert!(detail.top() > title.bottom(), "{title:?} {detail:?}");
+        assert!(actions.top() - detail.bottom() < gpui_kit::px(8.));
+    });
     app.click(cx, "paste-connection-activity");
     app.wait_for(cx, "activity");
     // The toast closes, so it no longer covers the Activity header.

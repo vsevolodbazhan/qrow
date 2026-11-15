@@ -151,7 +151,7 @@ impl Render for ProgressNotice {
                 h_flex()
                     .id("export-progress-actions")
                     .test_support()
-                    .mt(rems(0.625))
+                    .mt(toast::actions_gap())
                     .flex_wrap()
                     .gap_2()
                     .children(actions),

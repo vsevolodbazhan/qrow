@@ -91,12 +91,25 @@ pub(super) fn notice_with_actions(
         })
 }
 
+/// The space between the lines of a toast: the title, the name, and the
+/// detail.
+const LINE_GAP: Rems = Rems(0.125);
+
+/// The space above the row of buttons of a toast, after the
+/// [`LINE_GAP`] of the body. With it, the gap from the descenders of the
+/// last line to the buttons equals the gap between two lines of text
+/// (measured on screen at 2x). A line draws its descenders near the bottom
+/// of its line box, so the space is smaller than the leading.
+pub(super) fn actions_gap() -> Rems {
+    rems(0.28125)
+}
+
 /// The row of buttons below the text of a toast, aligned with the text.
 fn actions_row(actions: &[ToastAction], cx: &mut Context<Notification>) -> impl IntoElement {
     h_flex()
         .id("actions")
         .test_support()
-        .mt(rems(0.625))
+        .mt(actions_gap())
         .gap_2()
         .flex_wrap()
         .children(actions.iter().map(|action| action_button(action, cx)))
@@ -166,7 +179,12 @@ pub(super) fn body(kind: NotificationType, id: impl Into<ElementId>) -> Stateful
         NotificationType::Error | NotificationType::Warning => Role::Alert,
         NotificationType::Info | NotificationType::Success => Role::Status,
     };
-    v_flex().id(id).role(role).min_w_0().line_height(rems(1.25))
+    v_flex()
+        .id(id)
+        .role(role)
+        .min_w_0()
+        .line_height(rems(1.25))
+        .gap(LINE_GAP)
 }
 
 /// The bold first line that names the event.
