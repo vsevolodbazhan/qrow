@@ -991,6 +991,32 @@ impl<'a> Builder<'a> {
     fn finish(mut self) -> Completion {
         self.candidates.sort_unstable_by_key(|(rank, _)| *rank);
         self.candidates.truncate(MAX_ITEMS);
+        // "Empty" can be old: a stale empty schema in the list gets the
+        // stale footer. Only the kept schemas are checked. They come first,
+        // in catalog order, as schemas are found before names.
+        let mut empty: Vec<(usize, &'a str)> = self
+            .candidates
+            .iter()
+            .filter_map(|(rank, candidate)| match *candidate {
+                Candidate::Schema(name, true) => Some((rank.3, name)),
+                _ => None,
+            })
+            .collect();
+        if !empty.is_empty() {
+            empty.sort_unstable();
+            let later = std::mem::take(&mut self.completion.stale);
+            let catalog = self.catalog;
+            for (_, name) in empty {
+                if let Some(node) = catalog.schemas.get(name) {
+                    self.mark_stale(name, node.fetched_at);
+                }
+            }
+            for schema in later {
+                if !self.completion.stale.contains(&schema) {
+                    self.completion.stale.push(schema);
+                }
+            }
+        }
         let prefix = &self.request.prefix;
         let database_type = self.database_type;
         self.completion.items = self
@@ -1004,9 +1030,10 @@ impl<'a> Builder<'a> {
         let empty_schema = self.completion.empty_schema.as_deref();
         self.completion.stale.retain(|schema| {
             empty_schema == Some(schema.as_str())
-                || items
-                    .iter()
-                    .any(|item| item.relation.as_ref().is_some_and(|(of, _)| of == schema))
+                || items.iter().any(|item| {
+                    item.relation.as_ref().is_some_and(|(of, _)| of == schema)
+                        || (item.empty && item.name == *schema)
+                })
         });
         self.completion
     }

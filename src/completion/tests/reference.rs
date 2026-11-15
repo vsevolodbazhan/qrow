@@ -106,10 +106,14 @@ impl<'a> Builder<'a> {
 
     fn schema_item(&mut self, name: &str) {
         let order = self.candidates.len();
-        let empty = self
-            .schema(name)
-            .and_then(|(_, node)| node.relations.as_ref())
+        let node = self.schema(name).map(|(_, node)| node);
+        let empty = node
+            .and_then(|node| node.relations.as_ref())
             .is_some_and(|relations| relations.is_empty());
+        // "Empty" can be old: a stale empty schema gets the stale footer.
+        if empty && let Some(node) = node {
+            self.mark_stale(name, node.fetched_at);
+        }
         self.push(
             0,
             order,
@@ -316,9 +320,10 @@ impl<'a> Builder<'a> {
         let empty_schema = self.completion.empty_schema.as_deref();
         self.completion.stale.retain(|schema| {
             empty_schema == Some(schema.as_str())
-                || items
-                    .iter()
-                    .any(|item| item.relation.as_ref().is_some_and(|(of, _)| of == schema))
+                || items.iter().any(|item| {
+                    item.relation.as_ref().is_some_and(|(of, _)| of == schema)
+                        || (item.empty && item.name == *schema)
+                })
         });
         self.completion
     }

@@ -1044,9 +1044,14 @@ fn a_schema_without_tables_is_marked_empty() {
 }
 
 #[test]
-fn a_stale_empty_schema_is_stale_in_its_own_list() {
+fn a_stale_empty_schema_is_stale_where_the_list_shows_it() {
     let mut read = catalog(NOW - 3_601);
     read.apply_relations("cold", None, Vec::new(), NOW - 3_601);
     let completion = suggest(Some(&read), "SELECT * FROM cold.|");
+    assert_eq!(completion.stale, ["cold"]);
+    // Its row in a list of schemas is stale too; a stale schema with
+    // tables and no names in the list is not.
+    let completion = suggest(Some(&read), "SELECT * FROM co|");
+    assert_eq!(names(&completion), ["cold"]);
     assert_eq!(completion.stale, ["cold"]);
 }
