@@ -54,8 +54,9 @@ pub(super) fn notice_with_names(
                             .px(rems(0.25))
                             .rounded(rems(0.25))
                             .bg(muted)
+                            // A long name wraps instead of being cut, so
+                            // the toast always shows it in full.
                             .max_w_full()
-                            .truncate()
                             .child(text.clone())
                             .into_any_element(),
                     );
