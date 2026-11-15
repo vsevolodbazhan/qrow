@@ -394,10 +394,15 @@ fn empty_export_writes_a_header_and_a_statement_without_results_preserves_output
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_gone(cx, "export-save");
     app.wait_label(cx, "preserved.csv");
+    // The toast keeps the raw error out. Retry… opens the dialog with it.
+    app.wait_label(cx, "Select Retry… to see the error.");
+    app.click_labelled(cx, "Retry…");
     app.wait_label(
         cx,
         "The statement completed without a result set. No export file was written.",
     );
+    app.press(cx, "escape");
+    app.wait_gone(cx, "export-save");
     assert_eq!(std::fs::read_to_string(output).unwrap(), "previous output");
     app.run_complete(cx, "SELECT count(*) AS value FROM qrow_no_export");
     app.wait_cell(cx, 0, 1, "0");
