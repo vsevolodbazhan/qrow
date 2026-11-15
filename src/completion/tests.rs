@@ -2,6 +2,8 @@ use super::*;
 use crate::catalog::{CatalogColumn, RelationEntry};
 use std::collections::BTreeMap;
 
+mod reference;
+
 const NOW: u64 = 100_000;
 const KYUUBI: DatabaseType = DatabaseType::Kyuubi;
 
@@ -429,4 +431,456 @@ fn names_are_quoted_only_when_they_need_it() {
     let catalog = catalog(NOW - 60);
     let completion = suggest(Some(&catalog), "SELECT * FROM avia.Mi|");
     assert_eq!(completion.items[0].insert, "`Mixed Case`");
+}
+
+/// A small generator of repeatable random numbers for generated catalogs.
+struct Random(u64);
+
+impl Random {
+    fn next(&mut self) -> u64 {
+        // xorshift64*
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+
+    fn below(&mut self, count: usize) -> usize {
+        (self.next() % count as u64) as usize
+    }
+
+    fn chance(&mut self, percent: usize) -> bool {
+        self.below(100) < percent
+    }
+
+    fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+        &items[self.below(items.len())]
+    }
+}
+
+/// Parts of generated names: letter case variants, non-ASCII letters whose
+/// lowercase form is ASCII or longer than one character, and digits.
+const NAME_PARTS: [&str; 24] = [
+    "id",
+    "Id",
+    "ID",
+    "status",
+    "STATUS",
+    "Status",
+    "fl",
+    "fare",
+    "flight",
+    "Straße",
+    "STRASSE",
+    "\u{212a}elvin",
+    "kelvin",
+    "\u{130}d",
+    "日本",
+    "éte",
+    "ÉTÉ",
+    "a",
+    "b",
+    "x_1",
+    "0042",
+    "_",
+    "ß",
+    "Ωmega",
+];
+
+fn generated_name(random: &mut Random) -> String {
+    let mut name = String::new();
+    for _ in 0..1 + random.below(3) {
+        if !name.is_empty() && random.chance(60) {
+            name.push('_');
+        }
+        name.push_str(random.pick(&NAME_PARTS));
+    }
+    if random.chance(3) {
+        // Longer than the buffer of `tier`.
+        name.push_str(&"日本_".repeat(30));
+    }
+    if random.chance(50) {
+        name.push_str(&random.below(500).to_string());
+    }
+    name
+}
+
+/// A catalog with schemas of random sizes, up to more relations and
+/// columns than the list shows.
+fn generated_catalog(random: &mut Random) -> Catalog {
+    let mut catalog = Catalog::empty(uuid::Uuid::nil(), None);
+    let mut schemas: Vec<String> = (0..1 + random.below(6))
+        .map(|_| generated_name(random))
+        .collect();
+    if random.chance(30) {
+        schemas.extend((0..MAX_ITEMS + random.below(100)).map(|n| format!("s{n}")));
+    }
+    schemas.push("main".into());
+    catalog.apply_schemas(schemas.clone(), &CatalogSettings::default(), NOW - 60);
+    for schema in &schemas {
+        if random.chance(20) && schema != "main" {
+            continue;
+        }
+        let count = if random.chance(15) {
+            MAX_ITEMS * 2 + random.below(200)
+        } else {
+            random.below(20)
+        };
+        let names: Vec<String> = (0..count).map(|_| generated_name(random)).collect();
+        let fetched = if random.chance(30) {
+            NOW - 4_000
+        } else {
+            NOW - 60
+        };
+        catalog.apply_relations(
+            schema,
+            None,
+            names
+                .iter()
+                .map(|name| RelationEntry {
+                    name: name.clone(),
+                    kind: if random.chance(20) {
+                        RelationKind::View
+                    } else {
+                        RelationKind::Table
+                    },
+                    comment: random.chance(30).then(|| format!("About {name}")),
+                })
+                .collect(),
+            fetched,
+        );
+        let Some(relations) = catalog.schemas[schema].relations.clone() else {
+            continue;
+        };
+        for relation in relations.keys() {
+            if random.chance(30) {
+                continue;
+            }
+            let count = if random.chance(2) {
+                MAX_ITEMS * 2 + random.below(100)
+            } else {
+                random.below(12)
+            };
+            let columns = (0..count)
+                .map(|_| CatalogColumn {
+                    name: generated_name(random),
+                    data_type: random
+                        .pick(&["BIGINT", "String", "DECIMAL(12,2)"])
+                        .to_string(),
+                    comment: random.chance(30).then(|| "A comment.".into()),
+                })
+                .collect();
+            let fetched = if random.chance(20) {
+                NOW - 4_000
+            } else {
+                NOW - 60
+            };
+            catalog.apply_columns(
+                schema,
+                Some(relation),
+                BTreeMap::from([(relation.clone(), columns)]),
+                fetched,
+            );
+        }
+    }
+    catalog
+}
+
+/// A name of `catalog`, or a name that it does not have, in a random
+/// letter case.
+fn some_name(random: &mut Random, names: &[String]) -> String {
+    let name = if names.is_empty() || random.chance(10) {
+        generated_name(random)
+    } else {
+        random.pick(names).clone()
+    };
+    match random.below(4) {
+        0 => name.to_uppercase(),
+        1 => name.to_lowercase(),
+        _ => name,
+    }
+}
+
+fn generated_prefix(random: &mut Random, names: &[String]) -> String {
+    match random.below(5) {
+        0 => String::new(),
+        1 => random.pick(&NAME_PARTS).to_string(),
+        2 => ["k", "K", "\u{212a}", "i", "ss", "zz", "日", "s1", "_"][random.below(9)].into(),
+        _ => {
+            let name: Vec<char> = some_name(random, names).chars().collect();
+            let start = random.below(name.len().max(1));
+            let end = (start + 1 + random.below(4)).min(name.len());
+            name[start.min(end)..end].iter().collect()
+        }
+    }
+}
+
+#[test]
+fn the_ranked_list_is_the_list_of_the_first_implementation() {
+    let mut random = Random(0x5eed_1234_abcd_0001);
+    let mut cases = 0;
+    for _ in 0..24 {
+        let catalog = generated_catalog(&mut random);
+        let schemas: Vec<String> = catalog.schemas.keys().cloned().collect();
+        let relations: Vec<(String, String)> = catalog
+            .schemas
+            .iter()
+            .flat_map(|(schema, node)| {
+                node.relations
+                    .iter()
+                    .flat_map(|relations| relations.keys())
+                    .map(|relation| (schema.clone(), relation.clone()))
+            })
+            .collect();
+        let relation_names: Vec<String> = relations.iter().map(|(_, name)| name.clone()).collect();
+        for _ in 0..80 {
+            let sources: Vec<Source> = (0..random.below(5))
+                .map(|_| {
+                    let (schema, name) = if relations.is_empty() || random.chance(10) {
+                        ("main".to_string(), generated_name(&mut random))
+                    } else {
+                        random.pick(&relations).clone()
+                    };
+                    Source {
+                        schema: random.chance(60).then(|| some_name(&mut random, &[schema])),
+                        name: some_name(&mut random, &[name]),
+                        alias: random
+                            .chance(50)
+                            .then(|| some_name(&mut random, &relation_names)),
+                    }
+                })
+                .collect();
+            let place = match random.below(3) {
+                0 => Place::Relation,
+                1 => Place::Column,
+                _ => {
+                    let qualifier = |random: &mut Random| match random.below(3) {
+                        0 if !sources.is_empty() => random.pick(&sources).qualifier().to_owned(),
+                        1 => some_name(random, &schemas),
+                        _ => some_name(random, &relation_names),
+                    };
+                    let mut parts = vec![qualifier(&mut random)];
+                    if random.chance(40) {
+                        parts.insert(0, some_name(&mut random, &schemas));
+                    }
+                    Place::Qualified {
+                        parts,
+                        relation: random.chance(50),
+                    }
+                }
+            };
+            let request = Request {
+                replace: 0..0,
+                prefix: generated_prefix(&mut random, &relation_names),
+                start: 0,
+                place,
+                column_start: true,
+                sources,
+            };
+            let default_schema = if random.chance(80) {
+                "main".to_string()
+            } else {
+                some_name(&mut random, &schemas)
+            };
+            let database_type =
+                *random.pick(&[KYUUBI, DatabaseType::Postgres, DatabaseType::Trino]);
+            let settings = CatalogSettings::default();
+            let fast = complete(
+                Some(&catalog),
+                &request,
+                &default_schema,
+                &settings,
+                NOW,
+                database_type,
+            );
+            let first = reference::complete(
+                Some(&catalog),
+                &request,
+                &default_schema,
+                &settings,
+                NOW,
+                database_type,
+            );
+            assert_eq!(fast, first, "{request:?} in {default_schema}");
+            if !fast.items.is_empty() {
+                cases += 1;
+            }
+        }
+    }
+    // Most generated requests have suggestions.
+    assert!(cases > 800, "{cases} requests with suggestions");
+}
+
+#[test]
+fn the_tier_without_offsets_is_the_tier_of_fuzzy() {
+    let mut random = Random(0x0dd_ba11);
+    let mut names: Vec<String> = (0..800).map(|_| generated_name(&mut random)).collect();
+    names.extend(["", "a", "\u{212a}", "\u{130}", "ǅ", "ﬁle", "ΣΑΣ"].map(String::from));
+    for name in &names {
+        for prefix in names.iter().take(150).map(String::as_str).chain([
+            "", "k", "K", "i", "i\u{307}", "s", "ss", "σ", "日本", "fi", "_",
+        ]) {
+            let wanted: Vec<char> = prefix.chars().map(lower).collect();
+            assert_eq!(
+                tier(name, &wanted),
+                fuzzy(name, prefix).map(|(tier, _)| tier),
+                "{name:?} for {prefix:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ranks_order_tiers_then_groups_then_sources() {
+    let catalog = catalog(NOW - 60);
+    // After FROM: schemas before relations in each tier, and each tier
+    // before the next.
+    let completion = suggest(Some(&catalog), "SELECT * FROM a|");
+    assert_eq!(
+        names(&completion),
+        [
+            "avia",
+            "finance",
+            "Mixed Case",
+            "fare_rules",
+            "fleet_summary"
+        ]
+    );
+    // Columns of the same tier follow the order of the columns in their
+    // relations. Columns at the same place keep the order of the relations
+    // of the statement.
+    let completion = suggest(
+        Some(&catalog),
+        "SELECT * FROM avia.flight_events f JOIN avia.bookings b ON 1=1 WHERE t|",
+    );
+    assert_eq!(
+        names(&completion),
+        [
+            "f.status",
+            "b.status",
+            "station_code",
+            "amount",
+            "scheduled_at"
+        ]
+    );
+}
+
+#[test]
+fn shared_column_names_ignore_ascii_letter_case_only() {
+    let mut catalog = Catalog::empty(uuid::Uuid::nil(), None);
+    catalog.apply_schemas(vec!["s".into()], &CatalogSettings::default(), NOW);
+    let entry = |name: &str| RelationEntry {
+        name: name.into(),
+        kind: RelationKind::Table,
+        comment: None,
+    };
+    catalog.apply_relations("s", None, vec![entry("one"), entry("two")], NOW);
+    let column = |name: &str| CatalogColumn {
+        name: name.into(),
+        data_type: "INT".into(),
+        comment: None,
+    };
+    catalog.apply_columns(
+        "s",
+        None,
+        BTreeMap::from([
+            (
+                "one".into(),
+                vec![column("Status"), column("straße"), column("é")],
+            ),
+            (
+                "two".into(),
+                vec![column("STATUS"), column("STRASSE"), column("É")],
+            ),
+        ]),
+        NOW,
+    );
+    let (_, request) = at("SELECT | FROM s.one a JOIN s.two b", KYUUBI);
+    let completion = complete(
+        Some(&catalog),
+        &request,
+        "s",
+        &CatalogSettings::default(),
+        NOW,
+        KYUUBI,
+    );
+    // `É` and `é` differ outside ASCII, so they stay apart.
+    assert_eq!(
+        names(&completion),
+        ["a.Status", "b.STATUS", "straße", "STRASSE", "é", "É"]
+    );
+    assert_eq!(completion.items[2].source.as_deref(), Some("a"));
+    // A self join shares all its columns.
+    let (_, request) = at("SELECT | FROM s.one a JOIN s.one b", KYUUBI);
+    let completion = complete(
+        Some(&catalog),
+        &request,
+        "s",
+        &CatalogSettings::default(),
+        NOW,
+        KYUUBI,
+    );
+    assert!(completion.items.iter().all(|item| item.qualifier.is_some()));
+}
+
+#[test]
+fn the_cap_keeps_the_best_ranks_and_the_stale_schemas_that_it_shows() {
+    let mut catalog = Catalog::empty(uuid::Uuid::nil(), None);
+    let mut schemas: Vec<String> = (0..MAX_ITEMS + 20).map(|n| format!("s{n:04}")).collect();
+    schemas.push("big".into());
+    catalog.apply_schemas(schemas, &CatalogSettings::default(), NOW);
+    catalog.apply_relations(
+        "big",
+        None,
+        (0..MAX_ITEMS * 3)
+            .map(|index| RelationEntry {
+                name: format!("t{index:04}_s"),
+                kind: RelationKind::Table,
+                comment: None,
+            })
+            .collect(),
+        NOW - 4_000,
+    );
+    let suggest_in = |sql: &str| {
+        let (_, request) = at(sql, KYUUBI);
+        complete(
+            Some(&catalog),
+            &request,
+            "big",
+            &CatalogSettings::default(),
+            NOW,
+            KYUUBI,
+        )
+    };
+    // All schemas rank before the tables, and the list has no room for
+    // a table: the stale schema `big` does not show.
+    let completion = suggest_in("SELECT * FROM |");
+    assert_eq!(completion.items.len(), MAX_ITEMS);
+    assert!(
+        completion
+            .items
+            .iter()
+            .all(|item| item.kind == ItemKind::Schema)
+    );
+    assert!(completion.stale.is_empty());
+    // A prefix of the tables ranks them first.
+    let completion = suggest_in("SELECT * FROM t|");
+    assert_eq!(completion.items.len(), MAX_ITEMS);
+    assert_eq!(completion.items[0].name, "t0000_s");
+    assert_eq!(
+        completion.items[MAX_ITEMS - 1].name,
+        format!("t{:04}_s", MAX_ITEMS - 1)
+    );
+    assert_eq!(completion.stale, ["big"]);
+    // Schemas that start with the prefix rank before tables that only
+    // have it.
+    let completion = suggest_in("SELECT * FROM s|");
+    assert_eq!(completion.items[0].name, "s0000");
+    assert_eq!(completion.items.len(), MAX_ITEMS);
+    assert!(
+        completion
+            .items
+            .iter()
+            .all(|item| item.kind == ItemKind::Schema)
+    );
 }

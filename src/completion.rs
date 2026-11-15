@@ -4,9 +4,11 @@
 //! here sends SQL. [`request`] reads the SQL around the cursor, and
 //! [`complete`] matches the request against a [`Catalog`].
 
-use crate::catalog::{Catalog, Relation, RelationKind, Schema};
+use crate::catalog::{Catalog, CatalogColumn, Relation, RelationKind, Schema};
 use crate::model::{CatalogSettings, DatabaseType};
 use crate::sql::{Kind, name_part, tokens_for};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 /// The most suggestions that one request gives.
@@ -599,13 +601,16 @@ pub fn complete(
         settings,
         now,
         database_type,
+        wanted: request.prefix.chars().map(lower).collect(),
         candidates: Vec::new(),
+        bound: None,
+        found: 0,
         completion,
     };
     match &request.place {
         Place::Relation => {
             for name in catalog.schemas.keys() {
-                builder.schema_item(name);
+                builder.push(0, 0, Candidate::Schema(name));
             }
             builder.relations(default_schema);
         }
@@ -627,15 +632,130 @@ impl Completion {
     }
 }
 
+/// The rank of a match: the match tier, the group, the order in the group,
+/// and then the order in which the builder found it. The last part keeps
+/// the order of the relations of the statement for columns of the same
+/// rank. No two matches have the same rank.
+type Rank = (u8, u8, usize, usize);
+
+/// A name that can become a suggestion, with the metadata that the
+/// suggestion needs. The builder makes [`Item`]s only for the best matches.
+enum Candidate<'a> {
+    Schema(&'a str),
+    Relation {
+        schema: &'a str,
+        name: &'a str,
+        relation: &'a Relation,
+    },
+    Column {
+        schema: &'a str,
+        relation: &'a str,
+        column: &'a CatalogColumn,
+        qualify: Option<Qualify<'a>>,
+    },
+}
+
+impl Candidate<'_> {
+    /// The name that the prefix matches.
+    fn name(&self) -> &str {
+        match self {
+            Self::Schema(name) | Self::Relation { name, .. } => name,
+            Self::Column { column, .. } => &column.name,
+        }
+    }
+
+    fn item(&self, prefix: &str, database_type: DatabaseType) -> Item {
+        let name = self.name();
+        let matches = fuzzy(name, prefix)
+            .map(|(_, matches)| matches)
+            .unwrap_or_default();
+        match *self {
+            Self::Schema(name) => Item {
+                kind: ItemKind::Schema,
+                name: name.to_owned(),
+                qualifier: None,
+                insert: sql_name(name, database_type),
+                matches,
+                source: None,
+                detail: "schema".into(),
+                relation: None,
+                comment: None,
+            },
+            Self::Relation {
+                schema,
+                name,
+                relation,
+            } => {
+                let (kind, detail) = match relation.kind {
+                    RelationKind::Table => (ItemKind::Table, "table"),
+                    RelationKind::View => (ItemKind::View, "view"),
+                };
+                Item {
+                    kind,
+                    name: name.to_owned(),
+                    qualifier: None,
+                    insert: sql_name(name, database_type),
+                    matches,
+                    source: None,
+                    detail: detail.into(),
+                    relation: Some((schema.to_owned(), name.to_owned())),
+                    comment: relation.comment.clone(),
+                }
+            }
+            Self::Column {
+                schema,
+                relation,
+                column,
+                qualify,
+            } => {
+                let (qualifier, source, insert) = match qualify {
+                    Some(Qualify::Prefix(qualifier)) => {
+                        let insert = format!(
+                            "{}.{}",
+                            sql_name(qualifier, database_type),
+                            sql_name(&column.name, database_type)
+                        );
+                        (Some(qualifier.to_owned()), None, insert)
+                    }
+                    Some(Qualify::Tag(tag)) => (
+                        None,
+                        Some(tag.to_owned()),
+                        sql_name(&column.name, database_type),
+                    ),
+                    None => (None, None, sql_name(&column.name, database_type)),
+                };
+                Item {
+                    kind: ItemKind::Column,
+                    name: column.name.clone(),
+                    qualifier,
+                    insert,
+                    matches,
+                    source,
+                    detail: column.data_type.to_lowercase(),
+                    relation: Some((schema.to_owned(), relation.to_owned())),
+                    comment: column.comment.clone(),
+                }
+            }
+        }
+    }
+}
+
 struct Builder<'a> {
     catalog: &'a Catalog,
     request: &'a Request,
     settings: &'a CatalogSettings,
     now: u64,
     database_type: DatabaseType,
-    /// Each match with its rank: the match tier, then the group, then the
-    /// order in the group.
-    candidates: Vec<((u8, u8, usize), Item)>,
+    /// The characters of the prefix, as [`fuzzy`] compares them.
+    wanted: Vec<char>,
+    /// The best matches so far, with their ranks. [`Builder::trim`] keeps
+    /// the list short.
+    candidates: Vec<(Rank, Candidate<'a>)>,
+    /// The rank of the last kept match after the last trim. A match with a
+    /// higher rank cannot be in the list.
+    bound: Option<Rank>,
+    /// The names that the builder looked at.
+    found: usize,
     completion: Completion,
 }
 
@@ -682,31 +802,37 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn push(&mut self, group: u8, order: usize, item: Item) {
-        let Some((tier, matches)) = fuzzy(&item.name, &self.request.prefix) else {
+    /// Keeps `candidate` when its name matches the prefix and its rank can
+    /// be in the list.
+    fn push(&mut self, group: u8, order: usize, candidate: Candidate<'a>) {
+        let found = self.found;
+        self.found += 1;
+        // The best tier is 0, so a match cannot rank before this.
+        if self
+            .bound
+            .is_some_and(|bound| (0, group, order, found) > bound)
+        {
+            return;
+        }
+        let Some(tier) = tier(candidate.name(), &self.wanted) else {
             return;
         };
-        self.candidates
-            .push(((tier, group, order), Item { matches, ..item }));
+        let rank = (tier, group, order, found);
+        if self.bound.is_some_and(|bound| rank > bound) {
+            return;
+        }
+        self.candidates.push((rank, candidate));
+        if self.candidates.len() >= 2 * MAX_ITEMS {
+            self.trim();
+        }
     }
 
-    fn schema_item(&mut self, name: &str) {
-        let order = self.candidates.len();
-        self.push(
-            0,
-            order,
-            Item {
-                kind: ItemKind::Schema,
-                name: name.to_owned(),
-                qualifier: None,
-                insert: sql_name(name, self.database_type),
-                matches: Vec::new(),
-                source: None,
-                detail: "schema".into(),
-                relation: None,
-                comment: None,
-            },
-        );
+    /// Keeps only the `MAX_ITEMS` best matches.
+    fn trim(&mut self) {
+        self.candidates
+            .select_nth_unstable_by_key(MAX_ITEMS - 1, |(rank, _)| *rank);
+        self.candidates.truncate(MAX_ITEMS);
+        self.bound = self.candidates.iter().map(|(rank, _)| *rank).max();
     }
 
     /// The tables and views of `schema`.
@@ -721,37 +847,26 @@ impl<'a> Builder<'a> {
         };
         self.mark_stale(schema_name, node.fetched_at);
         for (order, (name, relation)) in relations.iter().enumerate() {
-            let (kind, detail) = match relation.kind {
-                RelationKind::Table => (ItemKind::Table, "table"),
-                RelationKind::View => (ItemKind::View, "view"),
-            };
             self.push(
                 1,
                 order,
-                Item {
-                    kind,
-                    name: name.clone(),
-                    qualifier: None,
-                    insert: sql_name(name, self.database_type),
-                    matches: Vec::new(),
-                    source: None,
-                    detail: detail.into(),
-                    relation: Some((schema_name.clone(), name.clone())),
-                    comment: relation.comment.clone(),
+                Candidate::Relation {
+                    schema: schema_name,
+                    name,
+                    relation,
                 },
             );
         }
     }
 
     fn qualified(&mut self, parts: &[String], relation_place: bool, default_schema: &str) {
+        let request = self.request;
         let last = parts.last().map(String::as_str).unwrap_or_default();
         if !relation_place && parts.len() == 1 {
-            let source = self
-                .request
+            let source = request
                 .sources
                 .iter()
-                .find(|source| source.qualifier().eq_ignore_ascii_case(last))
-                .cloned();
+                .find(|source| source.qualifier().eq_ignore_ascii_case(last));
             if let Some(source) = source {
                 let schema = source.schema.as_deref().unwrap_or(default_schema);
                 self.columns(schema, &source.name, None);
@@ -763,8 +878,7 @@ impl<'a> Builder<'a> {
             if self.schema(schema).is_some()
                 && let Some((schema, name, _)) = self.relation(schema, last)
             {
-                let (schema, name) = (schema.clone(), name.clone());
-                self.columns(&schema, &name, None);
+                self.columns(schema, name, None);
                 return;
             }
         }
@@ -780,34 +894,44 @@ impl<'a> Builder<'a> {
 
     /// The columns of the relations of the statement.
     fn statement_columns(&mut self, default_schema: &str) {
-        let sources = self.request.sources.clone();
-        let mut names: Vec<(Source, Vec<String>)> = Vec::new();
-        for source in &sources {
+        let request = self.request;
+        let mut resolved: Vec<(&'a Source, &'a [CatalogColumn])> = Vec::new();
+        for source in &request.sources {
             let schema = source.schema.as_deref().unwrap_or(default_schema);
             let Some((_, _, relation)) = self.relation(schema, &source.name) else {
                 continue;
             };
-            let columns = relation
-                .columns
-                .as_ref()
-                .map(|columns| columns.iter().map(|column| column.name.clone()).collect())
-                .unwrap_or_default();
-            names.push((source.clone(), columns));
+            resolved.push((source, relation.columns.as_deref().unwrap_or_default()));
         }
-        let several = names.len() > 1;
-        for (index, (source, _)) in names.iter().enumerate() {
+        // For each column name, without regard to ASCII letter case: the
+        // first source that has it, and whether another source has it too.
+        // A source has each of its own columns, so a column is shared when
+        // more than one source has it.
+        let mut owners: HashMap<NoCase<'a>, (usize, bool)> = HashMap::new();
+        if resolved.len() > 1 {
+            for (index, (_, columns)) in resolved.iter().enumerate() {
+                for column in *columns {
+                    owners
+                        .entry(NoCase(&column.name))
+                        .and_modify(|(first, shared)| *shared |= *first != index)
+                        .or_insert((index, false));
+                }
+            }
+        }
+        let shared = |column: &str| {
+            owners
+                .get(&NoCase(column))
+                .is_some_and(|(_, shared)| *shared)
+        };
+        let several = resolved.len() > 1;
+        for (source, _) in &resolved {
             let schema = source.schema.as_deref().unwrap_or(default_schema);
-            let shared = |column: &str| {
-                names.iter().enumerate().any(|(other, (_, columns))| {
-                    other != index && columns.iter().any(|name| name.eq_ignore_ascii_case(column))
-                })
-            };
-            let qualifier = source.qualifier().to_owned();
+            let qualifier = source.qualifier();
             self.columns_with(schema, &source.name, |column| {
                 if shared(column) {
-                    Some(Qualify::Prefix(qualifier.clone()))
+                    Some(Qualify::Prefix(qualifier))
                 } else if several {
-                    Some(Qualify::Tag(qualifier.clone()))
+                    Some(Qualify::Tag(qualifier))
                 } else {
                     None
                 }
@@ -815,15 +939,15 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn columns(&mut self, schema: &str, relation: &str, qualifier: Option<Qualify>) {
-        self.columns_with(schema, relation, |_| qualifier.clone());
+    fn columns(&mut self, schema: &str, relation: &str, qualifier: Option<Qualify<'a>>) {
+        self.columns_with(schema, relation, |_| qualifier);
     }
 
     fn columns_with(
         &mut self,
         schema: &str,
         relation: &str,
-        qualify: impl Fn(&str) -> Option<Qualify>,
+        qualify: impl Fn(&str) -> Option<Qualify<'a>>,
     ) {
         let Some((schema_name, name, node)) = self.relation(schema, relation) else {
             return;
@@ -840,47 +964,28 @@ impl<'a> Builder<'a> {
             .and_then(|(_, node)| node.fetched_at);
         self.mark_stale(schema_name, schema_fetched.min(node.fetched_at));
         for (order, column) in columns.iter().enumerate() {
-            let (qualifier, source, insert) = match qualify(&column.name) {
-                Some(Qualify::Prefix(qualifier)) => {
-                    let insert = format!(
-                        "{}.{}",
-                        sql_name(&qualifier, self.database_type),
-                        sql_name(&column.name, self.database_type)
-                    );
-                    (Some(qualifier), None, insert)
-                }
-                Some(Qualify::Tag(tag)) => {
-                    (None, Some(tag), sql_name(&column.name, self.database_type))
-                }
-                None => (None, None, sql_name(&column.name, self.database_type)),
-            };
             self.push(
                 2,
                 order,
-                Item {
-                    kind: ItemKind::Column,
-                    name: column.name.clone(),
-                    qualifier,
-                    insert,
-                    matches: Vec::new(),
-                    source,
-                    detail: column.data_type.to_lowercase(),
-                    relation: Some((schema_name.clone(), name.clone())),
-                    comment: column.comment.clone(),
+                Candidate::Column {
+                    schema: schema_name,
+                    relation: name,
+                    column,
+                    qualify: qualify(&column.name),
                 },
             );
         }
     }
 
     fn finish(mut self) -> Completion {
-        // A stable sort keeps the order of the relations of the statement
-        // for columns of the same rank.
-        self.candidates.sort_by_key(|(rank, _)| *rank);
+        self.candidates.sort_unstable_by_key(|(rank, _)| *rank);
+        self.candidates.truncate(MAX_ITEMS);
+        let prefix = &self.request.prefix;
+        let database_type = self.database_type;
         self.completion.items = self
             .candidates
-            .into_iter()
-            .take(MAX_ITEMS)
-            .map(|(_, item)| item)
+            .iter()
+            .map(|(_, candidate)| candidate.item(prefix, database_type))
             .collect();
         // A stale schema matters only when the list shows names from it.
         let items = &self.completion.items;
@@ -893,12 +998,98 @@ impl<'a> Builder<'a> {
     }
 }
 
-#[derive(Clone)]
-enum Qualify {
+#[derive(Clone, Copy)]
+enum Qualify<'a> {
     /// Insert and show the column as `qualifier.column`.
-    Prefix(String),
+    Prefix(&'a str),
     /// Show the source as a tag.
-    Tag(String),
+    Tag(&'a str),
+}
+
+/// A name that equals another name without regard to ASCII letter case, as
+/// [`str::eq_ignore_ascii_case`] compares them.
+struct NoCase<'a>(&'a str);
+
+impl PartialEq for NoCase<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_ignore_ascii_case(other.0)
+    }
+}
+
+impl Eq for NoCase<'_> {}
+
+impl Hash for NoCase<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut buffer = [0u8; 32];
+        for chunk in self.0.as_bytes().chunks(buffer.len()) {
+            for (to, from) in buffer.iter_mut().zip(chunk) {
+                *to = from.to_ascii_lowercase();
+            }
+            state.write(&buffer[..chunk.len()]);
+        }
+        state.write_u8(0xff);
+    }
+}
+
+/// A character as [`fuzzy`] compares it: the first character of its
+/// lowercase form.
+fn lower(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+/// The tier that [`fuzzy`] gives `name` for the characters `wanted` of a
+/// prefix, without the offsets of the matched characters. It does not
+/// allocate for names of up to 64 characters.
+fn tier(name: &str, wanted: &[char]) -> Option<u8> {
+    if wanted.is_empty() {
+        return Some(0);
+    }
+    if name.is_ascii() {
+        let bytes = name.as_bytes();
+        return tier_of(
+            bytes.len(),
+            |index| bytes[index].to_ascii_lowercase() as char,
+            wanted,
+        );
+    }
+    let mut chars = ['\0'; 64];
+    let mut count = 0;
+    for c in name.chars() {
+        let Some(slot) = chars.get_mut(count) else {
+            let long: Vec<char> = name.chars().map(lower).collect();
+            return tier_of(long.len(), |index| long[index], wanted);
+        };
+        *slot = lower(c);
+        count += 1;
+    }
+    tier_of(count, |index| chars[index], wanted)
+}
+
+/// [`tier`] of the `len` characters that `at` gives.
+fn tier_of(len: usize, at: impl Fn(usize) -> char, wanted: &[char]) -> Option<u8> {
+    let starts_at = |start: usize| {
+        wanted.len() <= len - start
+            && wanted
+                .iter()
+                .enumerate()
+                .all(|(index, want)| at(start + index) == *want)
+    };
+    if starts_at(0) {
+        return Some(0);
+    }
+    if (1..len).any(starts_at) {
+        return Some(1);
+    }
+    if len == 0 || at(0) != wanted[0] {
+        return None;
+    }
+    let mut next = 0;
+    for index in 0..len {
+        if next < wanted.len() && at(index) == wanted[next] {
+            next += 1;
+        }
+    }
+    (next == wanted.len()).then_some(2)
 }
 
 /// How `name` matches `prefix`, without regard to letter case: 0 for a
@@ -908,7 +1099,6 @@ pub fn fuzzy(name: &str, prefix: &str) -> Option<(u8, Vec<usize>)> {
     if prefix.is_empty() {
         return Some((0, Vec::new()));
     }
-    let lower = |c: char| c.to_lowercase().next().unwrap_or(c);
     let chars: Vec<(usize, char)> = name.char_indices().map(|(i, c)| (i, lower(c))).collect();
     let wanted: Vec<char> = prefix.chars().map(lower).collect();
     let contiguous = |start: usize| {
