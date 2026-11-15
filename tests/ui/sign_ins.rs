@@ -1287,6 +1287,16 @@ fn pasting_text_that_is_not_a_sign_in_tells_why_and_adds_nothing(cx: &mut TestAp
                 .replace("\"qrow_sign_in\": 1", "\"qrow_sign_in\": 99"),
             "newer version",
         ),
+        // A field of the wrong type: the dialog keeps the cause.
+        (
+            {
+                let text = provider.sign_in("Company").to_shared_text();
+                let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+                json["issuer"] = serde_json::json!(5);
+                json.to_string()
+            },
+            "not complete. invalid type",
+        ),
     ] {
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(clipboard));
         app.click(cx, "paste-sign-in");
