@@ -814,6 +814,10 @@ pub struct Qrow {
     menu: Option<ContextMenu>,
     /// The autocomplete popup of the SQL editor.
     completion: Option<sql_completion::CompletionPopup>,
+    /// For each connection, the idle report count of its catalog when the
+    /// suggestions last started a read. Until the next report, the read
+    /// counts as running, so the list does not show the last error.
+    completion_reads: std::collections::HashMap<Uuid, u64>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
     message: Option<String>,
@@ -1100,6 +1104,7 @@ impl Qrow {
             result_form: None,
             menu: None,
             completion: None,
+            completion_reads: std::collections::HashMap::new(),
             saver,
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
             message,

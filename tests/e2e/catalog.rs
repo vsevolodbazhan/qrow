@@ -997,15 +997,12 @@ fn autocomplete_reads_the_metadata_on_request_and_inserts_quoted_names(cx: &mut 
         &format!("CREATE VIEW {schema}.`select` AS SELECT 42 AS id"),
     );
 
-    // The connection has no metadata copy yet, so the list offers Refresh.
+    // The connection has no metadata copy yet, so a toast offers Refresh.
     app.type_sql(cx, &format!("SELECT * FROM {schema}.se"));
     app.press(cx, "tab");
-    app.wait_until(cx, "the empty state", QUERY_TIMEOUT, |window, _| {
-        crate::support::label(window, "sql-completion-notice").as_deref()
-            == Some("No cached metadata")
-    });
-    // Tab runs Refresh, and the list then shows the view.
-    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion-refresh");
+    // Refresh reads the connection, and the list then shows the view.
+    app.click(cx, "sql-completion-refresh");
     app.wait_until(cx, "the view", QUERY_TIMEOUT, |window, _| {
         labelled(window, "select")
             .is_some_and(|row| format!("{:?}", row.path().last()).contains("sql-completion-item-"))

@@ -324,10 +324,12 @@ characters. The box also shows a name or a type that the list cuts or hides.
 
 When the list needs data that the copy does not have, Qrow reads it, like a
 **Refresh** of that table or schema in the tree. This read can open a
-session. If the read fails, the list shows the error. Press **Tab** when the
-list has no names, or select **Retry**, to read again. For a connection that
-Qrow never read, the list shows **No cached metadata**. Press **Tab** or select
-**Refresh** to read it.
+session. If the read fails and the list has no names, the list closes and
+a toast shows the error. Select **Retry** in the toast, or press **Tab**
+again, to read again. If the list has other names, the error and **Retry**
+show below them. For a connection that Qrow never read, a toast shows
+**No cached metadata**. Select **Refresh** in the toast to read the
+connection. The list then opens at the cursor again.
 
 When the metadata of a schema in the list is older than the
 [Refresh Period](connections.md#refresh-metadata-automatically) of the

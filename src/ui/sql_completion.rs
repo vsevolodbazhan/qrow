@@ -5,6 +5,7 @@
 
 use super::Qrow;
 use super::dbt::{DbtLookup, summary};
+use super::toast::{self, NotificationType};
 use crate::catalog::Scope;
 use crate::completion::{self, Completion, Item, ItemKind, Need, Request};
 use gpui_kit::assets::IconName;
@@ -14,7 +15,7 @@ use gpui_kit::component::input::{
 };
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{TextView, TextViewState, TextViewStyle};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::cell::RefCell;
@@ -82,22 +83,17 @@ impl CompletionPopup {
     }
 }
 
-/// A state of the popup without a list.
-struct Notice {
-    title: &'static str,
-    message: Vec<Text>,
-    action: Option<(&'static str, &'static str)>,
-    /// Whether the title has the warning icon.
-    warning: bool,
-}
+/// The ID of the toast that replaces a list without names. A new toast
+/// replaces the last one, so repeated Tab presses do not stack toasts.
+struct CompletionToast;
 
 /// What the popup shows when it has no suggestions.
 enum Body {
     Items,
     Loading(Vec<Text>),
     Failed {
-        title: &'static str,
-        message: Vec<Text>,
+        title: String,
+        detail: String,
     },
     /// The connection has no cached metadata.
     NotRead,
@@ -130,7 +126,7 @@ impl Qrow {
             let scopes = self.completion_retry_scopes(popup);
             if !scopes.is_empty() {
                 for scope in scopes {
-                    self.refresh_catalog(profile, scope, cx);
+                    self.read_for_completion(profile, scope, cx);
                 }
                 self.update_completion(Trigger::Metadata, cx);
                 return;
@@ -164,6 +160,21 @@ impl Qrow {
             .into_iter()
             .filter(|scope| !self.catalog.reads(popup.profile, scope))
             .collect()
+    }
+
+    /// Reads `scope` for the list. The worker reports the read on a later
+    /// tick, so until its next report the read counts as running.
+    fn read_for_completion(&mut self, profile: Uuid, scope: Scope, cx: &mut Context<Self>) {
+        self.completion_reads
+            .insert(profile, self.catalog.idle_reports(profile));
+        self.refresh_catalog(profile, scope, cx);
+    }
+
+    /// Whether a read that the list started has not reported yet.
+    fn completion_waits(&self, profile: Uuid) -> bool {
+        self.completion_reads
+            .get(&profile)
+            .is_some_and(|reports| *reports == self.catalog.idle_reports(profile))
     }
 
     /// Finds the suggestions for the cursor of the active tab again.
@@ -242,16 +253,18 @@ impl Qrow {
             .map(|popup| popup.requested.clone())
             .unwrap_or_default();
         // A request by the user can read what the list needs, like Run can
-        // open a session. A read that failed waits for Retry.
+        // open a session. A read that failed waits for Retry or for the
+        // next Tab.
         for need in &completion.missing {
             if *need == Need::Schemas
                 || requested.contains(need)
-                || completion.errors.iter().any(|(failed, _)| failed == need)
+                || (trigger != Trigger::Open
+                    && completion.errors.iter().any(|(failed, _)| failed == need))
             {
                 continue;
             }
             requested.insert(need.clone());
-            self.refresh_catalog(profile.id, need_scope(need), cx);
+            self.read_for_completion(profile.id, need_scope(need), cx);
         }
         let description = previous.as_ref().and_then(|popup| popup.description.take());
         let same_list = previous.as_ref().is_some_and(|popup| {
@@ -419,27 +432,7 @@ impl Qrow {
             }
             return;
         }
-        let tab = &self.tabs[self.active];
-        let input = tab.input.read(cx);
-        if !input.selected_range().is_empty() {
-            return;
-        }
-        let Some(profile) = tab
-            .saved
-            .profile
-            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
-        else {
-            return;
-        };
-        let after_name = completion::request(&input.value(), input.cursor(), profile.database_type)
-            .is_some_and(|request| {
-                !request.prefix.is_empty()
-                    || matches!(
-                        request.place,
-                        completion::Place::Qualified { .. } | completion::Place::Relation
-                    )
-            });
-        if !after_name || !profile.catalog.browses() {
+        if !self.completion_fits(cx) {
             return;
         }
         self.update_completion(Trigger::Open, cx);
@@ -456,6 +449,107 @@ impl Qrow {
             cx.stop_propagation();
         } else {
             self.close_completion(cx);
+        }
+    }
+
+    /// Whether the cursor of the active tab follows a name, a dot, or `FROM `
+    /// with nothing selected, in a tab whose connection reads metadata.
+    fn completion_fits(&self, cx: &App) -> bool {
+        let tab = &self.tabs[self.active];
+        let input = tab.input.read(cx);
+        if !input.selected_range().is_empty() {
+            return false;
+        }
+        let Some(profile) = tab
+            .saved
+            .profile
+            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
+        else {
+            return false;
+        };
+        profile.catalog.browses()
+            && completion::request(&input.value(), input.cursor(), profile.database_type)
+                .is_some_and(|request| {
+                    !request.prefix.is_empty()
+                        || matches!(
+                            request.place,
+                            completion::Place::Qualified { .. } | completion::Place::Relation
+                        )
+                })
+    }
+
+    /// Closes a list that has no names and only reports a problem, and shows
+    /// the problem in a toast: a failed read with Retry, or a connection
+    /// without cached metadata with Refresh.
+    fn completion_toast(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(popup) = self.active_completion() else {
+            return;
+        };
+        let profile = popup.profile;
+        let scopes = self.completion_retry_scopes(popup);
+        let (kind, title, detail, action) = match self.completion_body(popup) {
+            Body::Failed { title, detail } => (
+                NotificationType::Error,
+                title,
+                detail,
+                Some(("sql-completion-retry", "Retry")),
+            ),
+            Body::NotRead => (
+                NotificationType::Info,
+                "No cached metadata".to_owned(),
+                "Refresh the schemas of this connection to get suggestions.".to_owned(),
+                Some(("sql-completion-refresh", "Refresh")),
+            ),
+            Body::Off => (
+                NotificationType::Info,
+                "No cached metadata".to_owned(),
+                "Turn on metadata refresh in the connection settings.".to_owned(),
+                None,
+            ),
+            _ => return,
+        };
+        self.close_completion(cx);
+        let mut toast = toast::notice(kind, "sql-completion-toast", title, Some(detail.into()));
+        if let Some((id, label)) = action
+            && !scopes.is_empty()
+        {
+            let owner = cx.entity().downgrade();
+            toast = toast.action(move |_, _, _| {
+                let owner = owner.clone();
+                let scopes = scopes.clone();
+                Button::new(id).label(label).on_click(move |_, window, cx| {
+                    window.remove_notification::<CompletionToast>(cx);
+                    let _ = owner.update(cx, |this, cx| {
+                        this.retry_completion(profile, &scopes, window, cx);
+                    });
+                })
+            });
+        }
+        window.push_notification(toast.id::<CompletionToast>().autohide(true), cx);
+    }
+
+    /// Retry or Refresh of a toast: reads `scopes` again and, when the
+    /// cursor still follows a name, shows the list at the cursor again.
+    fn retry_completion(
+        &mut self,
+        profile: Uuid,
+        scopes: &[Scope],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for scope in scopes {
+            if !self.catalog.reads(profile, scope) {
+                self.read_for_completion(profile, scope.clone(), cx);
+            }
+        }
+        let tab = &self.tabs[self.active];
+        if tab.saved.profile != Some(profile) || !self.settings.editor_autocomplete {
+            return;
+        }
+        let input = tab.input.clone();
+        input.update(cx, |input, cx| input.focus(window, cx));
+        if self.completion_fits(cx) {
+            self.update_completion(Trigger::Open, cx);
         }
     }
 
@@ -478,6 +572,13 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let popup = self.active_completion()?;
+        if matches!(
+            self.completion_body(popup),
+            Body::Failed { .. } | Body::NotRead | Body::Off
+        ) {
+            cx.defer_in(window, |this, window, cx| this.completion_toast(window, cx));
+            return None;
+        }
         let editor = &self.tabs[self.active].input;
         if !editor.focus_handle(cx).is_focused(window) {
             return None;
@@ -597,14 +698,15 @@ impl Qrow {
         if !popup.completion.items.is_empty() {
             return Body::Items;
         }
-        if !popup.loaded || self.catalog.reads(popup.profile, &Scope::Connection) {
+        let waits = self.completion_waits(popup.profile);
+        if !popup.loaded || waits || self.catalog.reads(popup.profile, &Scope::Connection) {
             return Body::Loading(vec![Text::Plain("Loading schemas…".into())]);
         }
         if !popup.read {
             if let Some((_, error)) = popup.completion.errors.first() {
                 return Body::Failed {
-                    title: "Could not load schemas",
-                    message: vec![Text::Plain(first_line(error))],
+                    title: "Could not load schemas".into(),
+                    detail: first_line(error),
                 };
             }
             return Body::NotRead;
@@ -612,7 +714,7 @@ impl Qrow {
         let Some(need) = popup.completion.missing.first() else {
             return Body::NoSuggestions;
         };
-        let reading = self.catalog.reads(popup.profile, &need_scope(need));
+        let reading = waits || self.catalog.reads(popup.profile, &need_scope(need));
         let error = popup
             .completion
             .errors
@@ -620,16 +722,15 @@ impl Qrow {
             .find(|(failed, _)| failed == need)
             .map(|(_, error)| error);
         match (need, error) {
-            (Need::Columns(schema, relation), Some(error)) if !reading => Body::Failed {
-                title: "Could not load columns",
-                message: code_names(
-                    &first_line(error),
-                    &[format!("{schema}.{relation}"), relation.clone()],
-                ),
+            // The statement names the schema, so the title names only the
+            // table.
+            (Need::Columns(_, relation), Some(error)) if !reading => Body::Failed {
+                title: format!("Could not load columns of {relation}"),
+                detail: first_line(error),
             },
             (Need::Relations(schema), Some(error)) if !reading => Body::Failed {
-                title: "Could not load tables",
-                message: code_names(&first_line(error), std::slice::from_ref(schema)),
+                title: format!("Could not load tables of {schema}"),
+                detail: first_line(error),
             },
             (Need::Columns(schema, relation), _) => Body::Loading(vec![
                 Text::Plain("Loading columns of ".into()),
@@ -698,43 +799,8 @@ impl Qrow {
                         self.text_line("sql-completion-loading-text", message, room, window, cx)
                     }),
             ),
-            Body::Failed { title, message } => shell.child(self.completion_notice(
-                Notice {
-                    title,
-                    message,
-                    action: Some(("sql-completion-retry", "Retry")),
-                    warning: true,
-                },
-                layout,
-                window,
-                cx,
-            )),
-            Body::NotRead => shell.child(self.completion_notice(
-                Notice {
-                    title: "No cached metadata",
-                    message: vec![Text::Plain(
-                        "Refresh the schemas of this connection to get suggestions.".into(),
-                    )],
-                    action: Some(("sql-completion-refresh", "Refresh")),
-                    warning: false,
-                },
-                layout,
-                window,
-                cx,
-            )),
-            Body::Off => shell.child(self.completion_notice(
-                Notice {
-                    title: "No cached metadata",
-                    message: vec![Text::Plain(
-                        "Turn on metadata refresh in the connection settings.".into(),
-                    )],
-                    action: None,
-                    warning: false,
-                },
-                layout,
-                window,
-                cx,
-            )),
+            // Shown as a toast instead; see `completion_toast`.
+            Body::Failed { .. } | Body::NotRead | Body::Off => shell,
             Body::NoSuggestions => shell.child(
                 div()
                     .id("sql-completion-empty")
@@ -750,113 +816,6 @@ impl Qrow {
             ),
         };
         shell.into_any_element()
-    }
-
-    /// A title, a message, and an optional button: the states without a
-    /// list.
-    fn completion_notice(
-        &self,
-        notice: Notice,
-        layout: &Layout,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let Notice {
-            title,
-            message,
-            action,
-            warning,
-        } = notice;
-        // The border and the padding of the popup and of the notice.
-        let room = layout.width - px(2.) - self.ui_px(8. + 16.);
-        let message = self.texts(message, room, window, cx);
-        let theme = cx.theme();
-        let profile = self.active_completion().map(|popup| popup.profile);
-        v_flex()
-            .id("sql-completion-notice")
-            .test_support()
-            .role(Role::Status)
-            .aria_label(title)
-            .p(self.ui_px(8.))
-            // One line height for the title and the message, like toasts,
-            // so that the space above and below the message is the same.
-            .line_height(rems(1.25))
-            .child(
-                h_flex()
-                    .id("sql-completion-title")
-                    .test_support()
-                    .gap(self.ui_px(GAP))
-                    .font_weight(FontWeight::MEDIUM)
-                    .when(warning, |row| {
-                        row.child(
-                            Icon::new(IconName::TriangleAlert)
-                                .size(self.ui_px(14.))
-                                .text_color(theme.warning),
-                        )
-                    })
-                    .child(title),
-            )
-            .child(
-                div()
-                    .id("sql-completion-message")
-                    .test_support()
-                    .text_size(self.ui_px(12.))
-                    .text_color(theme.muted_foreground)
-                    .child(message),
-            )
-            .when_some(action.zip(profile), |notice, ((id, label), _)| {
-                notice.child(
-                    h_flex().mt(self.ui_px(8.)).child(
-                        Button::new(id).small().label(label).on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.refresh_completion(cx);
-                            },
-                        )),
-                    ),
-                )
-            })
-    }
-
-    /// Text with names in the code font, at 12 px, in lines of `room`.
-    /// Plain text wraps between its words. A name wider than `room` is cut
-    /// at the end and shows its full text in a tooltip.
-    fn texts(&self, parts: Vec<Text>, room: Pixels, window: &mut Window, cx: &App) -> Div {
-        let code_font = font(self.settings.editor_font_family.clone());
-        let mut items: Vec<AnyElement> = Vec::new();
-        for (index, part) in parts.into_iter().enumerate() {
-            match part {
-                // Each word with its space is an item of the row, so the
-                // row wraps between words.
-                Text::Plain(text) => items.extend(text.split_inclusive(' ').map(|word| {
-                    div()
-                        .whitespace_nowrap()
-                        .child(word.to_owned())
-                        .into_any_element()
-                })),
-                Text::Code(text) => {
-                    let cut = self.code_width(window, &text, &code_font) > room + px(0.5);
-                    items.push(
-                        self.code_chip(text.clone(), cx)
-                            .id(("sql-completion-name", index))
-                            .max_w_full()
-                            .truncate()
-                            .when(cut, |chip| {
-                                chip.tooltip(move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(text.clone())
-                                        .build(window, cx)
-                                })
-                            })
-                            .into_any_element(),
-                    );
-                }
-            }
-        }
-        div()
-            .w_full()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .children(items)
     }
 
     /// Text with names in the code font, at 12 px, on one line of `room`.
@@ -1473,24 +1432,6 @@ fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().trim().to_owned()
 }
 
-/// `message` with the first of `names` that it contains in the code font.
-fn code_names(message: &str, names: &[String]) -> Vec<Text> {
-    for name in names {
-        if let Some(start) = message.find(name.as_str()) {
-            let end = start + name.len();
-            return [
-                Text::Plain(message[..start].to_owned()),
-                Text::Code(name.clone()),
-                Text::Plain(message[end..].to_owned()),
-            ]
-            .into_iter()
-            .filter(|part| !matches!(part, Text::Plain(text) if text.is_empty()))
-            .collect();
-        }
-    }
-    vec![Text::Plain(message.to_owned())]
-}
-
 fn plain(parts: &[Text]) -> String {
     parts
         .iter()
@@ -1562,18 +1503,5 @@ mod tests {
         let details = DetailsBox::of(&item(short), &layout, 0, None).unwrap();
         assert_eq!(details.description.as_deref(), Some(short));
         assert!(DetailsBox::of(&item("  "), &layout, 0, None).is_none());
-    }
-
-    #[::core::prelude::v1::test]
-    fn an_error_shows_the_relation_name_in_code_font() {
-        let parts = code_names(
-            "Table or view not found: avia.flight_events",
-            &["avia.flight_events".into(), "flight_events".into()],
-        );
-        assert_eq!(parts.len(), 2);
-        assert!(matches!(&parts[0], Text::Plain(text) if text == "Table or view not found: "));
-        assert!(matches!(&parts[1], Text::Code(text) if text == "avia.flight_events"));
-        let parts = code_names("Timed out", &["avia.x".into()]);
-        assert!(matches!(&parts[..], [Text::Plain(text)] if text == "Timed out"));
     }
 }

@@ -98,6 +98,37 @@ fn launch(cx: &mut TestAppContext, read_at: Option<u64>, relations: &[&str]) -> 
     (app, profile)
 }
 
+/// Like [`launch`], with a connection to a listening socket that never
+/// answers, so each read stays in its loading state. The socket lives as
+/// long as the returned listener.
+fn launch_held(cx: &mut TestAppContext, read_at: Option<u64>) -> (TestApp, TcpListener) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        ..profile()
+    };
+    let directory = tempfile::tempdir().unwrap();
+    if let Some(read_at) = read_at {
+        cache(&directory, &profile, read_at, &[]);
+    }
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+        credentials,
+    );
+    (app, listener)
+}
+
 fn fresh() -> Option<u64> {
     Some(qrow::catalog::now())
 }
@@ -287,46 +318,51 @@ fn stale_metadata_shows_a_footer_whose_refresh_reads_the_schema(cx: &mut TestApp
     );
 }
 
-#[gpui_kit::test]
-fn columns_that_are_not_cached_load_and_a_failed_load_offers_retry(cx: &mut TestAppContext) {
-    let (app, profile) = launch(cx, fresh(), &[]);
-    complete(&app, cx, "SELECT d. FROM avia.daily d");
-    app.wait_until(cx, "the failed load", WAIT, |window, _| {
-        label(window, "sql-completion-notice").as_deref() == Some("Could not load columns")
-    });
-    assert!(app.update(cx, |window, _| {
-        window.try_find("sql-completion-retry").is_some()
-    }));
-    let activity = app.activity(cx, profile.id);
-    assert!(activity.contains("avia.daily"), "{activity}");
+/// The title of the suggestion toast, when one shows.
+fn toast_title(window: &mut gpui_kit::Window) -> Option<String> {
+    window.try_find("sql-completion-toast")?;
+    window
+        .within("sql-completion-toast")
+        .try_find("title")
+        .and_then(|title| title.label().map(str::to_owned))
 }
 
 #[gpui_kit::test]
-fn a_connection_without_cached_metadata_offers_refresh(cx: &mut TestAppContext) {
-    let (app, _) = launch(cx, None, &[]);
-    complete(&app, cx, "SELECT * FROM ");
-    app.wait_until(cx, "the empty state", WAIT, |window, _| {
-        label(window, "sql-completion-notice").as_deref() == Some("No cached metadata")
+fn a_failed_load_closes_the_list_and_shows_a_toast_with_retry(cx: &mut TestAppContext) {
+    let (app, profile) = launch(cx, fresh(), &[]);
+    app.type_sql(cx, "SELECT d. FROM avia.daily d");
+    app.press(cx, "tab");
+    app.wait_until(cx, "the failed load", WAIT, |window, _| {
+        toast_title(window).as_deref() == Some("Could not load columns of daily")
     });
     assert!(app.update(cx, |window, _| {
-        window.try_find("sql-completion-refresh").is_some()
+        window.try_find("sql-completion").is_none()
+            && window.try_find("sql-completion-retry").is_some()
     }));
-    // The message wraps inside the popup instead of running past its edge.
-    app.update(cx, |window, _| {
-        let popup = bounds_of(window, "sql-completion");
-        let message = bounds_of(window, "sql-completion-message");
-        assert!(message.right() <= popup.right(), "{popup:?} {message:?}");
-        assert!(message.size.height > gpui_kit::px(24.), "{message:?}");
-        // The message lines are as tall as the title line, so the space
-        // above and below the message is the same.
-        let title = bounds_of(window, "sql-completion-title");
-        let lines = message.size.height / title.size.height;
-        assert!(
-            (lines - lines.round()).abs() < 0.01,
-            "{title:?} {message:?}"
-        );
-        let button = bounds_of(window, "sql-completion-refresh");
-        assert!(button.top() - message.bottom() >= message.top() - title.bottom());
+    // Tab reads again, and the read fails again.
+    app.press(cx, "tab");
+    app.settle(cx);
+    app.wait_until(cx, "the second failed load", WAIT, |window, _| {
+        window.try_find("sql-completion").is_none() && toast_title(window).is_some()
+    });
+    let activity = app.activity(cx, profile.id);
+    assert!(activity.matches("avia.daily").count() >= 2, "{activity}");
+}
+
+#[gpui_kit::test]
+fn a_connection_without_cached_metadata_shows_a_toast_with_refresh(cx: &mut TestAppContext) {
+    let (app, _listener) = launch_held(cx, None);
+    app.type_sql(cx, "SELECT * FROM ");
+    app.press(cx, "tab");
+    app.wait_until(cx, "the toast", WAIT, |window, _| {
+        toast_title(window).as_deref() == Some("No cached metadata")
+    });
+    assert!(app.update(cx, |window, _| window.try_find("sql-completion").is_none()));
+    // Refresh reads the connection and shows the list at the cursor again.
+    app.click(cx, "sql-completion-refresh");
+    app.wait_until(cx, "the read", WAIT, |window, _| {
+        label(window, "sql-completion-loading").as_deref() == Some("Loading schemas…")
+            && toast_title(window).is_none()
     });
 }
 
@@ -405,30 +441,7 @@ fn a_cut_table_name_in_the_footer_shows_in_full_on_hover(cx: &mut TestAppContext
 
 #[gpui_kit::test]
 fn the_loading_row_draws_its_text_at_the_measured_size(cx: &mut TestAppContext) {
-    // A listening socket holds the read in its loading state without server
-    // responses or access to a user's connection.
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let profile = Profile {
-        host: "127.0.0.1".into(),
-        port: listener.local_addr().unwrap().port(),
-        ..profile()
-    };
-    let directory = tempfile::tempdir().unwrap();
-    cache(&directory, &profile, fresh().unwrap(), &[]);
-    let credentials = MemoryCredentials::default();
-    credentials
-        .set_password(profile.id, "synthetic-password")
-        .unwrap();
-    let app = TestApp::launch_in(
-        cx,
-        directory,
-        Workspace {
-            tabs: vec![SavedTab::new(1, Some(profile.id))],
-            profiles: vec![profile],
-            ..Workspace::default()
-        },
-        credentials,
-    );
+    let (app, _listener) = launch_held(cx, fresh());
     complete(&app, cx, "SELECT d. FROM avia.daily d");
     app.wait_for(cx, "sql-completion-loading-text");
     let loading = app.update(cx, |window, _| {
@@ -523,4 +536,21 @@ fn tab_indents_where_no_name_fits(cx: &mut TestAppContext) {
         });
         assert!(!app.update(cx, |window, _| window.try_find("sql-completion").is_some()));
     }
+}
+
+#[gpui_kit::test]
+fn a_failed_refresh_from_the_toast_shows_its_error(cx: &mut TestAppContext) {
+    // The connection has no password, so the read fails at once.
+    let (app, _) = launch(cx, None, &[]);
+    app.type_sql(cx, "SELECT * FROM ");
+    app.press(cx, "tab");
+    app.wait_until(cx, "the toast", WAIT, |window, _| {
+        toast_title(window).as_deref() == Some("No cached metadata")
+    });
+    app.click(cx, "sql-completion-refresh");
+    app.wait_until(cx, "the error", WAIT, |window, _| {
+        window.try_find("sql-completion").is_none()
+            && toast_title(window).as_deref() == Some("Could not load schemas")
+            && window.try_find("sql-completion-retry").is_some()
+    });
 }
