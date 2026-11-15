@@ -3,9 +3,9 @@
 //! suggestions; this module owns the popup, its keys, and the reads that it
 //! asks the catalog worker for.
 
-use super::Qrow;
 use super::dbt::{DbtLookup, summary};
 use super::toast::{self, NotificationType};
+use super::{Qrow, text_width};
 use crate::catalog::Scope;
 use crate::completion::{self, Completion, Item, ItemKind, Need, Request};
 use gpui_kit::assets::IconName;
@@ -20,6 +20,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 use uuid::Uuid;
 
 /// The most rows that the list shows without scrolling.
@@ -91,9 +92,10 @@ struct CompletionToast;
 enum Body {
     Items,
     Loading(Vec<Text>),
+    /// A read failed. `name` is the schema or the table, or none for the
+    /// schemas of the connection. Activity has the error.
     Failed {
-        title: Vec<Text>,
-        detail: String,
+        name: Option<String>,
     },
     /// The connection has no cached metadata.
     NotRead,
@@ -484,65 +486,90 @@ impl Qrow {
     }
 
     /// Closes a list that has no names and only reports a problem, and shows
-    /// the problem in a toast: a failed read with Retry, or a connection
-    /// without cached metadata with Refresh.
+    /// the problem in a toast: a failed read with Retry and Show activity,
+    /// or a connection without cached metadata with Refresh.
     fn completion_toast(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(popup) = self.active_completion() else {
             return;
         };
         let profile = popup.profile;
         let scopes = self.completion_retry_scopes(popup);
-        let (kind, title, detail, action) = match self.completion_body(popup) {
-            Body::Failed { title, detail } => (
+        let owner = cx.entity().downgrade();
+        let retry = |id: &'static str, label: &'static str| {
+            let owner = owner.clone();
+            let scopes = scopes.clone();
+            toast::ToastAction {
+                id,
+                label,
+                on_click: Rc::new(move |window, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.retry_completion(profile, &scopes, window, cx);
+                    });
+                }),
+            }
+        };
+        let show_activity = {
+            let owner = owner.clone();
+            toast::ToastAction {
+                id: "sql-completion-activity",
+                label: SHOW_ACTIVITY,
+                on_click: Rc::new(move |window, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.open_activity(Some(profile), window, cx);
+                    });
+                }),
+            }
+        };
+        let can_retry = !scopes.is_empty();
+        // The toast says what failed in our words. The error of the
+        // database or the system is in Activity.
+        let (kind, title, name, detail, actions) = match self.completion_body(popup) {
+            Body::Failed { name } => (
                 NotificationType::Error,
-                title,
-                detail,
-                Some(("sql-completion-retry", "Retry")),
+                match name {
+                    Some(_) => "Could not load metadata for",
+                    None => "Could not load metadata",
+                },
+                name,
+                None,
+                can_retry
+                    .then(|| retry("sql-completion-retry", "Retry"))
+                    .into_iter()
+                    .chain([show_activity])
+                    .collect(),
             ),
             Body::NotRead => (
                 NotificationType::Info,
-                vec![Text::Plain("No cached metadata".into())],
-                "Refresh the schemas of this connection to get suggestions.".to_owned(),
-                Some(("sql-completion-refresh", "Refresh")),
+                "No cached metadata",
+                None,
+                Some("Refresh the schemas of this connection to get suggestions."),
+                can_retry
+                    .then(|| retry("sql-completion-refresh", "Refresh"))
+                    .into_iter()
+                    .collect(),
             ),
             Body::Off => (
                 NotificationType::Info,
-                vec![Text::Plain("No cached metadata".into())],
-                "Turn on metadata refresh in the connection settings.".to_owned(),
+                "No cached metadata",
                 None,
+                Some("Turn on metadata refresh in the connection settings."),
+                Vec::new(),
             ),
             _ => return,
         };
         self.close_completion(cx);
-        let title = title
-            .into_iter()
-            .map(|part| match part {
-                Text::Plain(text) => (text, false),
-                Text::Code(text) => (text, true),
-            })
-            .collect();
-        let mut toast = toast::notice_with_names(
+        let name = name.map(|text| toast::CodeName {
+            text: text.into(),
+            font: self.settings.editor_font_family.clone().into(),
+        });
+        let toast = toast::notice_with_actions(
             kind,
             "sql-completion-toast",
             title,
-            self.settings.editor_font_family.clone().into(),
-            Some(detail.into()),
+            name,
+            detail.map(SharedString::from),
+            actions,
         );
-        if let Some((id, label)) = action
-            && !scopes.is_empty()
-        {
-            let owner = cx.entity().downgrade();
-            toast = toast.action(move |_, _, _| {
-                let owner = owner.clone();
-                let scopes = scopes.clone();
-                Button::new(id).label(label).on_click(move |_, window, cx| {
-                    window.remove_notification::<CompletionToast>(cx);
-                    let _ = owner.update(cx, |this, cx| {
-                        this.retry_completion(profile, &scopes, window, cx);
-                    });
-                })
-            });
-        }
         window.push_notification(toast.id::<CompletionToast>().autohide(true), cx);
     }
 
@@ -728,14 +755,11 @@ impl Qrow {
             || (!popup.read && waits)
             || self.catalog.reads(popup.profile, &Scope::Connection)
         {
-            return Body::Loading(need_text("Loading", &Need::Schemas));
+            return Body::Loading(loading_text(None));
         }
         if !popup.read {
-            if let Some((_, error)) = popup.completion.errors.first() {
-                return Body::Failed {
-                    title: need_text("Could not load", &Need::Schemas),
-                    detail: first_line(error),
-                };
+            if !popup.completion.errors.is_empty() {
+                return Body::Failed { name: None };
             }
             return Body::NotRead;
         }
@@ -743,25 +767,16 @@ impl Qrow {
             return Body::NoSuggestions;
         };
         let reading = waits || self.catalog.reads(popup.profile, &need_scope(need));
-        let error = popup
-            .completion
-            .errors
-            .iter()
-            .find(|(failed, _)| failed == need)
-            .map(|(_, error)| error);
-        match (need, error) {
-            // The statement names the schema, so the title names only the
-            // table.
-            (Need::Columns(..) | Need::Relations(_), Some(error)) if !reading => Body::Failed {
-                title: need_text("Could not load", need),
-                detail: first_line(error),
+        let failed = !reading && failed_need(&popup.completion, need);
+        match need {
+            Need::Columns(..) | Need::Relations(_) if failed => Body::Failed {
+                name: need_name(need),
             },
-            // The spinner shows the progress, so a name ends the message
-            // without an ellipsis.
-            (Need::Columns(schema, relation), _) => {
-                Body::Loading(metadata_text("Loading", format!("{schema}.{relation}")))
+            // The loading row has room for the schema of a table.
+            Need::Columns(schema, relation) => {
+                Body::Loading(loading_text(Some(format!("{schema}.{relation}"))))
             }
-            (Need::Relations(_) | Need::Schemas, _) => Body::Loading(need_text("Loading", need)),
+            _ => Body::Loading(loading_text(need_name(need))),
         }
     }
 
@@ -966,31 +981,35 @@ impl Qrow {
             self.catalog
                 .reads(popup.profile, &Scope::Schema(schema.clone()))
         });
-        let (slot, message, action): (Slot, Vec<Text>, Option<(&'static str, String)>) =
-            if let Some((need, error)) = failed {
+        let (slot, message, actions): (Slot, Vec<Text>, Vec<FooterAction>) =
+            if let Some((need, _)) = failed {
                 (
                     Slot::Alert,
-                    need_text("Could not load", &need),
-                    Some(("Retry", first_line(&error))),
+                    failed_text(need_name(&need)),
+                    vec![FooterAction::Retry, FooterAction::ShowActivity],
                 )
             } else if let Some(need) = loading {
-                (Slot::Spinner, need_text("Loading", &need), None)
+                (Slot::Spinner, loading_text(need_name(&need)), Vec::new())
             } else if refreshing {
                 // The words of the other reads.
                 let message = match stale.as_slice() {
-                    [schema] => metadata_text("Loading", schema.clone()),
+                    [schema] => loading_text(Some(schema.clone())),
                     schemas => vec![Text::Plain(format!(
                         "Loading metadata of {} schemas…",
                         schemas.len()
                     ))],
                 };
-                (Slot::Spinner, message, None)
+                (Slot::Spinner, message, Vec::new())
             } else if !stale.is_empty() {
                 let message = match stale.as_slice() {
                     [schema] => vec![Text::Code(schema.clone()), Text::Plain(" is stale".into())],
                     schemas => vec![Text::Plain(format!("{} schemas are stale", schemas.len()))],
                 };
-                (Slot::Dot, message, Some(("Refresh", stale_tooltip(stale))))
+                (
+                    Slot::Dot,
+                    message,
+                    vec![FooterAction::Refresh(stale_tooltip(stale))],
+                )
             } else {
                 return None;
             };
@@ -998,9 +1017,11 @@ impl Qrow {
         // The footer spans the popup inside its border. Its padding, the
         // slot and its gap, and the action with its gap leave the room of
         // the message.
-        let action_width = action.as_ref().map_or(px(0.), |(label, _)| {
-            let ui_font = font(cx.theme().font_family.clone());
-            text_width(window, label, &ui_font, window.rem_size() * 0.75) + self.ui_px(GAP)
+        let ui_font = font(cx.theme().font_family.clone());
+        let action_width = actions.iter().fold(px(0.), |width, action| {
+            width
+                + text_width(window, action.label(), &ui_font, window.rem_size() * 0.75)
+                + self.ui_px(GAP)
         });
         let room = layout.width - px(2.) - self.ui_px(24. + 14. + GAP) - action_width;
         let line = self.text_line("sql-completion-footer-text", message, room, window, cx);
@@ -1042,18 +1063,31 @@ impl Qrow {
                         }),
                 )
                 .child(line)
-                .when_some(action, |footer, (label, tooltip)| {
-                    footer.child(
-                        Button::new("sql-completion-footer-action")
-                            .link()
-                            .xsmall()
-                            .label(label)
-                            .tooltip(tooltip)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.refresh_completion(cx);
-                            })),
-                    )
-                })
+                .children(actions.into_iter().map(|action| {
+                    let profile = popup.profile;
+                    let button = Button::new(action.id())
+                        .link()
+                        .xsmall()
+                        .label(action.label());
+                    match action {
+                        FooterAction::Retry => button.on_click(cx.listener(|this, _, _, cx| {
+                            this.refresh_completion(cx);
+                        })),
+                        FooterAction::Refresh(tooltip) => {
+                            button
+                                .tooltip(tooltip)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.refresh_completion(cx);
+                                }))
+                        }
+                        FooterAction::ShowActivity => {
+                            button.on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_completion(cx);
+                                this.open_activity(Some(profile), window, cx);
+                            }))
+                        }
+                    }
+                }))
                 .into_any_element(),
         )
     }
@@ -1401,22 +1435,66 @@ fn failed_need(completion: &Completion, need: &Need) -> bool {
     completion.errors.iter().any(|(failed, _)| failed == need)
 }
 
-/// "`verb` metadata: `name`". All messages about one schema or table use
-/// these words. The message ends with the name and has no ellipsis.
-fn metadata_text(verb: &str, name: String) -> Vec<Text> {
-    vec![Text::Plain(format!("{verb} metadata: ")), Text::Code(name)]
+/// An action at the end of the footer.
+enum FooterAction {
+    /// Reads the failed metadata again.
+    Retry,
+    /// Reads the stale schemas again. The tooltip names them.
+    Refresh(String),
+    /// Opens the Activity of the connection, which has the error.
+    ShowActivity,
 }
 
-/// The message about `need`: "`verb` metadata: `name`", or, for the
-/// schemas of the connection, "Loading metadata…" and "`verb` metadata".
-/// A table shows without its schema: the statement names the schema, and a
-/// long schema name would push the table out of the footer.
-fn need_text(verb: &str, need: &Need) -> Vec<Text> {
+impl FooterAction {
+    fn id(&self) -> &'static str {
+        match self {
+            Self::Retry | Self::Refresh(_) => "sql-completion-footer-action",
+            Self::ShowActivity => "sql-completion-footer-activity",
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Retry => "Retry",
+            Self::Refresh(_) => "Refresh",
+            Self::ShowActivity => SHOW_ACTIVITY,
+        }
+    }
+}
+
+/// The label of the action that opens the Activity of the connection.
+const SHOW_ACTIVITY: &str = "Show activity";
+
+/// "Loading metadata: `name`", or "Loading metadata…" for the schemas of
+/// the connection. The spinner shows the progress, so a message that ends
+/// with a name has no ellipsis.
+fn loading_text(name: Option<String>) -> Vec<Text> {
+    match name {
+        Some(name) => vec![Text::Plain("Loading metadata: ".into()), Text::Code(name)],
+        None => vec![Text::Plain("Loading metadata…".into())],
+    }
+}
+
+/// "Could not load metadata for `name`", or "Could not load metadata" for
+/// the schemas of the connection.
+fn failed_text(name: Option<String>) -> Vec<Text> {
+    match name {
+        Some(name) => vec![
+            Text::Plain("Could not load metadata for ".into()),
+            Text::Code(name),
+        ],
+        None => vec![Text::Plain("Could not load metadata".into())],
+    }
+}
+
+/// The name in a message about `need`. A table shows without its schema:
+/// the statement names the schema, and a long schema name would push the
+/// table out of the footer or the toast.
+fn need_name(need: &Need) -> Option<String> {
     match need {
-        Need::Schemas if verb == "Loading" => vec![Text::Plain("Loading metadata…".into())],
-        Need::Schemas => vec![Text::Plain(format!("{verb} metadata"))],
-        Need::Relations(schema) => metadata_text(verb, schema.clone()),
-        Need::Columns(_, relation) => metadata_text(verb, relation.clone()),
+        Need::Schemas => None,
+        Need::Relations(schema) => Some(schema.clone()),
+        Need::Columns(_, relation) => Some(relation.clone()),
     }
 }
 
@@ -1427,28 +1505,6 @@ fn need_scope(need: &Need) -> Scope {
         Need::Relations(schema) => Scope::Schema(schema.clone()),
         Need::Columns(schema, relation) => Scope::Relation(schema.clone(), relation.clone()),
     }
-}
-
-fn text_width(window: &mut Window, text: &str, font: &Font, size: Pixels) -> Pixels {
-    if text.is_empty() {
-        return px(0.);
-    }
-    let run = TextRun {
-        len: text.len(),
-        font: font.clone(),
-        color: Hsla::default(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    window
-        .text_system()
-        .shape_line(SharedString::from(text.to_owned()), size, &[run], None)
-        .width
-}
-
-fn first_line(text: &str) -> String {
-    text.lines().next().unwrap_or_default().trim().to_owned()
 }
 
 fn plain(parts: &[Text]) -> String {

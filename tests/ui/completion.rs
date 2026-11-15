@@ -1,8 +1,8 @@
 //! The autocomplete popup of the SQL editor, with cached metadata and a
 //! connection that no test reaches.
 use crate::support::{MemoryCredentials, TestApp, bounds_of, label, labelled, offline_profile};
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
     model::{CatalogSettings, Profile, SavedTab, Workspace},
@@ -338,13 +338,18 @@ fn the_refresh_of_a_stale_schema_says_loading(cx: &mut TestAppContext) {
     });
 }
 
-/// The title of the suggestion toast, when one shows.
-fn toast_title(window: &mut gpui_kit::Window) -> Option<String> {
+/// The text of `part` of the suggestion toast, when one shows.
+fn toast_part(window: &mut gpui_kit::Window, part: &'static str) -> Option<String> {
     window.try_find("sql-completion-toast")?;
     window
         .within("sql-completion-toast")
-        .try_find("title")
-        .and_then(|title| title.label().map(str::to_owned))
+        .try_find(part)
+        .and_then(|part| part.label().map(str::to_owned))
+}
+
+/// The title of the suggestion toast, when one shows.
+fn toast_title(window: &mut gpui_kit::Window) -> Option<String> {
+    toast_part(window, "title")
 }
 
 #[gpui_kit::test]
@@ -353,11 +358,14 @@ fn a_failed_load_closes_the_list_and_shows_a_toast_with_retry(cx: &mut TestAppCo
     app.type_sql(cx, "SELECT d. FROM avia.daily d");
     app.press(cx, "tab");
     app.wait_until(cx, "the failed load", WAIT, |window, _| {
-        toast_title(window).as_deref() == Some("Could not load metadata: daily")
+        toast_title(window).as_deref() == Some("Could not load metadata for")
     });
     assert!(app.update(cx, |window, _| {
         window.try_find("sql-completion").is_none()
             && window.try_find("sql-completion-retry").is_some()
+            && toast_part(window, "name").as_deref() == Some("daily")
+            // The error of the read is in Activity, not in the toast.
+            && toast_part(window, "detail").is_none()
     }));
     // Tab reads again, and the read fails again.
     app.press(cx, "tab");
@@ -416,7 +424,8 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
     // The columns of `daily` are not cached, and the connection is out of
     // reach, so their read fails.
     app.wait_until(cx, "the failed read", WAIT, |window, _| {
-        label(window, "sql-completion-footer").as_deref() == Some("Could not load metadata: daily")
+        label(window, "sql-completion-footer").as_deref()
+            == Some("Could not load metadata for daily")
     });
     assert_eq!(
         app.update(cx, |window, _| label(
@@ -425,6 +434,82 @@ fn a_failed_read_of_one_table_shows_retry_below_the_other_columns(cx: &mut TestA
         )),
         Some("Retry".into())
     );
+    // The footer does not show the error. Show Activity opens it.
+    assert!(!hover_shows_tooltip(
+        &app,
+        cx,
+        "sql-completion-footer-action"
+    ));
+    app.click(cx, "sql-completion-footer-activity");
+    app.wait_for(cx, "activity");
+    assert!(app.update(cx, |window, _| window.try_find("sql-completion").is_none()));
+}
+
+#[gpui_kit::test]
+fn show_activity_in_the_failed_read_toast_opens_activity(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    app.type_sql(cx, "SELECT d. FROM avia.daily d");
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion-activity");
+    assert!(app.update(cx, |window, _| window.try_find("activity").is_none()));
+    app.click(cx, "sql-completion-activity");
+    app.wait_for(cx, "activity");
+    app.wait_until(cx, "the toast closes", WAIT, |window, _| {
+        toast_title(window).is_none()
+    });
+}
+
+/// Moves the pointer over the name in the suggestion toast, and returns
+/// whether GPUI opens a tooltip.
+fn toast_name_shows_tooltip(app: &TestApp, cx: &mut TestAppContext) -> bool {
+    app.update(cx, |window, cx| {
+        let position = window
+            .within("sql-completion-toast")
+            .find("name")
+            .bounds()
+            .center();
+        window.dispatch_event(
+            gpui_kit::MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers: Default::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| window.try_find("tooltip").is_some())
+}
+
+#[gpui_kit::test]
+fn a_cut_name_in_the_failed_read_toast_shows_in_full_on_hover(cx: &mut TestAppContext) {
+    let long = "customer_lifetime_value_by_acquisition_channel_and_region_v2";
+    let (app, _) = launch(cx, fresh(), &[long]);
+    app.type_sql(cx, &format!("SELECT d. FROM avia.{long} d"));
+    app.press(cx, "tab");
+    app.wait_until(cx, "the toast", WAIT, |window, _| {
+        toast_part(window, "name").as_deref() == Some(long)
+    });
+    app.update(cx, |window, _| {
+        let toast = bounds_of(window, "sql-completion-toast");
+        let name = window.within("sql-completion-toast").find("name").bounds();
+        assert!(name.right() <= toast.right(), "{toast:?} {name:?}");
+    });
+    assert!(toast_name_shows_tooltip(&app, cx));
+}
+
+#[gpui_kit::test]
+fn a_name_that_fits_in_the_toast_has_no_tooltip(cx: &mut TestAppContext) {
+    let (app, _) = launch(cx, fresh(), &[]);
+    app.type_sql(cx, "SELECT d. FROM avia.daily d");
+    app.press(cx, "tab");
+    app.wait_until(cx, "the toast", WAIT, |window, _| {
+        toast_part(window, "name").as_deref() == Some("daily")
+    });
+    assert!(!toast_name_shows_tooltip(&app, cx));
 }
 
 /// Hovers `id` until GPUI opens its tooltip, and returns whether it did.
@@ -447,7 +532,7 @@ fn a_cut_table_name_in_the_footer_shows_in_full_on_hover(cx: &mut TestAppContext
         }
     });
     app.press(cx, "tab");
-    let message = format!("Could not load metadata: {long}");
+    let message = format!("Could not load metadata for {long}");
     app.wait_until(cx, "the failed read", WAIT, |window, _| {
         label(window, "sql-completion-footer").as_deref() == Some(message.as_str())
     });

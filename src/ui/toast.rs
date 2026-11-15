@@ -1,10 +1,11 @@
 //! Toast notifications share one layout: the type icon, a bold title that
 //! names the event, and optional detail lines. One action shares the row
-//! with the text.
+//! with the text; two or more go on a row below it.
 use super::*;
 pub(super) use gpui_kit::component::notification::NotificationType;
-use gpui_kit::component::{notification::Notification, v_flex};
+use gpui_kit::component::{h_flex, notification::Notification, v_flex};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 /// A toast with a title and an optional detail line. `id` names its body in tests.
 pub(super) fn notice(
@@ -25,72 +26,105 @@ pub(super) fn notice(
     })
 }
 
-/// A toast whose title shows names in `code_font`, like the editor. Each
-/// part of `title` is text, or a name when its flag is true. Long titles
-/// wrap between words.
-pub(super) fn notice_with_names(
+/// What a toast button does after the toast closes.
+pub(super) type OnClick = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// A button of a toast. A click closes the toast, then runs `on_click`.
+#[derive(Clone)]
+pub(super) struct ToastAction {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub on_click: OnClick,
+}
+
+/// A name that a toast shows in a code font, like the editor.
+#[derive(Clone)]
+pub(super) struct CodeName {
+    pub text: SharedString,
+    pub font: SharedString,
+}
+
+/// A toast with a title, an optional name, an optional detail line, and
+/// actions. One action shares the row with the text; two or more go on a
+/// row below it. The name uses the full width of the text, so a toast with
+/// a name has no action or two or more.
+pub(super) fn notice_with_actions(
     kind: NotificationType,
     id: &'static str,
-    title: Vec<(String, bool)>,
-    code_font: SharedString,
+    title: impl Into<SharedString>,
+    name: Option<CodeName>,
     detail: Option<SharedString>,
+    actions: Vec<ToastAction>,
 ) -> Notification {
-    let label: SharedString = title
-        .iter()
-        .map(|(text, _)| text.as_str())
-        .collect::<String>()
-        .into();
-    Notification::new()
+    let title = title.into();
+    let side = actions.len() == 1;
+    debug_assert!(!(side && name.is_some()), "a named toast with one action");
+    let row = if side { Vec::new() } else { actions.clone() };
+    let notification = Notification::new()
         .with_type(kind)
-        .content(move |_, _, cx| {
-            let muted = cx.theme().muted;
-            let mut parts: Vec<AnyElement> = Vec::new();
-            for (text, name) in &title {
-                if *name {
-                    parts.push(
-                        div()
-                            .font_family(code_font.clone())
-                            .font_weight(FontWeight::NORMAL)
-                            .px(rems(0.25))
-                            .rounded(rems(0.25))
-                            .bg(muted)
-                            // A long name wraps instead of being cut, so
-                            // the toast always shows it in full.
-                            .max_w_full()
-                            .child(text.clone())
-                            .into_any_element(),
-                    );
-                } else {
-                    // Each word with its space is an item, so the title wraps
-                    // between words.
-                    parts.extend(text.split_inclusive(' ').map(|word| {
-                        div()
-                            .whitespace_nowrap()
-                            .child(word.to_owned())
-                            .into_any_element()
-                    }));
-                }
-            }
+        .content(move |_, window, cx| {
             body(kind, id)
                 .test_support()
-                .child(
-                    div()
-                        .id("title")
-                        .test_support()
-                        .role(Role::Label)
-                        .aria_label(label.clone())
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .children(parts),
-                )
+                .child(title_line("title", title.clone()))
+                .when_some(name.clone(), |body, name| {
+                    body.child(name_line(name, window, cx))
+                })
                 .when_some(detail.clone(), |body, detail| {
                     body.child(detail_line("detail", detail))
                 })
+                .when(!row.is_empty(), |body| {
+                    body.child(
+                        h_flex()
+                            .mt(rems(0.625))
+                            .gap_2()
+                            .children(row.iter().map(|action| action_button(action, cx))),
+                    )
+                })
                 .into_any_element()
+        });
+    match actions.into_iter().next().filter(|_| side) {
+        Some(action) => notification.action(move |_, _, cx| action_button(&action, cx)),
+        None => notification,
+    }
+}
+
+fn action_button(action: &ToastAction, cx: &mut Context<Notification>) -> Button {
+    let on_click = action.on_click.clone();
+    Button::new(action.id)
+        .small()
+        .label(action.label)
+        .on_click(cx.listener(move |toast, _, window, cx| {
+            toast.dismiss(window, cx);
+            on_click(window, cx);
+        }))
+}
+
+/// One line of a name in its code font, cut with an ellipsis. A cut name
+/// shows in full in a tooltip.
+fn name_line(name: CodeName, window: &mut Window, cx: &App) -> impl IntoElement {
+    let size = rems(0.8125).to_pixels(window.rem_size());
+    // The text of a toast is its width less the border, the padding, and
+    // the indent of the type icon.
+    let room = cx.theme().notification.width - px(2.) - rems(3.5).to_pixels(window.rem_size());
+    let cut = text_width(window, &name.text, &font(name.font.clone()), size) > room;
+    let tooltip = name.text.clone();
+    div()
+        .id("name")
+        .test_support()
+        .role(Role::Label)
+        .aria_label(name.text.clone())
+        .w_full()
+        .min_w_0()
+        .font_family(name.font)
+        .text_size(size)
+        .text_color(cx.theme().muted_foreground)
+        .when(cut, |line| {
+            line.tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+            })
         })
+        .truncate()
+        .child(name.text)
 }
 
 /// An error toast: the failed operation as the title, the cause below it.

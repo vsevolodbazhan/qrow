@@ -762,6 +762,25 @@ fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     }
 }
 
+/// The width of `text` on one line in `font` at `size`.
+fn text_width(window: &mut Window, text: &str, font: &Font, size: Pixels) -> Pixels {
+    if text.is_empty() {
+        return px(0.);
+    }
+    let run = TextRun {
+        len: text.len(),
+        font: font.clone(),
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(SharedString::from(text.to_owned()), size, &[run], None)
+        .width
+}
+
 fn panel_empty_state(message: &'static str, cx: &App) -> Div {
     div()
         .size_full()

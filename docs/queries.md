@@ -327,9 +327,12 @@ characters. The box also shows a name or a type that the list cuts or hides.
 When the list needs data that the copy does not have, Qrow reads it, like a
 **Refresh** of that table or schema in the tree. This read can open a
 session. If the read fails and the list has no names, the list closes and
-a toast shows the error. Select **Retry** in the toast, or press **Tab**
-again, to read again. If the list has other names, the error and **Retry**
-show below them. For a connection that Qrow never read, a toast shows
+a toast shows **Could not load metadata for** and the name of the table or
+schema. Select **Retry** in the toast, or press **Tab** again, to read
+again. Select **Show activity** to see the error in
+[Activity](activity.md). If the list has other names, the message,
+**Retry**, and **Show activity** show below them. For a connection that
+Qrow never read, a toast shows
 **No cached metadata**. Select **Refresh** in the toast to read the
 connection. The list then opens at the cursor again.
 
