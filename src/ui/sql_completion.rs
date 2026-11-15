@@ -255,11 +255,13 @@ impl Qrow {
         // A request by the user can read what the list needs, like Run can
         // open a session. A read that failed waits for Retry or for the
         // next Tab.
+        // The first read of a connection waits for Refresh. Tab reads it
+        // again only after a failed read.
         for need in &completion.missing {
-            if *need == Need::Schemas
-                || requested.contains(need)
-                || (trigger != Trigger::Open
-                    && completion.errors.iter().any(|(failed, _)| failed == need))
+            let failed = completion.errors.iter().any(|(failed, _)| failed == need);
+            if requested.contains(need)
+                || (*need == Need::Schemas && !(trigger == Trigger::Open && failed))
+                || (trigger != Trigger::Open && failed)
             {
                 continue;
             }
@@ -699,7 +701,10 @@ impl Qrow {
             return Body::Items;
         }
         let waits = self.completion_waits(popup.profile);
-        if !popup.loaded || waits || self.catalog.reads(popup.profile, &Scope::Connection) {
+        if !popup.loaded
+            || (!popup.read && waits)
+            || self.catalog.reads(popup.profile, &Scope::Connection)
+        {
             return Body::Loading(vec![Text::Plain("Loading schemas…".into())]);
         }
         if !popup.read {

@@ -444,6 +444,10 @@ fn the_loading_row_draws_its_text_at_the_measured_size(cx: &mut TestAppContext) 
     let (app, _listener) = launch_held(cx, fresh());
     complete(&app, cx, "SELECT d. FROM avia.daily d");
     app.wait_for(cx, "sql-completion-loading-text");
+    assert_eq!(
+        app.update(cx, |window, _| label(window, "sql-completion-loading")),
+        Some("Loading columns of avia.daily…".into())
+    );
     let loading = app.update(cx, |window, _| {
         bounds_of(window, "sql-completion-loading-text").size.height
     });
@@ -541,7 +545,7 @@ fn tab_indents_where_no_name_fits(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_failed_refresh_from_the_toast_shows_its_error(cx: &mut TestAppContext) {
     // The connection has no password, so the read fails at once.
-    let (app, _) = launch(cx, None, &[]);
+    let (app, profile) = launch(cx, None, &[]);
     app.type_sql(cx, "SELECT * FROM ");
     app.press(cx, "tab");
     app.wait_until(cx, "the toast", WAIT, |window, _| {
@@ -553,4 +557,15 @@ fn a_failed_refresh_from_the_toast_shows_its_error(cx: &mut TestAppContext) {
             && toast_title(window).as_deref() == Some("Could not load schemas")
             && window.try_find("sql-completion-retry").is_some()
     });
+    // Tab reads the connection again, and the read fails again.
+    app.press(cx, "tab");
+    app.settle(cx);
+    app.wait_until(cx, "the second error", WAIT, |window, _| {
+        window.try_find("sql-completion").is_none() && toast_title(window).is_some()
+    });
+    let activity = app.activity(cx, profile.id);
+    let reads = activity
+        .matches("Started a metadata refresh of the connection")
+        .count();
+    assert_eq!(reads, 2, "{activity}");
 }
