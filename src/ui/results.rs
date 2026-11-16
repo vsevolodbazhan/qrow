@@ -335,6 +335,18 @@ impl Results {
         }
     }
 
+    /// Whether a value aligns on the trailing edge: row numbers, and the
+    /// numbers of the standard layout. The transposed layout reads as
+    /// name and value, so all its values start at the left, next to the
+    /// name. `None` is the row number column.
+    fn aligns_end(&self, cell: Option<(usize, usize)>) -> bool {
+        match cell {
+            None => true,
+            Some(_) if self.transposed => false,
+            Some((_, column)) => self.numeric.get(column).copied().unwrap_or(false),
+        }
+    }
+
     /// Whether the selection has a cell in the table row `r`. The other
     /// cells of that row get a tint.
     fn line_selected(&self, r: usize) -> bool {
@@ -938,11 +950,7 @@ impl TableDelegate for Results {
             None => SharedString::from((self.page().start + r + 1).to_string()),
             Some(_) => SharedString::new(cell_preview(value.unwrap_or("NULL"))),
         };
-        // Row numbers and numbers align on the trailing edge.
-        let numeric = match cell {
-            None => true,
-            Some((_, column)) => self.numeric.get(column).copied().unwrap_or(false),
-        };
+        let numeric = self.aligns_end(cell);
         let selection = self.selection.filter(|_| cell.is_some());
         let selected = selection
             .zip(cell)
@@ -1761,6 +1769,8 @@ mod tests {
             assert_eq!(results.data_cell(1, 2), Some((1001, 1)));
             assert_eq!(results.table_cell((1001, 1)), (1, 2));
             assert_eq!(results.data_cell(1, 0), None);
+            // All values start at the left, also the numbers of column b.
+            assert!(!results.aligns_end(Some((1001, 1))));
 
             // Plain text writes a line for each result column.
             let selection = super::Selection {
@@ -1773,6 +1783,12 @@ mod tests {
             );
             results.selection = Some(selection);
             assert!(results.line_selected(1));
+
+            // The standard layout aligns numbers on the right.
+            results.transposed = false;
+            assert!(results.aligns_end(Some((1001, 1))));
+            assert!(!results.aligns_end(Some((1001, 0))));
+            results.transposed = true;
 
             // A new query in the same result tab keeps the layout.
             results.clear();

@@ -70,8 +70,8 @@ desktops, use the button or the menu.
 
 The first column shows the name and the type of each result column. The
 other columns show the rows of the current page. Their headings are the row
-numbers of the full result. Numbers align on the right, as in the standard
-layout. The tags in the result toolbar do not change.
+numbers of the full result. All values start at the left, next to the
+column names, also numbers. The tags in the result toolbar do not change.
 
 Each result tab keeps its layout. A new execution in the same result tab
 keeps the layout. A new result tab starts in the standard layout. A change
