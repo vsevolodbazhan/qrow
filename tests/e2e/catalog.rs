@@ -92,7 +92,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
         app.click(cx, status.clone());
         app.wait_for(cx, "activity");
         let activity = app.copy_activity(cx);
-        assert!(activity.contains("Schema refresh failed"), "{activity}");
+        assert!(activity.contains("Metadata refresh failed"), "{activity}");
         assert!(
             activity.contains("rejected SASL PLAIN authentication"),
             "{activity}"
@@ -151,12 +151,12 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
         });
         let activity = app.activity(cx, profile.id);
         assert_eq!(
-            activity.matches("Started a schema refresh").count(),
+            activity.matches("Started a metadata refresh").count(),
             2,
             "{activity}"
         );
         assert_eq!(
-            activity.matches("Schema refresh failed").count(),
+            activity.matches("Metadata refresh failed").count(),
             2,
             "{activity}"
         );
@@ -261,7 +261,7 @@ fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut Test
     let app = TestApp::launch_with(cx, workspace, credentials);
     assert!(
         !app.activity(cx, id)
-            .contains("Started an automatic schema refresh")
+            .contains("Started an automatic metadata refresh")
     );
     assert_eq!(proxy.active.load(Ordering::SeqCst), 0);
     app.run_complete(cx, "SELECT 1");
@@ -283,15 +283,18 @@ fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut Test
     app.wait_status(cx, "Disconnected: Idle timeout");
     app.wait_cell(cx, 0, 1, "1");
     let activity = app.activity(cx, id);
-    assert!(activity.contains("Schema refresh completed"), "{activity}");
+    assert!(
+        activity.contains("Metadata refresh completed"),
+        "{activity}"
+    );
     assert!(
         activity.contains("Disconnected after idle timeout"),
         "{activity}"
     );
-    assert!(!activity.contains("Schema refresh stopped"), "{activity}");
+    assert!(!activity.contains("Metadata refresh stopped"), "{activity}");
     assert_eq!(
         activity
-            .matches("Started an automatic schema refresh")
+            .matches("Started an automatic metadata refresh")
             .count(),
         1,
         "{activity}"
@@ -311,13 +314,13 @@ fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut Test
     let mut activity = String::new();
     while Instant::now() < deadline {
         activity = app.activity(cx, id);
-        if activity.matches("Schema refresh completed").count() == 2 {
+        if activity.matches("Metadata refresh completed").count() == 2 {
             break;
         }
         thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(
-        activity.matches("Schema refresh completed").count(),
+        activity.matches("Metadata refresh completed").count(),
         2,
         "{activity}"
     );
@@ -588,7 +591,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
     for (mode, label, added) in [
         (
             CatalogColumnReads::Table,
-            "One relation at a time",
+            "One table at a time",
             "table_read",
         ),
         (CatalogColumnReads::Schema, "Whole schema", "schema_read"),
@@ -596,7 +599,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit");
         app.wait_for(cx, "connection-name");
-        app.connection_page(cx, "Catalog");
+        app.connection_page(cx, "Metadata");
         app.scroll_to(cx, "connection-column-reads");
         app.select(cx, "connection-column-reads", label);
         app.click(cx, "save-profile");
@@ -691,18 +694,21 @@ fn the_first_run_on_a_stale_connection_fills_its_tree(cx: &mut TestAppContext) {
     let deadline = std::time::Instant::now() + QUERY_TIMEOUT;
     while std::time::Instant::now() < deadline {
         activity = app.activity(cx, reader.id);
-        if activity.contains("Schema refresh completed") {
+        if activity.contains("Metadata refresh completed") {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     assert!(
-        activity.contains("Started an automatic schema refresh of the connection"),
+        activity.contains("Started an automatic metadata refresh of the connection"),
         "{activity}"
     );
-    assert!(activity.contains("Schema refresh completed"), "{activity}");
+    assert!(
+        activity.contains("Metadata refresh completed"),
+        "{activity}"
+    );
     // Refreshes stay out of the tab Logs.
-    assert!(!app.logs(cx).contains("schema refresh"));
+    assert!(!app.logs(cx).contains("metadata refresh"));
 
     // The tree shows the cached schema, table, and columns.
     app.toggle_connection(cx, reader.id);
@@ -717,7 +723,7 @@ fn the_first_run_on_a_stale_connection_fills_its_tree(cx: &mut TestAppContext) {
     // Expansion did not read the catalog again.
     let activity = app.activity(cx, reader.id);
     assert_eq!(
-        activity.matches("schema refresh of").count(),
+        activity.matches("metadata refresh of").count(),
         1,
         "{activity}"
     );
@@ -796,14 +802,17 @@ fn a_live_shared_connection_resumes_an_unfinished_cache_before_its_period(cx: &m
     });
     let activity = app.activity(cx, reader.id);
     assert!(
-        activity.contains("Started an automatic schema refresh"),
+        activity.contains("Started an automatic metadata refresh"),
         "{activity}"
     );
     assert!(
-        activity.contains("Continued a stopped schema refresh"),
+        activity.contains("Continued a stopped metadata refresh"),
         "{activity}"
     );
-    assert!(activity.contains("Schema refresh completed"), "{activity}");
+    assert!(
+        activity.contains("Metadata refresh completed"),
+        "{activity}"
+    );
     app.toggle_connection(cx, reader.id);
     app.click_labelled(cx, &pending);
     app.click_labelled(cx, "bookings");
@@ -928,7 +937,7 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
-    app.connection_page(cx, "Catalog");
+    app.connection_page(cx, "Metadata");
     app.scroll_to(cx, "connection-schema-refresh");
     app.select(cx, "connection-schema-refresh", "While connected");
     app.scroll_to(cx, "connection-schema-catalog");

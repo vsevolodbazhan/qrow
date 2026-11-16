@@ -6,7 +6,7 @@
 
 Desktop SQL workbench, written in Rust.
 
-![Qrow demo with the schema catalog and assistant](assets/screenshots/demo.png)
+![Qrow demo with the schema tree and assistant](assets/screenshots/demo.png)
 
 ## Overview
 

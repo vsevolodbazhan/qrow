@@ -1,7 +1,7 @@
 # Activity
 
 Activity shows background work in logs. Each connection has a log of its
-schema refreshes, keep-alives, sessions, and the queries of its tabs. The
+metadata refreshes, keep-alives, sessions, and the queries of its tabs. The
 **Qrow** log has the events of the app itself, such as
 [update checks](installation.md#updates). Use Activity to find why a refresh
 failed, when a session closed, or why an update did not arrive.
@@ -47,7 +47,7 @@ Each entry is a row with lanes, like an entry in the
 
 | Work | Entries |
 | --- | --- |
-| Schema refresh | The start, the session, each request with its duration and count, and the result. Errors are in full. |
+| Metadata refresh | The start, the session, each request with its duration and count, and the result. Errors are in full. |
 | Keep-alive | The tab, the outcome, and the duration. A failed keep-alive tells that it closed the session. |
 | Session | Opened, closed, and idle disconnect, for each tab of the connection. |
 | Query | The tab submitted a query, then the query finished, failed, or was cancelled. |
@@ -59,7 +59,7 @@ see the tab of the query and its Logs, which have the details. An entry of a
 closed tab stays, without **Show tab**. The copied text of an entry of a tab
 starts with the tab name, for example `Query 3: Submitted a query`.
 
-A shared catalog refresh goes to the Activity of the connection that ran it.
+A refresh of shared metadata goes to the Activity of the connection that ran it.
 
 Select **Errors only** to show only errors. **All activity** shows all
 entries. The selected filter is filled. The toolbar shows the number of
@@ -86,7 +86,7 @@ to open the tab. The Activity entry keeps its error color after the error
 becomes seen.
 
 A blue dot means that at least one connection shows **In use**. This includes
-query or session work, schema refreshes, and assistant turns. An unread error
+query or session work, metadata refreshes, and assistant turns. An unread error
 takes priority over work. The tooltip shows
 **Activity** and its keyboard shortcut on the first line.
 The name and shortcut share a vertical center.

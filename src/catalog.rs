@@ -512,7 +512,7 @@ impl MetadataRows {
         self.columns
             .iter()
             .position(|column| column.name.eq_ignore_ascii_case(name))
-            .with_context(|| format!("The catalog result has no {name} column"))
+            .with_context(|| format!("The metadata result has no {name} column"))
     }
 
     fn optional_index(&self, name: &str) -> Option<usize> {

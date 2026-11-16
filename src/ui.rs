@@ -3948,7 +3948,7 @@ impl Qrow {
                         catalog.validate()?;
                         anyhow::ensure!(
                             !connection_form::shared_name_is_taken(&self.shared_catalogs, &catalog),
-                            "A shared catalog or a catalog choice with this name already exists."
+                            "Shared metadata or a choice with this name already exists."
                         );
                         shared = Some(catalog);
                     }

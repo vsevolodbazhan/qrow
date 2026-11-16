@@ -427,7 +427,7 @@ fn describe_scope(scope: &Scope) -> String {
     match scope {
         Scope::Connection => "the connection".into(),
         Scope::Schema(schema) => format!("schema {schema}"),
-        Scope::Relation(schema, relation) => format!("relation {schema}.{relation}"),
+        Scope::Relation(schema, relation) => format!("{schema}.{relation}"),
     }
 }
 
@@ -437,15 +437,15 @@ fn describe_request(request: &MetadataRequest) -> String {
         MetadataRequest::Relations {
             schema,
             relation: None,
-        } => format!("List relations in {schema}"),
+        } => format!("List tables and views in {schema}"),
         MetadataRequest::Relations {
             schema,
             relation: Some(relation),
-        } => format!("Find relation {schema}.{relation}"),
+        } => format!("Find {schema}.{relation}"),
         MetadataRequest::Columns {
             schema,
             relation: None,
-        } => format!("List columns of all relations in {schema}"),
+        } => format!("List columns of all tables and views in {schema}"),
         MetadataRequest::Columns {
             schema,
             relation: Some(relation),
@@ -457,7 +457,7 @@ fn describe_request(request: &MetadataRequest) -> String {
 fn describe_count(request: &MetadataRequest, count: usize) -> String {
     let (one, many) = match request {
         MetadataRequest::Schemas => ("schema", "schemas"),
-        MetadataRequest::Relations { .. } => ("relation", "relations"),
+        MetadataRequest::Relations { .. } => ("table or view", "tables and views"),
         MetadataRequest::Columns { .. } => ("column", "columns"),
     };
     format!("{count} {}", if count == 1 { one } else { many })
@@ -557,7 +557,7 @@ impl Runner {
                 self.log(
                     Severity::Info,
                     format!(
-                        "Started {} schema refresh of {}",
+                        "Started {} metadata refresh of {}",
                         if self.automatic { "an automatic" } else { "a" },
                         describe_scope(&scope)
                     ),
@@ -578,22 +578,22 @@ impl Runner {
                 let duration = started.elapsed();
                 let outcome = match &result {
                     Ok(()) if self.failures == 1 => {
-                        "Schema refresh completed with 1 error".to_owned()
+                        "Metadata refresh completed with 1 error".to_owned()
                     }
                     Ok(()) if self.failures > 1 => {
-                        format!("Schema refresh completed with {} errors", self.failures)
+                        format!("Metadata refresh completed with {} errors", self.failures)
                     }
-                    Ok(()) => "Schema refresh completed".to_owned(),
-                    Err(Interrupt::Cancelled) => "Schema refresh cancelled".to_owned(),
-                    Err(Interrupt::Stopped) => "Schema refresh stopped".to_owned(),
+                    Ok(()) => "Metadata refresh completed".to_owned(),
+                    Err(Interrupt::Cancelled) => "Metadata refresh cancelled".to_owned(),
+                    Err(Interrupt::Stopped) => "Metadata refresh stopped".to_owned(),
                     Err(Interrupt::Unavailable(message)) => {
-                        format!("Schema refresh failed: {message}")
+                        format!("Metadata refresh failed: {message}")
                     }
                     Err(Interrupt::TimedOut) => {
-                        format!("Schema refresh stopped after {}", format_minutes(timeout))
+                        format!("Metadata refresh stopped after {}", format_minutes(timeout))
                     }
                     Err(Interrupt::Cold) => {
-                        "Schema refresh stopped because no tab of the connection is connected"
+                        "Metadata refresh stopped because no tab of the connection is connected"
                             .to_owned()
                     }
                 };
@@ -973,7 +973,7 @@ impl Runner {
             self.log(
                 Severity::Info,
                 format!(
-                    "Continued a stopped schema refresh: {} of {} schemas were already read",
+                    "Continued a stopped metadata refresh: {} of {} schemas were already read",
                     self.status.done, self.status.total
                 ),
                 None,
@@ -1176,7 +1176,7 @@ impl Runner {
     fn read_rows(&mut self, request: &MetadataRequest) -> Result<MetadataRows> {
         // Opening a session and starting a request can take until the
         // network timeout of the connector, and the watchdog cannot cancel them.
-        anyhow::ensure!(!self.must_stop(), "The catalog request was stopped");
+        anyhow::ensure!(!self.must_stop(), "The metadata request was stopped");
         // Each member reads with its own user and settings.
         if self
             .session
@@ -1207,12 +1207,12 @@ impl Runner {
             self.log(
                 Severity::Info,
                 format!(
-                    "Opened a session for the schema refresh ({})",
+                    "Opened a session for the metadata refresh ({})",
                     format_duration(duration)
                 ),
                 Some(duration),
             );
-            anyhow::ensure!(!self.must_stop(), "The catalog request was stopped");
+            anyhow::ensure!(!self.must_stop(), "The metadata request was stopped");
         }
         let session = self.session();
         let cancellation = session.execute_metadata(request)?;
@@ -1222,24 +1222,24 @@ impl Runner {
         }
         if self.must_stop() {
             Self::cancel_request(&cancellation);
-            anyhow::bail!("The catalog request was stopped");
+            anyhow::bail!("The metadata request was stopped");
         }
         let has_results = loop {
             match self.session().poll()? {
                 QueryState::Finished { has_results } => break has_results,
-                QueryState::Cancelled => anyhow::bail!("The catalog request was cancelled"),
+                QueryState::Cancelled => anyhow::bail!("The metadata request was cancelled"),
                 QueryState::Running | QueryState::Streaming { .. } => {}
             }
             // Do not wait for the server to confirm a cancellation. The next
             // request closes the operation.
             anyhow::ensure!(
                 !self.cancel_requested(),
-                "The catalog request was cancelled"
+                "The metadata request was cancelled"
             );
             self.accept_refreshes();
             if self.must_stop() {
                 Self::cancel_request(&cancellation);
-                anyhow::bail!("The catalog request was stopped");
+                anyhow::bail!("The metadata request was stopped");
             }
             thread::sleep(POLL_INTERVAL);
         };
@@ -1258,7 +1258,7 @@ impl Runner {
             if batch.rows.is_empty() {
                 anyhow::ensure!(
                     !self.session().result_limited(),
-                    "The catalog request exceeded the connector result limit. Use per-relation column reads or hide some schemas in the connection settings."
+                    "The metadata request exceeded the connector result limit. Set Column Reads to One table at a time, or hide some schemas in the connection settings."
                 );
                 break;
             }
@@ -1274,16 +1274,16 @@ impl Runner {
             rows.extend(batch.rows);
             anyhow::ensure!(
                 rows.len() <= MAX_METADATA_ROWS && bytes <= MAX_RESULT_BYTES,
-                "The catalog request returned more than {MAX_METADATA_ROWS} rows or {} MB. Hide some schemas in the connection settings.",
+                "The metadata request returned more than {MAX_METADATA_ROWS} rows or {} MB. Hide some schemas in the connection settings.",
                 MAX_RESULT_BYTES / 1024 / 1024
             );
             if self.cancel_requested() {
-                anyhow::bail!("The catalog request was cancelled");
+                anyhow::bail!("The metadata request was cancelled");
             }
             self.accept_refreshes();
             if self.must_stop() {
                 Self::cancel_request(&cancellation);
-                anyhow::bail!("The catalog request was stopped");
+                anyhow::bail!("The metadata request was stopped");
             }
         }
         self.session().close_operation()?;

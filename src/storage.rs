@@ -366,9 +366,10 @@ pub fn load_catalog(path: &Path) -> Option<Catalog> {
 }
 
 pub fn save_catalog(path: &Path, catalog: &Catalog) -> Result<()> {
-    fs::create_dir_all(path.parent().context("Invalid schema cache path")?)
-        .context("Could not create the schema cache directory")?;
-    write_atomically(path, &serde_json::to_vec(catalog)?).context("Could not save the schema cache")
+    fs::create_dir_all(path.parent().context("Invalid metadata cache path")?)
+        .context("Could not create the metadata cache directory")?;
+    write_atomically(path, &serde_json::to_vec(catalog)?)
+        .context("Could not save the metadata cache")
 }
 
 pub fn delete_catalog(path: &Path) {

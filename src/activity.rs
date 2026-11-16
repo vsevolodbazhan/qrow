@@ -315,7 +315,7 @@ mod tests {
             None,
             Severity::Error,
             LogKind::SchemaRefreshFinished,
-            "Schema refresh failed",
+            "Metadata refresh failed",
         );
         assert!(from_refresh(outcome).counts());
         activity.record(first, ActivityEntry::new(Severity::Info, "Started"));

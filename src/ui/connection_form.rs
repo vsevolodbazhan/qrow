@@ -41,9 +41,9 @@ impl RefreshMode {
     /// What the mode does, in one line below the dropdown.
     fn help(self) -> &'static str {
         match self {
-            Self::Disabled => "Never introspect schemas.",
-            Self::Manual => "Introspect schemas on demand.",
-            Self::WhileConnected => "Introspect schemas on demand and on a schedule.",
+            Self::Disabled => "Do not read or show metadata.",
+            Self::Manual => "Refresh metadata only on request.",
+            Self::WhileConnected => "Refresh metadata on request and on a schedule.",
         }
     }
 
@@ -206,8 +206,8 @@ const PASSWORD: &str = "Password";
 const SIGN_IN: &str = "Sign-in";
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
-const PRIVATE_CATALOG: &str = "This connection";
-const NEW_SHARED_CATALOG: &str = "New shared catalog";
+const PRIVATE_CATALOG: &str = "Not shared";
+const NEW_SHARED_CATALOG: &str = "New shared metadata";
 const ANY_MEMBER: &str = "Any connected connection";
 
 /// A dropdown of a few fixed choices.
@@ -401,7 +401,7 @@ pub(super) fn choice_select<T: PartialEq>(
 
 pub(super) fn column_read_choices() -> [(CatalogColumnReads, String); 2] {
     [
-        (CatalogColumnReads::Table, "One relation at a time".into()),
+        (CatalogColumnReads::Table, "One table at a time".into()),
         (CatalogColumnReads::Schema, "Whole schema".into()),
     ]
 }
@@ -743,16 +743,16 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
     let fields = SettingGroup::new()
         .item(connection_row(
             qrow,
-            "Schema Refresh",
+            "Refresh",
             mode.help(),
-            &["schemas", "introspect", "catalog", "browse"],
+            &["metadata", "schemas", "introspect", "catalog", "browse"],
             false,
             |_, form, _, _| {
                 Select::new(&form.schema_refresh)
                     .id("connection-schema-refresh")
                     .w_full()
                     .disabled(form.saving.is_some())
-                    .accessibility_label("Schema Refresh")
+                    .accessibility_label("Refresh")
                     .into_any_element()
             },
         ))
@@ -760,7 +760,7 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             connection_row(
                 qrow,
                 "Refresh Period",
-                "Minutes between schema refreshes, from 5 to 10080.",
+                "Minutes between refreshes, from 5 to 10080.",
                 &["schemas", "minutes", "automatic"],
                 false,
                 |_, form, _, cx| form_input(form, 12, "Refresh Period in Minutes", cx),
@@ -770,7 +770,7 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             connection_row(
                 qrow,
                 "Refresh Timeout",
-                "Minutes before a schema refresh stops, from 1 to 1440.",
+                "Minutes before a refresh stops, from 1 to 1440.",
                 &["schemas", "minutes"],
                 false,
                 |_, form, _, cx| form_input(form, 13, "Refresh Timeout in Minutes", cx),
@@ -780,7 +780,7 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             connection_row(
                 qrow,
                 "Column Reads",
-                "One relation saves memory; whole schema saves requests.",
+                "One table saves memory; whole schema saves requests.",
                 &["columns", "memory", "driver", "requests"],
                 false,
                 |_, form, _, _| {
@@ -796,13 +796,13 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
         .items(browses.then(|| {
             connection_row(
                 qrow,
-                "Schema Catalog",
+                "Shared Metadata",
                 if shared {
                     "Its connections must see the same metastore."
                 } else {
-                    "Connections on one metastore can share a catalog."
+                    "Connections on one metastore can share metadata."
                 },
-                &["shared", "catalog", "metastore"],
+                &["shared", "metadata", "catalog", "metastore"],
                 false,
                 |_, form, _, cx| catalog_field(form, cx),
             )
@@ -811,16 +811,16 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             vec![
                 connection_row(
                     qrow,
-                    "Shared Catalog Name",
-                    "Shown in each connection that uses the catalog.",
-                    &["shared", "catalog"],
+                    "Shared Metadata Name",
+                    "Shown in each connection that uses it.",
+                    &["shared", "metadata", "catalog"],
                     false,
                     |_, form, _, _| {
                         Input::new(&form.shared_name)
                             .id("connection-shared-catalog-name")
                             .w_full()
                             .disabled(form.saving.is_some())
-                            .aria_label("Shared Catalog Name")
+                            .aria_label("Shared Metadata Name")
                             .into_any_element()
                     },
                 ),
@@ -863,7 +863,7 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                 |_, form, _, cx| form_input(form, 11, "Hidden Schemas", cx),
             )
         }));
-    SettingPage::new("Catalog").resettable(false).group(fields)
+    SettingPage::new("Metadata").resettable(false).group(fields)
 }
 
 /// The list of schema catalogs, with a button that adds a shared catalog.
@@ -886,14 +886,14 @@ fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
         .id("connection-schema-catalog")
         .test_support()
         .role(Role::ComboBox)
-        .aria_label("Schema Catalog")
+        .aria_label("Shared Metadata")
         .aria_value(label)
         .w_full()
         .child(
             Combobox::new(&form.catalog_select)
                 .w_full()
                 .disabled(form.saving.is_some())
-                .search_placeholder("Search catalogs…")
+                .search_placeholder("Search shared metadata…")
                 // One save makes at most one new shared catalog.
                 .when(!has_new, |list| {
                     list.footer(move |_, _| {
@@ -904,7 +904,7 @@ fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
                             .w_full()
                             .justify_start()
                             .icon(IconName::Plus)
-                            .label("New shared catalog…")
+                            .label("New shared metadata…")
                             .on_click(move |_, window, cx| {
                                 let _ =
                                     qrow.update(cx, |this, cx| this.new_shared_catalog(window, cx));

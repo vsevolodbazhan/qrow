@@ -284,13 +284,13 @@ fn activity_entry(n: usize) -> qrow::activity::ActivityEntry {
         ActivityEntry::new(
             Severity::Error,
             format!(
-                "List columns of all relations in schema_{n:05} failed: Could not initialize the session{trace}"
+                "List columns of all tables and views in schema_{n:05} failed: Could not initialize the session{trace}"
             ),
         )
     } else {
         ActivityEntry::new(
             Severity::Info,
-            format!("List relations in schema_{n:05}: 297 relations (1.22 s)"),
+            format!("List tables and views in schema_{n:05}: 297 tables and views (1.22 s)"),
         )
     }
 }

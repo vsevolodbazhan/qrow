@@ -961,7 +961,7 @@ fn every_refresh_sends_its_entries() {
     }
     let texts: Vec<_> = entries.iter().map(|entry| entry.text.as_str()).collect();
     assert!(
-        texts[0].starts_with("Started a schema refresh of the connection"),
+        texts[0].starts_with("Started a metadata refresh of the connection"),
         "{texts:?}"
     );
     assert!(
@@ -977,13 +977,13 @@ fn every_refresh_sends_its_entries() {
     assert!(
         texts
             .iter()
-            .any(|text| text.starts_with("List relations in sales: 2 relations ("))
+            .any(|text| text.starts_with("List tables and views in sales: 2 tables and views ("))
     );
     assert!(
         texts
             .last()
             .unwrap()
-            .starts_with("Schema refresh completed")
+            .starts_with("Metadata refresh completed")
     );
     assert_eq!(entries.last().unwrap().kind, LogKind::SchemaRefreshFinished);
     assert!(
@@ -1004,7 +1004,7 @@ fn every_refresh_sends_its_entries() {
     let last = entries.last().unwrap();
     assert!(
         last.text
-            .starts_with("Schema refresh completed with 1 error"),
+            .starts_with("Metadata refresh completed with 1 error"),
         "{}",
         last.text
     );
@@ -1037,19 +1037,19 @@ fn logs_entries_count_only_the_requested_names() {
     assert!(
         texts
             .iter()
-            .any(|t| t.starts_with("List relations in my_db: 1 relation (")),
+            .any(|t| t.starts_with("List tables and views in my_db: 1 table or view (")),
         "{texts:?}"
     );
     assert!(
         texts
             .iter()
-            .any(|t| t.starts_with("List columns of all relations in my_db: 1 column (")),
+            .any(|t| t.starts_with("List columns of all tables and views in my_db: 1 column (")),
         "{texts:?}"
     );
     assert!(
         texts
             .iter()
-            .any(|t| t.starts_with("List columns of all relations in myxdb: 2 columns (")),
+            .any(|t| t.starts_with("List columns of all tables and views in myxdb: 2 columns (")),
         "{texts:?}"
     );
 }
@@ -1289,7 +1289,7 @@ fn a_stopped_connection_refresh_continues_in_the_refresh_period() {
         texts
             .iter()
             .any(|text| text
-                == "Continued a stopped schema refresh: 3 of 4 schemas were already read"),
+                == "Continued a stopped metadata refresh: 3 of 4 schemas were already read"),
         "{texts:?}"
     );
 
@@ -1422,7 +1422,7 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
         texts
             .last()
             .unwrap()
-            .starts_with("Schema refresh stopped after 2 minutes"),
+            .starts_with("Metadata refresh stopped after 2 minutes"),
         "{texts:?}"
     );
 
@@ -1461,14 +1461,14 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
         .map(|e| e.text)
         .collect();
     assert!(
-        texts[0].starts_with("Started an automatic schema refresh of the connection"),
+        texts[0].starts_with("Started an automatic metadata refresh of the connection"),
         "{texts:?}"
     );
     assert!(
         texts
             .last()
             .unwrap()
-            .starts_with("Schema refresh stopped because no tab of the connection is connected"),
+            .starts_with("Metadata refresh stopped because no tab of the connection is connected"),
         "{texts:?}"
     );
 

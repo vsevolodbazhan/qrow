@@ -93,11 +93,11 @@ fn refresh_errors_keep_connection_tooltips_short_and_details_in_activity(cx: &mu
     app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(
         cx,
-        "the unread schema refresh error",
+        "the unread refresh error",
         QUERY_TIMEOUT,
         |window, _| {
             label(window, connection_row(connection)).as_deref()
-                == Some("Spark, unread error, schema refresh error")
+                == Some("Spark, unread error, refresh error")
         },
     );
     app.update(cx, |window, _| {
@@ -150,11 +150,11 @@ fn refresh_errors_keep_connection_tooltips_short_and_details_in_activity(cx: &mu
     app.click(cx, format!("connection-status-{connection}"));
     app.wait_for(cx, "activity");
     let activity = app.copy_activity(cx);
-    assert!(activity.contains("Schema refresh failed"), "{activity}");
+    assert!(activity.contains("Metadata refresh failed"), "{activity}");
     assert!(activity.contains("authentication"), "{activity}");
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
-    app.hover_labelled(cx, "Spark, schema refresh error");
+    app.hover_labelled(cx, "Spark, refresh error");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
     app.update(cx, |window, _| {

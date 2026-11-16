@@ -596,7 +596,7 @@ impl SchemaRule {
         anyhow::ensure!(
             !self.from.trim().is_empty()
                 && (self.kind == SchemaRuleKind::Prefix || !self.to.trim().is_empty()),
-            "Each schema mapping rule needs a dbt schema and a catalog schema."
+            "Each schema mapping rule needs a dbt schema and a database schema."
         );
         Ok(())
     }
@@ -824,18 +824,18 @@ impl SharedCatalog {
             };
         }
         if self.name.trim().is_empty() {
-            self.name = "Shared catalog".into();
+            self.name = "Shared metadata".into();
         }
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             !self.name.trim().is_empty(),
-            "Give the shared catalog a name."
+            "Give the shared metadata a name."
         );
         anyhow::ensure!(
             self.name.chars().count() <= MAX_SHARED_CATALOG_NAME,
-            "Shared catalog name must be {MAX_SHARED_CATALOG_NAME} characters or fewer."
+            "Shared metadata name must be {MAX_SHARED_CATALOG_NAME} characters or fewer."
         );
         self.settings.validate()
     }

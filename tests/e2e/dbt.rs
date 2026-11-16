@@ -70,7 +70,7 @@ fn a_dbt_project_matches_the_tables_of_the_server(cx: &mut TestAppContext) {
     app.scroll_to(cx, "connection-dbt-matches");
     app.wait_until(cx, "the match summary", QUERY_TIMEOUT, |window, _| {
         label(window, "connection-dbt-matches").as_deref()
-            == Some("1 of 2 dbt resources matched the catalog")
+            == Some("1 of 2 dbt resources matched cached tables")
             && label(window, "connection-dbt-match-percent").as_deref() == Some("50%")
     });
     app.click(cx, "cancel-profile");
