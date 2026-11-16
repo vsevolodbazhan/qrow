@@ -12,6 +12,7 @@ mod assistant_tabs;
 mod assistant_threads;
 mod assistant_transcript;
 mod catalog;
+mod completion;
 mod composer_motion;
 mod connection_sharing;
 mod connections;

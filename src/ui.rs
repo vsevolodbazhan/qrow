@@ -25,6 +25,7 @@ mod setting_row;
 mod settings_view;
 mod settings_window;
 mod sign_in_view;
+mod sql_completion;
 mod sql_files;
 mod status_dot;
 mod status_tooltip;
@@ -308,6 +309,7 @@ struct Tab {
     /// pinning the last unpinned result tab makes it ready.
     spare_table: Option<Entity<TableState<Results>>>,
     _subscription: Subscription,
+    _observe: Subscription,
     _run_highlight: Subscription,
     worker: Option<Worker>,
     // The last Run target can differ from the profile selected for the next Run.
@@ -760,6 +762,25 @@ fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     }
 }
 
+/// The width of `text` on one line in `font` at `size`.
+fn text_width(window: &mut Window, text: &str, font: &Font, size: Pixels) -> Pixels {
+    if text.is_empty() {
+        return px(0.);
+    }
+    let run = TextRun {
+        len: text.len(),
+        font: font.clone(),
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(SharedString::from(text.to_owned()), size, &[run], None)
+        .width
+}
+
 fn panel_empty_state(message: &'static str, cx: &App) -> Div {
     div()
         .size_full()
@@ -810,6 +831,16 @@ pub struct Qrow {
     tab_form: Option<TabEditor>,
     result_form: Option<result_tabs::ResultEditor>,
     menu: Option<ContextMenu>,
+    /// The autocomplete popup of the SQL editor.
+    completion: Option<sql_completion::CompletionPopup>,
+    /// For each connection, the idle report count of its catalog when the
+    /// suggestions last started a read. Until the next report, the read
+    /// counts as running, so the list does not show the last error.
+    completion_reads: std::collections::HashMap<Uuid, u64>,
+    /// The statements of the editor text of the query tab that last asked
+    /// for suggestions, so that a cursor move or an edit does not read the
+    /// whole SQL again.
+    completion_statements: Option<(Uuid, crate::completion::Statements)>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
     message: Option<String>,
@@ -1095,6 +1126,9 @@ impl Qrow {
             tab_form: None,
             result_form: None,
             menu: None,
+            completion: None,
+            completion_reads: std::collections::HashMap::new(),
+            completion_statements: None,
             saver,
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
             message,
@@ -1218,6 +1252,12 @@ impl Qrow {
                 .default_value(saved.sql.clone())
         });
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {
+            if matches!(event, InputEvent::Blur) {
+                this.close_completion(cx);
+            }
+            if matches!(event, InputEvent::Focus) {
+                this.preload_completion(tab_id);
+            }
             if matches!(event, InputEvent::Change) {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) {
                     // Only an assistant edit needs the text: it does not
@@ -1233,6 +1273,18 @@ impl Qrow {
                 this.sql_changed(cx);
             }
         });
+        // The autocomplete popup follows the cursor and the text.
+        let observe = cx.observe(&input, move |this, _, cx| {
+            if this
+                .completion
+                .as_ref()
+                .is_some_and(|popup| popup.tab() == tab_id)
+            {
+                this.update_completion(sql_completion::Trigger::Edit, cx);
+            } else {
+                this.preload_completion(tab_id);
+            }
+        });
         let run_highlight = run_highlight::track(&input, cx);
         let table = self.result_table(saved.profile, window, cx);
         Tab {
@@ -1246,6 +1298,7 @@ impl Qrow {
             next_result: 2,
             spare_table: None,
             _subscription: subscription,
+            _observe: observe,
             _run_highlight: run_highlight,
             worker: None,
             worker_profile: None,
@@ -1641,7 +1694,12 @@ impl Qrow {
     /// catalog tool call.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = self.drain_workers(cx);
-        changed |= self.drain_catalogs(cx);
+        if self.drain_catalogs(cx) {
+            changed = true;
+            if self.completion.is_some() {
+                self.update_completion(sql_completion::Trigger::Metadata, cx);
+            }
+        }
         self.sync_dbt();
         changed |= self.drain_dbt(cx);
         self.activity
@@ -2947,6 +3005,7 @@ impl Qrow {
         self.settings.editor_line_height = settings.editor_line_height;
         self.settings.editor_smooth_caret = settings.editor_smooth_caret;
         self.settings.editor_smooth_scrolling = settings.editor_smooth_scrolling;
+        self.settings.editor_autocomplete = settings.editor_autocomplete;
         self.settings.smooth_transitions = settings.smooth_transitions;
         self.set_editor_tab_size(settings.editor_tab_size, cx);
         self.settings.assistant.sql_keyword_case = settings.assistant.sql_keyword_case;

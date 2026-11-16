@@ -513,13 +513,7 @@ impl Qrow {
                 self.catalog.catalog(profile.id),
                 &crate::model::effective_catalog(profile, &self.shared_catalogs),
                 &tab.input.read(cx).value(),
-                if profile.database_type == crate::model::DatabaseType::Postgres {
-                    "public"
-                } else if profile.database_type == crate::model::DatabaseType::Trino {
-                    &profile.trino_schema
-                } else {
-                    &profile.database
-                },
+                profile.default_schema(),
                 crate::catalog::now(),
                 profile.database_type,
             ))
@@ -537,13 +531,7 @@ impl Qrow {
                 state,
                 project.as_ref(),
                 &tab.input.read(cx).value(),
-                if profile.database_type == crate::model::DatabaseType::Postgres {
-                    "public"
-                } else if profile.database_type == crate::model::DatabaseType::Trino {
-                    &profile.trino_schema
-                } else {
-                    &profile.database
-                },
+                profile.default_schema(),
                 profile.database_type,
             ))
         });

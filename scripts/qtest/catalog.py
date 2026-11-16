@@ -230,8 +230,9 @@ def suites_for_platform(system):
                          "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov"),
                         env=(("RUST_TEST_THREADS", "1"),)),
                   )),
-            Suite("perf", "SQL, dbt, and export benchmarks with enforced budgets.", ("cargo",),
-                  (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql", "--bench", "dbt", "--bench", "export")),)),
+            Suite("perf", "SQL, completion, dbt, and export benchmarks with enforced budgets.", ("cargo",),
+                  (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql", "--bench", "completion",
+                         "--bench", "dbt", "--bench", "export")),)),
             Suite("scripts", "ShellCheck, actionlint, Ruff, and automation unit tests.",
                   ("uv", "shellcheck", "actionlint"),
                   (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + "

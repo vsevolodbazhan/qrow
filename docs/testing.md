@@ -106,7 +106,7 @@ accept a test filter.
 | `unit` * | Rust unit and integration tests that need no UI and no servers. | cargo-nextest; on Linux, the desktop libraries |
 | `ui` * | Headless tests of the real Qrow window, without servers. | cargo-nextest; on Linux, the desktop libraries |
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
-| `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
+| `perf` | SQL, completion, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
 | `perf-e2e` * | Window query latency against the real servers. | macOS, Docker or Java 17 |
 | `perf-kyuubi` * | Kyuubi export transfer measurements against the real servers. | Docker or Java 17 |
@@ -663,8 +663,8 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 
 | Suite | Probes |
 | --- | --- |
-| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding of narrow, double, wide, and null-heavy data. CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
-| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns. Opening and typing into a tab with 1 MB of SQL. A keystroke in the editor of the demo, and of a workspace with 20 connections and 60 tabs. A frame, a scroll step, and a search keystroke of a schema tree with 2,000 tables. A search keystroke in a catalog with 100,000 tables: the input frame, and all the work until the tree shows the result. A batch of 500 Logs entries in a tab that keeps 20,000 entries. An assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a reply of 400 KB, a transcript save without changes, and a keystroke in the message field. [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probes draw their frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
+| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The suggestions of the SQL editor: the read of the SQL at the cursor, and the match of names in large catalogs. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding of narrow, double, wide, and null-heavy data. CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
+| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns. Opening and typing into a tab with 1 MB of SQL. A keystroke in the editor of the demo, and of a workspace with 20 connections and 60 tabs. A frame, a scroll step, and a search keystroke of a schema tree with 2,000 tables. A search keystroke in a catalog with 100,000 tables: the input frame, and all the work until the tree shows the result. The suggestions of the SQL editor: a key, an arrow key, and a caret blink while the list is open, in catalogs of 1,000, 20,000, and 100,000 tables, with columns of two tables of 1,000 columns, and in 1 MB of SQL. Tab that indents in 1 MB of SQL. A batch of 500 Logs entries in a tab that keeps 20,000 entries. An assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a reply of 400 KB, a transcript save without changes, and a keystroke in the message field. [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probes draw their frames like the window does: only the views that changed render again. The other probes render the full window in each frame. The `perf` Cargo profile uses the release optimization level, but uses more code generation units and no link-time optimization. |
 | `perf-e2e` | The time from **Run** to the first result row and to the next page. |
 | `perf-kyuubi` | Kyuubi export throughput and peak memory for each preset. |
 | `perf-postgres` | Postgres export throughput and peak memory for each preset. Normal protocol and server CSV `COPY` comparison. |
@@ -708,6 +708,32 @@ The [SQL benchmark](../benches/sql.rs) reports the median of 21 samples
 after a warm-up. Its budgets are 5 ms at 10 KB, 25 ms at 100 KB, and 250 ms at
 1 MB. The release profile favors a small size, so run `perf` after you change
 it.
+
+The [completion benchmark](../benches/completion.rs) reports the median of 21
+samples after a warm-up:
+
+- `completion.request.*` reads the SQL at the cursor in 10 KB, 100 KB, and
+  1 MB of SQL, without kept statements. The budgets are 2, 10, and 50 ms.
+- `completion.statements.*` reads 1 MB of SQL with the statements that the
+  window keeps for the editor. A key at the end must take less than 2 ms. A
+  cursor move must take less than 1 ms. An edit at the start reads all the
+  text again and must take less than 50 ms.
+- `completion.request.statement.*` reads one long statement of 10 KB and
+  100 KB. The budgets are 5 and 25 ms.
+- `completion.relations.*` matches an empty prefix, a prefix, a part of the
+  names, and a prefix that no name has. The catalog has 1,000 schemas and
+  1,000, 10,000, or 100,000 tables. The budgets are 2, 5, and 25 ms.
+- `completion.columns.*` matches the columns of 2 to 10 joined tables with
+  100 to 2,000 columns each. The budgets are 2 to 25 ms.
+
+The `perf-ui` probes `ui.completion.*` measure the same work in the window.
+Each key probe reports the work of the key and the frame after it. The
+budget of each probe is 50 ms. Run these probes alone, because other tests
+that run at the same time make the values 20 to 40% higher:
+
+```sh
+./qtest run perf-ui/completion --report-only
+```
 
 The [export benchmark](../benches/export.rs) runs one spool producer and one
 CSV or Parquet writer in each fresh process. It checks the full row count

@@ -284,6 +284,12 @@ impl CatalogTree {
         self.connection(profile)?.worker.as_ref()
     }
 
+    /// Whether the window loads or holds the metadata of `profile`.
+    fn holds(&self, profile: Uuid) -> bool {
+        self.connection(profile)
+            .is_some_and(|connection| connection.worker.is_some() || connection.catalog.is_some())
+    }
+
     pub(super) fn catalog(&self, profile: Uuid) -> Option<&Catalog> {
         self.connection(profile)?.catalog.as_deref()
     }
@@ -769,6 +775,12 @@ struct ConnectionRow {
 }
 
 impl Qrow {
+    /// Whether the window loads or holds the metadata cache of the
+    /// connection `profile`. For tests.
+    pub fn holds_catalog(&self, profile: Uuid) -> bool {
+        self.catalog.holds(profile)
+    }
+
     fn reorder_connection(&mut self, id: Uuid, target: Uuid, after: bool, cx: &mut Context<Self>) {
         if id == target {
             return;

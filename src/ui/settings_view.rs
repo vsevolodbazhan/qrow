@@ -1038,6 +1038,8 @@ fn appearance_page(
 ) -> SettingPage {
     let smooth_caret = settings.editor_smooth_caret;
     let smooth_scrolling = settings.editor_smooth_scrolling;
+    let autocomplete = settings.editor_autocomplete;
+    let autocomplete_owner = owner.clone();
     let smooth_transitions = settings.smooth_transitions;
     let composer_caret = settings.assistant_smooth_caret;
     let composer_resize = settings.assistant_smooth_resize;
@@ -1244,6 +1246,34 @@ fn appearance_page(
                     "Spaces for each indent level.",
                     &["editor", "sql", "indent", "spaces", "format"],
                     number_field(form, NumberSetting::EditorTabSize),
+                ))
+                .item(setting_item(
+                    "Autocomplete",
+                    "Suggest names from cached metadata when you press Tab.",
+                    &[
+                        "editor",
+                        "sql",
+                        "completion",
+                        "suggestions",
+                        "tab",
+                        "metadata",
+                        "intellisense",
+                    ],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = autocomplete_owner.clone();
+                        Switch::new("editor-autocomplete")
+                            .checked(autocomplete)
+                            .accessibility_label("Autocomplete")
+                            .on_click(move |next, _, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.settings.editor_autocomplete = *next;
+                                    if !*next {
+                                        this.close_completion(cx);
+                                    }
+                                    this.changed(cx);
+                                });
+                            })
+                    },
                 ))
                 .item(setting_item(
                     "SQL Keyword Case",

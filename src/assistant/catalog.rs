@@ -391,28 +391,7 @@ pub(super) fn names(sql: &str, database_type: crate::model::DatabaseType) -> Vec
         if text.trim().is_empty() {
             continue;
         }
-        let part = match kind {
-            crate::sql::Kind::Identifier => {
-                let quote = text.chars().next().unwrap();
-                let inner = text.strip_prefix(quote).unwrap();
-                Some(
-                    inner
-                        .strip_suffix(quote)
-                        .unwrap_or(inner)
-                        .replace(&format!("{quote}{quote}"), &quote.to_string()),
-                )
-            }
-            crate::sql::Kind::Plain
-                if text.starts_with(|c: char| c.is_alphabetic() || c == '_') =>
-            {
-                Some(if database_type == crate::model::DatabaseType::Postgres {
-                    text.to_lowercase()
-                } else {
-                    text.to_owned()
-                })
-            }
-            _ => None,
-        };
+        let part = crate::sql::name_part(text, kind, database_type);
         match part {
             Some(part) => {
                 if !current.is_empty() && !dot {
