@@ -427,12 +427,12 @@ fn contains_lowercase(name: &str, needle: &str) -> bool {
 /// names, like a catalog, a schema, and a table, when its parts match parts
 /// in a row: the first part ends a name, the last part starts a name, and
 /// the parts between are full names. A part in quotes starts or ends its
-/// name at the quotes. A search with dots and without quotes also matches
-/// one name that contains all of its text, like the table `events.v2`. The
-/// comparison ignores letter case.
+/// name at the quotes. A search with dots and without a part in quotes also
+/// matches one name that contains all of its text, like the table
+/// `events.v2`. The comparison ignores letter case.
 struct NameSearch {
     parts: Vec<SearchPart>,
-    /// All the text of a search with dots and without quotes.
+    /// All the text of a search with dots and without a part in quotes.
     whole: Option<SearchPart>,
 }
 
@@ -476,7 +476,8 @@ impl NameSearch {
             }
         }
         parts.push((text, opened, closed));
-        let quoted = search.contains(['`', '"']);
+        // A quote inside a part is a character of the name, not a quote.
+        let quoted = parts.iter().any(|(_, opened, _)| *opened);
         let whole = (parts.len() > 1 && !quoted).then(|| SearchPart {
             text: fold_case(search),
             start: false,
@@ -3484,6 +3485,9 @@ mod tests {
         assert!(matches("events.v2", "events.v2", "orders"));
         assert!(matches("sales.`events.v2`", "sales", "events.v2"));
         assert!(!matches("sales.events.v2", "sales", "events.v2"));
+        // A quote inside a part is a character of the name.
+        assert!(matches("events\"old.v2", "sales", "events\"old.v2"));
+        assert!(matches("events`old.v2", "sales", "events`old.v2"));
         // A name in quotes is a full name, also when another name contains
         // the quotes.
         assert!(!matches("\"orders\"", "sales", "archive_\"orders\"_old"));
