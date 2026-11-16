@@ -220,13 +220,32 @@ impl<'a, W: Write> CsvWriter<'a, W> {
         }
         if self.options.header {
             let columns = self.columns;
-            self.record(columns.iter().map(|c| Some(c.name.as_str())), false)?;
+            self.record(
+                columns
+                    .iter()
+                    .map(|c| (Some(c.name.as_str()), ValueKind::Text)),
+            )?;
         }
         Ok(())
     }
 
     pub fn row<'v>(&mut self, values: impl Iterator<Item = Option<&'v str>>) -> io::Result<()> {
-        self.record(values, true)
+        let columns = self.columns;
+        self.record(values.enumerate().map(|(index, value)| {
+            (
+                value,
+                columns.get(index).map_or(ValueKind::Text, |c| c.kind),
+            )
+        }))
+    }
+
+    /// Write a record whose cells have their own kinds, such as a line of a
+    /// transposed table.
+    pub fn cells<'v>(
+        &mut self,
+        cells: impl Iterator<Item = (Option<&'v str>, ValueKind)>,
+    ) -> io::Result<()> {
+        self.record(cells)
     }
 
     pub fn finish(self) -> io::Result<()> {
@@ -235,23 +254,17 @@ impl<'a, W: Write> CsvWriter<'a, W> {
 
     fn record<'v>(
         &mut self,
-        values: impl Iterator<Item = Option<&'v str>>,
-        data: bool,
+        cells: impl Iterator<Item = (Option<&'v str>, ValueKind)>,
     ) -> io::Result<()> {
         let separator = self.options.separator.char();
         let mut first = true;
-        for (index, value) in values.enumerate() {
+        for (value, kind) in cells {
             if !first {
                 let mut buffer = [0; 4];
                 self.out
                     .write_all(separator.encode_utf8(&mut buffer).as_bytes())?;
             }
             first = false;
-            let kind = if data {
-                self.columns.get(index).map_or(ValueKind::Text, |c| c.kind)
-            } else {
-                ValueKind::Text
-            };
             match value {
                 None => self.out.write_all(self.options.null.as_str().as_bytes())?,
                 Some(value) => {
