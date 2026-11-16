@@ -1093,6 +1093,26 @@ button shows as selected when the search does not use all connections. The
 choice applies only while the search field has text. Qrow saves the choice
 in the workspace. If you delete a connection, Qrow removes it from the choice.
 
+### Preview rows
+
+To see the first rows of a table or a view, right-click it and select
+**Preview rows**. Qrow opens a new query tab under the connection and runs
+SQL like this at once:
+
+```sql
+SELECT *
+FROM `sales`.`orders`
+LIMIT 100
+```
+
+The tab has the name of the table. If a tab of the connection has this name
+already, the new tab gets a copy suffix. The keywords use
+**SQL Keyword Case** from the settings. To filter or sort the rows, add a
+`WHERE` or `ORDER BY` clause to the SQL and run it again.
+
+A double-click on a row in the tree expands or collapses it. It does not
+preview rows.
+
 ### Use names in SQL
 
 Right-click a schema, a table, a view, or a column, then select:

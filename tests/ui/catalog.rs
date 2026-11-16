@@ -1194,6 +1194,66 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn preview_rows_opens_a_tab_that_runs_at_once(cx: &mut TestAppContext) {
+    // A loopback socket holds the session open until the test closes it.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        ..offline_profile("Warehouse")
+    };
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    wait_shows(&app, cx, "bookings");
+
+    // A schema has no rows to preview.
+    app.context_menu_labelled(cx, "avia");
+    app.update(cx, |window, _| {
+        assert!(menu_item(window, "popup-menu", "Preview rows").is_none());
+    });
+    app.press(cx, "escape");
+
+    let sql = "SELECT *\nFROM `avia`.`bookings`\nLIMIT 100";
+    app.context_menu_labelled(cx, "bookings");
+    app.choose(cx, "popup-menu", "Preview rows");
+    app.wait_saved(cx, "the preview tab", |saved| {
+        saved.tabs.len() == 2
+            && saved.active_tab == 1
+            && saved.tabs[1].title == "bookings"
+            && saved.tabs[1].sql == sql
+    });
+    let query = app.saved().tabs[1].id;
+    app.wait_until(
+        cx,
+        "the preview run",
+        Duration::from_secs(10),
+        |window, _| {
+            label(window, format!("query-status-{query}")).as_deref()
+                == Some("bookings, connecting")
+        },
+    );
+
+    // A second preview of the same table gets its own tab and name.
+    app.context_menu_labelled(cx, "bookings");
+    app.choose(cx, "popup-menu", "Preview rows");
+    app.wait_saved(cx, "the second preview tab", |saved| {
+        saved.tabs.len() == 3
+            && saved.active_tab == 2
+            && saved.tabs[2].title != "bookings"
+            && saved.tabs[2].title.starts_with("bookings")
+            && saved.tabs[2].sql == sql
+    });
+    drop(listener);
+}
+
+#[gpui_kit::test]
 fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut TestAppContext) {
     // A port that was free a moment ago refuses the connection.
     let port = TcpListener::bind("127.0.0.1:0")

@@ -179,6 +179,20 @@ impl Node {
     }
 }
 
+/// The rows that Preview Rows selects.
+const PREVIEW_ROWS: usize = 100;
+
+/// The SQL that selects the first rows of the relation `qualified`, a name
+/// ready for SQL. Each clause has its own line, so a filter or an order
+/// goes between them.
+fn preview_sql(qualified: &str, case: crate::sql::KeywordCase) -> String {
+    let [select, from, limit] = match case {
+        crate::sql::KeywordCase::Uppercase => ["SELECT", "FROM", "LIMIT"],
+        crate::sql::KeywordCase::Lowercase => ["select", "from", "limit"],
+    };
+    format!("{select} *\n{from} {qualified}\n{limit} {PREVIEW_ROWS}")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tone {
     Muted,
@@ -1387,6 +1401,45 @@ impl Qrow {
         });
     }
 
+    /// Opens a query tab named after a relation and runs `sql`, which
+    /// selects its first rows.
+    fn preview_rows(
+        &mut self,
+        profile: Uuid,
+        relation: &str,
+        sql: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_open() || !self.profiles.iter().any(|p| p.id == profile) {
+            return;
+        }
+        // The new tab must show, so the maximized assistant steps aside.
+        self.uncover_workspace(window, cx);
+        let title: String = relation
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(MAX_TAB_TITLE)
+            .collect();
+        let title = if title.trim().is_empty() {
+            "Query"
+        } else {
+            title.trim()
+        };
+        let mut saved = SavedTab::new(1, Some(profile));
+        saved.title = unique_tab_title(title, |candidate| {
+            self.tabs
+                .iter()
+                .any(|tab| tab.saved.profile == Some(profile) && tab.saved.title == candidate)
+        });
+        saved.sql = sql.clone();
+        let tab = self.make_tab(saved, window, cx);
+        self.tabs.push(tab);
+        let index = self.tabs.len() - 1;
+        self.activate(index, window, cx);
+        self.run_tab_sql(index, sql, false, cx);
+    }
+
     /// The ID prefixes of the rows below a connection, or below one of its
     /// schemas.
     fn descendant_prefixes(profile: Uuid, schema: Option<&str>) -> Vec<String> {
@@ -1530,6 +1583,7 @@ impl Qrow {
         } else {
             "Copy name"
         };
+        let preview = preview_sql(&insert, self.settings.sql_style().keyword_case);
         let refresh = scope.map(|scope| {
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.refresh_catalog(profile, scope.clone(), cx)
@@ -1556,6 +1610,19 @@ impl Qrow {
             }
             _ => None,
         };
+        let preview = match &node {
+            Node::Relation {
+                profile,
+                name: relation,
+                ..
+            } => {
+                let (profile, title, sql) = (*profile, relation.clone(), preview);
+                Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.preview_rows(profile, &title, sql.clone(), window, cx)
+                }))
+            }
+            _ => None,
+        };
         let collapse = match &node {
             Node::Schema { name, .. } => {
                 let has_expanded = self.has_expanded_descendants(profile, Some(name), cx);
@@ -1574,6 +1641,12 @@ impl Qrow {
             position,
             Some(tree),
             move |menu, _, _| {
+                let menu = match preview {
+                    Some(preview) => menu
+                        .item(PopupMenuItem::new("Preview rows").on_click(preview))
+                        .separator(),
+                    None => menu,
+                };
                 let menu = match refresh {
                     Some(refresh) => menu.item(
                         PopupMenuItem::new("Refresh")
@@ -3083,6 +3156,21 @@ fn notice_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn preview_sql_follows_the_keyword_case() {
+        assert_eq!(
+            preview_sql("`avia`.`bookings`", crate::sql::KeywordCase::Uppercase),
+            "SELECT *\nFROM `avia`.`bookings`\nLIMIT 100"
+        );
+        assert_eq!(
+            preview_sql(
+                "\"delta\".\"avia\".\"t\"",
+                crate::sql::KeywordCase::Lowercase
+            ),
+            "select *\nfrom \"delta\".\"avia\".\"t\"\nlimit 100"
+        );
+    }
 
     #[::core::prelude::v1::test]
     fn an_error_summary_keeps_only_the_first_line() {
