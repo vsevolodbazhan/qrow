@@ -1171,13 +1171,13 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
         cx.read_from_clipboard()
             .and_then(|item| item.text())
             .as_deref(),
-        Some("`avia`.`bookings`")
+        Some("avia.bookings")
     );
 
     app.context_menu_labelled(cx, "daily");
     app.choose(cx, "popup-menu", "Insert into editor");
     app.wait_until(cx, "the inserted name", Duration::from_secs(10), |_, _| {
-        app.saved().tabs[0].sql == "`avia`.`daily`"
+        app.saved().tabs[0].sql == "avia.daily"
     });
 
     let gate = app.update(cx, |window, _| {
@@ -1190,7 +1190,7 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
         assert!(labelled(window, "gate string").is_some());
     });
     std::thread::sleep(Duration::from_millis(600));
-    assert_eq!(app.saved().tabs[0].sql, "`avia`.`daily`");
+    assert_eq!(app.saved().tabs[0].sql, "avia.daily");
 }
 
 #[gpui_kit::test]
@@ -1451,7 +1451,7 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
         cx,
         "the inserted column",
         Duration::from_secs(10),
-        |_, _| app.saved().tabs[0].sql == "`gate`",
+        |_, _| app.saved().tabs[0].sql == "gate",
     );
 }
 
@@ -2478,7 +2478,7 @@ fn the_demo_catalog_supports_search_columns_and_copy(cx: &mut TestAppContext) {
         cx.read_from_clipboard()
             .and_then(|item| item.text())
             .as_deref(),
-        Some("`avia`.`bookings`")
+        Some("avia.bookings")
     );
     app.fill_labelled(cx, SEARCH, "finance.payments");
     app.click_labelled(cx, "payments");

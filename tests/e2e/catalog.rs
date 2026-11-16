@@ -375,7 +375,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.context_menu_labelled(cx, "bookings");
     app.choose(cx, "popup-menu", "Copy qualified name");
     let name = cx.read_from_clipboard().unwrap().text().unwrap();
-    assert_eq!(name, format!("`{schema}`.`bookings`"));
+    assert_eq!(name, format!("{schema}.bookings"));
     app.fill_labelled(cx, SEARCH, &name);
     app.wait_until(
         cx,
@@ -399,7 +399,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.type_sql(cx, "SELECT COUNT(*) FROM ");
     app.context_menu_labelled(cx, "bookings");
     app.choose(cx, "popup-menu", "Insert into editor");
-    let sql = format!("SELECT COUNT(*) FROM `{schema}`.`bookings`");
+    let sql = format!("SELECT COUNT(*) FROM {schema}.bookings");
     app.wait_until(cx, "the inserted name", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == sql
     });
@@ -437,7 +437,7 @@ fn an_inserted_reserved_table_name_runs_with_ansi_keywords(cx: &mut TestAppConte
     app.type_sql(cx, "SELECT `from` FROM ");
     app.context_menu_labelled(cx, "select");
     app.choose(cx, "popup-menu", "Insert into editor");
-    let sql = format!("SELECT `from` FROM `{schema}`.`select`");
+    let sql = format!("SELECT `from` FROM {schema}.`select`");
     app.wait_until(cx, "the quoted table name", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == sql
     });

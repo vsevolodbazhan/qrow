@@ -189,7 +189,7 @@ in [results](results.md) still apply to rows that Qrow keeps.
 
 The schema browser shows user schemas, tables, partitioned tables, views,
 materialized views, and foreign tables. It reads column types and comments.
-Names inserted into SQL use double quotes. The assistant receives `postgres`
+Names that need quotes in SQL get double quotes. The assistant receives `postgres`
 as the connector type in its connection context.
 For automatic relation context, the assistant uses `public` for unqualified
 names. Use qualified names when a different `search_path` applies.
@@ -232,7 +232,7 @@ server certificate and hostname against the system trust store.
 Enter **Initial Catalog**, for example `tpch`. Enter **Initial Schema** if you
 want to use unqualified table names, for example `tiny`. The schema is optional.
 The schema browser reads the initial catalog. SQL names from the browser include
-the catalog, schema, and table, with double quotes.
+the catalog, schema, and table, for example `tpch.tiny.nation`.
 
 For **Password** authentication, enter the username. Leave the password blank
 if the server accepts a username without a password. Turn on **TLS** when you
@@ -1060,7 +1060,7 @@ metadata and its copy of the schemas.
 Type in **Search…** above the tree to find connections, schemas, tables, and
 views. Use a name or part of a name. For a table or view, you can include the
 schema, for example `integrations.bookings`. The search also accepts names
-from **Copy qualified name**, for example `` `integrations`.`bookings` ``.
+in quotes, for example `` `integrations`.`bookings` ``.
 The search ignores letter case and spaces at the start and end of the search
 text.
 
@@ -1105,9 +1105,6 @@ FROM sales.orders
 LIMIT 100
 ```
 
-Qrow puts quotes only around a name that needs them, as in
-[name completion](queries.md#complete-names).
-
 The tab has the name of the table. If a tab of the connection has this name
 already, the new tab gets a copy suffix. The keywords use
 **SQL Keyword Case** from the settings. To filter or sort the rows, add a
@@ -1121,7 +1118,7 @@ rows.
 Right-click a schema, a table, a view, or a column, then select:
 
 - **Copy name** or **Copy qualified name** to copy the name. A table name
-  includes its schema, for example `` `sales`.`orders` ``.
+  includes its schema, for example `sales.orders`.
 - **Insert into editor** to put the name at the cursor of the SQL editor. The
   name replaces the selected text.
 
@@ -1132,9 +1129,11 @@ To use the keyboard, select a row in the tree, then:
 - Press **⌘C** to copy its name.
 - Press **Shift-Enter** to insert its name into the SQL editor.
 
-Qrow puts backticks around each name that it inserts into SQL. This also
-lets you use names that are SQL keywords. A backtick in a name becomes two
-backticks.
+**Copy qualified name**, **Insert into editor**, and **Preview rows** put
+quotes only around a name that needs them, as in
+[name completion](queries.md#complete-names). For example, the table `select`
+in the schema `sales` becomes `` sales.`select` `` on Kyuubi. **Copy name**
+copies a schema or column name without quotes.
 
 ### See refresh details
 

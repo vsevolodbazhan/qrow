@@ -400,7 +400,7 @@ fn schema_browser_reads_the_initial_catalog_and_copies_three_part_names(cx: &mut
     app.choose(cx, "popup-menu", "Copy qualified name");
     assert_eq!(
         cx.read_from_clipboard().unwrap().text().unwrap(),
-        "\"tpch\".\"tiny\".\"nation\""
+        "tpch.tiny.nation"
     );
 
     // Preview Rows runs the three-part name in a new tab.

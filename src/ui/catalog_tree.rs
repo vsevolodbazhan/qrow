@@ -157,48 +157,25 @@ pub(super) enum Node {
 
 impl Node {
     /// The name that Copy gives and the name for SQL, for a node with a name.
+    /// SQL names have quotes only around the parts that need them, as in
+    /// name completion.
     fn names(&self, kind: crate::model::DatabaseType, catalog: &str) -> Option<(String, String)> {
+        let sql = |part: &str| crate::completion::sql_name(part, kind);
         match self {
-            Node::Schema { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
+            Node::Schema { name, .. } => Some((name.clone(), sql(name))),
             Node::Relation { schema, name, .. } => {
-                let qualified = qualified_relation(kind, catalog, schema, name, |part| {
-                    kind.quote_identifier(part)
-                });
+                let qualified = format!("{}.{}", sql(schema), sql(name));
+                // Trino names also start with the catalog.
+                let qualified = if kind == crate::model::DatabaseType::Trino {
+                    format!("{}.{}", sql(catalog), qualified)
+                } else {
+                    qualified
+                };
                 Some((qualified.clone(), qualified))
             }
-            Node::Column { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
+            Node::Column { name, .. } => Some((name.clone(), sql(name))),
             Node::Connection(_) | Node::Notice { .. } => None,
         }
-    }
-
-    /// The qualified name of a relation for SQL that Qrow writes, with
-    /// quotes only around the parts that need them, like completion.
-    fn sql_relation(&self, kind: crate::model::DatabaseType, catalog: &str) -> Option<String> {
-        match self {
-            Node::Relation { schema, name, .. } => {
-                Some(qualified_relation(kind, catalog, schema, name, |part| {
-                    crate::completion::sql_name(part, kind)
-                }))
-            }
-            _ => None,
-        }
-    }
-}
-
-/// The name of the relation `name` in `schema`, with each part from `part`.
-/// Trino names also start with the catalog.
-fn qualified_relation(
-    kind: crate::model::DatabaseType,
-    catalog: &str,
-    schema: &str,
-    name: &str,
-    part: impl Fn(&str) -> String,
-) -> String {
-    let qualified = format!("{}.{}", part(schema), part(name));
-    if kind == crate::model::DatabaseType::Trino {
-        format!("{}.{}", part(catalog), qualified)
-    } else {
-        qualified
     }
 }
 
@@ -1606,6 +1583,7 @@ impl Qrow {
         } else {
             "Copy name"
         };
+        let preview = preview_sql(&insert, self.settings.sql_style().keyword_case);
         let refresh = scope.map(|scope| {
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.refresh_catalog(profile, scope.clone(), cx)
@@ -1638,20 +1616,10 @@ impl Qrow {
                 name: relation,
                 ..
             } => {
-                let sql = self
-                    .profiles
-                    .iter()
-                    .find(|candidate| candidate.id == *profile)
-                    .and_then(|candidate| {
-                        node.sql_relation(candidate.database_type, &candidate.database)
-                    })
-                    .map(|name| preview_sql(&name, self.settings.sql_style().keyword_case));
                 let (profile, title) = (*profile, relation.clone());
-                sql.map(|sql| {
-                    cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.preview_rows(profile, &title, sql.clone(), window, cx)
-                    })
-                })
+                Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.preview_rows(profile, &title, preview.clone(), window, cx)
+                }))
             }
             _ => None,
         };
@@ -3205,7 +3173,7 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
-    fn a_preview_quotes_only_the_parts_that_need_it() {
+    fn sql_names_quote_only_the_parts_that_need_it() {
         use crate::model::DatabaseType;
         let relation = |schema: &str, name: &str| Node::Relation {
             profile: Uuid::nil(),
@@ -3218,7 +3186,7 @@ mod tests {
             error_id: None,
             dbt: None,
         };
-        let name = |node: &Node, kind| node.sql_relation(kind, "delta").unwrap();
+        let name = |node: &Node, kind| node.names(kind, "delta").unwrap().1;
         assert_eq!(
             name(&relation("avia", "bookings"), DatabaseType::Kyuubi),
             "avia.bookings"
@@ -3247,13 +3215,20 @@ mod tests {
             name(&relation("Avia", "bookings"), DatabaseType::Postgres),
             "\"Avia\".bookings"
         );
-        // Copy and Insert keep quotes around each part.
+        // Copy name gives a schema or a column name as it is.
+        let column = Node::Column {
+            profile: Uuid::nil(),
+            schema: "avia".into(),
+            relation: "bookings".into(),
+            name: "Order".into(),
+            data_type: "bigint".into(),
+            comment: None,
+            description: None,
+            description_cut: false,
+        };
         assert_eq!(
-            relation("avia", "bookings")
-                .names(DatabaseType::Kyuubi, "delta")
-                .unwrap()
-                .1,
-            "`avia`.`bookings`"
+            column.names(DatabaseType::Kyuubi, "delta").unwrap(),
+            ("Order".to_owned(), "`Order`".to_owned())
         );
     }
 
