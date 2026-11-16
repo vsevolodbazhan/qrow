@@ -146,12 +146,15 @@ impl<'a, W: Write> Stream<'a, W> {
                 };
                 let result = write_value(out, kind, text, options, pretty, cancel);
                 result.map_err(|error| {
+                    // Name the result cell, also for a transposed line.
+                    let (name, number) = match table.line_column(row) {
+                        Some(source) => (source.name.as_str(), table.row_indices.start + column),
+                        None => (self.names[column].as_str(), row_offset + row + 1),
+                    };
                     io::Error::new(
                         error.kind(),
                         format!(
-                            "Column {}, row {}, value {:?}: {error}",
-                            self.names[column],
-                            row_offset + row + 1,
+                            "Column {name}, row {number}, value {:?}: {error}",
                             text.map(|text| text.chars().take(100).collect::<String>())
                         ),
                     )

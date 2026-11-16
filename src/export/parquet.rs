@@ -149,6 +149,12 @@ pub fn write(
     cancel: &AtomicBool,
 ) -> io::Result<usize> {
     super::validate_table(table)?;
+    if table.transposed {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Parquet needs one type for each column.",
+        ));
+    }
     let memory = super::budget::GLOBAL.allowance(WRITER_MEMORY)?;
     let schema_bytes = schema_memory(
         table

@@ -107,10 +107,8 @@ pub fn write(
     settings.validate()?;
     validate_table(table)?;
     if table.transposed && settings.format == Format::Parquet {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Parquet needs one type for each column.",
-        ));
+        // Before the budget check, which reads every value.
+        return parquet::write(out, table, &settings.parquet, cancel);
     }
     for line in table.lines() {
         check_cancelled(cancel)?;
@@ -728,12 +726,54 @@ mod tests {
     #[test]
     fn parquet_rejects_a_transposed_table() {
         let (columns, rows) = transposed_source();
+        let table = transposed(&columns, &rows, 0..=2);
         let settings = Settings {
             format: Format::Parquet,
             ..Default::default()
         };
-        let error = written(&transposed(&columns, &rows, 0..=2), &settings).unwrap_err();
+        let error = written(&table, &settings).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        // The Parquet writer itself rejects it too.
+        let error = parquet::write(
+            &mut Vec::new(),
+            &table,
+            &settings.parquet,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn a_transposed_json_error_names_the_result_cell() {
+        let columns: Vec<_> = [("id", "BIGINT"), ("age", "BIGINT")]
+            .into_iter()
+            .map(|(name, data_type)| Column {
+                name: name.into(),
+                data_type: data_type.into(),
+            })
+            .collect();
+        let rows: Rows = (0..8)
+            .map(|i| {
+                vec![
+                    Some(i.to_string()),
+                    Some(if i == 6 { "x".into() } else { i.to_string() }),
+                ]
+            })
+            .collect();
+        let table = Table {
+            columns: &columns,
+            rows: &rows,
+            row_indices: 4..8,
+            column_indices: 1..=1,
+            transposed: true,
+        };
+        let settings = Settings {
+            format: Format::Json,
+            ..Default::default()
+        };
+        let error = written(&table, &settings).unwrap_err().to_string();
+        assert!(error.starts_with("Column age, row 7, "), "{error}");
     }
 
     #[test]
