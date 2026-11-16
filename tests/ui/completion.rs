@@ -980,3 +980,97 @@ fn editor_text(app: &TestApp, cx: &mut TestAppContext) -> String {
     })
     .unwrap_or_default()
 }
+
+/// Saves the schema `avia` with `bookings` and the schema `actions` without
+/// tables, both read at `read_at`, and launches.
+fn launch_with_empty_schema(cx: &mut TestAppContext, read_at: u64) -> TestApp {
+    let profile = profile();
+    let directory = tempfile::tempdir().unwrap();
+    let mut catalog = Catalog::new(&profile);
+    catalog.apply_schemas(
+        vec!["actions".into(), "avia".into()],
+        &CatalogSettings::default(),
+        read_at,
+    );
+    let bookings = RelationEntry {
+        name: "bookings".into(),
+        kind: RelationKind::Table,
+        comment: None,
+    };
+    catalog.apply_relations("avia", None, vec![bookings], read_at);
+    catalog.apply_relations("actions", None, Vec::new(), read_at);
+    let path = storage::catalog_cache_path(directory.path(), profile.id);
+    storage::save_catalog(&path, &catalog).unwrap();
+    TestApp::launch_in(
+        cx,
+        directory,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+    )
+}
+
+#[gpui_kit::test]
+fn tab_after_an_empty_schema_says_it_has_no_tables_instead_of_an_indent(cx: &mut TestAppContext) {
+    let app = launch_with_empty_schema(cx, qrow::catalog::now());
+    app.type_sql(cx, "SELECT * FROM actions.");
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion-empty-schema");
+    assert_eq!(
+        app.update(cx, |window, _| label(window, "sql-completion-empty-schema")),
+        Some("No tables or views in actions".into())
+    );
+    // Tab did not indent, and fresh metadata has no footer.
+    assert_sql(&app, cx, "SELECT * FROM actions.");
+    assert!(app.update(cx, |window, _| {
+        window.try_find("sql-completion-footer").is_none()
+    }));
+    // The schema lines up with the rows of other lists.
+    app.update(cx, |window, _| {
+        let list = bounds_of(window, "sql-completion");
+        let icon = window
+            .within("sql-completion-empty-schema")
+            .find("icon")
+            .bounds();
+        assert_eq!(
+            icon.left() - list.left(),
+            gpui_kit::px(13.),
+            "{list:?} {icon:?}"
+        );
+    });
+    // Typing a name keeps the list open: the schema is still empty.
+    app.update(cx, |window, cx| window.input("ev", cx));
+    app.wait_for(cx, "sql-completion-empty-schema");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "sql-completion");
+}
+
+#[gpui_kit::test]
+fn a_stale_empty_schema_has_the_stale_footer(cx: &mut TestAppContext) {
+    let app = launch_with_empty_schema(cx, 1);
+    app.type_sql(cx, "SELECT * FROM actions.");
+    app.press(cx, "tab");
+    app.wait_for(cx, "sql-completion-empty-schema");
+    app.wait_until(cx, "the stale footer", WAIT, |window, _| {
+        label(window, "sql-completion-footer").as_deref() == Some("actions is stale")
+    });
+    assert_eq!(
+        app.update(cx, |window, _| label(
+            window,
+            "sql-completion-footer-action"
+        )),
+        Some("Refresh".into())
+    );
+}
+
+#[gpui_kit::test]
+fn an_empty_schema_after_from_can_be_inserted(cx: &mut TestAppContext) {
+    let app = launch_with_empty_schema(cx, qrow::catalog::now());
+    complete(&app, cx, "SELECT * FROM ");
+    assert_eq!(items(&app, cx), ["actions", "avia", "bookings"]);
+    app.press(cx, "enter");
+    assert_sql(&app, cx, "SELECT * FROM actions");
+}

@@ -110,6 +110,8 @@ enum Body {
     /// The connection does not read metadata.
     Off,
     NoSuggestions,
+    /// The list after `schema.` for a schema without tables or views.
+    EmptySchema(String),
 }
 
 /// A part of a message: plain text or a name in code font.
@@ -268,7 +270,10 @@ impl Qrow {
             crate::catalog::now(),
             profile.database_type,
         );
-        if trigger == Trigger::Edit && completion.items.is_empty() && completion.missing.is_empty()
+        if trigger == Trigger::Edit
+            && completion.items.is_empty()
+            && completion.missing.is_empty()
+            && completion.empty_schema.is_none()
         {
             cx.notify();
             return;
@@ -498,6 +503,7 @@ impl Qrow {
         // connection that Qrow never read.
         let useful = self.active_completion().is_some_and(|popup| {
             !popup.completion.items.is_empty()
+                || popup.completion.empty_schema.is_some()
                 || !popup.loaded
                 || !popup.read
                 || (popup.read && !popup.completion.missing.is_empty())
@@ -795,6 +801,9 @@ impl Qrow {
         if !popup.completion.items.is_empty() {
             return Body::Items;
         }
+        if let Some(schema) = &popup.completion.empty_schema {
+            return Body::EmptySchema(schema.clone());
+        }
         let waits = self.completion_waits(popup.profile);
         if !popup.loaded
             || (!popup.read && waits)
@@ -885,6 +894,9 @@ impl Qrow {
             ),
             // Shown as a toast instead; see `completion_toast`.
             Body::Failed { .. } | Body::NotRead | Body::Off => shell,
+            Body::EmptySchema(schema) => shell
+                .child(self.empty_schema_line(schema, layout, window, cx))
+                .children(self.completion_footer(popup, layout, window, cx)),
             Body::NoSuggestions => shell.child(
                 div()
                     .id("sql-completion-empty")
@@ -947,6 +959,48 @@ impl Qrow {
     }
 
     /// A name in the code font, on a muted background.
+    /// The list after `schema.` for a schema without tables or views: one
+    /// line with the schema icon, aligned like a row, and the schema name.
+    fn empty_schema_line(
+        &self,
+        schema: String,
+        layout: &Layout,
+        window: &mut Window,
+        cx: &App,
+    ) -> AnyElement {
+        let message = vec![
+            Text::Plain("No tables or views in ".into()),
+            Text::Code(schema),
+        ];
+        // The border and the padding of the popup and of the row, the
+        // icon, and its gap.
+        let room = layout.width - px(2.) - self.ui_px(8. + 16. + 14. + GAP);
+        h_flex()
+            .id("sql-completion-empty-schema")
+            .test_support()
+            .role(Role::Status)
+            .aria_label(plain(&message))
+            .h(self.ui_px(ROW_HEIGHT))
+            .px(self.ui_px(8.))
+            .gap(self.ui_px(GAP))
+            .text_color(cx.theme().muted_foreground)
+            .child(
+                div().id("icon").test_support().flex_none().child(
+                    Icon::new(IconName::Database)
+                        .size(self.ui_px(14.))
+                        .text_color(cx.theme().muted_foreground),
+                ),
+            )
+            .child(self.text_line(
+                "sql-completion-empty-schema-text",
+                message,
+                room,
+                window,
+                cx,
+            ))
+            .into_any_element()
+    }
+
     /// A name in the code font. It has no padding, so a line that starts
     /// with a name aligns with the names of the rows.
     fn code_name(&self, text: String, cx: &App) -> Div {
@@ -1450,7 +1504,7 @@ fn completion_row(
             div().id("icon").test_support().flex_none().child(
                 Icon::new(icon)
                     .size(ui(14.))
-                    .text_color(theme.muted_foreground),
+                    .text_color(empty_icon_color(item.empty, cx)),
             ),
         )
         .child(
@@ -1463,6 +1517,9 @@ fn completion_row(
                 .whitespace_nowrap()
                 .text_ellipsis()
                 .font_family(names_font.clone())
+                // An empty schema is dimmed, so it stands out from the
+                // schemas with tables.
+                .when(item.empty, |name| name.text_color(theme.muted_foreground))
                 .child(StyledText::new(shown).with_highlights(highlights)),
         )
         .when(label != RowLabel::Hidden, |row| {
@@ -1516,6 +1573,12 @@ fn shown_name(item: &Item) -> String {
         Some(qualifier) => format!("{qualifier}.{}", item.name),
         None => item.name.clone(),
     }
+}
+
+/// The icon of a row: dimmed more for an empty schema.
+fn empty_icon_color(empty: bool, cx: &App) -> Hsla {
+    let muted = cx.theme().muted_foreground;
+    if empty { muted.opacity(0.6) } else { muted }
 }
 
 fn failed_need(completion: &Completion, need: &Need) -> bool {
@@ -1658,6 +1721,7 @@ mod tests {
             detail: "string".into(),
             relation: Some(("billing".into(), "accounts".into())),
             comment: Some(comment.into()),
+            empty: false,
         };
         let long = format!(
             "The account that pays, from `billing.accounts`. {}\n\nOne row for each account.",

@@ -106,6 +106,14 @@ impl<'a> Builder<'a> {
 
     fn schema_item(&mut self, name: &str) {
         let order = self.candidates.len();
+        let node = self.schema(name).map(|(_, node)| node);
+        let empty = node
+            .and_then(|node| node.relations.as_ref())
+            .is_some_and(|relations| relations.is_empty());
+        // "Empty" can be old: a stale empty schema gets the stale footer.
+        if empty && let Some(node) = node {
+            self.mark_stale(name, node.fetched_at);
+        }
         self.push(
             0,
             order,
@@ -116,9 +124,10 @@ impl<'a> Builder<'a> {
                 insert: sql_name(name, self.database_type),
                 matches: Vec::new(),
                 source: None,
-                detail: "schema".into(),
+                detail: if empty { "empty schema" } else { "schema" }.into(),
                 relation: None,
                 comment: None,
+                empty,
             },
         );
     }
@@ -152,6 +161,7 @@ impl<'a> Builder<'a> {
                     detail: detail.into(),
                     relation: Some((schema_name.clone(), name.clone())),
                     comment: relation.comment.clone(),
+                    empty: false,
                 },
             );
         }
@@ -182,7 +192,14 @@ impl<'a> Builder<'a> {
                 return;
             }
         }
-        if self.schema(last).is_some() {
+        if let Some((schema_name, node)) = self.schema(last) {
+            if node
+                .relations
+                .as_ref()
+                .is_some_and(|relations| relations.is_empty())
+            {
+                self.completion.empty_schema = Some(schema_name.clone());
+            }
             self.relations(last);
         } else if !relation_place
             && parts.len() == 1
@@ -281,6 +298,7 @@ impl<'a> Builder<'a> {
                     detail: column.data_type.to_lowercase(),
                     relation: Some((schema_name.clone(), name.clone())),
                     comment: column.comment.clone(),
+                    empty: false,
                 },
             );
         }
@@ -296,12 +314,16 @@ impl<'a> Builder<'a> {
             .take(MAX_ITEMS)
             .map(|(_, item)| item)
             .collect();
-        // A stale schema matters only when the list shows names from it.
+        // A stale schema matters only when the list shows names from it,
+        // or shows that it is empty.
         let items = &self.completion.items;
+        let empty_schema = self.completion.empty_schema.as_deref();
         self.completion.stale.retain(|schema| {
-            items
-                .iter()
-                .any(|item| item.relation.as_ref().is_some_and(|(of, _)| of == schema))
+            empty_schema == Some(schema.as_str())
+                || items.iter().any(|item| {
+                    item.relation.as_ref().is_some_and(|(of, _)| of == schema)
+                        || (item.empty && item.name == *schema)
+                })
         });
         self.completion
     }

@@ -548,6 +548,8 @@ pub struct Item {
     /// The schema and the relation of a relation or a column.
     pub relation: Option<(String, String)>,
     pub comment: Option<String>,
+    /// A schema that Qrow read and that has no tables or views.
+    pub empty: bool,
 }
 
 /// Metadata that a request needs.
@@ -569,6 +571,9 @@ pub struct Completion {
     /// The schemas of the suggestions whose metadata is older than the
     /// refresh period.
     pub stale: Vec<String>,
+    /// The schema after `schema.` when Qrow read it and it has no tables or
+    /// views. The list shows the schema in place of names.
+    pub empty_schema: Option<String>,
 }
 
 /// The suggestions for `request` from `catalog`. `default_schema` is the
@@ -600,8 +605,12 @@ pub fn complete(
     };
     match &request.place {
         Place::Relation => {
-            for name in catalog.schemas.keys() {
-                builder.push(0, 0, Candidate::Schema(name));
+            for (name, node) in &catalog.schemas {
+                let empty = node
+                    .relations
+                    .as_ref()
+                    .is_some_and(|relations| relations.is_empty());
+                builder.push(0, 0, Candidate::Schema(name, empty));
             }
             builder.relations(default_schema);
         }
@@ -632,7 +641,8 @@ type Rank = (u8, u8, usize, usize);
 /// A name that can become a suggestion, with the metadata that the
 /// suggestion needs. The builder makes [`Item`]s only for the best matches.
 enum Candidate<'a> {
-    Schema(&'a str),
+    /// A schema, and whether Qrow read it without tables or views.
+    Schema(&'a str, bool),
     Relation {
         schema: &'a str,
         name: &'a str,
@@ -650,7 +660,7 @@ impl Candidate<'_> {
     /// The name that the prefix matches.
     fn name(&self) -> &str {
         match self {
-            Self::Schema(name) | Self::Relation { name, .. } => name,
+            Self::Schema(name, _) | Self::Relation { name, .. } => name,
             Self::Column { column, .. } => &column.name,
         }
     }
@@ -661,16 +671,17 @@ impl Candidate<'_> {
             .map(|(_, matches)| matches)
             .unwrap_or_default();
         match *self {
-            Self::Schema(name) => Item {
+            Self::Schema(name, empty) => Item {
                 kind: ItemKind::Schema,
                 name: name.to_owned(),
                 qualifier: None,
                 insert: sql_name(name, database_type),
                 matches,
                 source: None,
-                detail: "schema".into(),
+                detail: if empty { "empty schema" } else { "schema" }.into(),
                 relation: None,
                 comment: None,
+                empty,
             },
             Self::Relation {
                 schema,
@@ -691,6 +702,7 @@ impl Candidate<'_> {
                     detail: detail.into(),
                     relation: Some((schema.to_owned(), name.to_owned())),
                     comment: relation.comment.clone(),
+                    empty: false,
                 }
             }
             Self::Column {
@@ -725,6 +737,7 @@ impl Candidate<'_> {
                     detail: column.data_type.to_lowercase(),
                     relation: Some((schema.to_owned(), relation.to_owned())),
                     comment: column.comment.clone(),
+                    empty: false,
                 }
             }
         }
@@ -873,7 +886,14 @@ impl<'a> Builder<'a> {
                 return;
             }
         }
-        if self.schema(last).is_some() {
+        if let Some((schema_name, node)) = self.schema(last) {
+            if node
+                .relations
+                .as_ref()
+                .is_some_and(|relations| relations.is_empty())
+            {
+                self.completion.empty_schema = Some(schema_name.clone());
+            }
             self.relations(last);
         } else if !relation_place
             && parts.len() == 1
@@ -971,6 +991,32 @@ impl<'a> Builder<'a> {
     fn finish(mut self) -> Completion {
         self.candidates.sort_unstable_by_key(|(rank, _)| *rank);
         self.candidates.truncate(MAX_ITEMS);
+        // "Empty" can be old: a stale empty schema in the list gets the
+        // stale footer. Only the kept schemas are checked. They come first,
+        // in catalog order, as schemas are found before names.
+        let mut empty: Vec<(usize, &'a str)> = self
+            .candidates
+            .iter()
+            .filter_map(|(rank, candidate)| match *candidate {
+                Candidate::Schema(name, true) => Some((rank.3, name)),
+                _ => None,
+            })
+            .collect();
+        if !empty.is_empty() {
+            empty.sort_unstable();
+            let later = std::mem::take(&mut self.completion.stale);
+            let catalog = self.catalog;
+            for (_, name) in empty {
+                if let Some(node) = catalog.schemas.get(name) {
+                    self.mark_stale(name, node.fetched_at);
+                }
+            }
+            for schema in later {
+                if !self.completion.stale.contains(&schema) {
+                    self.completion.stale.push(schema);
+                }
+            }
+        }
         let prefix = &self.request.prefix;
         let database_type = self.database_type;
         self.completion.items = self
@@ -978,12 +1024,16 @@ impl<'a> Builder<'a> {
             .iter()
             .map(|(_, candidate)| candidate.item(prefix, database_type))
             .collect();
-        // A stale schema matters only when the list shows names from it.
+        // A stale schema matters only when the list shows names from it,
+        // or shows that it is empty.
         let items = &self.completion.items;
+        let empty_schema = self.completion.empty_schema.as_deref();
         self.completion.stale.retain(|schema| {
-            items
-                .iter()
-                .any(|item| item.relation.as_ref().is_some_and(|(of, _)| of == schema))
+            empty_schema == Some(schema.as_str())
+                || items.iter().any(|item| {
+                    item.relation.as_ref().is_some_and(|(of, _)| of == schema)
+                        || (item.empty && item.name == *schema)
+                })
         });
         self.completion
     }
