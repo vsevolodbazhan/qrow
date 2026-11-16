@@ -269,6 +269,14 @@ impl Results {
         if self.columns.is_empty() {
             return;
         }
+        // Both layouts number their table rows in a fixed first column.
+        self.headers.push(
+            Column::new("row", "#")
+                .width(self.px(48.))
+                .paddings(padding)
+                .fixed_left()
+                .movable(false),
+        );
         if self.transposed {
             let page = self.page();
             self.headers.push(
@@ -287,13 +295,6 @@ impl Results {
             }));
             self.laid_out = page;
         } else {
-            self.headers.push(
-                Column::new("row", "#")
-                    .width(self.px(48.))
-                    .paddings(padding)
-                    .fixed_left()
-                    .movable(false),
-            );
             self.headers
                 .extend(self.columns.iter().zip(&self.widths).enumerate().map(
                     |(i, (c, width))| {
@@ -313,10 +314,16 @@ impl Results {
         self.transposed && self.laid_out != self.page()
     }
 
+    /// The number of fixed table columns: the row numbers, and the column
+    /// names of the transposed layout.
+    fn fixed_columns(&self) -> usize {
+        if self.transposed { 2 } else { 1 }
+    }
+
     /// The result cell of a table cell, or `None` for the row numbers or
     /// the column names. `r` and `c` are table indices.
     fn data_cell(&self, r: usize, c: usize) -> Option<(usize, usize)> {
-        let c = c.checked_sub(1)?;
+        let c = c.checked_sub(self.fixed_columns())?;
         let start = self.page().start;
         Some(if self.transposed {
             (start + c, r)
@@ -328,10 +335,11 @@ impl Results {
     /// The table row and column of a result cell.
     fn table_cell(&self, (row, column): (usize, usize)) -> (usize, usize) {
         let start = self.page().start;
+        let fixed = self.fixed_columns();
         if self.transposed {
-            (column, row.saturating_sub(start) + 1)
+            (column, row.saturating_sub(start) + fixed)
         } else {
-            (row.saturating_sub(start), column + 1)
+            (row.saturating_sub(start), column + fixed)
         }
     }
 
@@ -668,7 +676,7 @@ impl Results {
             .unwrap_or_default();
         let measured = self.names.get(r).map(|(width, cut)| (*width, cut.clone()));
         div()
-            .id(("cell", 0usize))
+            .id(("cell", 1usize))
             .test_support()
             .role(Role::RowHeader)
             .aria_label(name.clone())
@@ -870,9 +878,9 @@ impl TableDelegate for Results {
                 let data = state.delegate_mut();
                 let extend = event.modifiers().shift;
                 match (c, data.transposed) {
-                    (0, _) => data.select_page(),
+                    (0, _) | (1, true) => data.select_page(),
                     // A row number selects that result row.
-                    (c, true) => data.select_rows(data.laid_out.start + c - 1, extend),
+                    (c, true) => data.select_rows(data.laid_out.start + c - 2, extend),
                     (c, false) => data.select_columns(c - 1, extend),
                 }
                 window.focus(&state.focus_handle(cx), cx);
@@ -881,7 +889,7 @@ impl TableDelegate for Results {
             // Column names start at the left, also over numbers, which align
             // on the right in the cells. The row-number header stays over its
             // numbers.
-            .when(c == 0 && !transposed, |el| el.justify_end())
+            .when(c == 0, |el| el.justify_end())
             // A column name that its column cuts shows in full in a tooltip.
             .when_some(column, |el, (_, (_, cut))| {
                 let name = self.headers[c].name.clone();
@@ -939,15 +947,22 @@ impl TableDelegate for Results {
     ) -> impl IntoElement {
         let transposed = self.transposed;
         let line_selected = self.line_selected(r);
-        if transposed && c == 0 {
+        if transposed && c == 1 {
             return self.render_name(r, line_selected, cx).into_any_element();
         }
         let cell = self.data_cell(r, c);
         let value = cell.and_then(|(row, column)| self.value(row, column));
         let null = cell.is_some() && value.is_none();
         // One shared copy of the preview serves the label and the text.
+        // A row number counts the table rows: the result rows, or the
+        // result columns of the transposed layout.
+        let number = if transposed {
+            r + 1
+        } else {
+            self.page().start + r + 1
+        };
         let display = match cell {
-            None => SharedString::from((self.page().start + r + 1).to_string()),
+            None => SharedString::from(number.to_string()),
             Some(_) => SharedString::new(cell_preview(value.unwrap_or("NULL"))),
         };
         let numeric = self.aligns_end(cell);
@@ -992,6 +1007,9 @@ impl TableDelegate for Results {
                 cx.listener(move |state, event: &MouseDownEvent, window, cx| {
                     let data = state.delegate_mut();
                     match cell {
+                        // The row number of the transposed layout selects
+                        // that result column, as its name does.
+                        None if data.transposed => data.select_columns(r, event.modifiers.shift),
                         None => {
                             let row = data.page().start + r;
                             data.select_rows(row, event.modifiers.shift)
@@ -1013,6 +1031,16 @@ impl TableDelegate for Results {
                 MouseButton::Right,
                 cx.listener(move |state, _, window, cx| {
                     let data = state.delegate_mut();
+                    if cell.is_none() && data.transposed {
+                        // A result column is not a result row.
+                        data.menu_row = None;
+                        if !data.line_selected(r) {
+                            data.select_columns(r, false);
+                        }
+                        window.focus(&state.focus_handle(cx), cx);
+                        cx.notify();
+                        return;
+                    }
                     let row = match cell {
                         Some((row, _)) => row,
                         None => data.page().start + r,
@@ -1259,7 +1287,7 @@ fn update_drag(
         let data = state.delegate_mut();
         // The pointer over the row numbers or the column names extends to
         // the first result cell of its line.
-        let Some(focus) = data.data_cell(row, column.max(1)) else {
+        let Some(focus) = data.data_cell(row, column.max(data.fixed_columns())) else {
             return;
         };
         if let Some(selection) = data.selection.as_mut()
@@ -1554,11 +1582,12 @@ pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx:
             return;
         }
         let fixed = |state: &TableState<Results>| {
-            state
-                .delegate()
-                .headers
-                .first()
-                .map_or(px(0.), |column| column.width)
+            let data = state.delegate();
+            data.headers
+                .iter()
+                .take(data.fixed_columns())
+                .map(|column| column.width)
+                .sum::<Pixels>()
         };
         // Measure the old layout before the change: the scrolled columns
         // get the width that the fixed column and the room for the vertical
@@ -1588,8 +1617,9 @@ pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx:
                     .scroll_to_item(row, ScrollStrategy::Nearest);
                 // The last frame measured the old fixed column, so compute
                 // the offset from the new widths.
+                let data = state.delegate();
                 let offset = viewport.and_then(|viewport| {
-                    column_offset(&state.delegate().headers, column, viewport)
+                    column_offset(&data.headers, data.fixed_columns(), column, viewport)
                 });
                 match offset {
                     Some(x) => state.horizontal_scroll_handle.set_offset(point(x, px(0.))),
@@ -1603,14 +1633,19 @@ pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx:
 }
 
 /// The horizontal offset, from the start, that shows the table column
-/// `column` fully in a viewport of `viewport` after the fixed first column.
+/// `column` fully in a viewport of `viewport` after the `fixed` columns.
 /// `None` before the first layout.
-fn column_offset(headers: &[Column], column: usize, viewport: Pixels) -> Option<Pixels> {
+fn column_offset(
+    headers: &[Column],
+    fixed: usize,
+    column: usize,
+    viewport: Pixels,
+) -> Option<Pixels> {
     if viewport <= px(0.) {
         return None;
     }
-    let scrolled = headers.get(1..)?;
-    let index = column.checked_sub(1)?;
+    let scrolled = headers.get(fixed..)?;
+    let index = column.checked_sub(fixed)?;
     let left: Pixels = scrolled.get(..index)?.iter().map(|c| c.width).sum();
     let right = left + scrolled.get(index)?.width;
     // A column wider than the viewport shows its start.
@@ -1752,8 +1787,9 @@ mod tests {
                 ..Results::default()
             };
             results.schema(vec![column("a", "STRING"), column("b", "BIGINT")], cx);
-            // Without rows, the layout has only the column names.
-            assert_eq!(results.headers.len(), 1);
+            // Without rows, the layout has only the row numbers and the
+            // column names.
+            assert_eq!(results.headers.len(), 2);
             results.rows = (0..1250)
                 .map(|i| vec![Some(format!("a{i}")), Some(i.to_string())])
                 .collect();
@@ -1762,13 +1798,15 @@ mod tests {
             results.layout();
             assert!(!results.layout_stale());
             // A table column for each row of the page, named by its number.
-            assert_eq!(results.headers.len(), 251);
-            assert_eq!(results.headers[1].name.to_string(), "1001");
+            assert_eq!(results.headers.len(), 252);
+            assert_eq!(results.headers[0].name.to_string(), "#");
+            assert_eq!(results.headers[2].name.to_string(), "1001");
 
-            // Table row 1 shows result column b; table column 2 shows row 1001.
-            assert_eq!(results.data_cell(1, 2), Some((1001, 1)));
-            assert_eq!(results.table_cell((1001, 1)), (1, 2));
+            // Table row 1 shows result column b; table column 3 shows row 1001.
+            assert_eq!(results.data_cell(1, 3), Some((1001, 1)));
+            assert_eq!(results.table_cell((1001, 1)), (1, 3));
             assert_eq!(results.data_cell(1, 0), None);
+            assert_eq!(results.data_cell(1, 1), None);
             // All values start at the left, also the numbers of column b.
             assert!(!results.aligns_end(Some((1001, 1))));
 

@@ -1101,13 +1101,15 @@ fn transposing_shows_columns_as_rows_and_keeps_the_selection(cx: &mut TestAppCon
             label(window, "transpose-result").as_deref(),
             Some("Show standard layout")
         );
-        // Each result column is a row with its name, and each result row
-        // is a column with its row number.
-        assert_eq!(header(window, 0).as_deref(), Some("Column"));
-        assert_eq!(header(window, 1).as_deref(), Some("1"));
-        assert_eq!(cell(window, 0, 0).as_deref(), Some("route"));
-        assert_eq!(cell(window, 2, 1).as_deref(), Some("3821"));
-        assert_eq!(cell(window, 0, 2).as_deref(), Some(ROUTES[1]));
+        // Each result column is a row with a number and its name, and each
+        // result row is a column with its row number.
+        assert_eq!(header(window, 0).as_deref(), Some("#"));
+        assert_eq!(header(window, 1).as_deref(), Some("Column"));
+        assert_eq!(header(window, 2).as_deref(), Some("1"));
+        assert_eq!(cell(window, 2, 0).as_deref(), Some("3"));
+        assert_eq!(cell(window, 0, 1).as_deref(), Some("route"));
+        assert_eq!(cell(window, 2, 2).as_deref(), Some("3821"));
+        assert_eq!(cell(window, 0, 3).as_deref(), Some(ROUTES[1]));
     });
 
     // The same cells stay selected, and copy writes them as shown.
@@ -1154,27 +1156,30 @@ fn transposed_headers_and_names_select_lines_and_the_menu_copies_a_row(cx: &mut 
         cx,
         "the transposed layout",
         Duration::from_secs(5),
-        |window, _| header(window, 0).as_deref() == Some("Column"),
+        |window, _| header(window, 1).as_deref() == Some("Column"),
     );
 
     // A row number header selects that result row: all 141 columns.
-    click_header(&app, cx, 3, Modifiers::default());
+    click_header(&app, cx, 4, Modifiers::default());
     let text = copy(&app, cx);
     let lines: Vec<_> = text.lines().collect();
     assert_eq!(lines.len(), 141);
     assert_eq!(lines[0], format!("route\t{}", ROUTES[2]));
 
-    // A column name selects that result column on the page.
-    click_cell(&app, cx, 2, 0, MouseButton::Left, Modifiers::default());
-    let text = copy(&app, cx);
-    assert_eq!(text.lines().count(), 1);
-    let values: Vec<_> = text.split('\t').collect();
-    assert_eq!(values.len(), 1001);
-    assert_eq!(values[0], "departures");
-    assert_eq!(values[1000], (3821 - 999).to_string());
+    // A column name, or its number, selects that result column on the page.
+    for column in [1, 0] {
+        click_cell(&app, cx, 0, 2, MouseButton::Left, Modifiers::default());
+        click_cell(&app, cx, 2, column, MouseButton::Left, Modifiers::default());
+        let text = copy(&app, cx);
+        assert_eq!(text.lines().count(), 1);
+        let values: Vec<_> = text.split('\t').collect();
+        assert_eq!(values.len(), 1001);
+        assert_eq!(values[0], "departures");
+        assert_eq!(values[1000], (3821 - 999).to_string());
+    }
 
     // Copy row names the result row of the cell, and copies it as shown.
-    let markdown = menu_copy(&app, cx, 1, 3, "Copy row 3");
+    let markdown = menu_copy(&app, cx, 1, 4, "Copy row 3");
     assert!(markdown.starts_with("| column "), "{markdown}");
     let text = cells(&markdown);
     let lines: Vec<_> = text.lines().collect();
@@ -1182,9 +1187,9 @@ fn transposed_headers_and_names_select_lines_and_the_menu_copies_a_row(cx: &mut 
     assert_eq!(lines[1], format!("carrier\t{}", CARRIERS[2]));
 
     // Plain text writes the values in the transposed order.
-    click_cell(&app, cx, 0, 1, MouseButton::Left, Modifiers::default());
-    click_cell(&app, cx, 1, 2, MouseButton::Left, shift());
-    click_cell(&app, cx, 1, 2, MouseButton::Right, Modifiers::default());
+    click_cell(&app, cx, 0, 2, MouseButton::Left, Modifiers::default());
+    click_cell(&app, cx, 1, 3, MouseButton::Left, shift());
+    click_cell(&app, cx, 1, 3, MouseButton::Right, Modifiers::default());
     app.wait_for(cx, "popup-menu");
     cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
     app.choose_in_submenu(cx, "Copy as", "Plain text");
@@ -1194,14 +1199,20 @@ fn transposed_headers_and_names_select_lines_and_the_menu_copies_a_row(cx: &mut 
     );
 }
 
-/// Asserts that the result cell in page row `row` and table column `column`
-/// shows in full between the fixed column and the vertical scrollbar.
-fn assert_cell_in_view(app: &TestApp, cx: &mut TestAppContext, row: usize, column: usize) {
+/// Asserts that the cell in table row `row` and table column `column` shows
+/// in full between the last fixed column `fixed` and the vertical scrollbar.
+fn assert_cell_in_view(
+    app: &TestApp,
+    cx: &mut TestAppContext,
+    row: usize,
+    column: usize,
+    fixed: usize,
+) {
     app.update(cx, |window, _| {
         let cell = find_in(window, ("row", row), ("cell", column))
             .expect("the focus cell is rendered")
             .bounds();
-        let fixed = find_in(window, ("row", row), ("cell", 0usize))
+        let fixed = find_in(window, ("row", row), ("cell", fixed))
             .expect("the fixed cell is rendered")
             .bounds();
         // The rows overflow, so they keep 16 points for the scrollbar.
@@ -1221,14 +1232,14 @@ fn transposing_scrolls_the_focus_cell_fully_into_view(cx: &mut TestAppContext) {
     app.press(cx, "secondary-down");
     app.click(cx, "transpose-result");
     app.settle(cx);
-    assert_cell_in_view(&app, cx, 0, 1000);
+    assert_cell_in_view(&app, cx, 0, 1001, 1);
 
     // ⌘↓ goes to the last result column. In the standard layout it is the
     // last table column again.
     app.press(cx, "secondary-down");
     app.click(cx, "transpose-result");
     app.settle(cx);
-    assert_cell_in_view(&app, cx, 999, 141);
+    assert_cell_in_view(&app, cx, 999, 141, 0);
 }
 
 #[gpui_kit::test]
@@ -1240,10 +1251,10 @@ fn returning_to_the_standard_layout_counts_the_new_scrollbar_room(cx: &mut TestA
     app.click(cx, "transpose-result");
     app.settle(cx);
     // The last result column of row 1,000: the last table row and column.
-    click_cell(&app, cx, 0, 1, MouseButton::Left, Modifiers::default());
+    click_cell(&app, cx, 0, 2, MouseButton::Left, Modifiers::default());
     app.press(cx, "secondary-down");
     app.press(cx, "end");
     app.click(cx, "transpose-result");
     app.settle(cx);
-    assert_cell_in_view(&app, cx, 999, 141);
+    assert_cell_in_view(&app, cx, 999, 141, 0);
 }

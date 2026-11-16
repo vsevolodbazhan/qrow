@@ -68,8 +68,9 @@ Click **Transpose result** in the result toolbar, press **⌥⌘T**, or select
 to go back. Some Linux desktops use Ctrl+Alt+T to open a terminal. On those
 desktops, use the button or the menu.
 
-The first column shows the name and the type of each result column. The
-other columns show the rows of the current page. Their headings are the row
+As in the standard layout, the first column numbers the rows. The next
+column shows the name and the type of each result column. The other columns
+show the rows of the current page. Their headings are the row
 numbers of the full result. All values start at the left, next to the
 column names, also numbers. The tags in the result toolbar do not change.
 
@@ -155,8 +156,8 @@ follow the screen:
 | Action | Selects |
 | --- | --- |
 | Click a row number heading | That result row: all its columns. Shift-click another heading to add the rows between. |
-| Click a column name | That result column on the current page. Shift-click another name to add the columns between. |
-| Click the **Column** heading, or press ⌘A in the table | All cells of the current page. |
+| Click a column name or its row number | That result column on the current page. Shift-click another name to add the columns between. |
+| Click the **#** or the **Column** heading, or press ⌘A in the table | All cells of the current page. |
 | Arrow keys | The next cell on the screen. Down goes to the next result column, and right goes to the next result row. |
 
 The selected cells use the selection color. The cell that the keys move has a
@@ -182,7 +183,7 @@ and each value keeps the type of its result column. Markdown aligns a column
 on the right only when all selected result columns are numeric. A Markdown
 code block has no row numbers. The menu names the result row of the cell,
 for example **Copy row 3**, and copies that row in the transposed layout.
-A right-click on a column name does not show **Copy row**.
+A right-click on a column name or its row number does not show **Copy row**.
 
 Select the copy format in **Settings → Export → Copy Format**:
 
