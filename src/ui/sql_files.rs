@@ -40,13 +40,10 @@ impl Qrow {
                 Ok(Ok(Some(paths))) => paths,
                 Ok(Ok(None)) => return,
                 error => {
-                    let _ = this.update_in(cx, |_, window, cx| {
-                        window.push_notification(
-                            toast::error(
-                                "sql-file-error-toast",
-                                "Could not open the file panel",
-                                format!("{error:?}"),
-                            ),
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.report_failure(
+                            panel_failure("Could not open the file panel", format!("{error:?}")),
+                            window,
                             cx,
                         );
                     });
@@ -102,12 +99,9 @@ impl Qrow {
                             this.tabs.push(tab);
                             this.activate(this.tabs.len() - 1, window, cx);
                         }
-                        Err(error) => window.push_notification(
-                            toast::error(
-                                "sql-file-error-toast",
-                                "Could not import SQL file",
-                                format!("{}: {error}", path.display()),
-                            ),
+                        Err(error) => this.report_failure(
+                            file_failure("Could not import SQL file", &path, &error),
+                            window,
                             cx,
                         ),
                     }
@@ -162,30 +156,25 @@ impl Qrow {
                 Ok(Ok(Some(path))) => path,
                 Ok(Ok(None)) => return,
                 error => {
-                    let _ = this.update_in(cx, |_, window, cx| {
-                        window.push_notification(
-                            toast::error(
-                                "sql-file-error-toast",
-                                "Could not open the save panel",
-                                format!("{error:?}"),
-                            ),
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.report_failure(
+                            panel_failure("Could not open the save panel", format!("{error:?}")),
+                            window,
                             cx,
-                        )
+                        );
                     });
                     return;
                 }
             };
+            let target = path.clone();
             let result = cx
-                .background_spawn(async move { save_sql(&path, &sql).map(|()| path) })
+                .background_spawn(async move { save_sql(&target, &sql) })
                 .await;
-            let _ = this.update_in(cx, |_, window, cx| match result {
-                Ok(path) => window.push_notification(saved_notification(path), cx),
-                Err(error) => window.push_notification(
-                    toast::error(
-                        "sql-file-error-toast",
-                        "Could not save SQL file",
-                        error.to_string(),
-                    ),
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => window.push_notification(saved_notification(path), cx),
+                Err(error) => this.report_failure(
+                    file_failure("Could not save SQL file", &path, &error),
+                    window,
                     cx,
                 ),
             });
@@ -193,6 +182,34 @@ impl Qrow {
         .detach();
     }
 }
+
+/// A failed read or write of the SQL file at `path`. The toast names the
+/// file; Activity has the path and the error.
+fn file_failure(title: &'static str, path: &Path, error: &std::io::Error) -> toast::Failure {
+    toast::Failure {
+        id: "sql-file-error-toast",
+        title,
+        file: Some(toast::file_name(path)),
+        log: crate::activity::APPLICATION,
+        source: FILES,
+        error: format!("{}: {error}", path.display()),
+    }
+}
+
+/// A file panel that the system did not open.
+fn panel_failure(title: &'static str, error: String) -> toast::Failure {
+    toast::Failure {
+        id: "sql-file-error-toast",
+        title,
+        file: None,
+        log: crate::activity::APPLICATION,
+        source: FILES,
+        error,
+    }
+}
+
+/// The Activity source of SQL file errors.
+const FILES: &str = "Files";
 
 fn save_sql(path: &Path, sql: &str) -> std::io::Result<()> {
     crate::export::save(path, &AtomicBool::new(false), |out| {

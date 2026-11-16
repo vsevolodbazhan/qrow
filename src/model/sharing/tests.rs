@@ -129,7 +129,8 @@ fn a_pasted_connection_is_new_and_has_the_same_settings() {
 
 #[test]
 fn shared_connection_text_rejects_other_or_invalid_content() {
-    let error = |text: &str| Profile::from_shared_text(text).unwrap_err().to_string();
+    // The whole chain: the message and its cause.
+    let error = |text: &str| format!("{:#}", Profile::from_shared_text(text).unwrap_err());
     for text in ["", "SELECT 1", r#"{"name": "Warehouse"}"#] {
         assert!(
             error(text).contains("does not contain connection settings"),
@@ -145,6 +146,13 @@ fn shared_connection_text_rejects_other_or_invalid_content() {
     json["qrow_connection"] = serde_json::json!(SHARED_CONNECTION_VERSION);
     json["port"] = serde_json::json!("ten");
     assert!(error(&json.to_string()).contains("not valid"));
+    // The message alone has no text of the JSON parser.
+    assert_eq!(
+        Profile::from_shared_text(&json.to_string())
+            .unwrap_err()
+            .to_string(),
+        "The connection settings are not valid."
+    );
     json["port"] = serde_json::json!(10009);
     json["authentication"] = serde_json::json!({"method": "oidc"});
     assert!(error(&json.to_string()).contains("sign_in"));

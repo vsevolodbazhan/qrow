@@ -114,12 +114,16 @@ impl Qrow {
         let source = match Snapshot::new(&data.columns, &data.rows) {
             Ok(source) => Arc::new(source),
             Err(error) => {
-                window.push_notification(
-                    toast::error(
-                        "export-error-toast",
-                        "Could not export results",
-                        error.to_string(),
-                    ),
+                self.report_failure(
+                    toast::Failure {
+                        id: "export-error-toast",
+                        title: "Could not export results",
+                        file: None,
+                        log: crate::activity::APPLICATION,
+                        source: "Export",
+                        error: error.to_string(),
+                    },
+                    window,
                     cx,
                 );
                 return;
@@ -1296,14 +1300,7 @@ pub(super) fn copy_format(
     let guard = match guard {
         Ok(guard) => guard,
         Err(error) => {
-            window.push_notification(
-                toast::error(
-                    "copy-error-toast",
-                    "Could not copy results",
-                    error.to_string(),
-                ),
-                cx,
-            );
+            toast::report_failure(copy_failure("Could not copy results", &error), window, cx);
             return;
         }
     };
@@ -1356,17 +1353,24 @@ pub(super) fn copy_format(
                 }
             }
             Ok(_) => {}
-            Err(error) => window.push_notification(
-                toast::error(
-                    "copy-error-toast",
-                    "Could not copy results",
-                    error.to_string(),
-                ),
-                cx,
-            ),
+            Err(error) => {
+                toast::report_failure(copy_failure("Could not copy results", &error), window, cx)
+            }
         });
     })
     .detach();
+}
+
+/// A copy to the clipboard that failed. Activity has the error.
+pub(super) fn copy_failure(title: &'static str, error: &dyn std::fmt::Display) -> toast::Failure {
+    toast::Failure {
+        id: "copy-error-toast",
+        title,
+        file: None,
+        log: crate::activity::APPLICATION,
+        source: "Clipboard",
+        error: error.to_string(),
+    }
 }
 
 fn confirm_markdown_copy(

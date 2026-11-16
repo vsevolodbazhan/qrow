@@ -425,9 +425,10 @@ fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppConte
         assert!(heading.bounds().top() >= detail.bounds().bottom());
         let reveal = window.find("reveal-export");
         assert!(reveal.visible());
-        assert!(reveal.bounds().left() >= notice.bounds().right());
-        assert!(reveal.bounds().top() < heading.bounds().bottom());
-        assert!(reveal.bounds().bottom() > detail.bounds().top());
+        // The action goes on a row below the text, aligned left with it.
+        assert!(reveal.bounds().top() >= heading.bounds().bottom());
+        assert_eq!(reveal.bounds().left(), detail.bounds().left());
+        assert!(reveal.bounds().right() <= notice.bounds().right());
     });
     // A finished background job stays reported until the user closes it.
     for _ in 0..140 {

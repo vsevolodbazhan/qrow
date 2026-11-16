@@ -9,8 +9,10 @@ concurrently.
 Select a connection, then use **File → Import SQL file…** (**⌘O**) to open
 a UTF-8 SQL file. The file opens in a new query tab under that
 connection. The tab uses the file name without its extension. Duplicate
-names get a copy suffix. Import does not run SQL. An unreadable file shows
-an error and does not add a tab.
+names get a copy suffix. Import does not run SQL. If Qrow cannot read the
+file, a notification shows the file name, and Qrow does not add a tab.
+Select **Show activity** in the notification to see the error in the
+**Qrow** log of [Activity](activity.md).
 
 Right-click a tab and select **Save as SQL file…** to save its full SQL text.
 Press **⇧⌘S** to save the active tab.
@@ -20,7 +22,8 @@ On Linux and Windows, use Ctrl in place of ⌘.
 After a save, a notification shows the file name. Use **Reveal in Finder**
 to locate the file. On Windows, the action is **Reveal in File Explorer**. On
 Linux, it is **Open Containing Folder**. The notification closes after 5 seconds. Point to it to
-keep it open.
+keep it open. If the save fails, a notification shows the file name. Select
+**Show activity** to see the error in the **Qrow** log.
 
 Tabs and files are separate copies. Workspace autosave does not change an
 imported or saved file. Use **Save as SQL file…** again to write later edits.
@@ -326,6 +329,11 @@ description of the table or column instead, when it has one. The box shows
 Markdown, and only the start of the first paragraph, up to about 140
 characters. The box also shows a name or a type that the list cuts or hides.
 
+Each row shows the kind or the type of its name at the right. When a row is
+too narrow, the list cuts the type first. If the name leaves almost no space,
+the row does not show the type. Point to a row to see a cut name or type in
+full.
+
 When the list needs data that the copy does not have, Qrow reads it, like a
 **Refresh** of that table or schema in the tree. This read can open a
 session. If the read fails and the list has no names, the list closes and
@@ -342,6 +350,10 @@ When the metadata of a schema in the list is older than the
 [Refresh Period](connections.md#refresh-metadata-automatically) of the
 connection, the list shows `schema is stale` below the names. Select
 **Refresh** to read the schema again.
+
+The status line of the list has a dot, with the same colors as the dots of
+connections: blue while Qrow reads metadata, yellow for stale metadata, and
+red for a failed read.
 
 Limitations:
 

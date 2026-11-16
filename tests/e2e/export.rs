@@ -463,8 +463,9 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
     app.update(cx, |window, _| {
         let heading = window.find("export-notification-filename");
         let actions = window.find("export-progress-actions");
-        // Cancel is the only action, so it shares the row with the text.
-        assert!(actions.bounds().left() >= heading.bounds().right());
+        // The actions go on a row below the text, aligned left with it.
+        assert!(actions.bounds().top() >= heading.bounds().bottom());
+        assert_eq!(actions.bounds().left(), heading.bounds().left());
     });
     app.click_labelled(cx, "Cancel");
     gate.resume();

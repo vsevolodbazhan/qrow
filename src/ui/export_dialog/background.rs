@@ -75,7 +75,7 @@ struct ProgressNotice {
 }
 
 impl Render for ProgressNotice {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(job) = self.job.upgrade() else {
             return div().into_any_element();
         };
@@ -135,46 +135,28 @@ impl Render for ProgressNotice {
                     });
                 }),
         );
-        let text = v_flex()
-            .flex_1()
-            .min_w_0()
+        // The actions go on a row below the text, as in other notifications.
+        toast::body(kind, SharedString::from(format!("export-job-{id}")))
+            .test_support()
+            .w_full()
             .child(toast::title_line("title", title.into()))
             .child(toast::filename_line(
                 "export-notification-filename",
                 filename,
+                window,
+                cx,
             ))
-            .child(toast::detail_line("status", message.into()));
-        let actions_id = "export-progress-actions";
-        let body = toast::body(kind, SharedString::from(format!("export-job-{id}")))
-            .test_support()
-            .w_full();
-        // One action shares the row with the text, as in other notifications.
-        // More actions go on a row below the text.
-        let body = if actions.len() == 1 {
-            body.child(
-                h_flex().w_full().gap_3().items_center().child(text).child(
-                    h_flex()
-                        .id(actions_id)
-                        .test_support()
-                        .flex_none()
-                        .mr_3p5()
-                        .children(actions),
-                ),
-            )
-        } else {
-            body.child(text).child(
+            .child(toast::detail_line("status", message.into()))
+            .child(
                 h_flex()
-                    .id(actions_id)
+                    .id("export-progress-actions")
                     .test_support()
-                    .w_full()
-                    .mt_2()
-                    .justify_end()
+                    .mt(toast::actions_gap())
                     .flex_wrap()
                     .gap_2()
                     .children(actions),
             )
-        };
-        body.into_any_element()
+            .into_any_element()
     }
 }
 
@@ -401,8 +383,10 @@ impl ExportDialog {
     }
 
     fn status_detail(&self) -> String {
-        if let Some(error) = &self.error {
-            return error.clone();
+        // The toast shows only text that Qrow writes. The export dialog,
+        // which Retry… opens, shows the error.
+        if self.error.is_some() {
+            return "Select Retry… to see the error.".into();
         }
         if !self.running {
             return "Ready to retry".into();

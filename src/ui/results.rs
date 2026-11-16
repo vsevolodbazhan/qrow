@@ -120,8 +120,9 @@ impl ClipboardCopy {
                 window,
                 cx,
             ),
-            Self::Failed(error) => window.push_notification(
-                super::toast::error("copy-error-toast", "Could not copy cells", error.clone()),
+            Self::Failed(error) => super::toast::report_failure(
+                super::export_dialog::copy_failure("Could not copy cells", error),
+                window,
                 cx,
             ),
         }

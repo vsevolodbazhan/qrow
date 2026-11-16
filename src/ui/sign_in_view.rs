@@ -1251,10 +1251,17 @@ impl Qrow {
                 self.show_sign_in_editor(sign_in, None, false, true, window, cx);
             }
             Err(error) => {
+                // The dialog keeps the cause, like the text of the JSON
+                // parser, so that the user can find the wrong field.
+                let message = if error.chain().count() > 1 {
+                    format!("{error} {}", error.root_cause())
+                } else {
+                    error.to_string()
+                };
                 error_alert(
                     "paste-sign-in-error",
                     "Cannot paste the sign-in",
-                    error.to_string(),
+                    message,
                     window,
                     cx,
                 );

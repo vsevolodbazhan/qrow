@@ -789,6 +789,11 @@ To add a connection that a colleague sent to you:
    host. Change the username to your username, and enter your password.
 4. Click **Save**.
 
+If the clipboard does not contain connection settings, a notification tells
+you what to copy. If the settings are not valid, select **Show activity** in
+the notification to see the cause in the **Qrow** log of
+[Activity](activity.md).
+
 The text contains the settings of all pages of **Connection Settings**,
 including the username, the session parameters, and the assistant notes.
 Remove secrets from the session parameters before you share a connection.

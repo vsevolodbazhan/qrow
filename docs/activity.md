@@ -3,7 +3,8 @@
 Activity shows background work in logs. Each connection has a log of its
 metadata refreshes, keep-alives, sessions, and the queries of its tabs. The
 **Qrow** log has the events of the app itself, such as
-[update checks](installation.md#updates). Use Activity to find why a refresh
+[update checks](installation.md#updates), and the errors of SQL files, of
+copies to the clipboard, and of pasted connections. Use Activity to find why a refresh
 failed, when a session closed, or why an update did not arrive.
 
 ## Open Activity
@@ -16,6 +17,8 @@ Do one of these steps:
 - Right-click a connection, then select **Show activity**.
 - Click the status dot on a connection row.
 - Click **Show activity** on a failed keep-alive line in the Logs of a tab.
+- Click **Show activity** in an error notification. Notifications do not
+  show the errors of the database or the system; Activity has them.
 
 Activity covers the main area of the window. Press **Esc** or click **Close activity**
 to go back.

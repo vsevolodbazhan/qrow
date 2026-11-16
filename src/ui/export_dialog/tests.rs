@@ -331,10 +331,9 @@ fn background_export_survives_tab_close_and_keeps_failure_until_dismissed(cx: &m
             let status = notice.find("status");
             let detail = status.label().unwrap();
             let cancel_button = notice.find(SharedString::from(format!("export-stop-{id}")));
-            // The only action shares the row with the text.
-            assert!(cancel_button.bounds().left() >= status.bounds().right());
-            assert!(cancel_button.bounds().top() < status.bounds().bottom());
-            assert!(cancel_button.bounds().bottom() > title.bounds().top());
+            // The action goes on a row below the text, aligned left with it.
+            assert!(cancel_button.bounds().top() >= status.bounds().bottom());
+            assert_eq!(cancel_button.bounds().left(), title.bounds().left());
             assert!(detail.starts_with("Writing 3 rows"));
             assert!(!detail.contains(".csv"));
             assert!(
