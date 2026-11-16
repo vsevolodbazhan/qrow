@@ -427,9 +427,13 @@ fn contains_lowercase(name: &str, needle: &str) -> bool {
 /// names, like a catalog, a schema, and a table, when its parts match parts
 /// in a row: the first part ends a name, the last part starts a name, and
 /// the parts between are full names. A part in quotes starts or ends its
-/// name at the quotes. The comparison ignores letter case.
+/// name at the quotes. A search with dots or quotes also matches one name
+/// that contains all of its text, like the table `events.v2`. The
+/// comparison ignores letter case.
 struct NameSearch {
     parts: Vec<SearchPart>,
+    /// All the text of a search with more than one part or with quotes.
+    whole: Option<SearchPart>,
 }
 
 struct SearchPart {
@@ -472,6 +476,11 @@ impl NameSearch {
             }
         }
         parts.push((text, opened, closed));
+        let whole = (parts.len() > 1 || parts[0].1).then(|| SearchPart {
+            text: fold_case(search),
+            start: false,
+            end: false,
+        });
         let last = parts.len() - 1;
         let parts = parts
             .into_iter()
@@ -482,11 +491,16 @@ impl NameSearch {
                 end: ix < last || closed,
             })
             .collect();
-        Self { parts }
+        Self { parts, whole }
     }
 
     /// Whether the search matches `path`, the names of a qualified name.
     fn matches(&self, path: &[&str]) -> bool {
+        if let Some(whole) = &self.whole
+            && path.iter().any(|name| whole.matches(name))
+        {
+            return true;
+        }
         let count = self.parts.len();
         count <= path.len()
             && (0..=path.len() - count).any(|first| {
@@ -3438,8 +3452,10 @@ mod tests {
             kind: DatabaseType::Postgres,
             catalog: "",
         };
+        // The tree lowercases the search before it reads it.
         let relation = |search: &str, dialect, schema, name| {
-            relation_matches(&NameSearch::new(search), dialect, schema, false, name)
+            let search = NameSearch::new(&search.to_lowercase());
+            relation_matches(&search, dialect, schema, false, name)
         };
         let matches = |search, schema, name| relation(search, spark, schema, name);
         assert!(matches("orders", "sales", "Orders"));
@@ -3460,6 +3476,13 @@ mod tests {
         // A final sigma and a sigma are the same letter.
         assert!(matches("σ", "ΟΣ", "orders"));
         assert!(matches("ος.orders", "ΟΣ", "orders"));
+        assert!(matches("ΟΣ.ORDERS", "οσ", "orders"));
+        // A dot can be part of one name.
+        assert!(matches("events.v2", "sales", "events.v2"));
+        assert!(matches("nts.v", "sales", "events.v2"));
+        assert!(matches("events.v2", "events.v2", "orders"));
+        assert!(matches("sales.`events.v2`", "sales", "events.v2"));
+        assert!(!matches("sales.events.v2", "sales", "events.v2"));
         // Copy qualified name puts quotes only around the parts that need
         // them, so the search finds the relation by this name too.
         assert!(matches("sales.`select`", "sales", "select"));
@@ -3494,7 +3517,7 @@ mod tests {
             catalog: "tpch",
         };
         let matches = |search: &str, dialect, schema| {
-            schema_matches(&NameSearch::new(search), dialect, schema)
+            schema_matches(&NameSearch::new(&search.to_lowercase()), dialect, schema)
         };
         assert!(matches("sel", spark, "select"));
         assert!(matches("`select`", spark, "select"));
@@ -3503,6 +3526,8 @@ mod tests {
         assert!(matches("tpch.tiny", trino, "tiny"));
         assert!(matches("tpch", trino, "tiny"));
         assert!(!matches("tpch.tiny.nation", trino, "tiny"));
+        assert!(matches("raw.v2", spark, "raw.v2"));
+        assert!(matches("`RAW.V2`", spark, "raw.v2"));
     }
 
     #[::core::prelude::v1::test]

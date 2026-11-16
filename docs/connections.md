@@ -1059,11 +1059,17 @@ metadata and its copy of the schemas.
 
 Type in **Search…** above the tree to find connections, schemas, tables, and
 views. Use a name or part of a name. For a table or view, you can include the
-schema, for example `integrations.bookings`. The search also accepts names
-from **Copy qualified name** and names in quotes, for example
-`` `integrations`.`bookings` ``.
-The search ignores letter case and spaces at the start and end of the search
-text.
+schema, for example `integrations.bookings`. Before the first dot, use the end
+of a name. After the last dot, use the start of a name. For example,
+`tions.book` finds `integrations.bookings`. On Trino, you can also include the
+catalog, for example `tpch.tiny.nation`. A search for the catalog shows all
+the schemas of the connection.
+
+The search also accepts names from **Copy qualified name** and names in
+quotes, for example `` `integrations`.`bookings` ``. A name in quotes must be
+the full name. If a name has a dot, put it in quotes when you include its
+schema, for example `` sales.`events.v2` ``. The search ignores letter case
+and spaces at the start and end of the search text.
 
 During a search, the tree shows only the connections that match. If no
 connection matches, the tree shows **No matches**.
