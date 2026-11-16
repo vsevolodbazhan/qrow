@@ -1551,16 +1551,54 @@ pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx:
         data.drag = None;
         data.menu_row = None;
         let focus = data.selection.map(|selection| selection.focus);
+        let fixed = |state: &TableState<Results>| {
+            state
+                .delegate()
+                .headers
+                .first()
+                .map_or(px(0.), |column| column.width)
+        };
+        let old_fixed = fixed(state);
+        // The scrolled columns get the width that the fixed column leaves.
+        let viewport = state.horizontal_scroll_handle.bounds().size.width;
         state
             .horizontal_scroll_handle
             .set_offset(point(px(0.), px(0.)));
         refresh(state, cx);
+        let viewport = viewport + old_fixed - fixed(state);
         match focus {
-            Some(focus) => scroll_to_cell(state, focus, cx),
+            Some(focus) => {
+                let (row, column) = state.delegate().table_cell(focus);
+                state
+                    .vertical_scroll_handle
+                    .scroll_to_item(row, ScrollStrategy::Nearest);
+                // The last frame measured the old fixed column, so compute
+                // the offset from the new widths.
+                let offset = column_offset(&state.delegate().headers, column, viewport);
+                match offset {
+                    Some(x) => state.horizontal_scroll_handle.set_offset(point(x, px(0.))),
+                    None => state.scroll_to_col(column, cx),
+                }
+            }
             None => state.scroll_to_row(0, cx),
         }
         cx.notify();
     });
+}
+
+/// The horizontal offset, from the start, that shows the table column
+/// `column` fully in a viewport of `viewport` after the fixed first column.
+/// `None` before the first layout.
+fn column_offset(headers: &[Column], column: usize, viewport: Pixels) -> Option<Pixels> {
+    if viewport <= px(0.) {
+        return None;
+    }
+    let scrolled = headers.get(1..)?;
+    let index = column.checked_sub(1)?;
+    let left: Pixels = scrolled.get(..index)?.iter().map(|c| c.width).sum();
+    let right = left + scrolled.get(index)?.width;
+    // A column wider than the viewport shows its start.
+    Some(-(right - viewport).max(px(0.)).min(left))
 }
 
 #[cfg(test)]

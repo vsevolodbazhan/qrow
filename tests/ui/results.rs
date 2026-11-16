@@ -1193,3 +1193,26 @@ fn transposed_headers_and_names_select_lines_and_the_menu_copies_a_row(cx: &mut 
         format!("{}\t{}\nNULL\t{}", ROUTES[0], ROUTES[1], CARRIERS[1])
     );
 }
+
+#[gpui_kit::test]
+fn transposing_scrolls_the_focus_cell_fully_into_view(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
+    // ⌘↓ goes to row 1,000, which becomes the last table column.
+    app.press(cx, "secondary-down");
+    app.click(cx, "transpose-result");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        let cell = find_in(window, ("row", 0usize), ("cell", 1000usize))
+            .expect("the focus cell is rendered")
+            .bounds();
+        let names = find_in(window, ("row", 0usize), ("cell", 0usize))
+            .expect("the column name is rendered")
+            .bounds();
+        let toolbar = bounds_of(window, "query-footer");
+        assert!(
+            cell.left() >= names.right() && cell.right() <= toolbar.right(),
+            "cell {cell:?}, names {names:?}, toolbar {toolbar:?}"
+        );
+    });
+}
