@@ -1542,15 +1542,9 @@ pub fn rows_changed(state: &mut TableState<Results>, cx: &mut Context<TableState
 /// keeps its cells and stays in view.
 pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx: &mut App) {
     table.update(cx, |state, cx| {
-        let data = state.delegate_mut();
-        if data.transposed == transposed {
+        if state.delegate().transposed == transposed {
             return;
         }
-        data.transposed = transposed;
-        // The drag task releases the pointer on its next turn.
-        data.drag = None;
-        data.menu_row = None;
-        let focus = data.selection.map(|selection| selection.focus);
         let fixed = |state: &TableState<Results>| {
             state
                 .delegate()
@@ -1558,13 +1552,19 @@ pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx:
                 .first()
                 .map_or(px(0.), |column| column.width)
         };
+        // Measure the old layout before the change: the scrolled columns
+        // get the width that the fixed column and the room for the vertical
+        // scrollbar leave. `None` before the first layout.
         let old_fixed = fixed(state);
         let old_room = state.vertical_scrollbar_room(cx);
-        // The scrolled columns get the width that the fixed column and the
-        // room for the vertical scrollbar leave. `None` before the first
-        // layout.
         let viewport = Some(state.horizontal_scroll_handle.bounds().size.width)
             .filter(|width| *width > px(0.));
+        let data = state.delegate_mut();
+        data.transposed = transposed;
+        // The drag task releases the pointer on its next turn.
+        data.drag = None;
+        data.menu_row = None;
+        let focus = data.selection.map(|selection| selection.focus);
         state
             .horizontal_scroll_handle
             .set_offset(point(px(0.), px(0.)));

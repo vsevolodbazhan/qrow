@@ -1230,3 +1230,20 @@ fn transposing_scrolls_the_focus_cell_fully_into_view(cx: &mut TestAppContext) {
     app.settle(cx);
     assert_cell_in_view(&app, cx, 999, 141);
 }
+
+#[gpui_kit::test]
+fn returning_to_the_standard_layout_counts_the_new_scrollbar_room(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    // In this window all 141 transposed rows fit, but 1,000 rows overflow.
+    cx.simulate_window_resize(app.window, gpui_kit::size(px(1280.), px(8000.)));
+    app.settle(cx);
+    app.click(cx, "transpose-result");
+    app.settle(cx);
+    // The last result column of row 1,000: the last table row and column.
+    click_cell(&app, cx, 0, 1, MouseButton::Left, Modifiers::default());
+    app.press(cx, "secondary-down");
+    app.press(cx, "end");
+    app.click(cx, "transpose-result");
+    app.settle(cx);
+    assert_cell_in_view(&app, cx, 999, 141);
+}
