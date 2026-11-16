@@ -510,13 +510,29 @@ fn wide_catalog(cx: &mut TestAppContext) -> TestApp {
 #[gpui_kit::test]
 #[ignore = "a performance probe: ./qtest run perf-ui"]
 fn catalog_search_100k(cx: &mut TestAppContext) {
-    // Each sample types one character and draws the frame, then lets the
-    // pending search work finish and draws the result. The first part is
-    // the input latency; the sum is all the work of one keystroke.
+    search_keystrokes(cx, &["t", "a", "b", "l", "e"], "search");
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn catalog_qualified_search_miss_100k(cx: &mut TestAppContext) {
+    // A qualified name that matches no relation reads every relation name.
+    search_keystrokes(
+        cx,
+        &["m", "i", "s", "s", ".", "`", "t", "a", "b", "l", "e"],
+        "qualified_miss",
+    );
+}
+
+/// Types `search` into the search of the wide catalog, then measures more
+/// keystrokes. Each sample types one character and draws the frame, then
+/// lets the pending search work finish and draws the result. The first part
+/// is the input latency; the sum is all the work of one keystroke.
+fn search_keystrokes(cx: &mut TestAppContext, search: &[&str], metric: &str) {
     let app = wide_catalog(cx);
     app.click_labelled(cx, "Search connections and relations");
     app.update(cx, |window, cx| {
-        for key in ["t", "a", "b", "l", "e"] {
+        for key in search {
             window.press(key, cx);
         }
         window.render_frame(cx);
@@ -540,12 +556,17 @@ fn catalog_search_100k(cx: &mut TestAppContext) {
         }
     }
     report(
-        "ui.catalog.search_keystroke_100k",
+        &format!("ui.catalog.{metric}_keystroke_100k"),
         median_ms(&keystroke),
         "ms",
         50.,
     );
-    report("ui.catalog.search_apply_100k", median_ms(&total), "ms", 50.);
+    report(
+        &format!("ui.catalog.{metric}_apply_100k"),
+        median_ms(&total),
+        "ms",
+        50.,
+    );
 }
 
 /// Types one character into the focused field and draws the next frame like

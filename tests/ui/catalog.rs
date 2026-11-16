@@ -835,6 +835,8 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
                 "finance",
                 Some(&[table("bookings_other", RelationKind::Table)]),
             ),
+            // Its relations are not loaded.
+            ("archive", None),
         ],
     );
     cache(
@@ -888,6 +890,14 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
     app.update(cx, |window, _| {
         assert!(labelled(window, "integrations").is_none());
         assert!(labelled(window, "bookings").is_none());
+    });
+
+    // A schema name in quotes finds the schema, also before its relations
+    // load.
+    app.fill_labelled(cx, SEARCH, "`archive`");
+    wait_shows(&app, cx, "archive");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "integrations").is_none());
     });
     assert_eq!(app.credentials.reads(), 0);
 }
