@@ -926,10 +926,18 @@ impl<'a> Builder<'a> {
                 continue;
             };
             // A subquery can name the same relation with the same
-            // qualifier. Its columns show once.
+            // qualifier. Its columns show once. Postgres names are already
+            // folded, and keep the case of their quotes.
             let key = (schema_name, name, source.qualifier());
+            let postgres = self.database_type == DatabaseType::Postgres;
             if seen.iter().any(|known| {
-                known.0 == key.0 && known.1 == key.1 && known.2.eq_ignore_ascii_case(key.2)
+                known.0 == key.0
+                    && known.1 == key.1
+                    && if postgres {
+                        known.2 == key.2
+                    } else {
+                        known.2.eq_ignore_ascii_case(key.2)
+                    }
             }) {
                 continue;
             }

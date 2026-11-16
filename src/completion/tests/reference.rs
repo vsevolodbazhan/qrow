@@ -219,10 +219,15 @@ impl<'a> Builder<'a> {
             let Some((schema_name, name, relation)) = self.relation(schema, &source.name) else {
                 continue;
             };
+            let qualifier = source.qualifier();
             let key = (
                 schema_name.clone(),
                 name.clone(),
-                source.qualifier().to_ascii_lowercase(),
+                if self.database_type == DatabaseType::Postgres {
+                    qualifier.to_owned()
+                } else {
+                    qualifier.to_ascii_lowercase()
+                },
             );
             if seen.contains(&key) {
                 continue;

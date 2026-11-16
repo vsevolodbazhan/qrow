@@ -377,6 +377,21 @@ fn a_relation_that_a_subquery_names_again_shows_its_columns_once() {
         "SELECT * FROM avia.bookings a JOIN avia.bookings b ON 1=1 WHERE st|",
     );
     assert_eq!(names(&completion), ["a.status", "b.status"]);
+    // In Postgres, a quoted alias keeps its case, so `"A"` is not `a`.
+    let (_, request) = at(
+        "SELECT * FROM avia.bookings a JOIN avia.bookings \"A\" ON 1=1 WHERE st|",
+        DatabaseType::Postgres,
+    );
+    let completion = complete(
+        Some(&catalog),
+        &request,
+        "avia",
+        &CatalogSettings::default(),
+        NOW,
+        DatabaseType::Postgres,
+    );
+    assert_eq!(names(&completion), ["a.status", "A.status"]);
+    assert_eq!(completion.items[1].insert, "\"A\".status");
 }
 
 #[test]
