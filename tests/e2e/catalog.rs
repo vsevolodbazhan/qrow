@@ -424,6 +424,7 @@ fn an_inserted_reserved_table_name_runs_with_ansi_keywords(cx: &mut TestAppConte
         cx,
         &format!("CREATE VIEW {schema}.`select` AS SELECT 42 AS `from`"),
     );
+    app.run_complete(cx, &format!("CREATE VIEW {schema}.other AS SELECT 1 AS x"));
     app.run_complete(cx, "SET spark.sql.ansi.enabled=true");
     app.run_complete(cx, "SET spark.sql.ansi.enforceReservedKeywords=true");
     app.toggle_connection(cx, profile.id);
@@ -443,6 +444,19 @@ fn an_inserted_reserved_table_name_runs_with_ansi_keywords(cx: &mut TestAppConte
     });
     app.run_complete(cx, &sql);
     app.wait_cell(cx, 0, 1, "42");
+
+    // The search finds the table by the name that Copy qualified name gives.
+    app.context_menu_labelled(cx, "select");
+    app.choose(cx, "popup-menu", "Copy qualified name");
+    let name = cx.read_from_clipboard().unwrap().text().unwrap();
+    assert_eq!(name, format!("{schema}.`select`"));
+    app.fill_labelled(cx, SEARCH, &name);
+    app.wait_until(
+        cx,
+        "the copied name to match",
+        QUERY_TIMEOUT,
+        |window, _| labelled(window, "select").is_some() && labelled(window, "other").is_none(),
+    );
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }
 

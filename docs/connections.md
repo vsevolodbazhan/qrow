@@ -1060,7 +1060,8 @@ metadata and its copy of the schemas.
 Type in **Search…** above the tree to find connections, schemas, tables, and
 views. Use a name or part of a name. For a table or view, you can include the
 schema, for example `integrations.bookings`. The search also accepts names
-in quotes, for example `` `integrations`.`bookings` ``.
+from **Copy qualified name** and names in quotes, for example
+`` `integrations`.`bookings` ``.
 The search ignores letter case and spaces at the start and end of the search
 text.
 
