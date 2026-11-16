@@ -3236,6 +3236,14 @@ mod tests {
             "delta.avia.bookings"
         );
         assert_eq!(
+            name(&relation("auto", "within"), DatabaseType::Trino),
+            "delta.\"auto\".within"
+        );
+        assert_eq!(
+            name(&relation("select", "within"), DatabaseType::Kyuubi),
+            "`select`.`within`"
+        );
+        assert_eq!(
             name(&relation("Avia", "bookings"), DatabaseType::Postgres),
             "\"Avia\".bookings"
         );
