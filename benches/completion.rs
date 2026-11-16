@@ -171,6 +171,7 @@ fn main() {
                 start: 0,
                 place: Place::Relation,
                 column_start: false,
+                indents: false,
                 sources: Vec::new(),
             };
             let median = median_ms(|| {

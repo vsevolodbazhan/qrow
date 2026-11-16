@@ -149,6 +149,28 @@ fn a_column_starts_after_words_and_signs_that_an_expression_follows() {
 }
 
 #[test]
+fn tab_indents_in_the_indent_of_a_line_and_right_before_a_name() {
+    for sql in [
+        "SELECT *\nFROM a\nWHERE\n|as_of = 1",
+        "SELECT *\nFROM a\nWHERE\n  |",
+        "SELECT *\nFROM\n|",
+        "SELECT * FROM a WHERE |as_of = 1",
+        "SELECT * FROM a WHERE x = 1 AND |`Name` = 2",
+    ] {
+        assert!(at(sql, KYUUBI).1.indents, "{sql}");
+    }
+    for sql in [
+        "SELECT * FROM a WHERE |",
+        "SELECT *\nFROM a\nWHERE\n  as|",
+        "SELECT * FROM a WHERE as|_of = 1",
+        "SELECT * FROM a WHERE x = | 1",
+        "SELECT count(|) FROM t",
+    ] {
+        assert!(!at(sql, KYUUBI).1.indents, "{sql}");
+    }
+}
+
+#[test]
 fn the_request_replaces_the_whole_name_at_the_cursor() {
     let (text, request) = at("SELECT * FROM avia.fl|ights", KYUUBI);
     assert_eq!(&text[request.replace.clone()], "flights");
@@ -338,6 +360,23 @@ fn a_column_name_in_more_than_one_relation_is_qualified() {
     assert_eq!(completion.items[0].source, None);
     assert_eq!(completion.items[2].insert, "station_code");
     assert_eq!(completion.items[2].source.as_deref(), Some("f"));
+}
+
+#[test]
+fn a_relation_that_a_subquery_names_again_shows_its_columns_once() {
+    let catalog = catalog(NOW - 60);
+    let completion = suggest(
+        Some(&catalog),
+        "SELECT count(*) FROM avia.bookings WHERE | = (SELECT max(amount) FROM avia.bookings)",
+    );
+    assert_eq!(names(&completion), ["booking_id", "status", "amount"]);
+    assert!(completion.items.iter().all(|item| item.source.is_none()));
+    // Another alias of the same relation still counts as another source.
+    let completion = suggest(
+        Some(&catalog),
+        "SELECT * FROM avia.bookings a JOIN avia.bookings b ON 1=1 WHERE st|",
+    );
+    assert_eq!(names(&completion), ["a.status", "b.status"]);
 }
 
 #[test]
@@ -675,6 +714,7 @@ fn the_ranked_list_is_the_list_of_the_first_implementation() {
                 start: 0,
                 place,
                 column_start: true,
+                indents: false,
                 sources,
             };
             let default_schema = if random.chance(80) {

@@ -287,7 +287,8 @@ impl Qrow {
         // next Tab.
         // The first read of a connection waits for Refresh. Tab reads it
         // again only after a failed read.
-        for need in &completion.missing {
+        // A connection with Refresh off reads nothing. Its list only says so.
+        for need in completion.missing.iter().filter(|_| browses) {
             let failed = completion.errors.iter().any(|(failed, _)| failed == need);
             if requested.contains(need)
                 || (*need == Need::Schemas && !(trigger == Trigger::Open && failed))
@@ -500,9 +501,11 @@ impl Qrow {
         self.update_completion(Trigger::Open, cx);
         // Tab opens only a list with names, or with a read for them,
         // including the first load of the cache and the Refresh of a
-        // connection that Qrow never read.
+        // connection that Qrow never read. A connection with Refresh off
+        // shows how to turn it on.
         let useful = self.active_completion().is_some_and(|popup| {
-            !popup.completion.items.is_empty()
+            !popup.browses
+                || !popup.completion.items.is_empty()
                 || popup.completion.empty_schema.is_some()
                 || !popup.loaded
                 || !popup.read
@@ -517,7 +520,9 @@ impl Qrow {
 
     /// Whether the cursor of the active tab follows a name, a dot, `FROM `,
     /// or a word or sign that a column follows (`WHERE `, `, `), with
-    /// nothing selected, in a tab whose connection reads metadata.
+    /// nothing selected, not in the indent of its line, and not right
+    /// before a name, in a tab with a connection. A connection with
+    /// Refresh off fits too, so that Tab tells how to get suggestions.
     fn completion_fits(&mut self, cx: &App) -> bool {
         let tab = &self.tabs[self.active];
         if !tab.input.read(cx).selected_range().is_empty() {
@@ -530,18 +535,16 @@ impl Qrow {
         else {
             return false;
         };
-        if !profile.catalog.browses() {
-            return false;
-        }
         let database_type = profile.database_type;
         self.completion_request(database_type, cx)
             .is_some_and(|request| {
-                !request.prefix.is_empty()
-                    || request.column_start
-                    || matches!(
-                        request.place,
-                        completion::Place::Qualified { .. } | completion::Place::Relation
-                    )
+                !request.indents
+                    && (!request.prefix.is_empty()
+                        || request.column_start
+                        || matches!(
+                            request.place,
+                            completion::Place::Qualified { .. } | completion::Place::Relation
+                        ))
             })
     }
 

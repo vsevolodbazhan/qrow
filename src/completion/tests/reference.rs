@@ -213,11 +213,21 @@ impl<'a> Builder<'a> {
     fn statement_columns(&mut self, default_schema: &str) {
         let sources = self.request.sources.clone();
         let mut names: Vec<(Source, Vec<String>)> = Vec::new();
+        let mut seen: Vec<(String, String, String)> = Vec::new();
         for source in &sources {
             let schema = source.schema.as_deref().unwrap_or(default_schema);
-            let Some((_, _, relation)) = self.relation(schema, &source.name) else {
+            let Some((schema_name, name, relation)) = self.relation(schema, &source.name) else {
                 continue;
             };
+            let key = (
+                schema_name.clone(),
+                name.clone(),
+                source.qualifier().to_ascii_lowercase(),
+            );
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
             let columns = relation
                 .columns
                 .as_ref()

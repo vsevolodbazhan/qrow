@@ -5,7 +5,7 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{ElementId, InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
-    model::{CatalogSettings, Profile, SavedTab, Workspace},
+    model::{CatalogRefresh, CatalogSettings, Profile, SavedTab, Workspace},
     storage::{self, Credentials as _},
     ui::OpenSettings,
 };
@@ -395,6 +395,52 @@ fn a_connection_without_cached_metadata_shows_a_toast_with_refresh(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn tab_on_a_connection_with_refresh_off_tells_how_to_get_suggestions(cx: &mut TestAppContext) {
+    let mut profile = profile();
+    profile.catalog.refresh = CatalogRefresh::Disabled;
+    let directory = tempfile::tempdir().unwrap();
+    // A cache from before Refresh was turned off does not give names.
+    cache(&directory, &profile, qrow::catalog::now(), &[]);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile.clone()],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+    );
+    for sql in ["SELECT * FROM avia.bo", "SELECT * FROM "] {
+        app.type_sql(cx, sql);
+        app.press(cx, "tab");
+        app.wait_until(cx, "the toast", WAIT, |window, _| {
+            toast_title(window).as_deref() == Some("No cached metadata")
+        });
+        assert!(app.update(cx, |window, _| {
+            window.try_find("sql-completion").is_none()
+                && toast_part(window, "detail").as_deref()
+                    == Some("Turn on metadata refresh in the connection settings.")
+                && window.try_find("sql-completion-refresh").is_none()
+        }));
+        // Tab shows the toast in place of an indent.
+        app.settle(cx);
+        assert_eq!(app.saved().tabs[0].sql, sql);
+    }
+    // Where no name fits, Tab still indents.
+    app.type_sql(cx, "SELECT 1 ");
+    app.press(cx, "tab");
+    app.wait_until(cx, "the indent", WAIT, |_, _| {
+        app.saved().tabs[0].sql.len() > "SELECT 1 ".len()
+    });
+    let activity = app.activity(cx, profile.id);
+    assert!(
+        !activity.contains("Started a metadata refresh"),
+        "{activity}"
+    );
+}
+
+#[gpui_kit::test]
 fn long_names_widen_the_list_up_to_its_limit(cx: &mut TestAppContext) {
     let long = "customer_lifetime_value_by_acquisition_channel_and_region_v2";
     let (app, _) = launch(cx, fresh(), &[long, "customers"]);
@@ -775,7 +821,12 @@ fn tab_after_where_shows_the_columns_of_the_statement(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn tab_indents_where_no_name_fits(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, fresh(), &[]);
-    for sql in ["SELECT 1 ", "SELECT * FROM avia.zzz"] {
+    for sql in [
+        "SELECT 1 ",
+        "SELECT * FROM avia.zzz",
+        // The start of a line after WHERE is its indent.
+        "SELECT * FROM avia.bookings\nWHERE\n",
+    ] {
         app.type_sql(cx, sql);
         app.press(cx, "tab");
         app.wait_until(cx, "the indent", WAIT, |_, _| {
