@@ -1559,13 +1559,19 @@ pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx:
                 .map_or(px(0.), |column| column.width)
         };
         let old_fixed = fixed(state);
-        // The scrolled columns get the width that the fixed column leaves.
-        let viewport = state.horizontal_scroll_handle.bounds().size.width;
+        let old_room = state.vertical_scrollbar_room(cx);
+        // The scrolled columns get the width that the fixed column and the
+        // room for the vertical scrollbar leave. `None` before the first
+        // layout.
+        let viewport = Some(state.horizontal_scroll_handle.bounds().size.width)
+            .filter(|width| *width > px(0.));
         state
             .horizontal_scroll_handle
             .set_offset(point(px(0.), px(0.)));
         refresh(state, cx);
-        let viewport = viewport + old_fixed - fixed(state);
+        let viewport = viewport.map(|width| {
+            width + old_fixed + old_room - fixed(state) - state.vertical_scrollbar_room(cx)
+        });
         match focus {
             Some(focus) => {
                 let (row, column) = state.delegate().table_cell(focus);
@@ -1574,7 +1580,9 @@ pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx:
                     .scroll_to_item(row, ScrollStrategy::Nearest);
                 // The last frame measured the old fixed column, so compute
                 // the offset from the new widths.
-                let offset = column_offset(&state.delegate().headers, column, viewport);
+                let offset = viewport.and_then(|viewport| {
+                    column_offset(&state.delegate().headers, column, viewport)
+                });
                 match offset {
                     Some(x) => state.horizontal_scroll_handle.set_offset(point(x, px(0.))),
                     None => state.scroll_to_col(column, cx),

@@ -526,6 +526,18 @@ where
         (left.map(|ix| ix + fixed), right.map(|ix| ix + fixed))
     }
 
+    /// Qrow: the width that the rows keep for the vertical scrollbar, from
+    /// the body size of the last frame and the current rows and columns. A
+    /// caller that changes the columns uses it to compute the viewport of
+    /// the next frame.
+    pub fn vertical_scrollbar_room(&self, cx: &App) -> Pixels {
+        if self.scrollbar_room(cx).0 {
+            SCROLLBAR_GUTTER
+        } else {
+            px(0.)
+        }
+    }
+
     /// Qrow: the room that the rows keep for the scrollbars, beside and
     /// below their content, from the sizes of the last frame. The vertical
     /// one is kept only when the rows overflow the body, the bottom one only

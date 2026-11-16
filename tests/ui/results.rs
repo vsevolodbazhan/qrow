@@ -1194,6 +1194,25 @@ fn transposed_headers_and_names_select_lines_and_the_menu_copies_a_row(cx: &mut 
     );
 }
 
+/// Asserts that the result cell in page row `row` and table column `column`
+/// shows in full between the fixed column and the vertical scrollbar.
+fn assert_cell_in_view(app: &TestApp, cx: &mut TestAppContext, row: usize, column: usize) {
+    app.update(cx, |window, _| {
+        let cell = find_in(window, ("row", row), ("cell", column))
+            .expect("the focus cell is rendered")
+            .bounds();
+        let fixed = find_in(window, ("row", row), ("cell", 0usize))
+            .expect("the fixed cell is rendered")
+            .bounds();
+        // The rows overflow, so they keep 16 points for the scrollbar.
+        let end = bounds_of(window, "query-footer").right() - px(16.);
+        assert!(
+            cell.left() >= fixed.right() && cell.right() <= end,
+            "cell {cell:?}, fixed {fixed:?}, end {end:?}"
+        );
+    });
+}
+
 #[gpui_kit::test]
 fn transposing_scrolls_the_focus_cell_fully_into_view(cx: &mut TestAppContext) {
     let app = demo(cx);
@@ -1202,17 +1221,12 @@ fn transposing_scrolls_the_focus_cell_fully_into_view(cx: &mut TestAppContext) {
     app.press(cx, "secondary-down");
     app.click(cx, "transpose-result");
     app.settle(cx);
-    app.update(cx, |window, _| {
-        let cell = find_in(window, ("row", 0usize), ("cell", 1000usize))
-            .expect("the focus cell is rendered")
-            .bounds();
-        let names = find_in(window, ("row", 0usize), ("cell", 0usize))
-            .expect("the column name is rendered")
-            .bounds();
-        let toolbar = bounds_of(window, "query-footer");
-        assert!(
-            cell.left() >= names.right() && cell.right() <= toolbar.right(),
-            "cell {cell:?}, names {names:?}, toolbar {toolbar:?}"
-        );
-    });
+    assert_cell_in_view(&app, cx, 0, 1000);
+
+    // ⌘↓ goes to the last result column. In the standard layout it is the
+    // last table column again.
+    app.press(cx, "secondary-down");
+    app.click(cx, "transpose-result");
+    app.settle(cx);
+    assert_cell_in_view(&app, cx, 999, 141);
 }

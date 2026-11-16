@@ -88,6 +88,9 @@ Qrow changes these files:
   with room for it. Before, the scrollbars covered the text of the bottom
   row and of the rightmost column, and later a padded body left an empty
   band beside and below the rows.
+  `TableState::vertical_scrollbar_room` (new) returns the width of that
+  room for the current rows and columns, so Qrow can scroll a cell into
+  view right after a change of columns.
   When columns are hidden past an edge of the scrolled columns, the cut
   column fades into that edge, in the header and in each row, with a 28 px
   gradient in the color that the row shows there: the table, a stripe, a
