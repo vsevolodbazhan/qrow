@@ -1089,3 +1089,107 @@ fn cut_columns_fade_only_where_more_columns_are_hidden(cx: &mut TestAppContext) 
         "end: {left} start fades, {right} end fades"
     );
 }
+
+#[gpui_kit::test]
+fn transposing_shows_columns_as_rows_and_keeps_the_selection(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
+    click_cell(&app, cx, 2, 2, MouseButton::Left, shift());
+    app.click(cx, "transpose-result");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "transpose-result").as_deref(),
+            Some("Show standard layout")
+        );
+        // Each result column is a row with its name, and each result row
+        // is a column with its row number.
+        assert_eq!(header(window, 0).as_deref(), Some("Column"));
+        assert_eq!(header(window, 1).as_deref(), Some("1"));
+        assert_eq!(cell(window, 0, 0).as_deref(), Some("route"));
+        assert_eq!(cell(window, 2, 1).as_deref(), Some("3821"));
+        assert_eq!(cell(window, 0, 2).as_deref(), Some(ROUTES[1]));
+    });
+
+    // The same cells stay selected, and copy writes them as shown.
+    let markdown = copy_markdown(&app, cx);
+    let header_line = markdown.lines().next().unwrap();
+    let names: Vec<_> = header_line
+        .trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect();
+    assert_eq!(names, ["column", "2", "3"]);
+    assert_eq!(
+        cells(&markdown),
+        format!(
+            "route\t{}\t{}\ncarrier\t{}\t{}",
+            ROUTES[1], ROUTES[2], CARRIERS[1], CARRIERS[2]
+        )
+    );
+
+    // The arrow keys move on screen: down goes to the next result column,
+    // and right to the next result row.
+    app.press(cx, "down");
+    assert_eq!(copy(&app, cx), format!("departures\t{}", 3821 - 2));
+    app.press(cx, "right");
+    assert_eq!(copy(&app, cx), format!("departures\t{}", 3821 - 3));
+
+    // ⌥⌘T shows the standard layout with the same selection.
+    app.press(cx, "alt-secondary-t");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "transpose-result").as_deref(),
+            Some("Transpose result")
+        );
+        assert_eq!(header(window, 1).as_deref(), Some("route"));
+    });
+    assert_eq!(copy(&app, cx), (3821 - 3).to_string());
+}
+
+#[gpui_kit::test]
+fn transposed_headers_and_names_select_lines_and_the_menu_copies_a_row(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.press(cx, "alt-secondary-t");
+    app.wait_until(
+        cx,
+        "the transposed layout",
+        Duration::from_secs(5),
+        |window, _| header(window, 0).as_deref() == Some("Column"),
+    );
+
+    // A row number header selects that result row: all 141 columns.
+    click_header(&app, cx, 3, Modifiers::default());
+    let text = copy(&app, cx);
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(lines.len(), 141);
+    assert_eq!(lines[0], format!("route\t{}", ROUTES[2]));
+
+    // A column name selects that result column on the page.
+    click_cell(&app, cx, 2, 0, MouseButton::Left, Modifiers::default());
+    let text = copy(&app, cx);
+    assert_eq!(text.lines().count(), 1);
+    let values: Vec<_> = text.split('\t').collect();
+    assert_eq!(values.len(), 1001);
+    assert_eq!(values[0], "departures");
+    assert_eq!(values[1000], (3821 - 999).to_string());
+
+    // Copy row names the result row of the cell, and copies it as shown.
+    let markdown = menu_copy(&app, cx, 1, 3, "Copy row 3");
+    assert!(markdown.starts_with("| column "), "{markdown}");
+    let text = cells(&markdown);
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(lines.len(), 141);
+    assert_eq!(lines[1], format!("carrier\t{}", CARRIERS[2]));
+
+    // Plain text writes the values in the transposed order.
+    click_cell(&app, cx, 0, 1, MouseButton::Left, Modifiers::default());
+    click_cell(&app, cx, 1, 2, MouseButton::Left, shift());
+    click_cell(&app, cx, 1, 2, MouseButton::Right, Modifiers::default());
+    app.wait_for(cx, "popup-menu");
+    cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+    app.choose_in_submenu(cx, "Copy as", "Plain text");
+    assert_eq!(
+        wait_clipboard(&app, cx),
+        format!("{}\t{}\nNULL\t{}", ROUTES[0], ROUTES[1], CARRIERS[1])
+    );
+}

@@ -104,6 +104,10 @@ impl Qrow {
                             .item(
                                 PopupMenuItem::new("Toggle results")
                                     .action(Box::new(ToggleResults)),
+                            )
+                            .item(
+                                PopupMenuItem::new("Transpose result")
+                                    .action(Box::new(TransposeResult)),
                             );
                         let menu = if assistant_enabled {
                             menu.item(
@@ -514,6 +518,25 @@ impl Qrow {
             self.tabs[self.active].panel.content_visible();
         }
         self.changed(cx);
+    }
+
+    /// Switch the shown result between the transposed and the standard
+    /// layout, and show it.
+    pub(super) fn transpose_result(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            return;
+        }
+        let tab = &self.tabs[self.active];
+        let table = tab.shown_result().table.clone();
+        let data = table.read(cx).delegate();
+        if data.columns.is_empty() {
+            return;
+        }
+        let transposed = !data.transposed;
+        results::set_transposed(&table, transposed, cx);
+        self.restore_results(cx);
+        self.tabs[self.active].panel.user_select(Panel::Results);
+        cx.notify();
     }
 
     pub(super) fn restore_results(&mut self, cx: &mut Context<Self>) {
@@ -1185,6 +1208,9 @@ impl Qrow {
             .on_action(
                 cx.listener(|this, _: &ToggleResults, window, cx| this.toggle_results(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &TransposeResult, window, cx| {
+                this.transpose_result(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
             }))

@@ -57,6 +57,34 @@ The minimized state applies to all query tabs and is saved after restart.
 Running a query restores the panel. Minimizing the panel keeps its results
 and logs and does not stop a running query.
 
+## Transpose a result
+
+A transposed result shows each result column as a row and each result row
+as a column. Use it to read a result with few rows and many columns.
+
+Click **Transpose result** in the result toolbar, press **⌥⌘T**, or select
+**View → Transpose result**. On Windows and Linux, the shortcut is
+**Ctrl+Alt+T**. Click **Show standard layout** or press the shortcut again
+to go back. Some Linux desktops use Ctrl+Alt+T to open a terminal. On those
+desktops, use the button or the menu.
+
+The first column shows the name and the type of each result column. The
+other columns show the rows of the current page. Their headings are the row
+numbers of the full result. Numbers align on the right, as in the standard
+layout. The tags in the result toolbar do not change.
+
+Each result tab keeps its layout. A new execution in the same result tab
+keeps the layout. A new result tab starts in the standard layout. A change
+of layout keeps the selection and scrolls it into view.
+
+A change of layout resets the column widths that you changed. In the
+transposed layout, a page change and new rows on the current page also
+reset the widths.
+
+Selection and copy follow the layout on the screen. See
+[Select and copy cells](#select-and-copy-cells). Exports always use the
+standard layout.
+
 ## Browse and copy
 
 Each page contains up to 1,000 rows. **Next page** fetches another page when needed.
@@ -121,6 +149,16 @@ Select a rectangle of cells on the current page, then press ⌘C to copy it.
 | ⌘↑ or ⌘Home, ⌘↓ or ⌘End | The cell in the first or last row of the page. |
 | Page Up, Page Down | The cell one screen up or down. |
 
+In the [transposed layout](#transpose-a-result), the headings and the keys
+follow the screen:
+
+| Action | Selects |
+| --- | --- |
+| Click a row number heading | That result row: all its columns. Shift-click another heading to add the rows between. |
+| Click a column name | That result column on the current page. Shift-click another name to add the columns between. |
+| Click the **Column** heading, or press ⌘A in the table | All cells of the current page. |
+| Arrow keys | The next cell on the screen. Down goes to the next result column, and right goes to the next result row. |
+
 The selected cells use the selection color. The cell that the keys move has a
 focus outline, also when it is the only selected cell. The other cells of its
 rows get a light tint. Escape clears the selection. A click
@@ -135,6 +173,16 @@ The rectangle stays on the current page and excludes the row numbers.
 the copy format. A right-click inside the selection keeps it. A right-click
 outside selects that cell. **Copy row** copies the whole row, even when the
 selection is narrower.
+
+In the transposed layout, copy writes the selection as the screen shows it.
+The first column has the name `column` and holds the column names. The
+names of the other columns are the row numbers. **Plain text** writes the
+values in the same order. JSON writes one object for each result column,
+and each value keeps the type of its result column. Markdown aligns a column
+on the right only when all selected result columns are numeric. A Markdown
+code block has no row numbers. The menu names the result row of the cell,
+for example **Copy row 3**, and copies that row in the transposed layout.
+A right-click on a column name does not show **Copy row**.
 
 Select the copy format in **Settings → Export → Copy Format**:
 
@@ -166,6 +214,7 @@ background. Text above 10 MiB must be saved to a file.
 Click **Export results** in the Results toolbar. The button is available
 when the result has columns. Choose a format, then **Save**. The export
 includes all rows and columns. Grid selection does not limit the export.
+Exports use the standard layout, also when the result is transposed.
 Use the [copy commands](#browse-and-copy) to copy selected cells.
 
 A complete result needs no server work. For an incomplete result, the export

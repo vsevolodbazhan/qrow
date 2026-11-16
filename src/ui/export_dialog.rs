@@ -1286,6 +1286,7 @@ pub(super) fn copy_format(
     range: Option<RangeSelection>,
     options: export::Settings,
     profile: Option<(Uuid, u8)>,
+    transposed: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -1307,7 +1308,9 @@ pub(super) fn copy_format(
     let task = cx.background_executor().spawn(async move {
         let _guard = guard;
         let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
-        export::write(&mut out, &source.table(range), &options, &cancel)?;
+        let mut table = source.table(range);
+        table.transposed = transposed;
+        export::write(&mut out, &table, &options, &cancel)?;
         out.into_text()
     });
     let window = window.window_handle();

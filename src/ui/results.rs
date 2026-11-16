@@ -100,6 +100,7 @@ enum ClipboardCopy {
         range: (Range<usize>, RangeInclusive<usize>),
         options: crate::export::Settings,
         profile: Option<(uuid::Uuid, u8)>,
+        transposed: bool,
     },
     Failed(String),
 }
@@ -112,11 +113,13 @@ impl ClipboardCopy {
                 range,
                 options,
                 profile,
+                transposed,
             } => super::export_dialog::copy_format(
                 source.clone(),
                 Some(range.clone()),
                 options.clone(),
                 *profile,
+                *transposed,
                 window,
                 cx,
             ),
@@ -138,11 +141,23 @@ pub struct Results {
     export_profile: Option<(uuid::Uuid, u8)>,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
+    /// The width of each result column that shows its full header.
+    widths: Vec<Pixels>,
+    /// The width of the column names of the transposed layout.
+    names_width: Pixels,
+    /// The rows that the headers of the transposed layout show.
+    laid_out: Range<usize>,
     /// The width of each column name in the header font, and whether the
     /// last frame cut the name to fit its column.
     names: Vec<(Pixels, Rc<Cell<bool>>)>,
     /// Whether each column holds numbers, which align on the trailing edge.
     numeric: Vec<bool>,
+    /// Whether the table shows each result column as a row and each result
+    /// row as a column. The selection keeps result coordinates.
+    pub transposed: bool,
+    /// The result row of the cell that the last right-click hit, or `None`
+    /// for a column name of the transposed layout.
+    menu_row: Option<usize>,
     pub selection: Option<Selection>,
     drag: Option<Point<Pixels>>,
     drag_hitbox: Option<HitboxId>,
@@ -160,8 +175,13 @@ impl Default for Results {
             export_profile: None,
             empty_message: None,
             headers: vec![],
+            widths: vec![],
+            names_width: px(0.),
+            laid_out: 0..0,
             names: vec![],
             numeric: vec![],
+            transposed: false,
+            menu_row: None,
             selection: None,
             drag: None,
             drag_hitbox: None,
@@ -209,28 +229,19 @@ impl Results {
     pub fn schema(&mut self, columns: Vec<DataColumn>, cx: &App) {
         let scale = self.ui_scale;
         let header = HeaderMeasure::new(scale, cx);
-        // At 100% scale, the inner 4px inset keeps the original 6px text offset.
-        let padding = Edges {
-            top: self.px(3.),
-            bottom: self.px(3.),
-            left: self.px(2.),
-            right: self.px(2.),
-        };
-        self.headers = vec![
-            Column::new("row", "#")
-                .width(self.px(48.))
-                .paddings(padding)
-                .fixed_left()
-                .movable(false),
-        ];
-        self.headers
-            .extend(columns.iter().enumerate().map(|(i, c)| {
-                Column::new(i.to_string(), c.name.clone())
-                    .min_width(px(scale * MIN_COLUMN_WIDTH))
-                    .width(px(scale * MIN_COLUMN_WIDTH).max(header.width(c)))
-                    .paddings(padding)
-                    .movable(false)
-            }));
+        let least = px(scale * MIN_COLUMN_WIDTH);
+        self.widths = columns
+            .iter()
+            .map(|column| least.max(header.width(column)))
+            .collect();
+        // The column names of the transposed layout use the header layout.
+        // A long name is cut at the widest standard width.
+        self.names_width = self
+            .widths
+            .iter()
+            .copied()
+            .fold(least, Pixels::max)
+            .min(px(scale * MAX_NAMES_WIDTH));
         self.names = columns
             .iter()
             .map(|c| (header.text(&c.name, false), Rc::default()))
@@ -240,12 +251,108 @@ impl Results {
             .map(|column| is_numeric(&column.data_type))
             .collect();
         self.columns = columns;
+        self.layout();
+    }
+
+    /// Build the table columns for the layout and the current page.
+    fn layout(&mut self) {
+        // At 100% scale, the inner 4px inset keeps the original 6px text offset.
+        let padding = Edges {
+            top: self.px(3.),
+            bottom: self.px(3.),
+            left: self.px(2.),
+            right: self.px(2.),
+        };
+        let least = self.px(MIN_COLUMN_WIDTH);
+        self.headers.clear();
+        self.laid_out = 0..0;
+        if self.columns.is_empty() {
+            return;
+        }
+        if self.transposed {
+            let page = self.page();
+            self.headers.push(
+                Column::new("names", "Column")
+                    .width(self.names_width)
+                    .paddings(padding)
+                    .fixed_left()
+                    .movable(false),
+            );
+            self.headers.extend(page.clone().map(|row| {
+                Column::new(format!("row-{row}"), (row + 1).to_string())
+                    .min_width(least)
+                    .width(least)
+                    .paddings(padding)
+                    .movable(false)
+            }));
+            self.laid_out = page;
+        } else {
+            self.headers.push(
+                Column::new("row", "#")
+                    .width(self.px(48.))
+                    .paddings(padding)
+                    .fixed_left()
+                    .movable(false),
+            );
+            self.headers
+                .extend(self.columns.iter().zip(&self.widths).enumerate().map(
+                    |(i, (c, width))| {
+                        Column::new(i.to_string(), c.name.clone())
+                            .min_width(least)
+                            .width(*width)
+                            .paddings(padding)
+                            .movable(false)
+                    },
+                ));
+        }
+    }
+
+    /// Whether the table columns no longer match the rows of the page.
+    /// Only the transposed layout has a column for each row.
+    fn layout_stale(&self) -> bool {
+        self.transposed && self.laid_out != self.page()
+    }
+
+    /// The result cell of a table cell, or `None` for the row numbers or
+    /// the column names. `r` and `c` are table indices.
+    fn data_cell(&self, r: usize, c: usize) -> Option<(usize, usize)> {
+        let c = c.checked_sub(1)?;
+        let start = self.page().start;
+        Some(if self.transposed {
+            (start + c, r)
+        } else {
+            (start + r, c)
+        })
+    }
+
+    /// The table row and column of a result cell.
+    fn table_cell(&self, (row, column): (usize, usize)) -> (usize, usize) {
+        let start = self.page().start;
+        if self.transposed {
+            (column, row.saturating_sub(start) + 1)
+        } else {
+            (row.saturating_sub(start), column + 1)
+        }
+    }
+
+    /// Whether the selection has a cell in the table row `r`. The other
+    /// cells of that row get a tint.
+    fn line_selected(&self, r: usize) -> bool {
+        self.selection.is_some_and(|selection| {
+            if self.transposed {
+                selection.columns().contains(&r)
+            } else {
+                selection.rows().contains(&(self.page().start + r))
+            }
+        })
     }
     pub fn clear(&mut self) {
         // The next timer turn releases this gesture's capture after a reset.
         let drag_task = self.drag_task.take();
         *self = Self {
             ui_scale: self.ui_scale,
+            // A rerun in the same result tab keeps the layout.
+            transposed: self.transposed,
             export: self.export.clone(),
             copy_format: self.copy_format,
             export_profile: self.export_profile,
@@ -361,14 +468,25 @@ impl Results {
             let (row, column) = selection.focus;
             out.write_all(self.value(row, column).unwrap_or("NULL").as_bytes())?;
         } else {
-            for row in selection.rows() {
-                if row != *selection.rows().start() {
+            // The lines and the values of a line follow the layout.
+            let (lines, values) = if self.transposed {
+                (selection.columns(), selection.rows())
+            } else {
+                (selection.rows(), selection.columns())
+            };
+            for line in lines.clone() {
+                if line != *lines.start() {
                     out.write_all(b"\n")?;
                 }
-                for column in selection.columns() {
-                    if column != *selection.columns().start() {
+                for value in values.clone() {
+                    if value != *values.start() {
                         out.write_all(b"\t")?;
                     }
+                    let (row, column) = if self.transposed {
+                        (value, line)
+                    } else {
+                        (line, value)
+                    };
                     let value = tsv_field(self.value(row, column).unwrap_or("NULL"));
                     out.write_all(value.as_bytes())?;
                 }
@@ -444,6 +562,7 @@ impl Results {
                 ),
                 options,
                 profile: self.export_profile,
+                transposed: self.transposed,
             },
             Err(error) => ClipboardCopy::Failed(error.to_string()),
         }
@@ -517,15 +636,105 @@ impl HeaderMeasure {
 }
 
 impl Results {
-    /// Whether the table column `c` holds numbers. The row numbers count.
-    fn is_numeric_column(&self, c: usize) -> bool {
-        c == 0 || self.numeric.get(c - 1).copied().unwrap_or(false)
+    /// The name and the type of the result column in the table row `r` of
+    /// the transposed layout. A click selects that column on the page.
+    fn render_name(
+        &self,
+        r: usize,
+        line_selected: bool,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement + use<> {
+        let (name, data_type) = self
+            .columns
+            .get(r)
+            .map(|column| {
+                (
+                    SharedString::from(column.name.clone()),
+                    display_type(&column.data_type),
+                )
+            })
+            .unwrap_or_default();
+        let measured = self.names.get(r).map(|(width, cut)| (*width, cut.clone()));
+        div()
+            .id(("cell", 0usize))
+            .test_support()
+            .role(Role::RowHeader)
+            .aria_label(name.clone())
+            .size_full()
+            .px_1()
+            .rounded_sm()
+            .flex()
+            .items_center()
+            .gap_2()
+            .overflow_hidden()
+            .text_size(rems(12. / 14.))
+            .when(line_selected, |el| {
+                el.bg(cx.theme().selection.opacity(SELECTED_ROW_TINT))
+            })
+            // A name that its column cuts shows in full in a tooltip.
+            .when_some(measured.clone(), |el, (_, cut)| {
+                let name = name.clone();
+                el.managed_tooltip_when(
+                    move || cut.get(),
+                    move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(name.clone()).build(window, cx)
+                    },
+                )
+            })
+            .child(
+                div()
+                    .id(("column-name-cell", r))
+                    .test_support()
+                    .truncate()
+                    .text_color(cx.theme().foreground)
+                    .font_weight(FontWeight::MEDIUM)
+                    .when_some(measured, |el, (width, cut)| {
+                        el.on_prepaint(move |bounds, _, _| {
+                            cut.set(bounds.size.width + px(0.5) < width)
+                        })
+                    })
+                    .child(name),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(rems(10. / 14.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(data_type),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |state, event: &MouseDownEvent, window, cx| {
+                    state
+                        .delegate_mut()
+                        .select_columns(r, event.modifiers.shift);
+                    window.focus(&state.focus_handle(cx), cx);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |state, _, window, cx| {
+                    let data = state.delegate_mut();
+                    // A column name is not a result row.
+                    data.menu_row = None;
+                    if !data.line_selected(r) {
+                        data.select_columns(r, false);
+                    }
+                    window.focus(&state.focus_handle(cx), cx);
+                    cx.notify();
+                }),
+            )
     }
 }
 
 /// The least width of a result column, in points of the 100% scale, also
 /// when a drag resizes it: room for an 18-character name and a short type.
 const MIN_COLUMN_WIDTH: f32 = 190.;
+
+/// The most width of the column names of the transposed layout, in points
+/// of the 100% scale. A longer name is cut and shows in full in a tooltip.
+const MAX_NAMES_WIDTH: f32 = 320.;
 
 /// The share of the selection color in the other cells of a selected row.
 const SELECTED_ROW_TINT: f32 = 0.35;
@@ -593,7 +802,16 @@ impl TableDelegate for Results {
         self.headers.len()
     }
     fn rows_count(&self, _: &App) -> usize {
-        self.pagination.range(self.rows.len()).len()
+        if self.transposed {
+            // Without table columns for the rows, the table is empty.
+            if self.laid_out.is_empty() {
+                0
+            } else {
+                self.columns.len()
+            }
+        } else {
+            self.pagination.range(self.rows.len()).len()
+        }
     }
     fn column(&self, c: usize, _: &App) -> Column {
         self.headers[c].clone()
@@ -614,6 +832,13 @@ impl TableDelegate for Results {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        let transposed = self.transposed;
+        // The header of a result column: its name, which a narrow column
+        // can cut, and its type.
+        let column = (!transposed)
+            .then(|| c.checked_sub(1))
+            .flatten()
+            .and_then(|i| Some((i, self.names.get(i)?)));
         div()
             .id(("column-header", c))
             .test_support()
@@ -631,10 +856,12 @@ impl TableDelegate for Results {
             .aria_label(self.headers[c].name.clone())
             .on_click(cx.listener(move |state, event: &ClickEvent, window, cx| {
                 let data = state.delegate_mut();
-                if c == 0 {
-                    data.select_page();
-                } else {
-                    data.select_columns(c - 1, event.modifiers().shift);
+                let extend = event.modifiers().shift;
+                match (c, data.transposed) {
+                    (0, _) => data.select_page(),
+                    // A row number selects that result row.
+                    (c, true) => data.select_rows(data.laid_out.start + c - 1, extend),
+                    (c, false) => data.select_columns(c - 1, extend),
                 }
                 window.focus(&state.focus_handle(cx), cx);
                 cx.notify();
@@ -642,9 +869,9 @@ impl TableDelegate for Results {
             // Column names start at the left, also over numbers, which align
             // on the right in the cells. The row-number header stays over its
             // numbers.
-            .when(c == 0, |el| el.justify_end())
+            .when(c == 0 && !transposed, |el| el.justify_end())
             // A column name that its column cuts shows in full in a tooltip.
-            .when_some(self.names.get(c.wrapping_sub(1)), |el, (_, cut)| {
+            .when_some(column, |el, (_, (_, cut))| {
                 let name = self.headers[c].name.clone();
                 let cut = cut.clone();
                 el.managed_tooltip_when(
@@ -661,7 +888,8 @@ impl TableDelegate for Results {
                     .truncate()
                     .text_color(cx.theme().foreground)
                     .font_weight(FontWeight::MEDIUM)
-                    .when_some(self.names.get(c.wrapping_sub(1)), |el, (width, cut)| {
+                    .when(transposed, |el| el.font_features(tabular_numbers()))
+                    .when_some(column, |el, (_, (width, cut))| {
                         let (width, cut) = (*width, cut.clone());
                         el.on_prepaint(move |bounds, _, _| {
                             cut.set(bounds.size.width + px(0.5) < width)
@@ -669,22 +897,22 @@ impl TableDelegate for Results {
                     })
                     .child(self.headers[c].name.clone()),
             )
-            .when(c > 0, |el| {
+            .when_some(column, |el, (i, _)| {
                 el.child(
                     div()
                         .flex_shrink_0()
                         .text_size(rems(10. / 14.))
                         .text_color(cx.theme().muted_foreground)
-                        .child(display_type(&self.columns[c - 1].data_type)),
+                        .child(display_type(&self.columns[i].data_type)),
                 )
             })
     }
     fn cell_background(&self, r: usize, c: usize, cx: &App) -> Option<Hsla> {
-        let r = self.pagination.range(self.rows.len()).start + r;
-        let selection = self.selection.filter(|_| c > 0)?;
-        if selection.contains(r, c - 1) {
+        let cell = self.data_cell(r, c)?;
+        let selection = self.selection?;
+        if selection.contains(cell.0, cell.1) {
             Some(cx.theme().selection)
-        } else if selection.rows().contains(&r) {
+        } else if self.line_selected(r) {
             Some(cx.theme().selection.opacity(SELECTED_ROW_TINT))
         } else {
             None
@@ -697,26 +925,33 @@ impl TableDelegate for Results {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let r = self.pagination.range(self.rows.len()).start + r;
-        let value = if c == 0 {
-            None
-        } else {
-            self.rows[r].get(c - 1).and_then(|value| value.as_deref())
-        };
-        let null = c > 0 && value.is_none();
+        let transposed = self.transposed;
+        let line_selected = self.line_selected(r);
+        if transposed && c == 0 {
+            return self.render_name(r, line_selected, cx).into_any_element();
+        }
+        let cell = self.data_cell(r, c);
+        let value = cell.and_then(|(row, column)| self.value(row, column));
+        let null = cell.is_some() && value.is_none();
         // One shared copy of the preview serves the label and the text.
-        let display = if c == 0 {
-            SharedString::from((r + 1).to_string())
-        } else {
-            SharedString::new(cell_preview(value.unwrap_or("NULL")))
+        let display = match cell {
+            None => SharedString::from((self.page().start + r + 1).to_string()),
+            Some(_) => SharedString::new(cell_preview(value.unwrap_or("NULL"))),
         };
-        let selection = self.selection.filter(|_| c > 0);
-        let selected = selection.is_some_and(|s| s.contains(r, c - 1));
+        // Row numbers and numbers align on the trailing edge.
+        let numeric = match cell {
+            None => true,
+            Some((_, column)) => self.numeric.get(column).copied().unwrap_or(false),
+        };
+        let selection = self.selection.filter(|_| cell.is_some());
+        let selected = selection
+            .zip(cell)
+            .is_some_and(|(s, (row, column))| s.contains(row, column));
         // The focus cell shows a ring, also when it is the only selected cell.
-        let focus = selection.is_some_and(|s| s.focus == (r, c - 1));
-        // The other cells of a selected row, and its row number, get a faint
-        // tint, so the row of the selection is easy to follow.
-        let row_selected = !selected && self.selection.is_some_and(|s| s.rows().contains(&r));
+        let focus = selection.zip(cell).is_some_and(|(s, cell)| s.focus == cell);
+        // The other cells of a selected line, and its row number, get a
+        // faint tint, so the line of the selection is easy to follow.
+        let row_selected = !selected && line_selected;
         div()
             .id(("cell", c))
             .test_support()
@@ -729,10 +964,10 @@ impl TableDelegate for Results {
             .items_center()
             .text_size(rems(12. / 14.))
             .font_features(tabular_numbers())
-            .when(self.is_numeric_column(c) && !null, |el| el.justify_end())
+            .when(numeric && !null, |el| el.justify_end())
             .overflow_hidden()
             .text_color(cx.theme().foreground)
-            .when(c == 0 || null, |el| {
+            .when(cell.is_none() || null, |el| {
                 el.text_color(cx.theme().muted_foreground)
             })
             .when(row_selected, |el| {
@@ -748,15 +983,19 @@ impl TableDelegate for Results {
                 MouseButton::Left,
                 cx.listener(move |state, event: &MouseDownEvent, window, cx| {
                     let data = state.delegate_mut();
-                    if c == 0 {
-                        data.select_rows(r, event.modifiers.shift);
-                    } else {
-                        data.select_cell(r, c - 1, event.modifiers.shift);
-                        data.drag = Some(event.position);
-                        if let Some(hitbox) = data.drag_hitbox {
-                            window.capture_pointer(hitbox);
+                    match cell {
+                        None => {
+                            let row = data.page().start + r;
+                            data.select_rows(row, event.modifiers.shift)
                         }
-                        start_drag(state, window, cx);
+                        Some((row, column)) => {
+                            data.select_cell(row, column, event.modifiers.shift);
+                            data.drag = Some(event.position);
+                            if let Some(hitbox) = data.drag_hitbox {
+                                window.capture_pointer(hitbox);
+                            }
+                            start_drag(state, window, cx);
+                        }
                     }
                     window.focus(&state.focus_handle(cx), cx);
                     cx.notify();
@@ -766,25 +1005,27 @@ impl TableDelegate for Results {
                 MouseButton::Right,
                 cx.listener(move |state, _, window, cx| {
                     let data = state.delegate_mut();
+                    let row = match cell {
+                        Some((row, _)) => row,
+                        None => data.page().start + r,
+                    };
+                    data.menu_row = Some(row);
                     // A right-click inside the selection keeps it for the menu.
-                    let inside = data.selection.is_some_and(|s| {
-                        if c == 0 {
-                            s.rows().contains(&r)
-                        } else {
-                            s.contains(r, c - 1)
-                        }
+                    let inside = data.selection.is_some_and(|s| match cell {
+                        Some((row, column)) => s.contains(row, column),
+                        None => s.rows().contains(&row),
                     });
                     if !inside {
-                        if c == 0 {
-                            data.select_rows(r, false);
-                        } else {
-                            data.select_cell(r, c - 1, false);
+                        match cell {
+                            Some((row, column)) => data.select_cell(row, column, false),
+                            None => data.select_rows(row, false),
                         }
                     }
                     window.focus(&state.focus_handle(cx), cx);
                     cx.notify();
                 }),
             )
+            .into_any_element()
     }
     fn context_menu(
         &mut self,
@@ -793,12 +1034,17 @@ impl TableDelegate for Results {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        let row = self.pagination.range(self.rows.len()).start + row;
+        // The table row of the transposed layout is a result column, so the
+        // result row comes from the right-clicked cell.
+        let result_row = if self.transposed {
+            self.menu_row
+        } else {
+            Some(self.page().start + row)
+        };
+        let in_line = self.line_selected(row);
         let label = match self.selection {
-            Some(selection) if selection.is_cell() && selection.focus.0 == row => "Copy cell",
-            Some(selection) if !selection.is_cell() && selection.rows().contains(&row) => {
-                "Copy selection"
-            }
+            Some(selection) if selection.is_cell() && in_line => "Copy cell",
+            Some(selection) if !selection.is_cell() && in_line => "Copy selection",
             _ => "",
         };
         let selection = self
@@ -806,9 +1052,17 @@ impl TableDelegate for Results {
             .filter(|_| !label.is_empty())
             .map(|selection| self.clipboard_copy(selection));
         let last = self.columns.len().saturating_sub(1);
-        let row_copy = self.clipboard_copy(Selection {
-            anchor: (row, 0),
-            focus: (row, last),
+        let row_copy = result_row.map(|row| {
+            let label = if self.transposed {
+                SharedString::from(format!("Copy row {}", row + 1))
+            } else {
+                SharedString::from("Copy row")
+            };
+            let copy = self.clipboard_copy(Selection {
+                anchor: (row, 0),
+                focus: (row, last),
+            });
+            (label, copy)
         });
         let source =
             crate::export::Snapshot::new(&self.columns, &self.rows).map(std::sync::Arc::new);
@@ -832,6 +1086,7 @@ impl TableDelegate for Results {
         ]
         .map(|format| (format.label(), self.copy_as_options(format)));
         let export_profile = self.export_profile;
+        let transposed = self.transposed;
         let menu = if let Ok(source) = source {
             let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
                 let menu = menu.when_some(plain_text, |menu, copy| {
@@ -852,6 +1107,7 @@ impl TableDelegate for Results {
                                 range.clone(),
                                 options.clone(),
                                 export_profile,
+                                transposed,
                                 window,
                                 cx,
                             );
@@ -870,9 +1126,9 @@ impl TableDelegate for Results {
                     .on_click(move |_, window, cx| copy.run(window, cx)),
             )
         })
-        .item(
-            PopupMenuItem::new("Copy row").on_click(move |_, window, cx| row_copy.run(window, cx)),
-        )
+        .when_some(row_copy, |menu, (label, copy)| {
+            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| copy.run(window, cx)))
+        })
     }
     fn render_empty(
         &mut self,
@@ -993,7 +1249,11 @@ fn update_drag(
 ) {
     if let Some((row, column)) = state.cell_at_position(position, cx) {
         let data = state.delegate_mut();
-        let focus = (data.page().start + row, column.saturating_sub(1));
+        // The pointer over the row numbers or the column names extends to
+        // the first result cell of its line.
+        let Some(focus) = data.data_cell(row, column.max(1)) else {
+            return;
+        };
         if let Some(selection) = data.selection.as_mut()
             && selection.focus != focus
         {
@@ -1113,15 +1373,31 @@ fn move_focus(
     cx: &mut App,
 ) {
     table.update(cx, |state, cx| {
-        let start = state.delegate().page().start;
-        if let Some((row, column)) = state.delegate_mut().move_focus(rows, columns, extend) {
-            state
-                .vertical_scroll_handle
-                .scroll_to_item(row - start, ScrollStrategy::Nearest);
-            state.scroll_to_col(column + 1, cx);
+        // The keys move on screen: down goes to the next result column of
+        // the transposed layout.
+        let (rows, columns) = if state.delegate().transposed {
+            (columns, rows)
+        } else {
+            (rows, columns)
+        };
+        if let Some(focus) = state.delegate_mut().move_focus(rows, columns, extend) {
+            scroll_to_cell(state, focus, cx);
         }
         cx.notify();
     });
+}
+
+/// Scroll the table so that a result cell is in view.
+fn scroll_to_cell(
+    state: &mut TableState<Results>,
+    cell: (usize, usize),
+    cx: &mut Context<TableState<Results>>,
+) {
+    let (row, column) = state.delegate().table_cell(cell);
+    state
+        .vertical_scroll_handle
+        .scroll_to_item(row, ScrollStrategy::Nearest);
+    state.scroll_to_col(column, cx);
 }
 
 /// The rows that Page Up and Page Down move: the visible rows less one.
@@ -1234,9 +1510,56 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
             data.selection = None;
             data.drag = None;
             state.clear_selection(cx);
+            if state.delegate().transposed {
+                // The rows of the new page are new table columns.
+                state
+                    .horizontal_scroll_handle
+                    .set_offset(point(px(0.), px(0.)));
+                refresh(state, cx);
+            }
             state.scroll_to_row(0, cx);
             cx.notify();
         }
+    });
+}
+
+/// Build the table columns again, for example after a new schema, a scale
+/// change, or a new layout.
+pub fn refresh(state: &mut TableState<Results>, cx: &mut Context<TableState<Results>>) {
+    state.delegate_mut().layout();
+    state.refresh(cx);
+}
+
+/// Add table columns for new rows of the page. Call after rows arrive.
+pub fn rows_changed(state: &mut TableState<Results>, cx: &mut Context<TableState<Results>>) {
+    if state.delegate().layout_stale() {
+        refresh(state, cx);
+    }
+    cx.notify();
+}
+
+/// Show the result in the transposed or the standard layout. The selection
+/// keeps its cells and stays in view.
+pub fn set_transposed(table: &Entity<TableState<Results>>, transposed: bool, cx: &mut App) {
+    table.update(cx, |state, cx| {
+        let data = state.delegate_mut();
+        if data.transposed == transposed {
+            return;
+        }
+        data.transposed = transposed;
+        // The drag task releases the pointer on its next turn.
+        data.drag = None;
+        data.menu_row = None;
+        let focus = data.selection.map(|selection| selection.focus);
+        state
+            .horizontal_scroll_handle
+            .set_offset(point(px(0.), px(0.)));
+        refresh(state, cx);
+        match focus {
+            Some(focus) => scroll_to_cell(state, focus, cx),
+            None => state.scroll_to_row(0, cx),
+        }
+        cx.notify();
     });
 }
 
@@ -1363,6 +1686,51 @@ mod tests {
             ]]
             .into();
             assert!(results.plain_text(super::Selection::cell(0, 0)).is_err());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn the_transposed_layout_maps_cells_and_copies_lines_of_columns(cx: &mut TestAppContext) {
+        cx.update(crate::ui::init);
+        cx.update(|cx| {
+            let mut results = Results {
+                transposed: true,
+                ..Results::default()
+            };
+            results.schema(vec![column("a", "STRING"), column("b", "BIGINT")], cx);
+            // Without rows, the layout has only the column names.
+            assert_eq!(results.headers.len(), 1);
+            results.rows = (0..1250)
+                .map(|i| vec![Some(format!("a{i}")), Some(i.to_string())])
+                .collect();
+            assert!(results.layout_stale());
+            assert!(results.pagination.select(1, results.rows.len()));
+            results.layout();
+            assert!(!results.layout_stale());
+            // A table column for each row of the page, named by its number.
+            assert_eq!(results.headers.len(), 251);
+            assert_eq!(results.headers[1].name.to_string(), "1001");
+
+            // Table row 1 shows result column b; table column 2 shows row 1001.
+            assert_eq!(results.data_cell(1, 2), Some((1001, 1)));
+            assert_eq!(results.table_cell((1001, 1)), (1, 2));
+            assert_eq!(results.data_cell(1, 0), None);
+
+            // Plain text writes a line for each result column.
+            let selection = super::Selection {
+                anchor: (1000, 0),
+                focus: (1001, 1),
+            };
+            assert_eq!(
+                results.plain_text(selection).unwrap(),
+                "a1000\ta1001\n1000\t1001"
+            );
+            results.selection = Some(selection);
+            assert!(results.line_selected(1));
+
+            // A new query in the same result tab keeps the layout.
+            results.clear();
+            assert!(results.transposed);
         });
     }
 

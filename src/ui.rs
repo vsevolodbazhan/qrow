@@ -100,6 +100,7 @@ actions!(
         MaximizeAssistant,
         MinimizeAssistant,
         ToggleResults,
+        TransposeResult,
         ToggleActivity,
         OpenAbout,
         OpenSettings,
@@ -170,6 +171,7 @@ pub fn init(cx: &mut App) {
             Some("Qrow && AssistantMaximized"),
         ),
         KeyBinding::new("secondary-j", ToggleResults, None),
+        KeyBinding::new("alt-secondary-t", TransposeResult, None),
         KeyBinding::new("secondary-shift-u", ToggleActivity, None),
         KeyBinding::new(
             "escape",
@@ -271,6 +273,7 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         MenuItem::action("Sign-Ins", ShowSignIns),
         MenuItem::action("Toggle sidebar", ToggleSidebar),
         MenuItem::action("Toggle results", ToggleResults),
+        MenuItem::action("Transpose result", TransposeResult),
         MenuItem::separator(),
     ];
     if assistant_enabled {
@@ -1969,7 +1972,7 @@ impl Qrow {
                 {
                     table.update(cx, |table, cx| {
                         table.delegate_mut().rows.append_shared(&rows);
-                        cx.notify();
+                        results::rows_changed(table, cx);
                     });
                 }
             }
@@ -1985,7 +1988,7 @@ impl Qrow {
                 if let Some(table) = &live {
                     table.update(cx, |t, cx| {
                         t.delegate_mut().schema(columns, cx);
-                        t.refresh(cx);
+                        results::refresh(t, cx);
                     });
                 }
                 tab.set_status("Fetching preview…");
@@ -1994,7 +1997,7 @@ impl Qrow {
                 if let Some(table) = &live {
                     table.update(cx, |t, cx| {
                         t.delegate_mut().rows.extend(rows);
-                        cx.notify();
+                        results::rows_changed(t, cx);
                     });
                     if let Some(page) = tab.pending_page.take() {
                         results::select_page(table, page, cx);
@@ -2772,7 +2775,7 @@ impl Qrow {
             t.clear_selection(cx);
             t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
             t.scroll_to_row(0, cx);
-            t.refresh(cx);
+            results::refresh(t, cx);
         });
         tab.live = Some(target);
         tab.active_result = target;
@@ -2935,7 +2938,7 @@ impl Qrow {
             for table in tab.result_tables() {
                 table.update(cx, |table, cx| {
                     table.delegate_mut().set_ui_scale(scale, cx);
-                    table.refresh(cx);
+                    results::refresh(table, cx);
                 });
             }
         }
@@ -4391,7 +4394,7 @@ impl Qrow {
                     row
                 })
                 .collect();
-            t.refresh(cx);
+            results::refresh(t, cx);
         });
         tab.set_status_detail("Complete", "Demo data");
         tab.preview_complete = true;

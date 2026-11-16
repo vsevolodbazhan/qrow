@@ -188,6 +188,7 @@ impl Qrow {
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
         let export_disabled = data.columns.is_empty();
+        let transposed = data.transposed;
         // Without a result set, counts and pages describe nothing.
         let no_result = data.columns.is_empty();
         // A cursor drain reads only the live result.
@@ -263,6 +264,30 @@ impl Qrow {
                     .child(
                         h_flex()
                             .gap_1()
+                            .child({
+                                let label = if transposed {
+                                    "Show standard layout"
+                                } else {
+                                    "Transpose result"
+                                };
+                                Button::new("transpose-result")
+                                    .small()
+                                    .ghost()
+                                    .icon(Icon::new(AssetIconName::RotateCwSquare))
+                                    .selected(transposed)
+                                    .accessibility_label(label)
+                                    .disabled(no_result)
+                                    .map(|mut button| {
+                                        button.interactivity().tooltip(
+                                            StatusTooltip::new(label, "")
+                                                .for_action(&TransposeResult, None),
+                                        );
+                                        button
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.transpose_result(window, cx)
+                                    }))
+                            })
                             .child(
                                 Button::new("export-results")
                                     .small()
