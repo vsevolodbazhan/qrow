@@ -402,6 +402,18 @@ fn schema_browser_reads_the_initial_catalog_and_copies_three_part_names(cx: &mut
         cx.read_from_clipboard().unwrap().text().unwrap(),
         "\"tpch\".\"tiny\".\"nation\""
     );
+
+    // Preview Rows runs the three-part name in a new tab.
+    app.context_menu_labelled(cx, "nation");
+    app.choose(cx, "popup-menu", "Preview rows");
+    app.wait_saved(cx, "the preview tab", |saved| {
+        saved.tabs.len() == 2
+            && saved.active_tab == 1
+            && saved.tabs[1].title == "nation"
+            && saved.tabs[1].sql == "SELECT *\nFROM \"tpch\".\"tiny\".\"nation\"\nLIMIT 100"
+    });
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 0, "1");
 }
 
 #[gpui_kit::test]

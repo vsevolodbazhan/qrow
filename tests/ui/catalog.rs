@@ -1222,9 +1222,11 @@ fn preview_rows_opens_a_tab_that_runs_at_once(cx: &mut TestAppContext) {
 
     let sql = "SELECT *\nFROM `avia`.`bookings`\nLIMIT 100";
     app.context_menu_labelled(cx, "bookings");
-    // It opens the menu, in a group of its own.
+    // It opens the menu, in a group of its own: a separator, which has no
+    // label, comes between it and Refresh.
     app.update(cx, |window, _| {
         assert_eq!(menu_item(window, "popup-menu", "Preview rows"), Some(0));
+        assert_eq!(menu_item(window, "popup-menu", "Refresh"), Some(2));
     });
     app.choose(cx, "popup-menu", "Preview rows");
     app.wait_saved(cx, "the preview tab", |saved| {
