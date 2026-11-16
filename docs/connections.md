@@ -1110,8 +1110,8 @@ already, the new tab gets a copy suffix. The keywords use
 **SQL Keyword Case** from the settings. To filter or sort the rows, add a
 `WHERE` or `ORDER BY` clause to the SQL and run it again.
 
-A double-click on a row in the tree expands or collapses it. It does not
-preview rows.
+A click on a table expands or collapses it. A double-click does not preview
+rows.
 
 ### Use names in SQL
 
