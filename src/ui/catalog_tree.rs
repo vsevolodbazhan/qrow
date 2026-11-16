@@ -427,12 +427,12 @@ fn contains_lowercase(name: &str, needle: &str) -> bool {
 /// names, like a catalog, a schema, and a table, when its parts match parts
 /// in a row: the first part ends a name, the last part starts a name, and
 /// the parts between are full names. A part in quotes starts or ends its
-/// name at the quotes. A search with dots or quotes also matches one name
-/// that contains all of its text, like the table `events.v2`. The
+/// name at the quotes. A search with dots and without quotes also matches
+/// one name that contains all of its text, like the table `events.v2`. The
 /// comparison ignores letter case.
 struct NameSearch {
     parts: Vec<SearchPart>,
-    /// All the text of a search with more than one part or with quotes.
+    /// All the text of a search with dots and without quotes.
     whole: Option<SearchPart>,
 }
 
@@ -476,7 +476,8 @@ impl NameSearch {
             }
         }
         parts.push((text, opened, closed));
-        let whole = (parts.len() > 1 || parts[0].1).then(|| SearchPart {
+        let quoted = search.contains(['`', '"']);
+        let whole = (parts.len() > 1 && !quoted).then(|| SearchPart {
             text: fold_case(search),
             start: false,
             end: false,
@@ -3483,6 +3484,16 @@ mod tests {
         assert!(matches("events.v2", "events.v2", "orders"));
         assert!(matches("sales.`events.v2`", "sales", "events.v2"));
         assert!(!matches("sales.events.v2", "sales", "events.v2"));
+        // A name in quotes is a full name, also when another name contains
+        // the quotes.
+        assert!(!matches("\"orders\"", "sales", "archive_\"orders\"_old"));
+        assert!(!matches("`orders`", "sales", "archive_`orders`_old"));
+        assert!(!matches("sales.`orders`", "sales", "x_sales.`orders`_y"));
+        assert!(!matches(
+            "\"sales\".\"orders\"",
+            "sales",
+            "\"sales\".\"orders\"_old"
+        ));
         // Copy qualified name puts quotes only around the parts that need
         // them, so the search finds the relation by this name too.
         assert!(matches("sales.`select`", "sales", "select"));
