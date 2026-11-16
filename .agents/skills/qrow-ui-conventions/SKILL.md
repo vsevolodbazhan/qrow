@@ -25,10 +25,10 @@ need it.
   value. Never wrap a toolbar or composer onto a second row.
 - **Default fonts.** IBM Plex Sans for the interface and assistant
   conversations. JetBrains Mono, with ligatures, for the editor, Logs, and code.
-- **Grid alignment.** All column headers are left-aligned. Only numeric cell
-  values are right-aligned, with tabular digits. In the transposed result
-  layout, all values are left-aligned, next to their column names. In the transposed result
-  layout, all values are left-aligned, next to their column names.
+- **Grid alignment.** All column headers are left-aligned. In the standard
+  result layout, only numeric cell values are right-aligned, with tabular
+  digits. In the transposed layout, all values are left-aligned, next to
+  their column names.
 - **Selected tab.** The selected query tab grows to show its full title.
 - **Settings controls end at the right.** In Settings and the connection
   editor, every control ends at the right edge of its row, so switches line
