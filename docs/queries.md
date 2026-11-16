@@ -295,7 +295,9 @@ Press **Tab** after a name, a dot, or `FROM` and a space to show the
 schemas, tables, views, and columns that can go at the cursor. Press
 **Tab** after `SELECT`, `WHERE`, `AND`, `ON`, `BY`, a comma, or a comparison
 and a space to show the columns of the tables in the statement. In other
-places, and when no name fits, **Tab** indents. To stop suggestions, turn
+places, and when no name fits, **Tab** indents. **Tab** also indents when
+only spaces are before the cursor on its line, and when a name starts at the
+cursor. To stop suggestions, turn
 off **Autocomplete** in the Editor section of
 [Settings](workspace.md#appearance-and-layout).
 
@@ -311,7 +313,8 @@ on, the editor loads the copy from this computer when it gets focus. While
 - After `schema.`: the tables and views of that schema.
 - After `alias.` or `table.`: the columns of that table or view.
 - In other places of a statement: the columns of the tables and views that
-  the statement names after `FROM` and `JOIN`.
+  the statement names after `FROM` and `JOIN`. When a subquery names the
+  same table or view with the same alias, its columns show once.
 
 Type to filter the list. Names that start with the typed text come first,
 then names that contain it, then names that contain its letters in order.
@@ -342,9 +345,11 @@ schema. Select **Retry** in the toast, or press **Tab** again, to read
 again. Select **Show activity** to see the error in
 [Activity](activity.md). If the list has other names, the message,
 **Retry**, and **Show activity** show below them. For a connection that
-Qrow never read, a toast shows
-**No cached metadata**. Select **Refresh** in the toast to read the
-connection. The list then opens at the cursor again.
+Qrow never read, a toast shows **No cached metadata**. Select **Refresh** in
+the toast to read the connection. The list then opens at the cursor again.
+For a connection with **Refresh** set to **Disabled** on its
+[Metadata page](connections.md#browse-schemas), the toast tells you to turn
+on metadata refresh. Qrow does not read metadata for that connection.
 
 When the metadata of a schema in the list is older than the
 [Refresh Period](connections.md#refresh-metadata-automatically) of the

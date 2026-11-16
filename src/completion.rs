@@ -58,6 +58,10 @@ pub struct Request {
     /// AND, a comma, a comparison, and other words that an expression
     /// follows.
     pub column_start: bool,
+    /// Whether Tab indents at the cursor instead of showing names: only
+    /// blanks precede the cursor on its line, or a name starts at the
+    /// cursor with nothing typed before it.
+    pub indents: bool,
     /// The relations of the statement at the cursor.
     pub sources: Vec<Source>,
 }
@@ -397,6 +401,13 @@ fn request_in(
             token.is(&COLUMN_WORDS)
                 || (token.kind == Kind::Plain && COLUMN_SIGNS.contains(&token.text))
         });
+    let line = &sql[sql[..offset].rfind('\n').map_or(0, |at| at + 1)..offset];
+    let name_follows = replace.is_empty()
+        && tokens.iter().any(|token| {
+            token.range.start == offset
+                && name_part(token.text, token.kind, database_type).is_some()
+        });
+    let indents = line.trim().is_empty() || name_follows;
     let place = if !parts.is_empty() {
         Place::Qualified { parts, relation }
     } else if relation {
@@ -410,6 +421,7 @@ fn request_in(
         start,
         place,
         column_start,
+        indents,
         sources: sources(&tokens, database_type),
     })
 }
@@ -907,11 +919,29 @@ impl<'a> Builder<'a> {
     fn statement_columns(&mut self, default_schema: &str) {
         let request = self.request;
         let mut resolved: Vec<(&'a Source, &'a [CatalogColumn])> = Vec::new();
+        let mut seen: Vec<(&'a String, &'a String, &'a str)> = Vec::new();
         for source in &request.sources {
             let schema = source.schema.as_deref().unwrap_or(default_schema);
-            let Some((_, _, relation)) = self.relation(schema, &source.name) else {
+            let Some((schema_name, name, relation)) = self.relation(schema, &source.name) else {
                 continue;
             };
+            // A subquery can name the same relation with the same
+            // qualifier. Its columns show once. Postgres names are already
+            // folded, and keep the case of their quotes.
+            let key = (schema_name, name, source.qualifier());
+            let postgres = self.database_type == DatabaseType::Postgres;
+            if seen.iter().any(|known| {
+                known.0 == key.0
+                    && known.1 == key.1
+                    && if postgres {
+                        known.2 == key.2
+                    } else {
+                        known.2.eq_ignore_ascii_case(key.2)
+                    }
+            }) {
+                continue;
+            }
+            seen.push(key);
             resolved.push((source, relation.columns.as_deref().unwrap_or_default()));
         }
         // For each column name, without regard to ASCII letter case: the
