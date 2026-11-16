@@ -1101,9 +1101,12 @@ SQL like this at once:
 
 ```sql
 SELECT *
-FROM `sales`.`orders`
+FROM sales.orders
 LIMIT 100
 ```
+
+Qrow puts quotes only around a name that needs them, as in
+[name completion](queries.md#complete-names).
 
 The tab has the name of the table. If a tab of the connection has this name
 already, the new tab gets a copy suffix. The keywords use

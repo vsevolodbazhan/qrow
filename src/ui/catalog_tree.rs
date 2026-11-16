@@ -161,21 +161,44 @@ impl Node {
         match self {
             Node::Schema { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
             Node::Relation { schema, name, .. } => {
-                let qualified = format!(
-                    "{}.{}",
-                    kind.quote_identifier(schema),
-                    kind.quote_identifier(name)
-                );
-                let qualified = if kind == crate::model::DatabaseType::Trino {
-                    format!("{}.{}", kind.quote_identifier(catalog), qualified)
-                } else {
-                    qualified
-                };
+                let qualified = qualified_relation(kind, catalog, schema, name, |part| {
+                    kind.quote_identifier(part)
+                });
                 Some((qualified.clone(), qualified))
             }
             Node::Column { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
             Node::Connection(_) | Node::Notice { .. } => None,
         }
+    }
+
+    /// The qualified name of a relation for SQL that Qrow writes, with
+    /// quotes only around the parts that need them, like completion.
+    fn sql_relation(&self, kind: crate::model::DatabaseType, catalog: &str) -> Option<String> {
+        match self {
+            Node::Relation { schema, name, .. } => {
+                Some(qualified_relation(kind, catalog, schema, name, |part| {
+                    crate::completion::sql_name(part, kind)
+                }))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The name of the relation `name` in `schema`, with each part from `part`.
+/// Trino names also start with the catalog.
+fn qualified_relation(
+    kind: crate::model::DatabaseType,
+    catalog: &str,
+    schema: &str,
+    name: &str,
+    part: impl Fn(&str) -> String,
+) -> String {
+    let qualified = format!("{}.{}", part(schema), part(name));
+    if kind == crate::model::DatabaseType::Trino {
+        format!("{}.{}", part(catalog), qualified)
+    } else {
+        qualified
     }
 }
 
@@ -1583,7 +1606,6 @@ impl Qrow {
         } else {
             "Copy name"
         };
-        let preview = preview_sql(&insert, self.settings.sql_style().keyword_case);
         let refresh = scope.map(|scope| {
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.refresh_catalog(profile, scope.clone(), cx)
@@ -1616,10 +1638,20 @@ impl Qrow {
                 name: relation,
                 ..
             } => {
-                let (profile, title, sql) = (*profile, relation.clone(), preview);
-                Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.preview_rows(profile, &title, sql.clone(), window, cx)
-                }))
+                let sql = self
+                    .profiles
+                    .iter()
+                    .find(|candidate| candidate.id == *profile)
+                    .and_then(|candidate| {
+                        node.sql_relation(candidate.database_type, &candidate.database)
+                    })
+                    .map(|name| preview_sql(&name, self.settings.sql_style().keyword_case));
+                let (profile, title) = (*profile, relation.clone());
+                sql.map(|sql| {
+                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.preview_rows(profile, &title, sql.clone(), window, cx)
+                    })
+                })
             }
             _ => None,
         };
@@ -3169,6 +3201,51 @@ mod tests {
                 crate::sql::KeywordCase::Lowercase
             ),
             "select *\nfrom \"delta\".\"avia\".\"t\"\nlimit 100"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_preview_quotes_only_the_parts_that_need_it() {
+        use crate::model::DatabaseType;
+        let relation = |schema: &str, name: &str| Node::Relation {
+            profile: Uuid::nil(),
+            schema: schema.into(),
+            name: name.into(),
+            kind: RelationKind::Table,
+            comment: None,
+            loading: false,
+            error: None,
+            error_id: None,
+            dbt: None,
+        };
+        let name = |node: &Node, kind| node.sql_relation(kind, "delta").unwrap();
+        assert_eq!(
+            name(&relation("avia", "bookings"), DatabaseType::Kyuubi),
+            "avia.bookings"
+        );
+        assert_eq!(
+            name(&relation("avia", "order"), DatabaseType::Kyuubi),
+            "avia.`order`"
+        );
+        assert_eq!(
+            name(&relation("avia", "Daily Stats"), DatabaseType::Kyuubi),
+            "avia.`Daily Stats`"
+        );
+        assert_eq!(
+            name(&relation("avia", "bookings"), DatabaseType::Trino),
+            "delta.avia.bookings"
+        );
+        assert_eq!(
+            name(&relation("Avia", "bookings"), DatabaseType::Postgres),
+            "\"Avia\".bookings"
+        );
+        // Copy and Insert keep quotes around each part.
+        assert_eq!(
+            relation("avia", "bookings")
+                .names(DatabaseType::Kyuubi, "delta")
+                .unwrap()
+                .1,
+            "`avia`.`bookings`"
         );
     }
 

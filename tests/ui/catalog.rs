@@ -1220,7 +1220,7 @@ fn preview_rows_opens_a_tab_that_runs_at_once(cx: &mut TestAppContext) {
     });
     app.press(cx, "escape");
 
-    let sql = "SELECT *\nFROM `avia`.`bookings`\nLIMIT 100";
+    let sql = "SELECT *\nFROM avia.bookings\nLIMIT 100";
     app.context_menu_labelled(cx, "bookings");
     // It opens the menu, in a group of its own: a separator, which has no
     // label, comes between it and Refresh.
