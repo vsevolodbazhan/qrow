@@ -266,28 +266,38 @@ run:
 gh secret set RELEASE_SIGNING_KEY --env release --repo vsevolodbazhan/qrow < qrow-release.key
 ```
 
-After a release is published, the `aur` job updates its package in the Arch
-User Repository (AUR): [`qrow-bin`](https://aur.archlinux.org/packages/qrow-bin)
-for a stable release, or
-[`qrow-nightly-bin`](https://aur.archlinux.org/packages/qrow-nightly-bin) for
-a nightly release. Each package installs the release archive into `/usr`. The
-two packages conflict, so only one can be installed.
-[scripts/package/aur.py](../scripts/package/aur.py) writes the package name,
-the version, and the archive checksums into a copy of the
-[PKGBUILD template](../packaging/aur/PKGBUILD). pacman versions cannot hold a
-hyphen, so the nightly `pkgver` has periods in place of hyphens, for example
-`0.6.0.nightly.20261116.63`.
+After a release is published, the release workflow updates the Arch User
+Repository (AUR) packages. Each package installs Qrow into `/usr`. The packages
+conflict, so only one can be installed.
+
+| Package | Releases | Contents | Job |
+| --- | --- | --- | --- |
+| [`qrow-bin`](https://aur.archlinux.org/packages/qrow-bin) | Stable | Release archive | `aur` |
+| [`qrow-nightly-bin`](https://aur.archlinux.org/packages/qrow-nightly-bin) | Nightly | Release archive | `aur` |
+| [`qrow`](https://aur.archlinux.org/packages/qrow) | Stable | Build of the release tag | `aur-source` |
+
+[scripts/package/aur.py](../scripts/package/aur.py) writes a copy of a
+PKGBUILD template with the release data. The
+[binary template](../packaging/aur/bin/PKGBUILD) gets the package name, the
+version, and the archive checksums from `SHA256SUMS`. pacman versions cannot
+hold a hyphen, so the nightly `pkgver` has periods in place of hyphens, for
+example `0.6.0.nightly.20261116.63`. The
+[source template](../packaging/aur/source/PKGBUILD) gets the version, the
+release commit, and the checksum of the GitHub source archive of the tag. It
+builds Qrow with the Rust of Arch Linux, not with the toolchain in
+`rust-toolchain.toml`. It does not set `QROW_RELEASE_VERSION`, so this build
+does not check for updates.
 [scripts/package/aur-build.sh](../scripts/package/aur-build.sh) builds and
 installs the package in an Arch Linux container, checks it with namcap, and
-writes `.SRCINFO`. The job then pushes both files to the AUR Git repository. A
-change to the PKGBUILD template goes to the AUR with the next release of each
-channel.
-If the `aur` job fails, fix the cause and rerun the failed job; the release
-stays published.
+writes `.SRCINFO`.
+[scripts/package/aur-push.sh](../scripts/package/aur-push.sh) then pushes both
+files to the AUR Git repository of the package. A change to a template goes to
+the AUR with the next release that updates the package. If an AUR job fails,
+fix the cause and rerun the failed job; the release stays published.
 
-The job reads an SSH key from the `AUR_SSH_PRIVATE_KEY` secret of the `release`
+The jobs read an SSH key from the `AUR_SSH_PRIVATE_KEY` secret of the `release`
 environment. The public key is in the AUR account of the package maintainer.
-The job trusts only the published ED25519 host key of `aur.archlinux.org`.
+The push script trusts only the published ED25519 host key of `aur.archlinux.org`.
 To set up the key, make a key without a password, add `qrow-aur.pub` in
 **My Account → SSH Public Key** on the AUR website, then run:
 
@@ -296,9 +306,9 @@ ssh-keygen -t ed25519 -N '' -C qrow-release -f qrow-aur
 gh secret set AUR_SSH_PRIVATE_KEY --env release --repo vsevolodbazhan/qrow < qrow-aur
 ```
 
-To check a PKGBUILD change before a release, write the package for the latest
-stable release and build it with Docker. For the nightly package, use the tag
-of a nightly release:
+To check a binary PKGBUILD change before a release, write the package for the
+latest stable release and build it with Docker. For the nightly package, use
+the tag of a nightly release:
 
 ```sh
 version=$(gh release view --repo vsevolodbazhan/qrow --json tagName --jq '.tagName | ltrimstr("v")')
@@ -307,8 +317,22 @@ python3 scripts/package/aur.py "$version" --sums target/aur/SHA256SUMS --output 
 sh scripts/package/aur-build.sh target/aur
 ```
 
-The official Arch Linux image is x86-64 only. On ARM64, Docker emulates it.
-The aarch64 package differs only in its source archive and checksum.
+To check the source package with your changes, put an archive of the staged
+files next to the PKGBUILD. makepkg then uses it in place of the download. The
+version in the commands is only a label:
+
+```sh
+mkdir -p target/aur-source
+git archive --format=tar.gz --prefix=qrow-9.9.9/ --output target/aur-source/qrow-9.9.9.tar.gz "$(git write-tree)"
+digest=$(sha256sum target/aur-source/qrow-9.9.9.tar.gz | cut -d ' ' -f 1)
+python3 scripts/package/aur.py 9.9.9 --package source --commit "$(git rev-parse HEAD)" \
+  --source-sha256 "$digest" --output target/aur-source
+sh scripts/package/aur-build.sh target/aur-source
+```
+
+The official Arch Linux image is x86-64 only. On ARM64, Docker emulates it, and
+the source build takes much longer. The aarch64 packages differ only in their
+sources.
 
 The packaged application shows the channel-specific release version in the
 About dialog. The macOS bundle metadata keeps the numeric version from

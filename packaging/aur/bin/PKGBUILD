@@ -1,5 +1,5 @@
 # Maintainer: Vsevolod Bazhan <work@bazhan.one>
-# Source: https://github.com/vsevolodbazhan/qrow/tree/main/packaging/aur
+# Source: https://github.com/vsevolodbazhan/qrow/tree/main/packaging/aur/bin
 # The Qrow release workflow writes this file for qrow-bin (stable releases) and
 # qrow-nightly-bin (nightly releases). It sets the package name, the versions,
 # and the checksums.

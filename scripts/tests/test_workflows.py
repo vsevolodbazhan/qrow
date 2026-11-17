@@ -402,22 +402,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(read("docs/installation.md").count(public_key), 2)
 
     def test_aur_gets_each_release_after_publication(self):
-        aur = job("aur", RELEASE)
-        self.assertEqual(needs(aur), ["resolve-target", "publish"])
-        # Both channels publish: stable to qrow-bin, nightly to qrow-nightly-bin.
-        self.assertNotIn("if:", aur.split("steps:")[0])
-        self.assertIn("qrow-bin|qrow-nightly-bin) ;;", aur)
-        self.assertIn('git clone "ssh://aur@aur.archlinux.org/$package.git"', aur)
-        self.assertIn("environment: release", aur)
-        self.assertIn("AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}", aur)
-        self.assertIn('if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then', aur)
-        # The package is built and checked before the push.
-        self.assertLess(aur.index("sh scripts/package/aur-build.sh aur"), aur.index("git push"))
+        binary, source = job("aur", RELEASE), job("aur-source", RELEASE)
+        # Both channels update the binary package. Only stable releases update qrow.
+        self.assertNotIn("if:", binary.split("steps:")[0])
+        self.assertIn("if: inputs.channel == 'stable'", source.split("steps:")[0])
+        self.assertIn("--package bin --sums", binary)
+        self.assertIn('--package source --commit "$TARGET_SHA"', source)
+        for body in (binary, source):
+            self.assertEqual(needs(body), ["resolve-target", "publish"])
+            self.assertIn("environment: release", body)
+            self.assertIn("AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}", body)
+            # The package is built and checked before the push.
+            self.assertLess(body.index("sh scripts/package/aur-build.sh aur"),
+                            body.index("sh scripts/package/aur-push.sh aur"))
         # Only the pinned host key is trusted.
-        self.assertIn("StrictHostKeyChecking=yes", aur)
+        push = read("scripts/package/aur-push.sh")
+        self.assertIn("StrictHostKeyChecking=yes", push)
         self.assertIn("aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN",
-                      aur)
-        self.assertNotIn("ssh-keyscan", aur)
+                      push)
+        self.assertNotIn("ssh-keyscan", push)
 
 
 

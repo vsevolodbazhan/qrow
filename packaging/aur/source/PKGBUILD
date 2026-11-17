@@ -1,0 +1,47 @@
+# Maintainer: Vsevolod Bazhan <work@bazhan.one>
+# Source: https://github.com/vsevolodbazhan/qrow/tree/main/packaging/aur/source
+# The Qrow release workflow writes this file for each stable release. It sets
+# the version, the release commit, and the checksum of the source archive.
+
+pkgname=qrow
+pkgver=0.0.0
+pkgrel=1
+_commit=0000000000000000000000000000000000000000
+pkgdesc='Desktop SQL workbench'
+arch=('x86_64' 'aarch64')
+url='https://qrow.dev'
+license=('MIT')
+depends=('glibc' 'hicolor-icon-theme' 'libgcc' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'vulkan-icd-loader' 'wayland')
+makedepends=('cargo' 'cmake' 'fontconfig' 'libx11' 'python' 'vulkan-headers')
+optdepends=(
+  'gnome-keyring: Secret Service provider for saved passwords'
+  'vulkan-driver: GPU rendering'
+  'xdg-desktop-portal: file dialogs'
+  'xdg-utils: open files with other applications'
+)
+options=('!lto' '!debug')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/vsevolodbazhan/qrow/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # Without QROW_RELEASE_VERSION, Qrow does not check for updates. pacman updates it.
+  QROW_COMMIT="${_commit::12}" cargo build --frozen --release --bin qrow
+  python scripts/package/notices.py THIRD_PARTY_NOTICES.txt
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/qrow -t "$pkgdir/usr/bin"
+  install -Dm644 assets/linux/qrow.desktop -t "$pkgdir/usr/share/applications"
+  install -Dm644 assets/app-icons/qrow-256.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/qrow.png"
+  install -Dm644 LICENSE NOTICE THIRD_PARTY_NOTICES.txt -t "$pkgdir/usr/share/licenses/$pkgname"
+}
