@@ -403,14 +403,14 @@ fn schema_browser_reads_the_initial_catalog_and_copies_three_part_names(cx: &mut
         "tpch.tiny.nation"
     );
 
-    // Run preview query runs the three-part name in a new tab.
+    // Run preview query leaves out the catalog: the new tab starts in it.
     app.context_menu_labelled(cx, "nation");
     app.choose(cx, "popup-menu", "Run preview query");
     app.wait_saved(cx, "the preview tab", |saved| {
         saved.tabs.len() == 2
             && saved.active_tab == 1
             && saved.tabs[1].title == "nation"
-            && saved.tabs[1].sql == "SELECT *\nFROM tpch.tiny.nation\nLIMIT 100"
+            && saved.tabs[1].sql == "SELECT *\nFROM tiny.nation\nLIMIT 100"
     });
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 0, "1");

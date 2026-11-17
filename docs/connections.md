@@ -231,8 +231,11 @@ server certificate and hostname against the system trust store.
 
 Enter **Initial Catalog**, for example `tpch`. Enter **Initial Schema** if you
 want to use unqualified table names, for example `tiny`. The schema is optional.
-The schema browser reads the initial catalog. SQL names from the browser include
-the catalog, schema, and table, for example `tpch.tiny.nation`.
+The schema browser reads the initial catalog. **Copy qualified name** and
+**Insert into editor** give the catalog, schema, and table, for example
+`tpch.tiny.nation`, so the name stays correct after `USE` changes the catalog of
+a tab. **Run preview query** leaves out the catalog, because its new tab starts
+in the initial catalog.
 
 For **Password** authentication, enter the username. Leave the password blank
 if the server accepts a username without a password. Turn on **TLS** when you

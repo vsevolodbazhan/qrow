@@ -201,15 +201,23 @@ struct Dialect<'a> {
 /// The rows that Run preview query selects.
 const PREVIEW_ROWS: usize = 100;
 
-/// The SQL that selects the first rows of the relation `qualified`, a name
-/// ready for SQL. Each clause has its own line, so a filter or an order
-/// goes between them.
-fn preview_sql(qualified: &str, case: crate::sql::KeywordCase) -> String {
+/// The SQL that selects the first rows of a relation. Each clause has its
+/// own line, so a filter or an order goes between them. The name has no
+/// Trino catalog: the query runs in a new tab, whose session starts in the
+/// initial catalog of the connection.
+fn preview_sql(
+    kind: crate::model::DatabaseType,
+    schema: &str,
+    name: &str,
+    case: crate::sql::KeywordCase,
+) -> String {
     let [select, from, limit] = match case {
         crate::sql::KeywordCase::Uppercase => ["SELECT", "FROM", "LIMIT"],
         crate::sql::KeywordCase::Lowercase => ["select", "from", "limit"],
     };
-    format!("{select} *\n{from} {qualified}\n{limit} {PREVIEW_ROWS}")
+    let part = |part: &str| crate::completion::sql_name(part, kind);
+    let (schema, name) = (part(schema), part(name));
+    format!("{select} *\n{from} {schema}.{name}\n{limit} {PREVIEW_ROWS}")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1764,7 +1772,7 @@ impl Qrow {
         } else {
             "Copy name"
         };
-        let preview = preview_sql(&insert, self.settings.sql_style().keyword_case);
+        let case = self.settings.sql_style().keyword_case;
         let refresh = scope.map(|scope| {
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.refresh_catalog(profile, scope.clone(), cx)
@@ -1791,13 +1799,23 @@ impl Qrow {
             }
             _ => None,
         };
-        let preview = match &node {
-            Node::Relation {
-                profile,
-                name: relation,
-                ..
-            } => {
+        let kind = self
+            .profiles
+            .iter()
+            .find(|candidate| candidate.id == profile)
+            .map(|profile| profile.database_type);
+        let preview = match (&node, kind) {
+            (
+                Node::Relation {
+                    profile,
+                    schema,
+                    name: relation,
+                    ..
+                },
+                Some(kind),
+            ) => {
                 let (profile, title) = (*profile, relation.clone());
+                let preview = preview_sql(kind, schema, relation, case);
                 Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.preview_rows(profile, &title, preview.clone(), window, cx)
                 }))
@@ -3340,16 +3358,21 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn preview_sql_follows_the_keyword_case() {
-        assert_eq!(
-            preview_sql("`avia`.`bookings`", crate::sql::KeywordCase::Uppercase),
-            "SELECT *\nFROM `avia`.`bookings`\nLIMIT 100"
-        );
+        use crate::model::DatabaseType;
+        use crate::sql::KeywordCase;
         assert_eq!(
             preview_sql(
-                "\"delta\".\"avia\".\"t\"",
-                crate::sql::KeywordCase::Lowercase
+                DatabaseType::Kyuubi,
+                "avia",
+                "select",
+                KeywordCase::Uppercase
             ),
-            "select *\nfrom \"delta\".\"avia\".\"t\"\nlimit 100"
+            "SELECT *\nFROM avia.`select`\nLIMIT 100"
+        );
+        // The Trino name has no catalog, and quotes only the parts that need them.
+        assert_eq!(
+            preview_sql(DatabaseType::Trino, "avia", "T", KeywordCase::Lowercase),
+            "select *\nfrom avia.\"T\"\nlimit 100"
         );
     }
 
