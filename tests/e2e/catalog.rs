@@ -80,7 +80,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
             app.click(cx, format!("{parent}\u{1f}label"));
         }
         app.context_menu(cx, format!("{parent}\u{1f}label"));
-        app.choose(cx, "popup-menu", "Refresh");
+        app.choose(cx, "popup-menu", "Refresh metadata");
         let status = format!("{parent}\u{1f}error-icon");
         app.wait_for(cx, status.clone());
         app.update(cx, |window, cx| {
@@ -134,7 +134,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
         });
         // Failed scopes remain refreshable from the parent's menu.
         app.context_menu(cx, format!("{parent}\u{1f}label"));
-        app.choose(cx, "popup-menu", "Refresh");
+        app.choose(cx, "popup-menu", "Refresh metadata");
         app.wait_until(
             cx,
             "the second refresh attempt",
@@ -309,7 +309,7 @@ fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut Test
     // Explicit Refresh can connect after the tab has disconnected. It leaves
     // the query tab disconnected and closes its own temporary session.
     app.context_menu(cx, connection_row(id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     let deadline = Instant::now() + QUERY_TIMEOUT;
     let mut activity = String::new();
     while Instant::now() < deadline {
@@ -506,7 +506,7 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
         &format!("ALTER TABLE {schema}.bookings ADD COLUMNS (fare DOUBLE)"),
     );
     app.context_menu_labelled(cx, "bookings");
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(cx, "the new column", QUERY_TIMEOUT, |window, _| {
         labelled(window, "fare double").is_some()
     });
@@ -629,7 +629,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
             &format!("ALTER TABLE {schema}.fourth ADD COLUMNS ({added} STRING)"),
         );
         app.context_menu(cx, connection_row(profile.id));
-        app.choose(cx, "popup-menu", "Refresh");
+        app.choose(cx, "popup-menu", "Refresh metadata");
         app.wait_until(
             cx,
             "all table and view columns to refresh",

@@ -719,7 +719,7 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
             "Copy settings",
             "Delete",
             "Schemas",
-            "Refresh",
+            "Refresh metadata",
             "Collapse",
         ]
         .map(|entry| top(window, entry));

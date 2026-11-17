@@ -337,8 +337,8 @@ too narrow, the list cuts the type first. If the name leaves almost no space,
 the row does not show the type. Point to a row to see a cut name or type in
 full.
 
-When the list needs data that the copy does not have, Qrow reads it, like a
-**Refresh** of that table or schema in the tree. This read can open a
+When the list needs data that the copy does not have, Qrow reads it, like
+**Refresh metadata** on that table or schema in the tree. This read can open a
 session. If the read fails and the list has no names, the list closes and
 a toast shows **Could not load metadata for** and the name of the table or
 schema. Select **Retry** in the toast, or press **Tab** again, to read

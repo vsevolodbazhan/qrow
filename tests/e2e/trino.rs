@@ -381,7 +381,7 @@ fn schema_browser_reads_the_initial_catalog_and_copies_three_part_names(cx: &mut
     app.click(cx, "save-profile");
     app.wait_gone(cx, "connection-name");
     app.context_menu(cx, connection_row(id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.toggle_connection(cx, id);
     app.wait_until(
         cx,
@@ -403,9 +403,9 @@ fn schema_browser_reads_the_initial_catalog_and_copies_three_part_names(cx: &mut
         "tpch.tiny.nation"
     );
 
-    // Preview Rows runs the three-part name in a new tab.
+    // Run preview query runs the three-part name in a new tab.
     app.context_menu_labelled(cx, "nation");
-    app.choose(cx, "popup-menu", "Preview rows");
+    app.choose(cx, "popup-menu", "Run preview query");
     app.wait_saved(cx, "the preview tab", |saved| {
         saved.tabs.len() == 2
             && saved.active_tab == 1

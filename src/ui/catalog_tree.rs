@@ -198,7 +198,7 @@ struct Dialect<'a> {
     catalog: &'a str,
 }
 
-/// The rows that Preview Rows selects.
+/// The rows that Run preview query selects.
 const PREVIEW_ROWS: usize = 100;
 
 /// The SQL that selects the first rows of the relation `qualified`, a name
@@ -1824,13 +1824,13 @@ impl Qrow {
             move |menu, _, _| {
                 let menu = match preview {
                     Some(preview) => menu
-                        .item(PopupMenuItem::new("Preview rows").on_click(preview))
+                        .item(PopupMenuItem::new("Run preview query").on_click(preview))
                         .separator(),
                     None => menu,
                 };
                 let menu = match refresh {
                     Some(refresh) => menu.item(
-                        PopupMenuItem::new("Refresh")
+                        PopupMenuItem::new("Refresh metadata")
                             .on_click(refresh)
                             .disabled(refreshing),
                     ),

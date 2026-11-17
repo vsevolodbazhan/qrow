@@ -3315,7 +3315,7 @@ impl Qrow {
                                 PopupMenuItem::new(if refreshing {
                                     "Stop refresh"
                                 } else {
-                                    "Refresh"
+                                    "Refresh metadata"
                                 })
                                 .on_click(refresh),
                             )

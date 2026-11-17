@@ -838,8 +838,8 @@ connection settings and set **Refresh**, the first field of the
   values. Qrow keeps
   the copy of the schemas on your computer, so the tree shows it again when
   you turn browsing on.
-- **Manual**: Qrow reads the schemas when you select **Refresh**, or when you
-  expand an unread row while a tab of the connection is connected.
+- **Manual**: Qrow reads the schemas when you select **Refresh metadata**,
+  or when you expand an unread row while a tab of the connection is connected.
 - **While connected**: as **Manual**, and Qrow also
   [refreshes the schemas automatically](#refresh-metadata-automatically).
 
@@ -885,12 +885,12 @@ session for the refresh and closes it when the refresh ends. This session does
 not change the idle timer, the keep-alive, or the results of a tab.
 
 - To refresh all schemas, with the tables and the columns of each schema,
-  right-click the connection and select **Refresh** in the **Schemas**
-  section.
+  right-click the connection and select **Refresh metadata** in the
+  **Schemas** section.
 - To refresh one schema and the columns of all its tables, right-click the
-  schema and select **Refresh**.
+  schema and select **Refresh metadata**.
 - To refresh one table or view and its columns, right-click it and select
-  **Refresh**.
+  **Refresh metadata**.
 - To stop a connection refresh, right-click the connection and select **Stop
   Refresh**. The tree keeps the schemas that it had before the refresh.
 
@@ -952,14 +952,14 @@ had before the refresh. The error shows on the row of the refreshed part:
   the connection name. Click the dot to open Activity and read the error.
   The expanded connection keeps its schemas and has no error or progress row
   after the refresh ends. The dot goes away when you view Activity.
-  Select **Refresh** from the connection menu to try again.
+  Select **Refresh metadata** from the connection menu to try again.
 - A schema, a table, or a view: the row shows a red status dot. Point to
   the dot to read the first line of the error. Click it to open Activity for
   that connection. The dot replaces the schema's relation count while the
   error is unread. When you view Activity, the dot goes away and the count
   returns. A later failure shows a new dot. The expanded row
-  keeps its cached data and has no error row. Select **Refresh** from the
-  schema, table, or view menu to try again.
+  keeps its cached data and has no error row. Select **Refresh metadata**
+  from the schema, table, or view menu to try again.
 
 [Activity](activity.md) shows the full error. Click the status dot or select
 **Show activity** from the connection menu to open it. The connection row uses
@@ -1100,11 +1100,11 @@ button shows as selected when the search does not use all connections. The
 choice applies only while the search field has text. Qrow saves the choice
 in the workspace. If you delete a connection, Qrow removes it from the choice.
 
-### Preview rows
+### Preview the rows of a table
 
 To see the first rows of a table or a view, right-click it and select
-**Preview rows**. Qrow opens a new query tab under the connection and runs
-SQL like this at once:
+**Run preview query**. Qrow opens a new query tab under the connection and
+runs SQL like this at once:
 
 ```sql
 SELECT *
@@ -1117,8 +1117,8 @@ already, the new tab gets a copy suffix. The keywords use
 **SQL Keyword Case** from the settings. To filter or sort the rows, add a
 `WHERE` or `ORDER BY` clause to the SQL and run it again.
 
-A click on a table expands or collapses it. A double-click does not preview
-rows.
+A click on a table expands or collapses it. A double-click does not run a
+preview query.
 
 ### Use names in SQL
 
@@ -1136,8 +1136,8 @@ To use the keyboard, select a row in the tree, then:
 - Press **⌘C** to copy its name.
 - Press **Shift-Enter** to insert its name into the SQL editor.
 
-**Copy qualified name**, **Insert into editor**, and **Preview rows** put
-quotes only around a name that needs them, as in
+**Copy qualified name**, **Insert into editor**, and **Run preview query**
+put quotes only around a name that needs them, as in
 [name completion](queries.md#complete-names). For example, the table `select`
 in the schema `sales` becomes `` sales.`select` `` on Kyuubi. **Copy name**
 copies a schema or column name without quotes.

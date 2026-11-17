@@ -441,7 +441,7 @@ fn schema_error_dots_replace_counts_until_their_activity_is_read(cx: &mut TestAp
             app.wait_for(cx, detail.clone());
             let count_bounds = app.update(cx, |window, _| bounds_of(window, &detail));
             app.context_menu(cx, format!("{parent}\u{1f}label"));
-            app.choose(cx, "popup-menu", "Refresh");
+            app.choose(cx, "popup-menu", "Refresh metadata");
             app.wait_for(cx, status.clone());
             assert_status_alignment(&app, cx, &status);
             app.update(cx, |window, cx| {
@@ -505,7 +505,7 @@ fn a_schema_failure_is_read_when_activity_is_already_open(cx: &mut TestAppContex
     let parent = format!("s\u{1f}{}\u{1f}finance", profile.id);
     app.wait_for(cx, format!("{parent}\u{1f}detail"));
     app.context_menu(cx, format!("{parent}\u{1f}label"));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_for(cx, format!("{parent}\u{1f}busy"));
     app.click(cx, "toggle-activity");
     app.wait_for(cx, "activity");
@@ -1226,19 +1226,22 @@ fn preview_rows_opens_a_tab_that_runs_at_once(cx: &mut TestAppContext) {
     // A schema has no rows to preview.
     app.context_menu_labelled(cx, "avia");
     app.update(cx, |window, _| {
-        assert!(menu_item(window, "popup-menu", "Preview rows").is_none());
+        assert!(menu_item(window, "popup-menu", "Run preview query").is_none());
     });
     app.press(cx, "escape");
 
     let sql = "SELECT *\nFROM avia.bookings\nLIMIT 100";
     app.context_menu_labelled(cx, "bookings");
     // It opens the menu, in a group of its own: a separator, which has no
-    // label, comes between it and Refresh.
+    // label, comes between it and Refresh metadata.
     app.update(cx, |window, _| {
-        assert_eq!(menu_item(window, "popup-menu", "Preview rows"), Some(0));
-        assert_eq!(menu_item(window, "popup-menu", "Refresh"), Some(2));
+        assert_eq!(
+            menu_item(window, "popup-menu", "Run preview query"),
+            Some(0)
+        );
+        assert_eq!(menu_item(window, "popup-menu", "Refresh metadata"), Some(2));
     });
-    app.choose(cx, "popup-menu", "Preview rows");
+    app.choose(cx, "popup-menu", "Run preview query");
     app.wait_saved(cx, "the preview tab", |saved| {
         saved.tabs.len() == 2
             && saved.active_tab == 1
@@ -1258,7 +1261,7 @@ fn preview_rows_opens_a_tab_that_runs_at_once(cx: &mut TestAppContext) {
 
     // A second preview of the same table gets its own tab and name.
     app.context_menu_labelled(cx, "bookings");
-    app.choose(cx, "popup-menu", "Preview rows");
+    app.choose(cx, "popup-menu", "Run preview query");
     app.wait_saved(cx, "the second preview tab", |saved| {
         saved.tabs.len() == 3
             && saved.active_tab == 2
@@ -1294,7 +1297,7 @@ fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut Te
     wait_shows(&app, cx, "finance");
     assert_eq!(app.credentials.reads(), 0);
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(
         cx,
         "the refresh error",
@@ -1331,7 +1334,7 @@ fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut Te
     app.wait_gone(cx, "activity");
     // The connection menu tries again.
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(cx, "a second attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 2
     });
@@ -1705,7 +1708,7 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
     let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(cx, "the attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 1
     });
@@ -2133,7 +2136,7 @@ fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut Test
         assert!(menu_item(window, "popup-menu", "Edit").is_some());
         // Without schema browsing, the menu has no Schemas section.
         assert!(window.try_find("menu-section-Schemas").is_none());
-        for item in ["Refresh", "Collapse"] {
+        for item in ["Refresh metadata", "Collapse"] {
             assert!(menu_item(window, "popup-menu", item).is_none(), "{item}");
         }
     });
@@ -2167,7 +2170,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
     };
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.hover_labelled(cx, "Closing, refreshing schemas");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
