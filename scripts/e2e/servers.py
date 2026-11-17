@@ -23,6 +23,9 @@ DOWNLOAD_TIMEOUT_SECONDS = 120 * 60
 DOWNLOAD_WATCHDOG_SECONDS = DOWNLOAD_TIMEOUT_SECONDS + 60
 DOWNLOAD_MINIMUM_RATE = 256 * 1024
 DOWNLOAD_MINIMUM_RATE_SECONDS = 60
+# Each round tries every source once. The waits between rounds let a runner's
+# DNS or network outage, or a source's reset connection, clear up.
+DOWNLOAD_ROUND_DELAYS_SECONDS = (0, 30, 90)
 OUTPUT_LOCK = threading.Lock()
 
 
@@ -80,14 +83,14 @@ def preflight():
     return Path(os.environ["JAVA_HOME"])
 
 
-def transfer(label, url, partial, total, more_sources):
+def transfer(label, url, partial, total, more_attempts):
     initial_received = partial.stat().st_size if partial.exists() else 0
     if initial_received:
         announce(f"{label}: resuming download at {human_size(initial_received)} / {human_size(total)}.")
     command = ["curl", "--fail", "--silent", "--show-error", "--location", "--continue-at", "-",
                "--max-time", str(DOWNLOAD_TIMEOUT_SECONDS)]
-    if more_sources:
-        # Leave a slow source early; the next source continues the same partial file.
+    if more_attempts:
+        # Leave a slow source early; the next attempt continues the same partial file.
         command += ["--speed-limit", str(DOWNLOAD_MINIMUM_RATE), "--speed-time", str(DOWNLOAD_MINIMUM_RATE_SECONDS)]
     command += ["--output", str(partial), url]
     total_text = f" ({human_size(total)} total)" if total else ""
@@ -118,6 +121,26 @@ def transfer(label, url, partial, total, more_sources):
     announce(f"{label}: download complete: {human_size(partial.stat().st_size)} in {elapsed_seconds(started)}.")
 
 
+def download(label, urls, partial, total):
+    rounds = len(DOWNLOAD_ROUND_DELAYS_SECONDS)
+    for round_index, delay in enumerate(DOWNLOAD_ROUND_DELAYS_SECONDS):
+        if delay:
+            announce(f"{label}: every download source failed; trying again in {delay}s "
+                     f"(round {round_index + 1} of {rounds}).")
+            time.sleep(delay)
+        for index, url in enumerate(urls):
+            final = round_index + 1 == rounds and index + 1 == len(urls)
+            try:
+                # Only the final attempt has no speed limit, so one slow source cannot hold up the others.
+                transfer(label, url, partial, total, more_attempts=not final)
+                return
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                if final:
+                    raise
+                if index + 1 < len(urls):
+                    announce(f"{label}: trying the next download source.")
+
+
 def download_cache():
     return target_dir() / "e2e-downloads"
 
@@ -137,15 +160,7 @@ def distribution(item, label=None):
             if total and partial.exists() and partial.stat().st_size > total:
                 announce(f"{label}: discarding oversized partial download ({human_size(partial.stat().st_size)}).")
                 partial.unlink()
-            for index, url in enumerate(urls):
-                more_sources = index + 1 < len(urls)
-                try:
-                    transfer(label, url, partial, total, more_sources)
-                    break
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                    if not more_sources:
-                        raise
-                    announce(f"{label}: trying the next download source.")
+            download(label, urls, partial, total)
         partial.rename(archive)
     else:
         announce(f"{label}: using cached archive {archive.name} ({human_size(archive.stat().st_size)}).")

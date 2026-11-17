@@ -84,8 +84,38 @@ class NativeFixtureTests(unittest.TestCase):
             self.assertEqual(mirror[-1], item["urls"][0])
             self.assertEqual(mirror[mirror.index("--speed-limit") + 1], str(native_fixture.DOWNLOAD_MINIMUM_RATE))
             self.assertEqual(origin[-1], item["urls"][1])
-            self.assertNotIn("--speed-limit", origin)
+            self.assertEqual(origin[origin.index("--speed-limit") + 1], str(native_fixture.DOWNLOAD_MINIMUM_RATE))
             self.assertFalse((cache / "fixture.partial").exists())
+
+    def test_download_tries_every_source_again_after_a_transient_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "target/e2e-downloads"
+            payload = b"abcd"
+            item = {"urls": ["https://mirror.invalid/fixture.jar", "https://origin.invalid/fixture.jar"],
+                    "directory": "fixture.jar", "bytes": len(payload), "sha512": hashlib.sha512(payload).hexdigest()}
+            calls = []
+
+            def start(command):
+                calls.append(command)
+                output = Path(command[command.index("--output") + 1])
+                process = MagicMock()
+                process.poll.return_value = 0
+                if len(calls) == 1:
+                    process.returncode = 6  # The runner could not resolve the mirror host.
+                elif len(calls) == 2:
+                    output.write_bytes(payload[:2])
+                    process.returncode = 56  # The origin reset the connection.
+                else:
+                    self.assertEqual(output.read_bytes(), payload[:2])
+                    output.write_bytes(payload)
+                    process.returncode = 0
+                return process
+
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}), patch.object(native_fixture.subprocess, "Popen", side_effect=start), patch.object(native_fixture.time, "sleep") as sleep, patch.object(native_fixture, "announce"):
+                self.assertEqual(native_fixture.distribution(item), cache / "fixture.jar")
+            self.assertEqual([command[-1] for command in calls], [*item["urls"], item["urls"][0]])
+            sleep.assert_called_once_with(native_fixture.DOWNLOAD_ROUND_DELAYS_SECONDS[1])
 
     def test_download_fails_when_every_source_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -95,10 +125,15 @@ class NativeFixtureTests(unittest.TestCase):
             process = MagicMock()
             process.poll.return_value = 0
             process.returncode = 22
-            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}), patch.object(native_fixture.subprocess, "Popen", return_value=process) as popen, patch.object(native_fixture, "announce"):
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}), patch.object(native_fixture.subprocess, "Popen", return_value=process) as popen, patch.object(native_fixture.time, "sleep") as sleep, patch.object(native_fixture, "announce"):
                 with self.assertRaises(native_fixture.subprocess.CalledProcessError):
                     native_fixture.distribution(item)
-            self.assertEqual(popen.call_count, 2)
+            rounds = native_fixture.DOWNLOAD_ROUND_DELAYS_SECONDS
+            self.assertEqual(popen.call_count, len(rounds) * len(item["urls"]))
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [delay for delay in rounds if delay])
+            commands = [call.args[0] for call in popen.call_args_list]
+            self.assertTrue(all("--speed-limit" in command for command in commands[:-1]))
+            self.assertNotIn("--speed-limit", commands[-1])
 
     def test_manifest_sources_share_one_archive_name(self):
         manifest = json.loads((native_fixture.ROOT / "tests/fixture/native-downloads.json").read_text())
