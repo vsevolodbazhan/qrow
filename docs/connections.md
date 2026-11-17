@@ -189,7 +189,7 @@ in [results](results.md) still apply to rows that Qrow keeps.
 
 The schema browser shows user schemas, tables, partitioned tables, views,
 materialized views, and foreign tables. It reads column types and comments.
-Names inserted into SQL use double quotes. The assistant receives `postgres`
+Names that need quotes in SQL get double quotes. The assistant receives `postgres`
 as the connector type in its connection context.
 For automatic relation context, the assistant uses `public` for unqualified
 names. Use qualified names when a different `search_path` applies.
@@ -231,8 +231,11 @@ server certificate and hostname against the system trust store.
 
 Enter **Initial Catalog**, for example `tpch`. Enter **Initial Schema** if you
 want to use unqualified table names, for example `tiny`. The schema is optional.
-The schema browser reads the initial catalog. SQL names from the browser include
-the catalog, schema, and table, with double quotes.
+The schema browser reads the initial catalog. **Copy qualified name** and
+**Insert into editor** give the catalog, schema, and table, for example
+`tpch.tiny.nation`, so the name stays correct after `USE` changes the catalog of
+a tab. **Run preview query** leaves out the catalog, because its new tab starts
+in the initial catalog.
 
 For **Password** authentication, enter the username. Leave the password blank
 if the server accepts a username without a password. Turn on **TLS** when you
@@ -838,8 +841,8 @@ connection settings and set **Refresh**, the first field of the
   values. Qrow keeps
   the copy of the schemas on your computer, so the tree shows it again when
   you turn browsing on.
-- **Manual**: Qrow reads the schemas when you select **Refresh**, or when you
-  expand an unread row while a tab of the connection is connected.
+- **Manual**: Qrow reads the schemas when you select **Refresh metadata**,
+  or when you expand an unread row while a tab of the connection is connected.
 - **While connected**: as **Manual**, and Qrow also
   [refreshes the schemas automatically](#refresh-metadata-automatically).
 
@@ -885,12 +888,12 @@ session for the refresh and closes it when the refresh ends. This session does
 not change the idle timer, the keep-alive, or the results of a tab.
 
 - To refresh all schemas, with the tables and the columns of each schema,
-  right-click the connection and select **Refresh** in the **Schemas**
-  section.
+  right-click the connection and select **Refresh metadata** in the
+  **Schemas** section.
 - To refresh one schema and the columns of all its tables, right-click the
-  schema and select **Refresh**.
+  schema and select **Refresh metadata**.
 - To refresh one table or view and its columns, right-click it and select
-  **Refresh**.
+  **Refresh metadata**.
 - To stop a connection refresh, right-click the connection and select **Stop
   Refresh**. The tree keeps the schemas that it had before the refresh.
 
@@ -952,14 +955,14 @@ had before the refresh. The error shows on the row of the refreshed part:
   the connection name. Click the dot to open Activity and read the error.
   The expanded connection keeps its schemas and has no error or progress row
   after the refresh ends. The dot goes away when you view Activity.
-  Select **Refresh** from the connection menu to try again.
+  Select **Refresh metadata** from the connection menu to try again.
 - A schema, a table, or a view: the row shows a red status dot. Point to
   the dot to read the first line of the error. Click it to open Activity for
   that connection. The dot replaces the schema's relation count while the
   error is unread. When you view Activity, the dot goes away and the count
   returns. A later failure shows a new dot. The expanded row
-  keeps its cached data and has no error row. Select **Refresh** from the
-  schema, table, or view menu to try again.
+  keeps its cached data and has no error row. Select **Refresh metadata**
+  from the schema, table, or view menu to try again.
 
 [Activity](activity.md) shows the full error. Click the status dot or select
 **Show activity** from the connection menu to open it. The connection row uses
@@ -1059,10 +1062,17 @@ metadata and its copy of the schemas.
 
 Type in **Search…** above the tree to find connections, schemas, tables, and
 views. Use a name or part of a name. For a table or view, you can include the
-schema, for example `integrations.bookings`. The search also accepts names
-from **Copy qualified name**, for example `` `integrations`.`bookings` ``.
-The search ignores letter case and spaces at the start and end of the search
-text.
+schema, for example `integrations.bookings`. Before the first dot, use the end
+of a name. After the last dot, use the start of a name. For example,
+`tions.book` finds `integrations.bookings`. On Trino, you can also include the
+catalog, for example `tpch.tiny.nation`. A search for the catalog shows all
+the schemas of the connection.
+
+The search also accepts names from **Copy qualified name** and names in
+quotes, for example `` `integrations`.`bookings` ``. A name in quotes must be
+the full name. If a name has a dot, put it in quotes when you include its
+schema, for example `` sales.`events.v2` ``. The search ignores letter case
+and spaces at the start and end of the search text.
 
 During a search, the tree shows only the connections that match. If no
 connection matches, the tree shows **No matches**.
@@ -1093,12 +1103,32 @@ button shows as selected when the search does not use all connections. The
 choice applies only while the search field has text. Qrow saves the choice
 in the workspace. If you delete a connection, Qrow removes it from the choice.
 
+### Preview the rows of a table
+
+To see the first rows of a table or a view, right-click it and select
+**Run preview query**. Qrow opens a new query tab under the connection and
+runs SQL like this at once:
+
+```sql
+SELECT *
+FROM sales.orders
+LIMIT 100
+```
+
+The tab has the name of the table. If a tab of the connection has this name
+already, the new tab gets a copy suffix. The keywords use
+**SQL Keyword Case** from the settings. To filter or sort the rows, add a
+`WHERE` or `ORDER BY` clause to the SQL and run it again.
+
+A click on a table expands or collapses it. A double-click does not run a
+preview query.
+
 ### Use names in SQL
 
 Right-click a schema, a table, a view, or a column, then select:
 
 - **Copy name** or **Copy qualified name** to copy the name. A table name
-  includes its schema, for example `` `sales`.`orders` ``.
+  includes its schema, for example `sales.orders`.
 - **Insert into editor** to put the name at the cursor of the SQL editor. The
   name replaces the selected text.
 
@@ -1109,9 +1139,11 @@ To use the keyboard, select a row in the tree, then:
 - Press **⌘C** to copy its name.
 - Press **Shift-Enter** to insert its name into the SQL editor.
 
-Qrow puts backticks around each name that it inserts into SQL. This also
-lets you use names that are SQL keywords. A backtick in a name becomes two
-backticks.
+**Copy qualified name**, **Insert into editor**, and **Run preview query**
+put quotes only around a name that needs them, as in
+[name completion](queries.md#complete-names). For example, the table `select`
+in the schema `sales` becomes `` sales.`select` `` on Kyuubi. **Copy name**
+copies a schema or column name without quotes.
 
 ### See refresh details
 

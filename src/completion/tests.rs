@@ -482,6 +482,13 @@ fn names_are_quoted_only_when_they_need_it() {
     assert_eq!(sql_name("returning", KYUUBI), "returning");
     assert_eq!(sql_name("unnest", DatabaseType::Trino), "\"unnest\"");
     assert_eq!(sql_name("filter", KYUUBI), "`filter`");
+    // Words that the Trino and Spark ANSI keyword tables reserve.
+    for word in ["auto", "overlaps", "json_serialize"] {
+        assert_eq!(sql_name(word, DatabaseType::Trino), format!("\"{word}\""));
+    }
+    for word in ["within", "percentile_cont", "percentile_disc"] {
+        assert_eq!(sql_name(word, KYUUBI), format!("`{word}`"));
+    }
     let catalog = catalog(NOW - 60);
     let completion = suggest(Some(&catalog), "SELECT * FROM avia.Mi|");
     assert_eq!(completion.items[0].insert, "`Mixed Case`");

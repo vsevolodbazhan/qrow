@@ -90,7 +90,7 @@ fn refresh_errors_keep_connection_tooltips_short_and_details_in_activity(cx: &mu
     app.toggle_connection(cx, connection);
     app.wait_label(cx, "Not loaded");
     app.context_menu(cx, connection_row(connection));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(
         cx,
         "the unread refresh error",

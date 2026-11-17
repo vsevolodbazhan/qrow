@@ -80,7 +80,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
             app.click(cx, format!("{parent}\u{1f}label"));
         }
         app.context_menu(cx, format!("{parent}\u{1f}label"));
-        app.choose(cx, "popup-menu", "Refresh");
+        app.choose(cx, "popup-menu", "Refresh metadata");
         let status = format!("{parent}\u{1f}error-icon");
         app.wait_for(cx, status.clone());
         app.update(cx, |window, cx| {
@@ -134,7 +134,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
         });
         // Failed scopes remain refreshable from the parent's menu.
         app.context_menu(cx, format!("{parent}\u{1f}label"));
-        app.choose(cx, "popup-menu", "Refresh");
+        app.choose(cx, "popup-menu", "Refresh metadata");
         app.wait_until(
             cx,
             "the second refresh attempt",
@@ -306,10 +306,10 @@ fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut Test
         |_, _| proxy.active.load(Ordering::SeqCst) == 0,
     );
 
-    // Explicit Refresh can connect after the tab has disconnected. It leaves
+    // Refresh metadata can connect after the tab has disconnected. It leaves
     // the query tab disconnected and closes its own temporary session.
     app.context_menu(cx, connection_row(id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     let deadline = Instant::now() + QUERY_TIMEOUT;
     let mut activity = String::new();
     while Instant::now() < deadline {
@@ -375,7 +375,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.context_menu_labelled(cx, "bookings");
     app.choose(cx, "popup-menu", "Copy qualified name");
     let name = cx.read_from_clipboard().unwrap().text().unwrap();
-    assert_eq!(name, format!("`{schema}`.`bookings`"));
+    assert_eq!(name, format!("{schema}.bookings"));
     app.fill_labelled(cx, SEARCH, &name);
     app.wait_until(
         cx,
@@ -399,7 +399,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.type_sql(cx, "SELECT COUNT(*) FROM ");
     app.context_menu_labelled(cx, "bookings");
     app.choose(cx, "popup-menu", "Insert into editor");
-    let sql = format!("SELECT COUNT(*) FROM `{schema}`.`bookings`");
+    let sql = format!("SELECT COUNT(*) FROM {schema}.bookings");
     app.wait_until(cx, "the inserted name", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == sql
     });
@@ -424,6 +424,7 @@ fn an_inserted_reserved_table_name_runs_with_ansi_keywords(cx: &mut TestAppConte
         cx,
         &format!("CREATE VIEW {schema}.`select` AS SELECT 42 AS `from`"),
     );
+    app.run_complete(cx, &format!("CREATE VIEW {schema}.other AS SELECT 1 AS x"));
     app.run_complete(cx, "SET spark.sql.ansi.enabled=true");
     app.run_complete(cx, "SET spark.sql.ansi.enforceReservedKeywords=true");
     app.toggle_connection(cx, profile.id);
@@ -437,12 +438,25 @@ fn an_inserted_reserved_table_name_runs_with_ansi_keywords(cx: &mut TestAppConte
     app.type_sql(cx, "SELECT `from` FROM ");
     app.context_menu_labelled(cx, "select");
     app.choose(cx, "popup-menu", "Insert into editor");
-    let sql = format!("SELECT `from` FROM `{schema}`.`select`");
+    let sql = format!("SELECT `from` FROM {schema}.`select`");
     app.wait_until(cx, "the quoted table name", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == sql
     });
     app.run_complete(cx, &sql);
     app.wait_cell(cx, 0, 1, "42");
+
+    // The search finds the table by the name that Copy qualified name gives.
+    app.context_menu_labelled(cx, "select");
+    app.choose(cx, "popup-menu", "Copy qualified name");
+    let name = cx.read_from_clipboard().unwrap().text().unwrap();
+    assert_eq!(name, format!("{schema}.`select`"));
+    app.fill_labelled(cx, SEARCH, &name);
+    app.wait_until(
+        cx,
+        "the copied name to match",
+        QUERY_TIMEOUT,
+        |window, _| labelled(window, "select").is_some() && labelled(window, "other").is_none(),
+    );
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }
 
@@ -492,7 +506,7 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
         &format!("ALTER TABLE {schema}.bookings ADD COLUMNS (fare DOUBLE)"),
     );
     app.context_menu_labelled(cx, "bookings");
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(cx, "the new column", QUERY_TIMEOUT, |window, _| {
         labelled(window, "fare double").is_some()
     });
@@ -615,7 +629,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
             &format!("ALTER TABLE {schema}.fourth ADD COLUMNS ({added} STRING)"),
         );
         app.context_menu(cx, connection_row(profile.id));
-        app.choose(cx, "popup-menu", "Refresh");
+        app.choose(cx, "popup-menu", "Refresh metadata");
         app.wait_until(
             cx,
             "all table and view columns to refresh",

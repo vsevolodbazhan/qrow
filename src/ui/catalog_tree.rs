@@ -10,7 +10,7 @@
 use super::*;
 use crate::catalog::{
     Catalog, CatalogConfig, CatalogIdentity, CatalogWorker, Event as CatalogEvent, RelationKind,
-    Scope, Seed, Status, catalog_key, qualified_name,
+    Scope, Seed, Status, catalog_key,
 };
 use crate::model::SearchScope;
 use gpui_kit::assets::IconName as AssetIconName;
@@ -157,26 +157,67 @@ pub(super) enum Node {
 
 impl Node {
     /// The name that Copy gives and the name for SQL, for a node with a name.
+    /// SQL names have quotes only around the parts that need them, as in
+    /// name completion.
     fn names(&self, kind: crate::model::DatabaseType, catalog: &str) -> Option<(String, String)> {
+        let sql = |part: &str| crate::completion::sql_name(part, kind);
         match self {
-            Node::Schema { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
+            Node::Schema { name, .. } => Some((name.clone(), sql(name))),
             Node::Relation { schema, name, .. } => {
-                let qualified = format!(
-                    "{}.{}",
-                    kind.quote_identifier(schema),
-                    kind.quote_identifier(name)
-                );
-                let qualified = if kind == crate::model::DatabaseType::Trino {
-                    format!("{}.{}", kind.quote_identifier(catalog), qualified)
-                } else {
-                    qualified
-                };
+                let qualified = relation_in_sql(kind, catalog, schema, name, sql);
                 Some((qualified.clone(), qualified))
             }
-            Node::Column { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
+            Node::Column { name, .. } => Some((name.clone(), sql(name))),
             Node::Connection(_) | Node::Notice { .. } => None,
         }
     }
+}
+
+/// The name of the relation `name` in `schema` for SQL, with each part from
+/// `part`. Trino names also start with the catalog.
+fn relation_in_sql(
+    kind: crate::model::DatabaseType,
+    catalog: &str,
+    schema: &str,
+    name: &str,
+    part: impl Fn(&str) -> String,
+) -> String {
+    let qualified = format!("{}.{}", part(schema), part(name));
+    if kind == crate::model::DatabaseType::Trino {
+        format!("{}.{}", part(catalog), qualified)
+    } else {
+        qualified
+    }
+}
+
+/// The connection type and the initial catalog of a connection, which give
+/// the names of its relations in SQL.
+#[derive(Clone, Copy)]
+struct Dialect<'a> {
+    kind: crate::model::DatabaseType,
+    catalog: &'a str,
+}
+
+/// The rows that Run preview query selects.
+const PREVIEW_ROWS: usize = 100;
+
+/// The SQL that selects the first rows of a relation. Each clause has its
+/// own line, so a filter or an order goes between them. The name has no
+/// Trino catalog: the query runs in a new tab, whose session starts in the
+/// initial catalog of the connection.
+fn preview_sql(
+    kind: crate::model::DatabaseType,
+    schema: &str,
+    name: &str,
+    case: crate::sql::KeywordCase,
+) -> String {
+    let [select, from, limit] = match case {
+        crate::sql::KeywordCase::Uppercase => ["SELECT", "FROM", "LIMIT"],
+        crate::sql::KeywordCase::Lowercase => ["select", "from", "limit"],
+    };
+    let part = |part: &str| crate::completion::sql_name(part, kind);
+    let (schema, name) = (part(schema), part(name));
+    format!("{select} *\n{from} {schema}.{name}\n{limit} {PREVIEW_ROWS}")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -388,21 +429,163 @@ fn contains_lowercase(name: &str, needle: &str) -> bool {
         })
 }
 
-/// Whether the relation `name` in `schema` contains `search`, which is in
-/// lowercase, also in its qualified names. `schema_matches` tells whether
-/// `schema` contains it.
-fn relation_matches(search: &str, schema: &str, schema_matches: bool, name: &str) -> bool {
-    if schema_matches || contains_lowercase(name, search) {
+/// A search for a name in the tree, read once as the parts of a qualified
+/// name. Dots split the parts. Backticks or double quotes around a part keep
+/// its dots, and two quotes in it are one quote. A search matches a path of
+/// names, like a catalog, a schema, and a table, when its parts match parts
+/// in a row: the first part ends a name, the last part starts a name, and
+/// the parts between are full names. A part in quotes starts or ends its
+/// name at the quotes. A search with dots and without a part in quotes also
+/// matches one name that contains all of its text, like the table
+/// `events.v2`. The comparison ignores letter case.
+struct NameSearch {
+    parts: Vec<SearchPart>,
+    /// All the text of a search with dots and without a part in quotes.
+    whole: Option<SearchPart>,
+}
+
+struct SearchPart {
+    /// The text in lowercase, without its quotes.
+    text: String,
+    /// Whether the name must start with the text.
+    start: bool,
+    /// Whether the name must end with the text.
+    end: bool,
+}
+
+impl NameSearch {
+    fn new(search: &str) -> Self {
+        let mut parts = vec![];
+        let mut text = String::new();
+        let (mut opened, mut closed) = (false, false);
+        let mut quote = None;
+        let mut chars = search.chars().peekable();
+        while let Some(c) = chars.next() {
+            match quote {
+                Some(q) if c == q => {
+                    if chars.peek() == Some(&q) {
+                        chars.next();
+                        text.push(q);
+                    } else {
+                        quote = None;
+                        closed = true;
+                    }
+                }
+                Some(_) => text.push(c),
+                None if c == '.' => {
+                    parts.push((std::mem::take(&mut text), opened, closed));
+                    (opened, closed) = (false, false);
+                }
+                None if (c == '`' || c == '"') && text.is_empty() && !opened => {
+                    quote = Some(c);
+                    opened = true;
+                }
+                None => text.push(c),
+            }
+        }
+        parts.push((text, opened, closed));
+        // A quote inside a part is a character of the name, not a quote.
+        let quoted = parts.iter().any(|(_, opened, _)| *opened);
+        let whole = (parts.len() > 1 && !quoted).then(|| SearchPart {
+            text: fold_case(search),
+            start: false,
+            end: false,
+        });
+        let last = parts.len() - 1;
+        let parts = parts
+            .into_iter()
+            .enumerate()
+            .map(|(ix, (text, opened, closed))| SearchPart {
+                text: fold_case(&text),
+                start: ix > 0 || opened,
+                end: ix < last || closed,
+            })
+            .collect();
+        Self { parts, whole }
+    }
+
+    /// Whether the search matches `path`, the names of a qualified name.
+    fn matches(&self, path: &[&str]) -> bool {
+        if let Some(whole) = &self.whole
+            && path.iter().any(|name| whole.matches(name))
+        {
+            return true;
+        }
+        let count = self.parts.len();
+        count <= path.len()
+            && (0..=path.len() - count).any(|first| {
+                self.parts
+                    .iter()
+                    .zip(&path[first..])
+                    .all(|(part, name)| part.matches(name))
+            })
+    }
+}
+
+impl SearchPart {
+    fn matches(&self, name: &str) -> bool {
+        let needle = self.text.as_str();
+        if name.is_ascii() && needle.is_ascii() {
+            let (bytes, wanted) = (name.as_bytes(), needle.as_bytes());
+            return match (self.start, self.end) {
+                (true, true) => bytes.eq_ignore_ascii_case(wanted),
+                (true, false) => bytes
+                    .get(..wanted.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(wanted)),
+                (false, true) => {
+                    bytes.len() >= wanted.len()
+                        && bytes[bytes.len() - wanted.len()..].eq_ignore_ascii_case(wanted)
+                }
+                (false, false) => contains_lowercase(name, needle),
+            };
+        }
+        let name = fold_case(name);
+        match (self.start, self.end) {
+            (true, true) => name == needle,
+            (true, false) => name.starts_with(needle),
+            (false, true) => name.ends_with(needle),
+            (false, false) => name.contains(needle),
+        }
+    }
+}
+
+/// `text` in lowercase, one character at a time, so that the final sigma
+/// and the sigma are the same letter.
+fn fold_case(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == 'ς' { 'σ' } else { c })
+        .collect()
+}
+
+/// The names of the qualified name of a schema: the catalog on Trino, and the
+/// schema.
+fn schema_path<'a>(dialect: Dialect<'a>, schema: &'a str) -> ([&'a str; 3], usize) {
+    let trino = dialect.kind == crate::model::DatabaseType::Trino;
+    ([dialect.catalog, schema, ""], if trino { 0 } else { 1 })
+}
+
+/// Whether `search` matches the schema `schema`, also in its qualified name.
+fn schema_matches(search: &NameSearch, dialect: Dialect, schema: &str) -> bool {
+    let (path, first) = schema_path(dialect, schema);
+    search.matches(&path[first..2])
+}
+
+/// Whether `search` matches the relation `name` in `schema`, also in its
+/// qualified name. `schema_matches` tells whether the schema matches.
+fn relation_matches(
+    search: &NameSearch,
+    dialect: Dialect,
+    schema: &str,
+    schema_matches: bool,
+    name: &str,
+) -> bool {
+    if schema_matches {
         return true;
     }
-    // In ASCII names, a search without a dot or a backtick matches a
-    // qualified name only in its schema or its relation name. Other scripts
-    // can lowercase differently in the qualified name, like the final sigma.
-    if !search.contains(['.', '`']) && schema.is_ascii() && name.is_ascii() {
-        return false;
-    }
-    contains_lowercase(&format!("{schema}.{name}"), search)
-        || contains_lowercase(&qualified_name(schema, name), search)
+    let (mut path, first) = schema_path(dialect, schema);
+    path[2] = name;
+    search.matches(&path[first..])
 }
 
 /// Builds the tree items and their nodes.
@@ -411,6 +594,8 @@ struct Builder<'a> {
     /// The dbt resources of the tables of each connection.
     dbt: &'a HashMap<Uuid, Rc<super::dbt::DbtLookup>>,
     search: String,
+    /// `search` as the parts of a qualified name.
+    names: NameSearch,
     /// The connection of the active tab, for the Current connection scope.
     current: Option<Uuid>,
     nodes: HashMap<SharedString, Node>,
@@ -491,8 +676,19 @@ impl Builder<'_> {
 
     /// Whether the relation `name` in `schema` matches, also by its
     /// qualified names. `schema_matches` tells whether `schema` matches.
-    fn matches_relation(&self, schema: &str, schema_matches: bool, name: &str) -> bool {
-        relation_matches(&self.search, schema, schema_matches, name)
+    fn matches_relation(
+        &self,
+        dialect: Dialect,
+        schema: &str,
+        schema_matches: bool,
+        name: &str,
+    ) -> bool {
+        relation_matches(&self.names, dialect, schema, schema_matches, name)
+    }
+
+    /// Whether the schema `name` matches, also by its qualified name.
+    fn matches_schema(&self, dialect: Dialect, name: &str) -> bool {
+        schema_matches(&self.names, dialect, name)
     }
 
     /// The row of a connection, or `None` when a search hides it: the
@@ -506,15 +702,19 @@ impl Builder<'_> {
         // A connection that matches by name shows all its schemas.
         let filtered = searching && !self.matches(&profile.name);
         let browses = profile.catalog.browses();
+        let dialect = Dialect {
+            kind: profile.database_type,
+            catalog: &profile.database,
+        };
         if filtered
             && !(browses
                 && self.tree.catalog(profile.id).is_some_and(|catalog| {
                     catalog.schemas.iter().any(|(name, schema)| {
-                        self.matches(name)
+                        self.matches_schema(dialect, name)
                             || schema.relations.as_ref().is_some_and(|relations| {
                                 relations
                                     .keys()
-                                    .any(|r| self.matches_relation(name, false, r))
+                                    .any(|r| self.matches_relation(dialect, name, false, r))
                             })
                     })
                 }))
@@ -536,7 +736,7 @@ impl Builder<'_> {
             self.is_expanded(&id)
         };
         Some(self.folder(item, expanded, profile.id, |builder| {
-            builder.connection_children(profile.id, &id, filtered)
+            builder.connection_children(profile.id, dialect, &id, filtered)
         }))
     }
 
@@ -545,6 +745,7 @@ impl Builder<'_> {
     fn connection_children(
         &mut self,
         profile: Uuid,
+        dialect: Dialect,
         id: &SharedString,
         filtered: bool,
     ) -> Vec<TreeItem> {
@@ -583,12 +784,12 @@ impl Builder<'_> {
             if filtered && self.matches >= MAX_SEARCH_MATCHES {
                 break;
             }
-            let schema_matches = !filtered || self.matches(name);
+            let schema_matches = !filtered || self.matches_schema(dialect, name);
             let relation_matches = !schema_matches
                 && schema.relations.as_ref().is_some_and(|relations| {
                     relations
                         .keys()
-                        .any(|r| self.matches_relation(name, false, r))
+                        .any(|r| self.matches_relation(dialect, name, false, r))
                 });
             if !schema_matches && !relation_matches {
                 continue;
@@ -618,7 +819,7 @@ impl Builder<'_> {
                 self.is_expanded(&item_id)
             };
             children.push(self.folder(item, expanded, profile, |builder| {
-                builder.schema_children(catalog, profile, name, &item_id, filtered)
+                builder.schema_children(catalog, profile, dialect, name, &item_id, filtered)
             }));
         }
         // A filtered connection has matches, so the limit hides them all.
@@ -632,6 +833,7 @@ impl Builder<'_> {
         &mut self,
         catalog: &Catalog,
         profile: Uuid,
+        dialect: Dialect,
         schema: &str,
         id: &SharedString,
         filtered: bool,
@@ -655,7 +857,7 @@ impl Builder<'_> {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
                 for (name, relation) in relations {
-                    if filtered && !self.matches_relation(schema, false, name) {
+                    if filtered && !self.matches_relation(dialect, schema, false, name) {
                         continue;
                     }
                     if filtered {
@@ -880,6 +1082,7 @@ impl Qrow {
         let mut builder = Builder {
             tree: &self.catalog,
             dbt: &dbt,
+            names: NameSearch::new(&search),
             search,
             current,
             nodes: HashMap::new(),
@@ -1387,6 +1590,45 @@ impl Qrow {
         });
     }
 
+    /// Opens a query tab named after a relation and runs `sql`, which
+    /// selects its first rows.
+    fn preview_rows(
+        &mut self,
+        profile: Uuid,
+        relation: &str,
+        sql: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_open() || !self.profiles.iter().any(|p| p.id == profile) {
+            return;
+        }
+        // The new tab must show, so the maximized assistant steps aside.
+        self.uncover_workspace(window, cx);
+        let title: String = relation
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(MAX_TAB_TITLE)
+            .collect();
+        let title = if title.trim().is_empty() {
+            "Query"
+        } else {
+            title.trim()
+        };
+        let mut saved = SavedTab::new(1, Some(profile));
+        saved.title = unique_tab_title(title, |candidate| {
+            self.tabs
+                .iter()
+                .any(|tab| tab.saved.profile == Some(profile) && tab.saved.title == candidate)
+        });
+        saved.sql = sql.clone();
+        let tab = self.make_tab(saved, window, cx);
+        self.tabs.push(tab);
+        let index = self.tabs.len() - 1;
+        self.activate(index, window, cx);
+        self.run_tab_sql(index, sql, false, cx);
+    }
+
     /// The ID prefixes of the rows below a connection, or below one of its
     /// schemas.
     fn descendant_prefixes(profile: Uuid, schema: Option<&str>) -> Vec<String> {
@@ -1530,6 +1772,7 @@ impl Qrow {
         } else {
             "Copy name"
         };
+        let case = self.settings.sql_style().keyword_case;
         let refresh = scope.map(|scope| {
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.refresh_catalog(profile, scope.clone(), cx)
@@ -1556,6 +1799,29 @@ impl Qrow {
             }
             _ => None,
         };
+        let kind = self
+            .profiles
+            .iter()
+            .find(|candidate| candidate.id == profile)
+            .map(|profile| profile.database_type);
+        let preview = match (&node, kind) {
+            (
+                Node::Relation {
+                    profile,
+                    schema,
+                    name: relation,
+                    ..
+                },
+                Some(kind),
+            ) => {
+                let (profile, title) = (*profile, relation.clone());
+                let preview = preview_sql(kind, schema, relation, case);
+                Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.preview_rows(profile, &title, preview.clone(), window, cx)
+                }))
+            }
+            _ => None,
+        };
         let collapse = match &node {
             Node::Schema { name, .. } => {
                 let has_expanded = self.has_expanded_descendants(profile, Some(name), cx);
@@ -1574,9 +1840,15 @@ impl Qrow {
             position,
             Some(tree),
             move |menu, _, _| {
+                let menu = match preview {
+                    Some(preview) => menu
+                        .item(PopupMenuItem::new("Run preview query").on_click(preview))
+                        .separator(),
+                    None => menu,
+                };
                 let menu = match refresh {
                     Some(refresh) => menu.item(
-                        PopupMenuItem::new("Refresh")
+                        PopupMenuItem::new("Refresh metadata")
                             .on_click(refresh)
                             .disabled(refreshing),
                     ),
@@ -1592,17 +1864,8 @@ impl Qrow {
                 };
                 let menu = if has_commands { menu.separator() } else { menu };
                 let menu = menu
-                    // The actions only show the shortcuts: a click runs the handler.
-                    .item(
-                        PopupMenuItem::new(copy_label)
-                            .action(Box::new(CopyCatalogName))
-                            .on_click(copy),
-                    )
-                    .item(
-                        PopupMenuItem::new("Insert into editor")
-                            .action(Box::new(InsertCatalogName))
-                            .on_click(insert),
-                    );
+                    .item(PopupMenuItem::new(copy_label).on_click(copy))
+                    .item(PopupMenuItem::new("Insert into editor").on_click(insert));
                 match details {
                     Some(details) => menu
                         .separator()
@@ -3085,6 +3348,86 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
+    fn preview_sql_follows_the_keyword_case() {
+        use crate::model::DatabaseType;
+        use crate::sql::KeywordCase;
+        assert_eq!(
+            preview_sql(
+                DatabaseType::Kyuubi,
+                "avia",
+                "select",
+                KeywordCase::Uppercase
+            ),
+            "SELECT *\nFROM avia.`select`\nLIMIT 100"
+        );
+        // The Trino name has no catalog, and quotes only the parts that need them.
+        assert_eq!(
+            preview_sql(DatabaseType::Trino, "avia", "T", KeywordCase::Lowercase),
+            "select *\nfrom avia.\"T\"\nlimit 100"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn sql_names_quote_only_the_parts_that_need_it() {
+        use crate::model::DatabaseType;
+        let relation = |schema: &str, name: &str| Node::Relation {
+            profile: Uuid::nil(),
+            schema: schema.into(),
+            name: name.into(),
+            kind: RelationKind::Table,
+            comment: None,
+            loading: false,
+            error: None,
+            error_id: None,
+            dbt: None,
+        };
+        let name = |node: &Node, kind| node.names(kind, "delta").unwrap().1;
+        assert_eq!(
+            name(&relation("avia", "bookings"), DatabaseType::Kyuubi),
+            "avia.bookings"
+        );
+        assert_eq!(
+            name(&relation("avia", "order"), DatabaseType::Kyuubi),
+            "avia.`order`"
+        );
+        assert_eq!(
+            name(&relation("avia", "Daily Stats"), DatabaseType::Kyuubi),
+            "avia.`Daily Stats`"
+        );
+        assert_eq!(
+            name(&relation("avia", "bookings"), DatabaseType::Trino),
+            "delta.avia.bookings"
+        );
+        assert_eq!(
+            name(&relation("auto", "within"), DatabaseType::Trino),
+            "delta.\"auto\".within"
+        );
+        assert_eq!(
+            name(&relation("select", "within"), DatabaseType::Kyuubi),
+            "`select`.`within`"
+        );
+        assert_eq!(
+            name(&relation("Avia", "bookings"), DatabaseType::Postgres),
+            "\"Avia\".bookings"
+        );
+        // Copy name gives a schema or a column name as it is.
+        let column = Node::Column {
+            profile: Uuid::nil(),
+            schema: "avia".into(),
+            relation: "bookings".into(),
+            name: "Order".into(),
+            data_type: "bigint".into(),
+            comment: None,
+            description: None,
+            description_cut: false,
+        };
+        assert_eq!(
+            column.names(DatabaseType::Kyuubi, "delta").unwrap(),
+            ("Order".to_owned(), "`Order`".to_owned())
+        );
+    }
+
+    #[::core::prelude::v1::test]
     fn an_error_summary_keeps_only_the_first_line() {
         let trace =
             "\n  Could not open the session: host unreachable\n\tat org.apache.Foo(Foo.java:1)";
@@ -3112,13 +3455,108 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn relations_match_by_name_and_by_qualified_name() {
-        assert!(relation_matches("orders", "sales", false, "Orders"));
-        assert!(relation_matches("anything", "sales", true, "orders"));
-        assert!(relation_matches("sales.ord", "Sales", false, "Orders"));
-        assert!(relation_matches("`sales`.`o", "sales", false, "orders"));
-        assert!(!relation_matches("events", "sales", false, "orders"));
-        // The schema alone lowercases to `ος`, the qualified name to `οσ.`.
-        assert!(relation_matches("σ", "ΟΣ", false, "orders"));
+        use crate::model::DatabaseType;
+        let spark = Dialect {
+            kind: DatabaseType::Kyuubi,
+            catalog: "",
+        };
+        let trino = Dialect {
+            kind: DatabaseType::Trino,
+            catalog: "tpch",
+        };
+        let postgres = Dialect {
+            kind: DatabaseType::Postgres,
+            catalog: "",
+        };
+        // The tree lowercases the search before it reads it.
+        let relation = |search: &str, dialect, schema, name| {
+            let search = NameSearch::new(&search.to_lowercase());
+            relation_matches(&search, dialect, schema, false, name)
+        };
+        let matches = |search, schema, name| relation(search, spark, schema, name);
+        assert!(matches("orders", "sales", "Orders"));
+        assert!(relation_matches(
+            &NameSearch::new("anything"),
+            spark,
+            "sales",
+            true,
+            "orders"
+        ));
+        assert!(matches("sales.ord", "Sales", "Orders"));
+        assert!(matches("les.ord", "sales", "orders"));
+        assert!(matches("sales.", "sales", "orders"));
+        assert!(matches("`sales`.`o", "sales", "orders"));
+        assert!(!matches("`sale`.`o", "sales", "orders"));
+        assert!(!matches("events", "sales", "orders"));
+        assert!(!matches("sales.x", "sales", "orders"));
+        // A final sigma and a sigma are the same letter.
+        assert!(matches("σ", "ΟΣ", "orders"));
+        assert!(matches("ος.orders", "ΟΣ", "orders"));
+        assert!(matches("ΟΣ.ORDERS", "οσ", "orders"));
+        // A dot can be part of one name.
+        assert!(matches("events.v2", "sales", "events.v2"));
+        assert!(matches("nts.v", "sales", "events.v2"));
+        assert!(matches("events.v2", "events.v2", "orders"));
+        assert!(matches("sales.`events.v2`", "sales", "events.v2"));
+        assert!(!matches("sales.events.v2", "sales", "events.v2"));
+        // A quote inside a part is a character of the name.
+        assert!(matches("events\"old.v2", "sales", "events\"old.v2"));
+        assert!(matches("events`old.v2", "sales", "events`old.v2"));
+        // A name in quotes is a full name, also when another name contains
+        // the quotes.
+        assert!(!matches("\"orders\"", "sales", "archive_\"orders\"_old"));
+        assert!(!matches("`orders`", "sales", "archive_`orders`_old"));
+        assert!(!matches("sales.`orders`", "sales", "x_sales.`orders`_y"));
+        assert!(!matches(
+            "\"sales\".\"orders\"",
+            "sales",
+            "\"sales\".\"orders\"_old"
+        ));
+        // Copy qualified name puts quotes only around the parts that need
+        // them, so the search finds the relation by this name too.
+        assert!(matches("sales.`select`", "sales", "select"));
+        assert!(matches("`select`.orders", "select", "orders"));
+        assert!(matches("`a``b`.c", "a`b", "c"));
+        assert!(matches("`a.b`.c", "a.b", "c"));
+        assert!(!matches("`a.b`.c", "a", "b.c"));
+        // Trino names start with the catalog, also in part.
+        assert!(relation("tpch", trino, "tiny", "nation"));
+        assert!(relation("pch", trino, "tiny", "nation"));
+        assert!(relation("tpch.tiny.nation", trino, "tiny", "nation"));
+        assert!(relation("tpch.\"auto\".nation", trino, "auto", "nation"));
+        assert!(relation(
+            "\"tpch\".\"tiny\".\"nation\"",
+            trino,
+            "tiny",
+            "nation"
+        ));
+        assert!(!relation("tpch", spark, "tiny", "nation"));
+        assert!(relation("\"Sales\".orders", postgres, "Sales", "orders"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn schemas_match_by_name_and_by_qualified_name() {
+        use crate::model::DatabaseType;
+        let spark = Dialect {
+            kind: DatabaseType::Kyuubi,
+            catalog: "",
+        };
+        let trino = Dialect {
+            kind: DatabaseType::Trino,
+            catalog: "tpch",
+        };
+        let matches = |search: &str, dialect, schema| {
+            schema_matches(&NameSearch::new(&search.to_lowercase()), dialect, schema)
+        };
+        assert!(matches("sel", spark, "select"));
+        assert!(matches("`select`", spark, "select"));
+        assert!(matches("\"select\"", spark, "select"));
+        assert!(!matches("`selec`", spark, "select"));
+        assert!(matches("tpch.tiny", trino, "tiny"));
+        assert!(matches("tpch", trino, "tiny"));
+        assert!(!matches("tpch.tiny.nation", trino, "tiny"));
+        assert!(matches("raw.v2", spark, "raw.v2"));
+        assert!(matches("`RAW.V2`", spark, "raw.v2"));
     }
 
     #[::core::prelude::v1::test]

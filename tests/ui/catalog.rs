@@ -441,7 +441,7 @@ fn schema_error_dots_replace_counts_until_their_activity_is_read(cx: &mut TestAp
             app.wait_for(cx, detail.clone());
             let count_bounds = app.update(cx, |window, _| bounds_of(window, &detail));
             app.context_menu(cx, format!("{parent}\u{1f}label"));
-            app.choose(cx, "popup-menu", "Refresh");
+            app.choose(cx, "popup-menu", "Refresh metadata");
             app.wait_for(cx, status.clone());
             assert_status_alignment(&app, cx, &status);
             app.update(cx, |window, cx| {
@@ -505,7 +505,7 @@ fn a_schema_failure_is_read_when_activity_is_already_open(cx: &mut TestAppContex
     let parent = format!("s\u{1f}{}\u{1f}finance", profile.id);
     app.wait_for(cx, format!("{parent}\u{1f}detail"));
     app.context_menu(cx, format!("{parent}\u{1f}label"));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_for(cx, format!("{parent}\u{1f}busy"));
     app.click(cx, "toggle-activity");
     app.wait_for(cx, "activity");
@@ -835,6 +835,8 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
                 "finance",
                 Some(&[table("bookings_other", RelationKind::Table)]),
             ),
+            // Its relations are not loaded.
+            ("archive", None),
         ],
     );
     cache(
@@ -888,6 +890,14 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
     app.update(cx, |window, _| {
         assert!(labelled(window, "integrations").is_none());
         assert!(labelled(window, "bookings").is_none());
+    });
+
+    // A schema name in quotes finds the schema, also before its relations
+    // load.
+    app.fill_labelled(cx, SEARCH, "`archive`");
+    wait_shows(&app, cx, "archive");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "integrations").is_none());
     });
     assert_eq!(app.credentials.reads(), 0);
 }
@@ -1171,13 +1181,13 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
         cx.read_from_clipboard()
             .and_then(|item| item.text())
             .as_deref(),
-        Some("`avia`.`bookings`")
+        Some("avia.bookings")
     );
 
     app.context_menu_labelled(cx, "daily");
     app.choose(cx, "popup-menu", "Insert into editor");
     app.wait_until(cx, "the inserted name", Duration::from_secs(10), |_, _| {
-        app.saved().tabs[0].sql == "`avia`.`daily`"
+        app.saved().tabs[0].sql == "avia.daily"
     });
 
     let gate = app.update(cx, |window, _| {
@@ -1190,7 +1200,76 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
         assert!(labelled(window, "gate string").is_some());
     });
     std::thread::sleep(Duration::from_millis(600));
-    assert_eq!(app.saved().tabs[0].sql, "`avia`.`daily`");
+    assert_eq!(app.saved().tabs[0].sql, "avia.daily");
+}
+
+#[gpui_kit::test]
+fn preview_rows_opens_a_tab_that_runs_at_once(cx: &mut TestAppContext) {
+    // A loopback socket holds the session open until the test closes it.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        ..offline_profile("Warehouse")
+    };
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    wait_shows(&app, cx, "bookings");
+
+    // A schema has no rows to preview.
+    app.context_menu_labelled(cx, "avia");
+    app.update(cx, |window, _| {
+        assert!(menu_item(window, "popup-menu", "Run preview query").is_none());
+    });
+    app.press(cx, "escape");
+
+    let sql = "SELECT *\nFROM avia.bookings\nLIMIT 100";
+    app.context_menu_labelled(cx, "bookings");
+    // It opens the menu, in a group of its own: a separator, which has no
+    // label, comes between it and Refresh metadata.
+    app.update(cx, |window, _| {
+        assert_eq!(
+            menu_item(window, "popup-menu", "Run preview query"),
+            Some(0)
+        );
+        assert_eq!(menu_item(window, "popup-menu", "Refresh metadata"), Some(2));
+    });
+    app.choose(cx, "popup-menu", "Run preview query");
+    app.wait_saved(cx, "the preview tab", |saved| {
+        saved.tabs.len() == 2
+            && saved.active_tab == 1
+            && saved.tabs[1].title == "bookings"
+            && saved.tabs[1].sql == sql
+    });
+    let query = app.saved().tabs[1].id;
+    app.wait_until(
+        cx,
+        "the preview run",
+        Duration::from_secs(10),
+        |window, _| {
+            label(window, format!("query-status-{query}")).as_deref()
+                == Some("bookings, connecting")
+        },
+    );
+
+    // A second preview of the same table gets its own tab and name.
+    app.context_menu_labelled(cx, "bookings");
+    app.choose(cx, "popup-menu", "Run preview query");
+    app.wait_saved(cx, "the second preview tab", |saved| {
+        saved.tabs.len() == 3
+            && saved.active_tab == 2
+            && saved.tabs[2].title != "bookings"
+            && saved.tabs[2].title.starts_with("bookings")
+            && saved.tabs[2].sql == sql
+    });
+    drop(listener);
 }
 
 #[gpui_kit::test]
@@ -1218,7 +1297,7 @@ fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut Te
     wait_shows(&app, cx, "finance");
     assert_eq!(app.credentials.reads(), 0);
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(
         cx,
         "the refresh error",
@@ -1255,7 +1334,7 @@ fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut Te
     app.wait_gone(cx, "activity");
     // The connection menu tries again.
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(cx, "a second attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 2
     });
@@ -1385,7 +1464,7 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
         cx,
         "the inserted column",
         Duration::from_secs(10),
-        |_, _| app.saved().tabs[0].sql == "`gate`",
+        |_, _| app.saved().tabs[0].sql == "gate",
     );
 }
 
@@ -1629,7 +1708,7 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
     let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.wait_until(cx, "the attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 1
     });
@@ -2057,7 +2136,7 @@ fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut Test
         assert!(menu_item(window, "popup-menu", "Edit").is_some());
         // Without schema browsing, the menu has no Schemas section.
         assert!(window.try_find("menu-section-Schemas").is_none());
-        for item in ["Refresh", "Collapse"] {
+        for item in ["Refresh metadata", "Collapse"] {
             assert!(menu_item(window, "popup-menu", item).is_none(), "{item}");
         }
     });
@@ -2091,7 +2170,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
     };
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
+    app.choose(cx, "popup-menu", "Refresh metadata");
     app.hover_labelled(cx, "Closing, refreshing schemas");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
@@ -2412,7 +2491,7 @@ fn the_demo_catalog_supports_search_columns_and_copy(cx: &mut TestAppContext) {
         cx.read_from_clipboard()
             .and_then(|item| item.text())
             .as_deref(),
-        Some("`avia`.`bookings`")
+        Some("avia.bookings")
     );
     app.fill_labelled(cx, SEARCH, "finance.payments");
     app.click_labelled(cx, "payments");
