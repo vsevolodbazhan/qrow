@@ -699,16 +699,20 @@ impl Qrow {
         }
         let input = editor.read(cx);
         let input_bounds = input.input_bounds();
+        let (cursor, _) = input.cursor_layout()?;
+        // The cursor of the last layout, in window coordinates.
+        if !input_bounds.contains(&(cursor.origin + input.scroll_offset())) {
+            return None;
+        }
         // The start of the name, in window coordinates. The popup follows
         // one name, so typing changes only the text after this point. The
         // last layout of the editor places it correctly also in the frame
         // of a keystroke, before the editor lays out the new text. The
-        // cursor of that layout is one keystroke behind the text.
+        // cursor of that layout is one keystroke behind the text. When a
+        // long name scrolls its start out of view, the list stays at the
+        // left edge of the editor.
         let start = popup.request.replace.start;
         let name = input.range_to_bounds(&(start..start))?;
-        if !input_bounds.contains(&name.origin) {
-            return None;
-        }
         let layout = self.completion_layout(popup, window, cx);
         // Names in the list start under the name in the editor.
         // The border, the padding of the popup and of a row, the icon, and
