@@ -2303,6 +2303,21 @@ where
                                                     .child(self.measure_render_td(
                                                         row_ix, col_ix, window, cx,
                                                     ))
+                                                    // Qrow: a line between two fixed columns,
+                                                    // as between their headers. The last
+                                                    // fixed column has the group border.
+                                                    .when(col_ix + 1 < left_columns_count, |this| {
+                                                        this.child(
+                                                            div()
+                                                                .absolute()
+                                                                .top_0()
+                                                                .right_0()
+                                                                .bottom_0()
+                                                                .w_0()
+                                                                .border_r_1()
+                                                                .border_color(cx.theme().border),
+                                                        )
+                                                    })
                                                     .when(is_cell_selected, |this| {
                                                         this.child(
                                                             div()

@@ -91,6 +91,8 @@ Qrow changes these files:
   `TableState::vertical_scrollbar_room` (new) returns the width of that
   room for the current rows and columns, so Qrow can scroll a cell into
   view right after a change of columns.
+  Each row shows a line between two fixed columns, as the header does.
+  Before, a row showed only the line after the last fixed column.
   When columns are hidden past an edge of the scrolled columns, the cut
   column fades into that edge, in the header and in each row, with a 28 px
   gradient in the color that the row shows there: the table, a stripe, a
