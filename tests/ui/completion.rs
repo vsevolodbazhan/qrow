@@ -288,6 +288,36 @@ fn the_details_box_shows_the_start_of_a_long_description_as_markdown(cx: &mut Te
 }
 
 #[gpui_kit::test]
+fn typing_in_the_name_keeps_the_list_in_place(cx: &mut TestAppContext) {
+    let long = "customer_lifetime_value_by_acquisition_channel_and_region_v2";
+    let (app, _) = launch(cx, fresh(), &[long, "cqx"]);
+    complete(&app, cx, "SELECT * FROM avia.");
+    let opened = app.update(cx, |window, _| bounds_of(window, "sql-completion"));
+    // Each key filters the list. The list stays under the start of the
+    // name, and it does not get narrower when the longest name goes.
+    for (key, expected) in [("c", None), ("q", None), ("x", Some(vec!["cqx"]))] {
+        // The key without the input helper of the tests, which draws the
+        // editor before the popup sees the edit. As in the app, the first
+        // frame after the key draws the popup with the editor layout of the
+        // old text. Before the fix, it moved one character to the left.
+        app.update(cx, |window, cx| {
+            let mut keystroke = gpui_kit::Keystroke::parse(key).unwrap();
+            keystroke.key_char = Some(key.to_owned());
+            window.dispatch_keystroke(keystroke, cx);
+        });
+        let first = app.update(cx, |window, _| bounds_of(window, "sql-completion"));
+        assert_eq!(first.origin, opened.origin, "first frame after {key:?}");
+        app.settle(cx);
+        if let Some(expected) = expected {
+            assert_eq!(items(&app, cx), expected, "after {key:?}");
+        }
+        let typed = app.update(cx, |window, _| bounds_of(window, "sql-completion"));
+        assert_eq!(typed.origin, opened.origin, "after {key:?}");
+        assert_eq!(typed.size.width, opened.size.width, "after {key:?}");
+    }
+}
+
+#[gpui_kit::test]
 fn typing_past_the_name_or_leaving_the_editor_closes_the_popup(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, fresh(), &[]);
     complete(&app, cx, "SELECT * FROM avia.b");

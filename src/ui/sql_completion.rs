@@ -18,7 +18,7 @@ use gpui_kit::component::text::{TextView, TextViewState, TextViewStyle};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 use uuid::Uuid;
@@ -76,6 +76,10 @@ pub(super) struct CompletionPopup {
     requested: HashSet<Need>,
     /// The parsed Markdown of the description in the details box.
     description: RefCell<Option<Description>>,
+    /// The widest list since the popup opened at this name. Typing that
+    /// filters out the longest names does not make the list narrower, so
+    /// the details box beside it stays in place.
+    width: Cell<Pixels>,
 }
 
 /// The Markdown state of a description, kept while its text stays the same.
@@ -300,6 +304,10 @@ impl Qrow {
             self.read_for_completion(profile.id, need_scope(need), cx);
         }
         let description = previous.as_ref().and_then(|popup| popup.description.take());
+        let width = previous
+            .as_ref()
+            .filter(|popup| popup.request.start == request.start)
+            .map_or(px(0.), |popup| popup.width.get());
         let same_list = previous.as_ref().is_some_and(|popup| {
             popup.request.prefix == request.prefix && popup.request.place == request.place
         });
@@ -326,6 +334,7 @@ impl Qrow {
             scroll,
             requested,
             description: RefCell::new(description),
+            width: Cell::new(width),
         });
         cx.notify();
     }
@@ -689,27 +698,27 @@ impl Qrow {
             return None;
         }
         let input = editor.read(cx);
-        let (cursor, line_height) = input.cursor_layout()?;
         let input_bounds = input.input_bounds();
+        let (cursor, _) = input.cursor_layout()?;
         // The cursor of the last layout, in window coordinates.
-        let caret = cursor.origin + input.scroll_offset();
-        if !input_bounds.contains(&caret) {
+        if !input_bounds.contains(&(cursor.origin + input.scroll_offset())) {
             return None;
         }
-        let text = input.value();
-        let typed =
-            &text[popup.request.replace.start..input.cursor().max(popup.request.replace.start)];
-        let names = self.completion_font(cx);
-        let typed_width = text_width(window, typed, &names, self.ui_px(13.));
+        // The start of the name, in window coordinates. The popup follows
+        // one name, so typing changes only the text after this point. The
+        // last layout of the editor places it correctly also in the frame
+        // of a keystroke, before the editor lays out the new text. The
+        // cursor of that layout is one keystroke behind the text. When a
+        // long name scrolls its start out of view, the list stays at the
+        // left edge of the editor.
+        let start = popup.request.replace.start;
+        let name = input.range_to_bounds(&(start..start))?;
         let layout = self.completion_layout(popup, window, cx);
         // Names in the list start under the name in the editor.
         // The border, the padding of the popup and of a row, the icon, and
         // the gap before the name.
         let name_inset = self.ui_px(1. + 4. + 8. + 14. + GAP);
-        let mut position = point(
-            caret.x - typed_width - name_inset,
-            caret.y + line_height + self.ui_px(2.),
-        );
+        let mut position = point(name.origin.x - name_inset, name.bottom() + self.ui_px(4.));
         let margin = px(8.);
         let window_right = window.viewport_size().width - margin;
         let right = input_bounds.right().min(window_right) - layout.width;
@@ -779,7 +788,9 @@ impl Qrow {
             .fold(px(0.), Pixels::max);
         let width = (widest + chrome)
             .max(self.ui_px(MIN_WIDTH))
-            .min(self.ui_px(MAX_WIDTH));
+            .min(self.ui_px(MAX_WIDTH))
+            .max(popup.width.get());
+        popup.width.set(width);
         let room = width - chrome;
         let (labels, cut) = rows
             .iter()
