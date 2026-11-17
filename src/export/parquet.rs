@@ -149,6 +149,12 @@ pub fn write(
     cancel: &AtomicBool,
 ) -> io::Result<usize> {
     super::validate_table(table)?;
+    if table.transposed {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Parquet needs one type for each column.",
+        ));
+    }
     let memory = super::budget::GLOBAL.allowance(WRITER_MEMORY)?;
     let schema_bytes = schema_memory(
         table
@@ -328,6 +334,7 @@ pub(crate) fn write_spool(
                 rows: batch.rows(),
                 row_indices: 0..batch.rows().len(),
                 column_indices: 0..=spool.columns().len() - 1,
+                transposed: false,
             };
             let additional: Vec<_> = fields
                 .iter()
@@ -378,6 +385,7 @@ pub(crate) fn write_spool(
             columns: spool.columns(),
             row_indices: 0..rows.len(),
             column_indices: 0..=spool.columns().len() - 1,
+            transposed: false,
             rows: &rows,
         };
         let mut group = writer.next_row_group().map_err(error)?;
@@ -745,6 +753,7 @@ mod tests {
             rows,
             row_indices: 0..rows.len(),
             column_indices: 0..=columns.len() - 1,
+            transposed: false,
         }
     }
     fn schema_columns(names: &[(&str, &str)]) -> Vec<Column> {

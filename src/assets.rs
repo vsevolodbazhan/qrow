@@ -31,7 +31,8 @@ const STATUS_BAR_ICONS: [&str; 5] = [
 // the icons after `Send`. The status bar uses `Activity`, `Plug`, and
 // `KeyRound`. The Sign-ins sidebar uses `KeyRound`, and the Connections and
 // Sign-ins sidebars use `ClipboardPaste`.
-// The result toolbar uses `FileCode` for Copy query and `Pin`, and the Logs
+// The result toolbar uses `FileCode` for Copy query, `Pin`, and
+// `RotateCwSquare` for Transpose result, and the Logs
 // toolbar uses `Trash` for Clear. The Connections search uses `ListFilter`.
 // The conversation list toggle uses `List`. The status bar Updates button uses
 // `CircleFadingArrowUp`.
@@ -57,6 +58,7 @@ gpui_kit::assets::icon_assets!(
         FileCode,
         Download,
         Pin,
+        RotateCwSquare,
         Trash,
         ListFilter,
         List,

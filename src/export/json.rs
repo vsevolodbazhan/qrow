@@ -39,15 +39,30 @@ pub fn write(
 ) -> io::Result<usize> {
     super::validate_table(table)?;
     check_cancelled(cancel)?;
-    let mut writer = Stream::new(
-        out,
+    // A transposed table names its output columns itself. Each line takes
+    // the type of its result column in `batch`.
+    let transposed: Vec<_> = if table.transposed {
+        table
+            .export_columns()
+            .into_iter()
+            .map(|column| crate::model::Column {
+                name: column.name,
+                data_type: String::new(),
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+    let columns: Vec<_> = if table.transposed {
+        transposed.iter().collect()
+    } else {
         table
             .column_indices
             .clone()
-            .map(|index| &table.columns[index]),
-        options,
-        lines,
-    )?;
+            .map(|index| &table.columns[index])
+            .collect()
+    };
+    let mut writer = Stream::new(out, columns.into_iter(), options, lines)?;
     writer.batch(table, 0, cancel)?;
     writer.finish(cancel)
 }
@@ -100,8 +115,11 @@ impl<'a, W: Write> Stream<'a, W> {
         let options = self.options;
         let lines = self.lines;
         let pretty = options.pretty && !lines;
-        for row in table.row_indices.clone() {
+        for row in table.lines() {
             check_cancelled(cancel)?;
+            let line_kind = table
+                .line_column(row)
+                .map(|column| Kind::of(&column.data_type));
             if !lines {
                 if self.count > 0 {
                     out.write_all(b",")?;
@@ -120,14 +138,23 @@ impl<'a, W: Write> Stream<'a, W> {
                 }
                 serde_json::to_writer(&mut *out, &self.names[column])?;
                 out.write_all(if pretty { b": " } else { b":" })?;
-                let result = write_value(out, self.kinds[column], text, options, pretty, cancel);
+                let kind = match line_kind {
+                    // The column names of a transposed table are text.
+                    Some(_) if column == 0 => Kind::Text,
+                    Some(kind) => kind,
+                    None => self.kinds[column],
+                };
+                let result = write_value(out, kind, text, options, pretty, cancel);
                 result.map_err(|error| {
+                    // Name the result cell, also for a transposed line.
+                    let (name, number) = match table.line_column(row) {
+                        Some(source) => (source.name.as_str(), table.row_indices.start + column),
+                        None => (self.names[column].as_str(), row_offset + row + 1),
+                    };
                     io::Error::new(
                         error.kind(),
                         format!(
-                            "Column {}, row {}, value {:?}: {error}",
-                            self.names[column],
-                            row_offset + row + 1,
+                            "Column {name}, row {number}, value {:?}: {error}",
                             text.map(|text| text.chars().take(100).collect::<String>())
                         ),
                     )
@@ -244,6 +271,7 @@ mod tests {
             rows,
             row_indices: 0..rows.len(),
             column_indices: 0..=columns.len() - 1,
+            transposed: false,
         }
     }
     #[test]

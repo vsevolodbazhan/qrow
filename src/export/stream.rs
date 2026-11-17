@@ -36,6 +36,7 @@ fn table<'a>(spool: &'a Spool, rows: &'a super::Rows) -> Table<'a> {
         rows,
         row_indices: 0..rows.len(),
         column_indices: 0..=spool.columns().len() - 1,
+        transposed: false,
     }
 }
 
@@ -278,6 +279,7 @@ mod tests {
             columns: &columns,
             row_indices: 0..rows.len(),
             column_indices: 0..=columns.len() - 1,
+            transposed: false,
             rows: &rows,
         };
         for format in Format::ALL {

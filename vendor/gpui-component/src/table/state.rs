@@ -526,6 +526,18 @@ where
         (left.map(|ix| ix + fixed), right.map(|ix| ix + fixed))
     }
 
+    /// Qrow: the width that the rows keep for the vertical scrollbar, from
+    /// the body size of the last frame and the current rows and columns. A
+    /// caller that changes the columns uses it to compute the viewport of
+    /// the next frame.
+    pub fn vertical_scrollbar_room(&self, cx: &App) -> Pixels {
+        if self.scrollbar_room(cx).0 {
+            SCROLLBAR_GUTTER
+        } else {
+            px(0.)
+        }
+    }
+
     /// Qrow: the room that the rows keep for the scrollbars, beside and
     /// below their content, from the sizes of the last frame. The vertical
     /// one is kept only when the rows overflow the body, the bottom one only
@@ -2291,6 +2303,21 @@ where
                                                     .child(self.measure_render_td(
                                                         row_ix, col_ix, window, cx,
                                                     ))
+                                                    // Qrow: a line between two fixed columns,
+                                                    // as between their headers. The last
+                                                    // fixed column has the group border.
+                                                    .when(col_ix + 1 < left_columns_count, |this| {
+                                                        this.child(
+                                                            div()
+                                                                .absolute()
+                                                                .top_0()
+                                                                .right_0()
+                                                                .bottom_0()
+                                                                .w_0()
+                                                                .border_r_1()
+                                                                .border_color(cx.theme().border),
+                                                        )
+                                                    })
                                                     .when(is_cell_selected, |this| {
                                                         this.child(
                                                             div()

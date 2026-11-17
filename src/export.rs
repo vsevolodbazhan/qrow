@@ -106,9 +106,13 @@ pub fn write(
 ) -> io::Result<usize> {
     settings.validate()?;
     validate_table(table)?;
-    for row in table.row_indices.clone() {
+    if table.transposed && settings.format == Format::Parquet {
+        // Before the budget check, which reads every value.
+        return parquet::write(out, table, &settings.parquet, cancel);
+    }
+    for line in table.lines() {
         check_cancelled(cancel)?;
-        budget::selected_row_bytes(table.values(row))?;
+        budget::selected_row_bytes(table.values(line))?;
     }
     match settings.format {
         Format::Parquet => parquet::write(out, table, &settings.parquet, cancel),
@@ -179,28 +183,101 @@ pub struct Table<'a> {
     pub row_indices: std::ops::Range<usize>,
     /// Indices into `columns`, in order.
     pub column_indices: std::ops::RangeInclusive<usize>,
+    /// Write each selected column as a line, as the transposed grid shows
+    /// it. The first output column holds the column names under the name
+    /// `column`. Each selected row becomes an output column, named by its
+    /// row number.
+    pub transposed: bool,
 }
 
 impl Table<'_> {
+    /// The name of the output column that holds the column names of a
+    /// transposed table.
+    pub const NAMES_COLUMN: &'static str = "column";
+
+    /// The output lines: indices into `rows`, or into `columns` when
+    /// transposed.
+    pub fn lines(&self) -> std::ops::Range<usize> {
+        if self.transposed {
+            *self.column_indices.start()..self.column_indices.end() + 1
+        } else {
+            self.row_indices.clone()
+        }
+    }
+
     pub fn export_columns(&self) -> Vec<ExportColumn> {
-        self.column_indices
+        if !self.transposed {
+            return self
+                .column_indices
+                .clone()
+                .filter_map(|i| self.columns.get(i).map(ExportColumn::from))
+                .collect();
+        }
+        // An output column holds one value of each selected column. It has
+        // a kind only when all of them have the same kind.
+        let mut kinds = self
+            .column_indices
             .clone()
-            .filter_map(|i| self.columns.get(i).map(ExportColumn::from))
-            .collect()
-    }
-
-    /// The values of one row, in the order of the selected columns.
-    pub fn values(&self, row: usize) -> impl Iterator<Item = Option<&str>> {
-        let values = self.rows.get(row);
-        self.column_indices.clone().map(move |column| {
-            values
-                .and_then(|values| values.get(column))
-                .and_then(|value| value.as_deref())
+            .filter_map(|i| self.columns.get(i))
+            .map(|column| ValueKind::of(&column.data_type));
+        let first = kinds.next().unwrap_or(ValueKind::Text);
+        let kind = if kinds.all(|kind| kind == first) {
+            first
+        } else {
+            ValueKind::Text
+        };
+        std::iter::once(ExportColumn {
+            name: Self::NAMES_COLUMN.into(),
+            kind: ValueKind::Text,
         })
+        .chain(self.row_indices.clone().map(|row| ExportColumn {
+            name: (row + 1).to_string(),
+            kind,
+        }))
+        .collect()
     }
 
+    /// The values of one output line, in output column order.
+    pub fn values(&self, line: usize) -> impl Iterator<Item = Option<&str>> {
+        let transposed = self.transposed;
+        let name = transposed.then(|| self.columns.get(line).map(|column| column.name.as_str()));
+        let (values, columns) = if transposed {
+            (None, 0..0)
+        } else {
+            (
+                self.rows.get(line),
+                *self.column_indices.start()..self.column_indices.end() + 1,
+            )
+        };
+        let rows = if transposed {
+            self.row_indices.clone()
+        } else {
+            0..0
+        };
+        name.into_iter()
+            .chain(columns.map(move |column| {
+                values
+                    .and_then(|values| values.get(column))
+                    .and_then(|value| value.as_deref())
+            }))
+            .chain(rows.map(move |row| {
+                self.rows
+                    .get(row)
+                    .and_then(|values| values.get(line))
+                    .and_then(|value| value.as_deref())
+            }))
+    }
+
+    /// The result column whose type applies to the values of a transposed
+    /// line, or `None` for a table that is not transposed. The column
+    /// names in the first output column are text.
+    pub fn line_column(&self, line: usize) -> Option<&Column> {
+        self.transposed.then(|| self.columns.get(line)).flatten()
+    }
+
+    /// The number of output lines.
     pub fn row_count(&self) -> usize {
-        self.row_indices.len()
+        self.lines().len()
     }
 }
 
@@ -268,6 +345,7 @@ impl Snapshot {
             rows: &self.rows,
             row_indices,
             column_indices,
+            transposed: false,
         }
     }
 }
@@ -381,9 +459,19 @@ pub fn write_csv(
     let columns = table.export_columns();
     let mut writer = csv::CsvWriter::new(out, options, &columns);
     writer.begin()?;
-    for row in table.row_indices.clone() {
+    for line in table.lines() {
         check_cancelled(cancel)?;
-        writer.row(table.values(row))?;
+        match table.line_column(line) {
+            // The type of a transposed line applies to its values, not to
+            // the column names before them.
+            Some(column) => {
+                let kind = ValueKind::of(&column.data_type);
+                writer.cells(table.values(line).enumerate().map(|(index, value)| {
+                    (value, if index == 0 { ValueKind::Text } else { kind })
+                }))?
+            }
+            None => writer.row(table.values(line))?,
+        }
     }
     writer.finish()?;
     check_cancelled(cancel)?;
@@ -492,6 +580,7 @@ mod tests {
             rows: &rows,
             row_indices: 0..1,
             column_indices: 0..=0,
+            transposed: false,
         };
         let mut bytes = Vec::new();
         write(
@@ -504,6 +593,7 @@ mod tests {
         assert_eq!(bytes, b"small\r\nselected\r\n");
         let table = Table {
             column_indices: 0..=1,
+            transposed: false,
             ..table
         };
         assert!(
@@ -531,6 +621,159 @@ mod tests {
             data_type: data_type.into(),
         })
         .collect()
+    }
+
+    fn transposed_source() -> (Vec<Column>, Rows) {
+        let columns = [("day", "date"), ("delta", "BIGINT"), ("note", "STRING")]
+            .into_iter()
+            .map(|(name, data_type)| Column {
+                name: name.into(),
+                data_type: data_type.into(),
+            })
+            .collect();
+        let rows = vec![
+            vec![
+                Some("2026-11-09".into()),
+                Some("-5".into()),
+                Some("=x".into()),
+            ],
+            vec![Some("2026-11-10".into()), Some("7".into()), None],
+        ]
+        .into();
+        (columns, rows)
+    }
+
+    fn transposed<'a>(
+        columns: &'a [Column],
+        rows: &'a Rows,
+        column_indices: std::ops::RangeInclusive<usize>,
+    ) -> Table<'a> {
+        Table {
+            columns,
+            rows,
+            row_indices: 0..2,
+            column_indices,
+            transposed: true,
+        }
+    }
+
+    fn written(table: &Table<'_>, settings: &Settings) -> io::Result<String> {
+        let mut out = Vec::new();
+        write(&mut out, table, settings, &AtomicBool::new(false))?;
+        Ok(String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn a_transposed_table_writes_each_column_as_a_line() {
+        let (columns, rows) = transposed_source();
+        let table = transposed(&columns, &rows, 1..=2);
+        assert_eq!(table.lines(), 1..3);
+        assert_eq!(table.row_count(), 2);
+        let names: Vec<_> = table
+            .export_columns()
+            .into_iter()
+            .map(|column| column.name)
+            .collect();
+        assert_eq!(names, ["column", "1", "2"]);
+        let values: Vec<_> = table.values(2).collect();
+        assert_eq!(values, [Some("note"), Some("=x"), None]);
+
+        // Formula escaping follows the type of each line: the negative
+        // number stays a number, and the text is escaped.
+        let mut settings = Settings::default();
+        settings.csv.escape_formulas = true;
+        settings.csv.line_ending = csv::LineEnding::Lf;
+        assert_eq!(
+            written(&table, &settings).unwrap(),
+            "column,1,2\ndelta,-5,7\nnote,'=x,\n"
+        );
+
+        // Typed JSON writes the values of each line with its type.
+        settings.format = Format::Json;
+        let json: serde_json::Value =
+            serde_json::from_str(&written(&table, &settings).unwrap()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([
+                {"column": "delta", "1": -5, "2": 7},
+                {"column": "note", "1": "=x", "2": null},
+            ])
+        );
+    }
+
+    #[test]
+    fn a_transposed_markdown_column_aligns_right_only_when_all_its_values_are_numbers() {
+        let (columns, rows) = transposed_source();
+        let settings = Settings {
+            format: Format::Markdown,
+            markdown: markdown::Options {
+                pretty: false,
+                // The row numbers are the column names of a transposed table.
+                row_numbers: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mixed = written(&transposed(&columns, &rows, 0..=1), &settings).unwrap();
+        assert_eq!(
+            mixed,
+            "| column | 1 | 2 |\n| --- | --- | --- |\n| day | 2026-11-09 | 2026-11-10 |\n| delta | -5 | 7 |\n"
+        );
+        let numbers = written(&transposed(&columns, &rows, 1..=1), &settings).unwrap();
+        assert!(numbers.contains("| --- | ---: | ---: |"), "{numbers}");
+    }
+
+    #[test]
+    fn parquet_rejects_a_transposed_table() {
+        let (columns, rows) = transposed_source();
+        let table = transposed(&columns, &rows, 0..=2);
+        let settings = Settings {
+            format: Format::Parquet,
+            ..Default::default()
+        };
+        let error = written(&table, &settings).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        // The Parquet writer itself rejects it too.
+        let error = parquet::write(
+            &mut Vec::new(),
+            &table,
+            &settings.parquet,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn a_transposed_json_error_names_the_result_cell() {
+        let columns: Vec<_> = [("id", "BIGINT"), ("age", "BIGINT")]
+            .into_iter()
+            .map(|(name, data_type)| Column {
+                name: name.into(),
+                data_type: data_type.into(),
+            })
+            .collect();
+        let rows: Rows = (0..8)
+            .map(|i| {
+                vec![
+                    Some(i.to_string()),
+                    Some(if i == 6 { "x".into() } else { i.to_string() }),
+                ]
+            })
+            .collect();
+        let table = Table {
+            columns: &columns,
+            rows: &rows,
+            row_indices: 4..8,
+            column_indices: 1..=1,
+            transposed: true,
+        };
+        let settings = Settings {
+            format: Format::Json,
+            ..Default::default()
+        };
+        let error = written(&table, &settings).unwrap_err().to_string();
+        assert!(error.starts_with("Column age, row 7, "), "{error}");
     }
 
     #[test]
@@ -575,6 +818,7 @@ mod tests {
             rows: &rows,
             row_indices: 1..3,
             column_indices: 1..=2,
+            transposed: false,
         };
         assert_eq!(
             table
@@ -611,6 +855,7 @@ mod tests {
             rows: &rows,
             row_indices: 0..10,
             column_indices: 0..=2,
+            transposed: false,
         };
         let error = save(&path, &AtomicBool::new(false), |out| {
             write_csv(
@@ -669,6 +914,7 @@ mod tests {
             rows: &rows,
             row_indices: 0..1,
             column_indices: 0..=2,
+            transposed: false,
         };
         let mut out = LimitedWriter::new(64);
         let error = write_csv(
@@ -694,6 +940,7 @@ mod tests {
             rows: &rows,
             row_indices: 0..0,
             column_indices: 0..=2,
+            transposed: false,
         };
         let mut out = Vec::new();
         assert!(

@@ -50,6 +50,8 @@ pub fn write(
             "Cell width must be between 1 and 1000.",
         ));
     }
+    // The row numbers of a transposed table are its column names.
+    let row_numbers = options.row_numbers && !table.transposed;
     let columns = table.export_columns();
     let names: Vec<_> = columns.iter().map(|column| column.name.as_str()).collect();
     match options.style {
@@ -61,7 +63,7 @@ pub fn write(
                     .map(|column| column.kind == ValueKind::Number),
             );
             if options.pretty {
-                for row in table.row_indices.clone() {
+                for row in table.lines() {
                     check_cancelled(cancel)?;
                     measure_table(&mut widths, table.values(row));
                 }
@@ -70,14 +72,14 @@ pub fn write(
             if options.pretty {
                 pretty_line(
                     out,
-                    options.row_numbers.then_some(("#", number_width)),
+                    row_numbers.then_some(("#", number_width)),
                     names.iter().copied().map(Some),
                     &widths,
                     cancel,
                 )?;
                 pretty_separator(
                     out,
-                    options.row_numbers.then_some(number_width),
+                    row_numbers.then_some(number_width),
                     &widths,
                     columns
                         .iter()
@@ -87,12 +89,12 @@ pub fn write(
             } else {
                 line(
                     out,
-                    options.row_numbers.then_some("#"),
+                    row_numbers.then_some("#"),
                     names.iter().copied().map(Some),
                 )?;
                 line(
                     out,
-                    options.row_numbers.then_some("---:"),
+                    row_numbers.then_some("---:"),
                     columns.iter().map(|column| {
                         Some(if column.kind == ValueKind::Number {
                             "---:"
@@ -102,15 +104,13 @@ pub fn write(
                     }),
                 )?;
             }
-            for row in table.row_indices.clone() {
+            for row in table.lines() {
                 check_cancelled(cancel)?;
                 let number = (row + 1).to_string();
                 if options.pretty {
                     pretty_line(
                         out,
-                        options
-                            .row_numbers
-                            .then_some((number.as_str(), number_width)),
+                        row_numbers.then_some((number.as_str(), number_width)),
                         table.values(row),
                         &widths,
                         cancel,
@@ -118,7 +118,7 @@ pub fn write(
                 } else {
                     line(
                         out,
-                        options.row_numbers.then_some(number.as_str()),
+                        row_numbers.then_some(number.as_str()),
                         table.values(row),
                     )?;
                 }
@@ -128,7 +128,7 @@ pub fn write(
             let cap = options.max_cell_width;
             let mut widths: Vec<_> = names.iter().map(|name| width(name, cap)).collect();
             // Measure without retaining another copy of the rows.
-            for row in table.row_indices.clone() {
+            for row in table.lines() {
                 check_cancelled(cancel)?;
                 for (index, value) in table.values(row).enumerate() {
                     widths[index] = widths[index].max(width(value.unwrap_or("NULL"), cap));
@@ -139,26 +139,24 @@ pub fn write(
             out.write_all(b"```\n")?;
             code_line(
                 out,
-                options.row_numbers.then_some(("#", number_width)),
+                row_numbers.then_some(("#", number_width)),
                 names.iter().copied().map(Some),
                 &widths,
                 cap,
             )?;
             code_line(
                 out,
-                options.row_numbers.then_some(("-", number_width)),
+                row_numbers.then_some(("-", number_width)),
                 widths.iter().map(|_| Some("-")),
                 &widths,
                 cap,
             )?;
-            for row in table.row_indices.clone() {
+            for row in table.lines() {
                 check_cancelled(cancel)?;
                 let number = (row + 1).to_string();
                 code_line(
                     out,
-                    options
-                        .row_numbers
-                        .then_some((number.as_str(), number_width)),
+                    row_numbers.then_some((number.as_str(), number_width)),
                     table.values(row),
                     &widths,
                     cap,
@@ -456,6 +454,7 @@ mod tests {
             rows: &rows,
             row_indices: 0..2,
             column_indices: 0..=1,
+            transposed: false,
         };
         let mut out = Vec::new();
         write(
@@ -498,6 +497,7 @@ mod tests {
             rows: &rows,
             row_indices: 0..4,
             column_indices: 0..=1,
+            transposed: false,
         };
         let options = Options {
             pretty: true,
@@ -552,6 +552,7 @@ mod tests {
             rows: &rows,
             row_indices: 0..1,
             column_indices: 0..=0,
+            transposed: false,
         };
         let cancel = AtomicBool::new(false);
         let mut out = CancelOnWrite {
@@ -618,6 +619,7 @@ mod tests {
             rows: &rows,
             row_indices: 0..3,
             column_indices: 0..=0,
+            transposed: false,
         };
         let mut out = Vec::new();
         write(
