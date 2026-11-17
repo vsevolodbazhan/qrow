@@ -401,6 +401,21 @@ class ReleaseWorkflowTests(unittest.TestCase):
         # Users verify downloads with the key in the installation guide.
         self.assertEqual(read("docs/installation.md").count(public_key), 2)
 
+    def test_aur_gets_stable_releases_after_publication(self):
+        aur = job("aur", RELEASE)
+        self.assertEqual(needs(aur), ["resolve-target", "publish"])
+        self.assertIn("if: inputs.channel == 'stable'", aur)
+        self.assertIn("environment: release", aur)
+        self.assertIn("AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}", aur)
+        self.assertIn('if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then', aur)
+        # The package is built and checked before the push.
+        self.assertLess(aur.index("sh scripts/package/aur-build.sh aur"), aur.index("git push"))
+        # Only the pinned host key is trusted.
+        self.assertIn("StrictHostKeyChecking=yes", aur)
+        self.assertIn("aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN",
+                      aur)
+        self.assertNotIn("ssh-keyscan", aur)
+
 
 
 class WebsiteWorkflowTests(unittest.TestCase):

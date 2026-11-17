@@ -215,7 +215,7 @@ tag is `v<version>`. The nightly tag is
 The jobs run in this order:
 
 ```text
-resolve-target -> validation (shared test workflow) -> dmg, linux, and windows -> publish
+resolve-target -> validation (shared test workflow) -> dmg, linux, and windows -> publish -> aur
 ```
 
 `resolve-target` finds the commit and release version. The validation
@@ -265,6 +265,44 @@ run:
 ```sh
 gh secret set RELEASE_SIGNING_KEY --env release --repo vsevolodbazhan/qrow < qrow-release.key
 ```
+
+After a stable release is published, the `aur` job updates the
+[`qrow-bin`](https://aur.archlinux.org/packages/qrow-bin) package in the Arch
+User Repository (AUR). The package installs the release archive into `/usr`.
+pacman versions cannot hold a hyphen, so nightly releases do not go to the AUR.
+[scripts/package/aur.py](../scripts/package/aur.py) writes the version and the
+archive checksums into a copy of the
+[PKGBUILD template](../packaging/aur/qrow-bin/PKGBUILD).
+[scripts/package/aur-build.sh](../scripts/package/aur-build.sh) builds and
+installs the package in an Arch Linux container, checks it with namcap, and
+writes `.SRCINFO`. The job then pushes both files to the AUR Git repository. A
+change to the PKGBUILD template goes to the AUR with the next stable release.
+If the `aur` job fails, fix the cause and rerun the failed job; the release
+stays published.
+
+The job reads an SSH key from the `AUR_SSH_PRIVATE_KEY` secret of the `release`
+environment. The public key is in the AUR account of the package maintainer.
+The job trusts only the published ED25519 host key of `aur.archlinux.org`.
+To set up the key, make a key without a password, add `qrow-aur.pub` in
+**My Account → SSH Public Key** on the AUR website, then run:
+
+```sh
+ssh-keygen -t ed25519 -N '' -C qrow-release -f qrow-aur
+gh secret set AUR_SSH_PRIVATE_KEY --env release --repo vsevolodbazhan/qrow < qrow-aur
+```
+
+To check a PKGBUILD change before a release, write the package for the latest
+stable release and build it with Docker:
+
+```sh
+version=$(gh release view --repo vsevolodbazhan/qrow --json tagName --jq '.tagName | ltrimstr("v")')
+gh release download "v$version" --repo vsevolodbazhan/qrow --pattern SHA256SUMS --dir target/aur --clobber
+python3 scripts/package/aur.py "$version" --sums target/aur/SHA256SUMS --output target/aur
+sh scripts/package/aur-build.sh target/aur
+```
+
+The official Arch Linux image is x86-64 only. On ARM64, Docker emulates it.
+The aarch64 package differs only in its source archive and checksum.
 
 The packaged application shows the channel-specific release version in the
 About dialog. The macOS bundle metadata keeps the numeric version from

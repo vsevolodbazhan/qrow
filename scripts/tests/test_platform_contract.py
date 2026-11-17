@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import os
+import re
 import textwrap
 import unittest
 from unittest.mock import patch
@@ -196,7 +197,8 @@ FAKE_MINISIGN = textwrap.dedent("""
 
 
 def step_script(workflow, name):
-    step = workflow.split(f'      - name: {name}\n', 1)[1].split('\n      - name: ', 1)[0]
+    # A step ends at the next step or at the next job.
+    step = re.split(r'\n(?:      - name: |  [a-z0-9-]+:\n)', workflow.split(f'      - name: {name}\n', 1)[1], maxsplit=1)[0]
     return textwrap.dedent(step.split('        run: |\n', 1)[1])
 
 

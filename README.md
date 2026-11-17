@@ -89,6 +89,13 @@ Or extract `Qrow-VERSION-linux-x86_64.tar.gz` or
 [latest release](https://github.com/vsevolodbazhan/qrow/releases/latest) into
 `~/.local`.
 
+On Arch Linux, install [`qrow-bin`](https://aur.archlinux.org/packages/qrow-bin)
+from the AUR:
+
+```sh
+yay -S qrow-bin
+```
+
 ### Channels
 
 - **Stable** for daily work. Choose it if you want fewer surprises.
