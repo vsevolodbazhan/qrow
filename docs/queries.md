@@ -318,7 +318,9 @@ on, the editor loads the copy from this computer when it gets focus. While
 
 Type to filter the list. Names that start with the typed text come first,
 then names that contain it, then names that contain its letters in order.
-Letter case does not matter. Use **↑** and **↓** to select a name, and
+Letter case does not matter. While you type, the list stays under the start
+of the name and does not become narrower, so the box beside it stays in
+place. Use **↑** and **↓** to select a name, and
 **Enter** or **Tab** to insert it. **Escape** closes the list. The list also
 closes when you type past the name or click outside the list.
 
