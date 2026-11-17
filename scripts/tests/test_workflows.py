@@ -401,10 +401,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
         # Users verify downloads with the key in the installation guide.
         self.assertEqual(read("docs/installation.md").count(public_key), 2)
 
-    def test_aur_gets_stable_releases_after_publication(self):
+    def test_aur_gets_each_release_after_publication(self):
         aur = job("aur", RELEASE)
         self.assertEqual(needs(aur), ["resolve-target", "publish"])
-        self.assertIn("if: inputs.channel == 'stable'", aur)
+        # Both channels publish: stable to qrow-bin, nightly to qrow-nightly-bin.
+        self.assertNotIn("if:", aur.split("steps:")[0])
+        self.assertIn("qrow-bin|qrow-nightly-bin) ;;", aur)
+        self.assertIn('git clone "ssh://aur@aur.archlinux.org/$package.git"', aur)
         self.assertIn("environment: release", aur)
         self.assertIn("AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}", aur)
         self.assertIn('if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then', aur)

@@ -147,9 +147,10 @@ Install Qrow on Arch Linux from the
 yay -S qrow-bin
 ```
 
-The package installs the stable release archive for x86-64 or ARM64 into
-`/usr`. There is no nightly package. To upgrade, use your AUR helper, for
-example `yay -Syu`. Qrow tells you about a new version, but it does not show
+To install the latest nightly build, use `yay -S qrow-nightly-bin`. The
+packages install the release archive for x86-64 or ARM64 into `/usr`. Only one
+of them can be installed. To upgrade, use your AUR helper, for example
+`yay -Syu`. Qrow tells you about a new version, but it does not show
 the command of your AUR helper.
 
 ## Updates

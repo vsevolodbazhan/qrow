@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Write the AUR PKGBUILD of a stable release.
+"""Write the AUR PKGBUILD of a release.
 
-Copy packaging/aur/qrow-bin/PKGBUILD to the output folder with the release
-version and the archive checksums from the SHA256SUMS of the release.
+Copy packaging/aur/PKGBUILD to the output folder with the package of the
+release channel, the release version, and the archive checksums from the
+SHA256SUMS of the release. Stable releases go to qrow-bin, nightly releases to
+qrow-nightly-bin.
 """
 
 from __future__ import annotations
@@ -14,10 +16,15 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE = ROOT / "packaging/aur/qrow-bin/PKGBUILD"
+TEMPLATE = ROOT / "packaging/aur/PKGBUILD"
 ARCHITECTURES = ("x86_64", "aarch64")
-# pacman versions cannot hold a hyphen, so nightly versions are not accepted.
 STABLE_VERSION = re.compile(r"\d+\.\d+\.\d+")
+NIGHTLY_VERSION = re.compile(r"\d+\.\d+\.\d+-nightly\.\d{8}\.\d+")
+# The package name and description of each channel.
+PACKAGES = {
+    "stable": ("qrow-bin", "Desktop SQL workbench (release build)"),
+    "nightly": ("qrow-nightly-bin", "Desktop SQL workbench (nightly build)"),
+}
 
 
 def checksums(text: str, version: str) -> dict[str, str]:
@@ -36,6 +43,20 @@ def checksums(text: str, version: str) -> dict[str, str]:
     return found
 
 
+def channel(version: str) -> str:
+    if STABLE_VERSION.fullmatch(version):
+        return "stable"
+    if NIGHTLY_VERSION.fullmatch(version):
+        return "nightly"
+    raise ValueError(f"Not a stable or nightly release version: {version!r}")
+
+
+def pkgver(version: str) -> str:
+    # 0.6.0-nightly.20261116.63 becomes 0.6.0.nightly.20261116.63. pacman
+    # compares the parts in order, so later nightly builds have higher versions.
+    return version.replace("-", ".")
+
+
 def replace(text: str, field: str, value: str) -> str:
     updated, count = re.subn(rf"^{field}=.*$", lambda _: f"{field}={value}", text, flags=re.MULTILINE)
     if count != 1:
@@ -44,9 +65,11 @@ def replace(text: str, field: str, value: str) -> str:
 
 
 def render(template: str, version: str, sums: dict[str, str]) -> str:
-    if not STABLE_VERSION.fullmatch(version):
-        raise ValueError(f"AUR packages need a stable version, got: {version!r}")
-    text = replace(template, "pkgver", version)
+    name, description = PACKAGES[channel(version)]
+    text = replace(template, "pkgname", name)
+    text = replace(text, "pkgdesc", f"'{description}'")
+    text = replace(text, "_version", version)
+    text = replace(text, "pkgver", pkgver(version))
     text = replace(text, "pkgrel", "1")
     for architecture in ARCHITECTURES:
         text = replace(text, f"sha256sums_{architecture}", f"('{sums[architecture]}')")
@@ -55,11 +78,12 @@ def render(template: str, version: str, sums: dict[str, str]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("version", help="stable release version, for example 0.6.0")
+    parser.add_argument("version", help="release version, for example 0.6.0 or 0.6.0-nightly.20261116.63")
     parser.add_argument("--sums", type=Path, required=True, help="SHA256SUMS of the release")
     parser.add_argument("--output", type=Path, required=True, help="folder for the PKGBUILD")
     args = parser.parse_args()
     try:
+        channel(args.version)
         text = render(TEMPLATE.read_text(), args.version,
                       checksums(args.sums.read_text(), args.version))
         args.output.mkdir(parents=True, exist_ok=True)

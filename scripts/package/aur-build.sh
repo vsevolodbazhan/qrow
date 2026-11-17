@@ -20,7 +20,7 @@ cd /home/builder/package
 su builder -c "makepkg --syncdeps --noconfirm --cleanbuild"
 su builder -c "makepkg --printsrcinfo" > .SRCINFO
 pacman -U --noconfirm ./*.pkg.tar.zst
-pacman -Qkk qrow-bin
+pacman -Qkk "$(sed -n "s/^pkgname = //p" .SRCINFO)"
 # namcap reports errors with " E: ". It also lists the libraries that each dependency gives.
 namcap --info PKGBUILD ./*.pkg.tar.zst | tee namcap.log
 if grep -F " E: " namcap.log; then

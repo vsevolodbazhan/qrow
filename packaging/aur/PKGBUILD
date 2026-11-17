@@ -1,9 +1,13 @@
 # Maintainer: Vsevolod Bazhan <work@bazhan.one>
-# Source: https://github.com/vsevolodbazhan/qrow/tree/main/packaging/aur/qrow-bin
-# The Qrow release workflow sets pkgver and the checksums.
+# Source: https://github.com/vsevolodbazhan/qrow/tree/main/packaging/aur
+# The Qrow release workflow writes this file for qrow-bin (stable releases) and
+# qrow-nightly-bin (nightly releases). It sets the package name, the versions,
+# and the checksums.
 
 pkgname=qrow-bin
 _pkgname=qrow
+# The release version. pacman does not accept a hyphen in pkgver.
+_version=0.0.0
 pkgver=0.0.0
 pkgrel=1
 pkgdesc='Desktop SQL workbench (release build)'
@@ -20,9 +24,9 @@ optdepends=(
 provides=("$_pkgname=$pkgver")
 conflicts=("$_pkgname")
 options=('!strip' '!debug')
-_release="https://github.com/vsevolodbazhan/qrow/releases/download/v$pkgver"
-source_x86_64=("$_release/Qrow-$pkgver-linux-x86_64.tar.gz")
-source_aarch64=("$_release/Qrow-$pkgver-linux-aarch64.tar.gz")
+_release="https://github.com/vsevolodbazhan/qrow/releases/download/v$_version"
+source_x86_64=("$_release/Qrow-$_version-linux-x86_64.tar.gz")
+source_aarch64=("$_release/Qrow-$_version-linux-aarch64.tar.gz")
 sha256sums_x86_64=('SKIP')
 sha256sums_aarch64=('SKIP')
 

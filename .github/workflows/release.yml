@@ -508,8 +508,7 @@ jobs:
   aur:
     name: aur
     needs: [resolve-target, publish]
-    # pacman versions cannot hold a hyphen, so only stable releases go to the AUR.
-    if: inputs.channel == 'stable'
+    # Stable releases update qrow-bin. Nightly releases update qrow-nightly-bin.
     # Only jobs in this environment can read the AUR SSH key.
     environment: release
     runs-on: ubuntu-24.04
@@ -545,7 +544,7 @@ jobs:
             exit 1
           fi
           ssh_dir="$RUNNER_TEMP/aur-ssh"
-          repository="$RUNNER_TEMP/qrow-bin"
+          repository="$RUNNER_TEMP/aur-package"
           trap 'rm -rf "$ssh_dir" "$repository"' EXIT
           (umask 077 && mkdir "$ssh_dir" && printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$ssh_dir/key")
           # The host key that aur.archlinux.org publishes: SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4.
@@ -553,14 +552,22 @@ jobs:
             > "$ssh_dir/known_hosts"
           export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts"
 
-          git clone ssh://aur@aur.archlinux.org/qrow-bin.git "$repository"
+          package="$(sed -n 's/^pkgbase = //p' aur/.SRCINFO)"
+          case "$package" in
+            qrow-bin|qrow-nightly-bin) ;;
+            *)
+              echo "Unexpected AUR package: $package" >&2
+              exit 1
+              ;;
+          esac
+          git clone "ssh://aur@aur.archlinux.org/$package.git" "$repository"
           # The AUR keeps the history of a package name, so add a commit on top of it.
           find "$repository" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp aur/PKGBUILD aur/.SRCINFO "$repository/"
           cd "$repository"
           git add --all
           if git diff --cached --quiet; then
-            echo "The AUR package already has Qrow $RELEASE_VERSION."
+            echo "$package already has Qrow $RELEASE_VERSION."
             exit 0
           fi
           git -c user.name="github-actions[bot]" \

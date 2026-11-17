@@ -266,17 +266,22 @@ run:
 gh secret set RELEASE_SIGNING_KEY --env release --repo vsevolodbazhan/qrow < qrow-release.key
 ```
 
-After a stable release is published, the `aur` job updates the
-[`qrow-bin`](https://aur.archlinux.org/packages/qrow-bin) package in the Arch
-User Repository (AUR). The package installs the release archive into `/usr`.
-pacman versions cannot hold a hyphen, so nightly releases do not go to the AUR.
-[scripts/package/aur.py](../scripts/package/aur.py) writes the version and the
-archive checksums into a copy of the
-[PKGBUILD template](../packaging/aur/qrow-bin/PKGBUILD).
+After a release is published, the `aur` job updates its package in the Arch
+User Repository (AUR): [`qrow-bin`](https://aur.archlinux.org/packages/qrow-bin)
+for a stable release, or
+[`qrow-nightly-bin`](https://aur.archlinux.org/packages/qrow-nightly-bin) for
+a nightly release. Each package installs the release archive into `/usr`. The
+two packages conflict, so only one can be installed.
+[scripts/package/aur.py](../scripts/package/aur.py) writes the package name,
+the version, and the archive checksums into a copy of the
+[PKGBUILD template](../packaging/aur/PKGBUILD). pacman versions cannot hold a
+hyphen, so the nightly `pkgver` has periods in place of hyphens, for example
+`0.6.0.nightly.20261116.63`.
 [scripts/package/aur-build.sh](../scripts/package/aur-build.sh) builds and
 installs the package in an Arch Linux container, checks it with namcap, and
 writes `.SRCINFO`. The job then pushes both files to the AUR Git repository. A
-change to the PKGBUILD template goes to the AUR with the next stable release.
+change to the PKGBUILD template goes to the AUR with the next release of each
+channel.
 If the `aur` job fails, fix the cause and rerun the failed job; the release
 stays published.
 
@@ -292,7 +297,8 @@ gh secret set AUR_SSH_PRIVATE_KEY --env release --repo vsevolodbazhan/qrow < qro
 ```
 
 To check a PKGBUILD change before a release, write the package for the latest
-stable release and build it with Docker:
+stable release and build it with Docker. For the nightly package, use the tag
+of a nightly release:
 
 ```sh
 version=$(gh release view --repo vsevolodbazhan/qrow --json tagName --jq '.tagName | ltrimstr("v")')
