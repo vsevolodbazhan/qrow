@@ -541,8 +541,10 @@ sources for each archive. The first source is the
 [Qrow E2E fixtures mirror](https://github.com/vsevolodbazhan/qrow-e2e-fixtures),
 because the Apache archive service is slow. When a source fails, or stays
 below 256 KiB/s for 60 seconds, the download continues from the next source.
-The last source has no speed limit. To change an archive version, add the new
-archive to the mirror first, as its README tells.
+When all sources fail, the runtime waits and tries all sources again, for a
+maximum of three rounds. This lets a short DNS or network outage clear up.
+Only the final attempt has no speed limit. To change an archive version, add
+the new archive to the mirror first, as its README tells.
 
 ## Test Postgres
 
