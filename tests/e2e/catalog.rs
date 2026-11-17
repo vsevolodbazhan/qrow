@@ -306,7 +306,7 @@ fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut Test
         |_, _| proxy.active.load(Ordering::SeqCst) == 0,
     );
 
-    // Explicit Refresh can connect after the tab has disconnected. It leaves
+    // Refresh metadata can connect after the tab has disconnected. It leaves
     // the query tab disconnected and closes its own temporary session.
     app.context_menu(cx, connection_row(id));
     app.choose(cx, "popup-menu", "Refresh metadata");

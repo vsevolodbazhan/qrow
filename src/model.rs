@@ -896,7 +896,7 @@ pub enum CatalogRefresh {
     /// connections use it.
     #[default]
     Disabled,
-    /// Only an explicit Refresh, or the expansion of an unread row while
+    /// Only an explicit metadata refresh, or the expansion of an unread row while
     /// connected, reads the catalog.
     Manual,
     /// As `Manual`, and read the connection again after each refresh
