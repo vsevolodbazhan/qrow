@@ -1577,8 +1577,9 @@ pub(super) fn settings_panel(id: &'static str, window: &Window, cx: &App) -> Set
         .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
         .sidebar_width(rem * SIDEBAR_REMS)
         .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
-        // Each group is a filled card with a divider between its rows.
-        .with_group_variant(GroupBoxVariant::Fill)
+        // Each group is an outlined card with a divider between its rows. A
+        // fill is too faint in the light theme.
+        .with_group_variant(GroupBoxVariant::Outline)
         .item_dividers(true)
 }
 

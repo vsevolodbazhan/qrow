@@ -95,7 +95,7 @@ The Shortcuts page sets the keyboard shortcuts. See
 Select a page or section in the list at the left. A selected section scrolls to
 the top of the page, as far as the content allows. Use the search box above the
 list to show only settings that match a word in their name or description.
-Each section is a card, and a line separates the settings in a card. Each
+Each section is a card with a border, and a line separates the settings in a card. Each
 setting shows a description below its name. A long description wraps, and the
 controls stay aligned at the right. A message about a setting shows below its
 description. The control stays at the vertical center of the row.
