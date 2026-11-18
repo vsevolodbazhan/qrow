@@ -838,6 +838,7 @@ impl Qrow {
         // A recording on a page that did not show in the last frame ends,
         // so it does not resume when its page shows again.
         if !form.shortcuts.page_shown.replace(false) {
+            form.shortcuts.stale.set(true);
             let qrow = cx.entity();
             cx.defer(move |cx| qrow.update(cx, |qrow, cx| qrow.drop_hidden_recording(cx)));
         }

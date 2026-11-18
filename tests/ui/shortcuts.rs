@@ -574,6 +574,22 @@ fn a_recording_on_a_page_left_does_not_resume(cx: &mut TestAppContext) {
     assert_eq!(saved_shortcut(&app, "refresh_metadata"), None);
 }
 
+#[gpui_kit::test]
+fn tab_out_of_the_field_ends_a_conflict(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "secondary-j");
+    app.wait_for(cx, "replace-shortcut-cancel_query");
+    // Replace, Cancel, then out of the field.
+    for _ in 0..3 {
+        app.press(cx, "tab");
+    }
+    app.wait_gone(cx, "replace-shortcut-cancel_query");
+    assert_eq!(saved_shortcut(&app, "cancel_query"), None);
+}
+
 /// A key press with its release, as a keyboard sends it. A button clicks on
 /// the release.
 fn press_and_release(app: &TestApp, cx: &mut TestAppContext, key: &str) {

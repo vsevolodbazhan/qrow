@@ -59,6 +59,9 @@ pub(super) struct ShortcutsForm {
     /// Whether the Shortcuts page showed in the last frame. Its header sets
     /// it, and the Settings window clears it before each frame.
     pub(super) page_shown: Rc<Cell<bool>>,
+    /// Set in a frame without the Shortcuts page. A recording or Find by
+    /// keys from before then is over, also before its state is cleared.
+    pub(super) stale: Rc<Cell<bool>>,
     _intercept: Option<Subscription>,
 }
 
@@ -170,6 +173,12 @@ impl Qrow {
         if form.recording.is_none() && !form.finding {
             return false;
         }
+        if form.stale.get() {
+            form.recording = None;
+            form.finding = false;
+            cx.notify();
+            return false;
+        }
         // Only the shown control with the focus takes keys. Focus elsewhere,
         // like the search field or a dialog, ends the recording.
         let target = if form.finding {
@@ -204,7 +213,9 @@ impl Qrow {
                 return true;
             }
             if plain && key == "tab" {
+                let target = target.cloned();
                 move_focus(modifiers.shift, window, cx);
+                self.end_recording_outside(target, window, cx);
                 return true;
             }
             return false;
@@ -236,7 +247,13 @@ impl Qrow {
             .as_ref()
             .is_some_and(|recording| recording.conflict.is_some());
         if pending && plain && key == "tab" {
+            let target = form
+                .recording
+                .as_ref()
+                .and_then(|recording| form.focus.get(recording.id))
+                .cloned();
             move_focus(modifiers.shift, window, cx);
+            self.end_recording_outside(target, window, cx);
             return true;
         }
         if plain && !modifiers.shift && key == "escape" {
@@ -389,6 +406,7 @@ impl Qrow {
             // It shows: the user clicked it or moved to it.
             form.shown.set(true);
             form.page_shown.set(true);
+            form.stale.set(false);
             if let Some(focus) = form.focus.get(id) {
                 focus.focus(window, cx);
             }
@@ -413,9 +431,26 @@ impl Qrow {
     /// End a recording or Find by keys whose control did not show in the
     /// last frame, for example after a switch to another page.
     pub(super) fn drop_hidden_recording(&mut self, cx: &mut Context<Self>) {
+        // A recording that started after the frame without the page stays.
         if let Some(form) = self.shortcuts_form()
+            && form.stale.get()
             && (form.recording.is_some() || form.finding)
         {
+            form.recording = None;
+            form.finding = false;
+            cx.notify();
+        }
+    }
+
+    /// End the recording when Tab moved the focus out of the field.
+    fn end_recording_outside(
+        &mut self,
+        field: Option<FocusHandle>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let inside = field.is_some_and(|field| field.contains_focused(window, cx));
+        if !inside && let Some(form) = self.shortcuts_form() {
             form.recording = None;
             form.finding = false;
             cx.notify();
@@ -524,6 +559,7 @@ impl Qrow {
             form.last = None;
             if form.finding {
                 form.shown.set(true);
+                form.stale.set(false);
                 if let Some(focus) = &form.find_focus {
                     focus.focus(window, cx);
                 }
@@ -720,7 +756,26 @@ fn filters(
         // One focus for both states, so the focus stays on a control that
         // shows when Find by keys ends.
         let find = match &find_focus {
-            Some(focus) => div().track_focus(focus).child(find).into_any_element(),
+            Some(focus) => {
+                // Clear key filter gives the focus to this wrapper; Enter or
+                // Space on it starts Find by keys, like a press of its button.
+                let wrapper = focus.clone();
+                let qrow = qrow.clone();
+                div()
+                    .track_focus(focus)
+                    .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                        let key = &event.keystroke;
+                        if wrapper.is_focused(window)
+                            && matches!(key.key.as_str(), "enter" | "space")
+                            && !key.modifiers.modified()
+                        {
+                            cx.stop_propagation();
+                            let _ = qrow.update(cx, |qrow, cx| qrow.find_by_keys(window, cx));
+                        }
+                    })
+                    .child(find)
+                    .into_any_element()
+            }
             None => find,
         };
         h_flex()
@@ -762,7 +817,7 @@ impl ShortcutRow {
             recording: form
                 .recording
                 .clone()
-                .filter(|recording| recording.id == command.id),
+                .filter(|recording| recording.id == command.id && !form.stale.get()),
             notice: form
                 .notice
                 .as_ref()
