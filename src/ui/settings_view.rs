@@ -837,7 +837,13 @@ impl Qrow {
         form.shortcuts.shown.set(false);
         // A recording on a page that did not show in the last frame ends,
         // so it does not resume when its page shows again.
-        if !form.shortcuts.page_shown.replace(false) {
+        // So does one whose control lost the focus, for example to the search
+        // field or a dialog, so its prompt does not stay on screen.
+        let focus_left = form
+            .shortcuts
+            .active_focus()
+            .is_some_and(|focus| !focus.contains_focused(window, cx));
+        if !form.shortcuts.page_shown.replace(false) || focus_left {
             form.shortcuts.stale.set(true);
             let qrow = cx.entity();
             cx.defer(move |cx| qrow.update(cx, |qrow, cx| qrow.drop_hidden_recording(cx)));

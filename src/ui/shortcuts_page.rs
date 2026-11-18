@@ -788,6 +788,18 @@ fn filters(
     }
 }
 
+impl ShortcutsForm {
+    /// The control that records or waits for Find by keys.
+    pub(super) fn active_focus(&self) -> Option<&FocusHandle> {
+        if self.finding {
+            return self.find_focus.as_ref();
+        }
+        self.recording
+            .as_ref()
+            .and_then(|recording| self.focus.get(recording.id))
+    }
+}
+
 /// A snapshot of one command for its row.
 #[derive(Clone)]
 struct ShortcutRow {
@@ -1163,6 +1175,11 @@ impl Qrow {
         let count = self.changed_on_page(page, cx);
         if count == 0 {
             return;
+        }
+        // The dialog covers the page: a recording on it ends.
+        if let Some(form) = self.shortcuts_form() {
+            form.recording = None;
+            form.finding = false;
         }
         let (name, things) = match page {
             ResetPage::Appearance => ("appearance", ("setting", "settings")),

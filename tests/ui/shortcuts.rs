@@ -367,8 +367,10 @@ fn recording_ends_when_the_focus_leaves_the_field(cx: &mut TestAppContext) {
     open_shortcuts(&app, cx);
     app.click(cx, "shortcut-toggle_results");
     app.wait_for(cx, "cancel-shortcut-toggle_results");
-    // Typing in the Settings search is not a shortcut.
+    // The prompt ends with the focus, before any key.
     app.click_labelled(cx, "Search...");
+    app.wait_gone(cx, "cancel-shortcut-toggle_results");
+    // Typing in the Settings search is not a shortcut.
     app.press(cx, "backspace");
     app.pass_time(cx, Duration::from_secs(1));
     assert_eq!(saved_shortcut(&app, "toggle_results"), None);
@@ -588,6 +590,19 @@ fn tab_out_of_the_field_ends_a_conflict(cx: &mut TestAppContext) {
     }
     app.wait_gone(cx, "replace-shortcut-cancel_query");
     assert_eq!(saved_shortcut(&app, "cancel_query"), None);
+}
+
+#[gpui_kit::test]
+fn a_dialog_over_the_recorder_ends_the_recording(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[("new_tab", Some("secondary-alt-n"))]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.wait_for(cx, "cancel-shortcut-cancel_query");
+    app.click_labelled(cx, "Reset shortcuts");
+    app.wait_for(cx, "confirm-reset-page");
+    // The prompt does not stay behind the dialog.
+    app.wait_gone(cx, "cancel-shortcut-cancel_query");
 }
 
 /// A key press with its release, as a keyboard sends it. A button clicks on
