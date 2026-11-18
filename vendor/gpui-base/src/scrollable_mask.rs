@@ -538,6 +538,60 @@ mod tests {
         assert_eq!(outer_handle.offset().y, px(-40.));
     }
 
+    /// A `MessageScroller`-shaped list with top padding and its mask.
+    struct PaddedListWithVerticalMaskTest {
+        list_state: ListState,
+    }
+
+    impl Render for PaddedListWithVerticalMaskTest {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .relative()
+                .w(px(100.))
+                .h(px(80.))
+                .overflow_hidden()
+                .child(
+                    list(self.list_state.clone(), |_, _, _| {
+                        div().w_full().h(px(40.)).into_any_element()
+                    })
+                    .w_full()
+                    .h_full()
+                    .pt(px(10.)),
+                )
+                .child(ScrollableMask::new(Axis::Vertical, &self.list_state))
+        }
+    }
+
+    #[gpui::test]
+    fn vertical_mask_moves_a_padded_list_by_the_wheel_delta_from_its_end(
+        cx: &mut TestAppContext,
+    ) {
+        let list_state = ListState::new(10, ListAlignment::Top, px(1000.));
+        list_state.set_follow_mode(gpui::FollowMode::Tail);
+        let (_, cx) = cx.add_window_view({
+            let list_state = list_state.clone();
+            move |_, _| PaddedListWithVerticalMaskTest {
+                list_state: list_state.clone(),
+            }
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
+        // The end: 400 of rows and 10 of padding in an 80 high list.
+        assert_eq!(list_state.scroll_px_offset_for_scrollbar().y, px(-330.));
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(10.), px(10.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(40.))),
+            ..Default::default()
+        });
+
+        // The list moves by the delta. Before, the mask clamped the offset
+        // to the rows without the padding first, so it moved 10 more.
+        assert_eq!(list_state.scroll_px_offset_for_scrollbar().y, px(-290.));
+    }
+
     #[gpui::test]
     fn horizontal_scroll_area_covers_viewport_after_scrolled(cx: &mut TestAppContext) {
         let scroll_handle = ScrollHandle::new();

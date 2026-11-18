@@ -1,4 +1,5 @@
-//! Text selection in the transcript while the transcript scrolls.
+//! Text selection in the transcript while the transcript scrolls, and the
+//! scroll itself.
 use crate::support::assistant::FakeCodex;
 use crate::support::{MemoryCredentials, TestApp, bounds_of, elements};
 use gpui_kit::InputEvent as _;
@@ -158,8 +159,6 @@ fn a_drag_selection_follows_the_pointer_while_the_wheel_scrolls(cx: &mut TestApp
     let pointer = app.update(cx, |window, cx| {
         let list = bounds_of(window, "assistant-transcript");
         let pointer = point(list.left() + px(200.), list.top() + px(200.));
-        // Leave the end of the transcript, which stops following new text.
-        wheel(window, pointer, step, cx);
         press(
             window,
             point(list.left() + px(40.), list.bottom() - px(80.)),
@@ -240,4 +239,29 @@ fn a_drag_past_the_transcript_scrolls_and_extends_the_selection(cx: &mut TestApp
         TextSelection::selected_text(window, cx)
     });
     assert_selected_back_to(&selected, 1);
+}
+
+#[gpui_kit::test]
+fn a_wheel_step_from_the_end_moves_the_transcript_by_its_delta(cx: &mut TestAppContext) {
+    // GPUI's list takes a place within 1 pixel of its end for the end, and
+    // follows new text from there. A larger step leaves the end.
+    for step in [px(2.), px(60.)] {
+        let app = long_conversation(cx);
+        app.update(cx, |window, cx| {
+            let list = bounds_of(window, "assistant-transcript");
+            let at = point(list.left() + px(200.), list.top() + px(200.));
+            for _ in 0..2 {
+                let before = entries(window);
+                wheel(window, at, step, cx);
+                let moved = moved(&before, &entries(window));
+                assert!(
+                    !moved.is_empty()
+                        && moved
+                            .iter()
+                            .all(|delta| (delta - f32::from(step)).abs() < 0.5),
+                    "a step of {step:?} moved the transcript by {moved:?}"
+                );
+            }
+        });
+    }
 }

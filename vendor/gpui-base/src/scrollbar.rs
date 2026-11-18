@@ -132,7 +132,15 @@ impl ScrollbarHandle for ListState {
     }
 
     fn content_size(&self) -> Size<Pixels> {
-        self.viewport_bounds().size + self.max_offset_for_scrollbar().into()
+        // `max_offset_for_scrollbar` leaves out the padding of the list, but
+        // the list scrolls through it: at its end, the offset is larger by
+        // the padding. The content is at least as tall as the offset shows,
+        // so a wheel from the end moves the list by its delta.
+        let max_offset = self
+            .max_offset_for_scrollbar()
+            .y
+            .max(-self.scroll_px_offset_for_scrollbar().y);
+        self.viewport_bounds().size + point(px(0.), max_offset).into()
     }
 
     fn start_drag(&self) {
