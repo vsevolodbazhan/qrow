@@ -33,13 +33,20 @@ impl MessageViews {
         }
     }
 
-    /// The view of the entry `id`, for this render.
-    pub(super) fn view(&mut self, id: Uuid, cx: &mut App) -> Entity<TextViewState> {
+    /// The view of the entry `id`, for this render. A new view starts with
+    /// the text of `text`, so that text which is already there does not
+    /// fade in as if it streamed in.
+    pub(super) fn view(
+        &mut self,
+        id: Uuid,
+        text: impl FnOnce(&App) -> SharedString,
+        cx: &mut App,
+    ) -> Entity<TextViewState> {
         let render = self.render;
-        let (view, drawn) = self
-            .views
-            .entry(id)
-            .or_insert_with(|| (cx.new(|cx| TextViewState::markdown("", cx)), render));
+        let (view, drawn) = self.views.entry(id).or_insert_with(|| {
+            let text = text(cx);
+            (cx.new(|cx| TextViewState::markdown(&text, cx)), render)
+        });
         *drawn = render;
         view.clone()
     }

@@ -336,9 +336,19 @@ impl AssistantPane {
                             return div().into_any_element();
                         };
                         let view = match row {
-                            Row::Entry { id, .. } => {
-                                Some(pane.update(cx, |pane, cx| pane.message_views.view(id, cx)))
-                            }
+                            Row::Entry { id, .. } => Some(pane.update(cx, |pane, cx| {
+                                let text = |cx: &App| {
+                                    qrow_entity
+                                        .read(cx)
+                                        .shown_conversation()
+                                        .entries
+                                        .iter()
+                                        .find(|entry| entry.id == id)
+                                        .map(|entry| entry.shown_text().clone())
+                                        .unwrap_or_default()
+                                };
+                                pane.message_views.view(id, text, cx)
+                            })),
                             _ => None,
                         };
                         transcript_row(
