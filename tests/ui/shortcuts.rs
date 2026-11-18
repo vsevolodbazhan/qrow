@@ -621,6 +621,29 @@ fn a_recorded_enter_does_not_start_another_recording(cx: &mut TestAppContext) {
     }));
 }
 
+#[gpui_kit::test]
+fn closing_the_reset_dialog_returns_the_focus_to_the_field(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[("new_tab", Some("secondary-alt-n"))]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "secondary-j");
+    app.wait_for(cx, "replace-shortcut-cancel_query");
+    // The focus is on Replace when the dialog opens.
+    app.press(cx, "tab");
+    app.click_labelled(cx, "Reset shortcuts");
+    app.wait_for(cx, "cancel-reset-page");
+    app.click(cx, "cancel-reset-page");
+    app.wait_gone(cx, "cancel-reset-page");
+    // The field has the focus again: Enter records, and Escape cancels
+    // without closing Settings.
+    press_and_release(&app, cx, "enter");
+    app.wait_for(cx, "cancel-shortcut-cancel_query");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "cancel-shortcut-cancel_query");
+    app.wait_for(cx, "settings-content");
+}
+
 /// A key press with its release, as a keyboard sends it. A button clicks on
 /// the release.
 fn press_and_release(app: &TestApp, cx: &mut TestAppContext, key: &str) {

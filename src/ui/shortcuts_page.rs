@@ -1217,9 +1217,16 @@ impl Qrow {
         if count == 0 {
             return;
         }
-        // The dialog covers the page: a recording on it ends.
+        // The dialog covers the page: a recording on it ends. The field gets
+        // the focus first, so the dialog returns the focus to a control that
+        // stays, not to a button of the recording.
         if let Some(form) = self.shortcuts_form() {
-            form.recording = None;
+            if let Some(recording) = form.recording.take() {
+                if let Some(focus) = form.focus.get(recording.id) {
+                    focus.focus(window, cx);
+                }
+                form.last = Some(recording.id);
+            }
             form.finding = false;
         }
         let (name, things) = match page {
