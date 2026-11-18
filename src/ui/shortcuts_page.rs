@@ -56,6 +56,9 @@ pub(super) struct ShortcutsForm {
     /// The Settings window clears it before each frame, so a field on
     /// another page cannot record.
     pub(super) shown: Rc<Cell<bool>>,
+    /// Whether the Shortcuts page showed in the last frame. Its header sets
+    /// it, and the Settings window clears it before each frame.
+    pub(super) page_shown: Rc<Cell<bool>>,
     _intercept: Option<Subscription>,
 }
 
@@ -176,12 +179,34 @@ impl Qrow {
                 .as_ref()
                 .and_then(|recording| form.focus.get(recording.id))
         };
-        let on_control = form.shown.get() && target.is_some_and(|focus| focus.is_focused(window));
-        // A button in the field, like Replace, has the focus: keep the state
-        // and let the button take the key.
-        let in_control =
-            !on_control && target.is_some_and(|focus| focus.contains_focused(window, cx));
+        let modifiers = keystroke.modifiers;
+        let plain =
+            !(modifiers.platform || modifiers.control || modifiers.alt || modifiers.function);
+        let key = keystroke.key.as_str();
+        let shown = form.shown.get();
+        let target_focused = target.is_some_and(|focus| focus.is_focused(window));
+        let on_control = shown && target_focused;
+        // A button in the field, like Replace, has the focus. Escape still
+        // cancels, and Tab moves between the buttons: neither reaches the
+        // bindings of the window. Other keys go to the button.
+        let in_control = shown
+            && !target_focused
+            && target.is_some_and(|focus| focus.contains_focused(window, cx));
         if in_settings && in_control {
+            if plain && key == "escape" {
+                let target = target.cloned();
+                form.recording = None;
+                form.finding = false;
+                if let Some(target) = target {
+                    target.focus(window, cx);
+                }
+                cx.notify();
+                return true;
+            }
+            if plain && key == "tab" {
+                move_focus(modifiers.shift, window, cx);
+                return true;
+            }
             return false;
         }
         if !in_settings || !on_control {
@@ -190,10 +215,6 @@ impl Qrow {
             cx.notify();
             return false;
         }
-        let modifiers = keystroke.modifiers;
-        let plain =
-            !(modifiers.platform || modifiers.control || modifiers.alt || modifiers.function);
-        let key = keystroke.key.as_str();
         if form.finding {
             form.finding = false;
             if !(plain && !modifiers.shift && key == "escape") {
@@ -214,8 +235,9 @@ impl Qrow {
             .recording
             .as_ref()
             .is_some_and(|recording| recording.conflict.is_some());
-        if pending && key == "tab" && !(modifiers.platform || modifiers.control || modifiers.alt) {
-            return false;
+        if pending && plain && key == "tab" {
+            move_focus(modifiers.shift, window, cx);
+            return true;
         }
         if plain && !modifiers.shift && key == "escape" {
             form.recording = None;
@@ -364,6 +386,9 @@ impl Qrow {
             });
             form.finding = false;
             form.notice = None;
+            // It shows: the user clicked it or moved to it.
+            form.shown.set(true);
+            form.page_shown.set(true);
             if let Some(focus) = form.focus.get(id) {
                 focus.focus(window, cx);
             }
@@ -371,9 +396,28 @@ impl Qrow {
         }
     }
 
-    fn cancel_recording(&mut self, cx: &mut Context<Self>) {
+    /// Cancel recording, and give the focus back to the field.
+    fn cancel_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(form) = self.shortcuts_form() {
+            if let Some(focus) = form
+                .recording
+                .take()
+                .and_then(|recording| form.focus.get(recording.id))
+            {
+                focus.focus(window, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// End a recording or Find by keys whose control did not show in the
+    /// last frame, for example after a switch to another page.
+    pub(super) fn drop_hidden_recording(&mut self, cx: &mut Context<Self>) {
+        if let Some(form) = self.shortcuts_form()
+            && (form.recording.is_some() || form.finding)
+        {
             form.recording = None;
+            form.finding = false;
             cx.notify();
         }
     }
@@ -392,6 +436,9 @@ impl Qrow {
             return;
         };
         form.notice = None;
+        if let Some(focus) = form.focus.get(id) {
+            focus.focus(window, cx);
+        }
         let Some(command) = shortcuts::command(id) else {
             return;
         };
@@ -465,6 +512,7 @@ impl Qrow {
         if let Some(form) = self.shortcuts_form() {
             form.filter = filter;
             form.recording = None;
+            form.last = None;
             cx.notify();
         }
     }
@@ -473,18 +521,24 @@ impl Qrow {
         if let Some(form) = self.shortcuts_form() {
             form.finding = !form.finding;
             form.recording = None;
-            if form.finding
-                && let Some(focus) = &form.find_focus
-            {
-                focus.focus(window, cx);
+            form.last = None;
+            if form.finding {
+                form.shown.set(true);
+                if let Some(focus) = &form.find_focus {
+                    focus.focus(window, cx);
+                }
             }
             cx.notify();
         }
     }
 
-    fn clear_found_keys(&mut self, cx: &mut Context<Self>) {
+    fn clear_found_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(form) = self.shortcuts_form() {
             form.found = None;
+            form.last = None;
+            if let Some(focus) = &form.find_focus {
+                focus.focus(window, cx);
+            }
             cx.notify();
         }
     }
@@ -502,6 +556,7 @@ impl Qrow {
         if let Some(form) = self.shortcuts_form() {
             form.recording = None;
             form.notice = None;
+            form.last = None;
         }
         self.apply_shortcuts(window, cx);
     }
@@ -582,6 +637,7 @@ impl Qrow {
                 form.found.clone(),
                 form.find_focus.clone(),
                 form.shown.clone(),
+                form.page_shown.clone(),
             ))
             .groups(groups)
     }
@@ -595,8 +651,10 @@ fn filters(
     found: Option<String>,
     find_focus: Option<FocusHandle>,
     shown: Rc<Cell<bool>>,
+    page_shown: Rc<Cell<bool>>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     move |_, cx| {
+        page_shown.set(true);
         if finding {
             shown.set(true);
         }
@@ -636,8 +694,8 @@ fn filters(
                         .icon(IconName::Close)
                         .tooltip("Clear key filter")
                         .accessibility_label("Clear key filter")
-                        .on_click(move |_, _, cx| {
-                            let _ = qrow.update(cx, |qrow, cx| qrow.clear_found_keys(cx));
+                        .on_click(move |_, window, cx| {
+                            let _ = qrow.update(cx, |qrow, cx| qrow.clear_found_keys(window, cx));
                         })
                 })
                 .into_any_element(),
@@ -872,9 +930,9 @@ impl ShortcutRow {
                     Icon::new(IconName::Close),
                     "Cancel".into(),
                 )
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    let _ = qrow.update(cx, |qrow, cx| qrow.cancel_recording(cx));
+                    let _ = qrow.update(cx, |qrow, cx| qrow.cancel_recording(window, cx));
                 }),
             );
         } else {
@@ -1107,5 +1165,14 @@ fn list<'a>(names: impl Iterator<Item = &'a str>) -> String {
         [one] => (*one).to_owned(),
         [first, second] => format!("{first} and {second}"),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
+}
+
+/// Move the focus to the next or the previous control, as Tab does.
+fn move_focus(back: bool, window: &mut Window, cx: &mut App) {
+    if back {
+        window.focus_prev(cx);
+    } else {
+        window.focus_next(cx);
     }
 }

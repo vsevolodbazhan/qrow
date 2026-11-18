@@ -141,7 +141,14 @@ impl Qrow {
                                         );
                                         button
                                     } else {
-                                        button.tooltip("Close result")
+                                        // The managed tooltip, like the shown
+                                        // result's: a plain button tooltip
+                                        // loses to the tooltip of its tab.
+                                        button.interactivity().tooltip({
+                                            let tooltip = StatusTooltip::new("Close result", "");
+                                            move |window, cx| tooltip.build(None, window, cx)
+                                        });
+                                        button
                                     }
                                 })
                                 .accessibility_label(format!("Close {title}"))

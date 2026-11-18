@@ -832,7 +832,15 @@ impl Qrow {
             });
         }
         // Rows of the Shortcuts page that render in this frame set it again.
+        // A recording whose field did not show in the last frame ends, so it
+        // does not resume when its page shows again.
         form.shortcuts.shown.set(false);
+        // A recording on a page that did not show in the last frame ends,
+        // so it does not resume when its page shows again.
+        if !form.shortcuts.page_shown.replace(false) {
+            let qrow = cx.entity();
+            cx.defer(move |cx| qrow.update(cx, |qrow, cx| qrow.drop_hidden_recording(cx)));
+        }
         let theme = self.settings.theme.clone();
         if form.theme.read(cx).selected_value() != Some(&theme) {
             form.theme

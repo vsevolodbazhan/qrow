@@ -520,3 +520,77 @@ fn settings_open_from_a_dialog(cx: &mut TestAppContext) {
     app.press(cx, "secondary-,");
     app.wait_for(cx, "settings-content");
 }
+
+#[gpui_kit::test]
+fn a_conflict_can_be_resolved_with_the_keyboard_only(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "secondary-j");
+    app.wait_for(cx, "replace-shortcut-cancel_query");
+    // Tab moves to Replace; Enter presses it.
+    app.press(cx, "tab");
+    press_and_release(&app, cx, "enter");
+    app.wait_until(cx, "the moved keys", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("secondary-j".into()))
+    });
+    app.wait_for(cx, "settings-content");
+}
+
+#[gpui_kit::test]
+fn escape_on_replace_cancels_and_keeps_settings_open(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "secondary-j");
+    app.wait_for(cx, "replace-shortcut-cancel_query");
+    app.press(cx, "tab");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "replace-shortcut-cancel_query");
+    app.pass_time(cx, Duration::from_secs(1));
+    app.wait_for(cx, "settings-content");
+    assert_eq!(saved_shortcut(&app, "cancel_query"), None);
+    // The field has the focus again, so Enter records.
+    app.press(cx, "enter");
+    app.wait_for(cx, "cancel-shortcut-cancel_query");
+}
+
+#[gpui_kit::test]
+fn a_recording_on_a_page_left_does_not_resume(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-refresh_metadata");
+    app.wait_for(cx, "cancel-shortcut-refresh_metadata");
+    app.settings_page(cx, "Appearance");
+    app.wait_gone(cx, "shortcut-refresh_metadata");
+    app.settings_page(cx, "Shortcuts");
+    // The page keeps its scroll position, so the field shows again.
+    app.wait_for(cx, "shortcut-refresh_metadata");
+    app.press(cx, "f9");
+    app.pass_time(cx, Duration::from_secs(1));
+    assert_eq!(saved_shortcut(&app, "refresh_metadata"), None);
+}
+
+/// A key press with its release, as a keyboard sends it. A button clicks on
+/// the release.
+fn press_and_release(app: &TestApp, cx: &mut TestAppContext, key: &str) {
+    use gpui_kit::{InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke};
+    let keystroke = Keystroke::parse(key).unwrap();
+    app.update(cx, |window, cx| {
+        window.dispatch_event(
+            KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
+        window.render_frame(cx);
+    });
+    app.settle(cx);
+}
