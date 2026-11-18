@@ -1064,16 +1064,17 @@ impl ShortcutRow {
         };
         let muted = |text: &'static str| {
             div()
-                .flex_1()
                 .min_w_0()
                 .text_color(cx.theme().muted_foreground)
                 .child(text)
         };
         let chip = |keys: &str| shortcuts::keystroke(keys).map(Kbd::new);
+        // The keys stay at the start of the field in every state, and the
+        // buttons follow them.
         let mut content = h_flex().w_full().gap_1().items_center();
         if let Some(recording) = &self.recording {
             content = match &recording.conflict {
-                Some((keys, _)) => content.children(chip(keys)).child(div().flex_1()).child({
+                Some((keys, _)) => content.children(chip(keys)).child({
                     let qrow = qrow.clone();
                     Button::new(SharedString::from(format!("replace-shortcut-{id}")))
                         .outline()
@@ -1099,11 +1100,8 @@ impl ShortcutRow {
                 }),
             );
         } else {
-            // The keys end at the right edge, as the other Settings controls.
-            // Remove and Reset come before them.
-            content = content.child(div().flex_1());
             content = match &self.keys {
-                Some(_) => content.child({
+                Some(keys) => content.children(chip(keys)).child({
                     let qrow = qrow.clone();
                     // Shows on hover and keyboard focus only.
                     div()
@@ -1122,7 +1120,7 @@ impl ShortcutRow {
                             }),
                         )
                 }),
-                None => content,
+                None => content.child(muted("None")),
             };
             if self.customized {
                 let label = match &self.default_keys {
@@ -1142,10 +1140,6 @@ impl ShortcutRow {
                     }),
                 );
             }
-            content = match &self.keys {
-                Some(keys) => content.children(chip(keys)),
-                None => content.child(muted("None").flex_none()),
-            };
         }
         let label = self.label;
         let value: SharedString = self
