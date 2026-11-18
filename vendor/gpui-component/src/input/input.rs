@@ -130,6 +130,9 @@ pub struct Input {
     /// Whether the focused input draws a ring outside its border. The
     /// tinted border of `focus_bordered` stays without it.
     focus_ring: bool,
+    /// The color of the focus border and ring, instead of the theme's ring
+    /// color.
+    focus_color: Option<Hsla>,
     tab_index: isize,
     selected: bool,
     content_type: Option<InputContentType>,
@@ -221,6 +224,7 @@ impl Input {
             bordered: true,
             focus_bordered: true,
             focus_ring: true,
+            focus_color: None,
             tab_index: 0,
             selected: false,
             content_type: None,
@@ -284,6 +288,14 @@ impl Input {
     /// Set the bordered for the input, default: true
     pub fn bordered(mut self, bordered: bool) -> Self {
         self.bordered = bordered;
+        self
+    }
+
+    /// Draw the focus border and ring in `color` instead of the theme's ring
+    /// color. A field with an error can keep its error color while it has
+    /// the focus.
+    pub fn focus_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.focus_color = Some(color.into());
         self
     }
 
@@ -740,7 +752,11 @@ impl RenderOnce for Input {
                 styles.focused(|style| {
                     style.when(
                         self.appearance && self.bordered && self.focus_bordered,
-                        |style| style.border_1().border_color(cx.theme().ring),
+                        |style| {
+                            style
+                                .border_1()
+                                .border_color(self.focus_color.unwrap_or(cx.theme().ring))
+                        },
                     )
                 })
             })
@@ -785,7 +801,10 @@ impl RenderOnce for Input {
                     && self.bordered
                     && self.focus_bordered
                     && self.focus_ring,
-                |this| this.focus_ring_style(window, cx),
+                |this| match self.focus_color {
+                    Some(color) => crate::styled::focus_ring_in_color(this, color, window, cx),
+                    None => this.focus_ring_style(window, cx),
+                },
             )
             .children(prefix.map(|p| {
                 div()
@@ -1161,6 +1180,26 @@ mod tests {
         let input = Input::new(&state).focus_bordered(false);
         assert!(input.is_focus_ring_enabled());
         assert!(!input.focus_bordered);
+    }
+
+    /// A focus color replaces the theme's ring color of the focus border.
+    #[gpui::test]
+    fn input_focus_color_replaces_the_ring_color(cx: &mut gpui::TestAppContext) {
+        use gpui::{AppContext as _, Empty};
+
+        cx.update(crate::init);
+        let mut state = None;
+        cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                state = Some(cx.new(|cx| InputState::new(window, cx)));
+                cx.new(|_| Empty)
+            })
+            .unwrap()
+        });
+        let state = state.unwrap();
+        assert_eq!(Input::new(&state).focus_color, None);
+        let red = gpui::red();
+        assert_eq!(Input::new(&state).focus_color(red).focus_color, Some(red));
     }
 
     #[gpui::test]

@@ -200,3 +200,10 @@ with the other GPUI crates as one set.
   opens its sections, as before. Before, a click on a page name only opened
   the sections, and only the chevron closed them. The Qrow UI test
   `a_click_on_the_current_settings_page_shows_or_hides_its_sections` checks it.
+- `src/input/input.rs` and `src/styled.rs`: `Input::focus_color` draws the
+  focus border and ring of an input in a given color instead of the theme's
+  ring color. Before, the focus border replaced a border color that the
+  caller set, so a connection field with an error was blue, not red, while
+  it had the focus. Qrow sets the danger color on fields with an error. The
+  test in `input.rs` checks the setting; painted colors need a check on
+  screen.

@@ -110,7 +110,13 @@ pub(super) fn form_input(
         .disabled(form.saving.is_some())
         .aria_label(label);
     if field_error(form, index).is_some() {
-        input.border_color(cx.theme().danger).into_any_element()
+        // The field stays red while it has the focus, so the field to fix
+        // looks invalid too.
+        let danger = cx.theme().danger;
+        input
+            .border_color(danger)
+            .focus_color(danger)
+            .into_any_element()
     } else {
         input.into_any_element()
     }
