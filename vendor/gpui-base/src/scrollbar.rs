@@ -79,6 +79,16 @@ pub trait ScrollbarHandle: 'static {
     fn start_drag(&self) {}
     /// Called when end dragging the scrollbar thumb.
     fn end_drag(&self) {}
+    /// The largest offset that a wheel can scroll to, as a positive distance
+    /// on each axis: by default, the content size less the viewport.
+    fn max_wheel_offset(&self) -> Point<Pixels> {
+        let content = self.content_size();
+        let viewport = self.viewport_bounds().size;
+        point(
+            (content.width - viewport.width).max(px(0.)),
+            (content.height - viewport.height).max(px(0.)),
+        )
+    }
 }
 
 impl ScrollbarHandle for ScrollHandle {
@@ -132,15 +142,7 @@ impl ScrollbarHandle for ListState {
     }
 
     fn content_size(&self) -> Size<Pixels> {
-        // `max_offset_for_scrollbar` leaves out the padding of the list, but
-        // the list scrolls through it: at its end, the offset is larger by
-        // the padding. The content is at least as tall as the offset shows,
-        // so a wheel from the end moves the list by its delta.
-        let max_offset = self
-            .max_offset_for_scrollbar()
-            .y
-            .max(-self.scroll_px_offset_for_scrollbar().y);
-        self.viewport_bounds().size + point(px(0.), max_offset).into()
+        self.viewport_bounds().size + self.max_offset_for_scrollbar().into()
     }
 
     fn start_drag(&self) {
@@ -149,6 +151,20 @@ impl ScrollbarHandle for ListState {
 
     fn end_drag(&self) {
         self.scrollbar_drag_ended();
+    }
+
+    fn max_wheel_offset(&self) -> Point<Pixels> {
+        // `max_offset_for_scrollbar` leaves out the padding of the list, but
+        // the list scrolls through it: at its end, the offset is larger by
+        // the padding. The list keeps its offset in its range, so a wheel
+        // can reach at least the current offset. The scrollbar keeps the
+        // stable extent of `content_size`.
+        point(
+            px(0.),
+            self.max_offset_for_scrollbar()
+                .y
+                .max(-self.scroll_px_offset_for_scrollbar().y),
+        )
     }
 }
 

@@ -259,11 +259,7 @@ impl<H: ScrollbarHandle + Clone> Element for ScrollableMask<H> {
                         // pushes the shared offset beyond the edge unclamped
                         // (the div only clamps on prepaint), and that
                         // transient overscroll would read as "room to scroll".
-                        // `ScrollbarHandle` has no `max_offset`; recover it from
-                        // the definition `content_size = viewport + max_offset`.
-                        let axis_max = (scroll_handle.content_size().height
-                            - scroll_handle.viewport_bounds().size.height)
-                            .max(px(0.));
+                        let axis_max = scroll_handle.max_wheel_offset().y;
                         let current = offset.y.clamp(-axis_max, px(0.));
                         let new_offset = (current + delta.y).clamp(-axis_max, px(0.));
                         if new_offset == current {
@@ -580,6 +576,7 @@ mod tests {
         });
         // The end: 400 of rows and 10 of padding in an 80 high list.
         assert_eq!(list_state.scroll_px_offset_for_scrollbar().y, px(-330.));
+        let extent = ScrollbarHandle::content_size(&list_state);
 
         cx.simulate_event(ScrollWheelEvent {
             position: point(px(10.), px(10.)),
@@ -590,6 +587,9 @@ mod tests {
         // The list moves by the delta. Before, the mask clamped the offset
         // to the rows without the padding first, so it moved 10 more.
         assert_eq!(list_state.scroll_px_offset_for_scrollbar().y, px(-290.));
+        // The scrollbar keeps one extent at any offset, so a thumb drag maps
+        // the same pointer position to the same offset.
+        assert_eq!(ScrollbarHandle::content_size(&list_state), extent);
     }
 
     #[gpui::test]

@@ -129,12 +129,15 @@ Qrow changes these files:
   four replies. To run the GPUI Base tests, use
   `CARGO_TARGET_DIR=target/gpui-base-tests cargo test --manifest-path
   vendor/gpui-base/Cargo.toml --lib text_selection::`.
-- `src/scrollbar.rs`: the content of a `ListState` is at least as tall as
-  its scroll offset shows. `max_offset_for_scrollbar` leaves out the padding
-  of the list, but at its end the offset includes the padding. Before, the
-  vertical `ScrollableMask` clamped the offset to the rows first, so the first
-  wheel step from the end of the Qrow transcript moved it 10.5 points more
-  than the step. The test in `src/scrollable_mask.rs` and the Qrow UI test
+- `src/scrollbar.rs` and `src/scrollable_mask.rs`: the vertical
+  `ScrollableMask` clamps a wheel step to `ScrollbarHandle::max_wheel_offset`
+  (new). By default, it is the content size less the viewport. A `ListState`
+  also reaches its current offset: `max_offset_for_scrollbar` leaves out the
+  padding of the list, but at its end the offset includes the padding.
+  Before, the mask clamped the offset to the rows first, so the first wheel
+  step from the end of the Qrow transcript moved it 10.5 points more than the
+  step. The content size, and with it the scrollbar thumb, does not change.
+  The test in `src/scrollable_mask.rs` and the Qrow UI test
   `a_wheel_step_from_the_end_moves_the_transcript_by_its_delta` check it. A
   step of at most 1 point from the end still returns to the end: GPUI's list
   takes that place for its end and follows new rows from there.
