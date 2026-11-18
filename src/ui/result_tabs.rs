@@ -131,12 +131,18 @@ impl Qrow {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::Close)
+                                // Close Result closes the shown result, so only
+                                // its button shows the shortcut.
                                 .map(|mut button| {
-                                    button.interactivity().tooltip(
-                                        StatusTooltip::new("Close result", "")
-                                            .for_action(&CloseResult, None),
-                                    );
-                                    button
+                                    if id == tab.active_result {
+                                        button.interactivity().tooltip(
+                                            StatusTooltip::new("Close result", "")
+                                                .for_action(&CloseResult, None),
+                                        );
+                                        button
+                                    } else {
+                                        button.tooltip("Close result")
+                                    }
                                 })
                                 .accessibility_label(format!("Close {title}"))
                                 .disabled(!tab.can_close_result(id))

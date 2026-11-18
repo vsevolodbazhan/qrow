@@ -17,7 +17,31 @@ impl Qrow {
     }
 
     pub(super) fn cancel_query(&mut self, _: &CancelQuery, _: &mut Window, cx: &mut Context<Self>) {
-        self.cancel(cx);
+        if self.workspace_in_view(cx) {
+            self.cancel(cx);
+        }
+    }
+
+    /// True when the keyboard focus is in the table of the shown result.
+    fn results_focused(&self, window: &Window, cx: &App) -> bool {
+        self.tabs[self.active]
+            .shown_result()
+            .table
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx)
+    }
+
+    /// Moves the focus to the table of the shown result after it changed.
+    /// A result without rows has no table, so the editor gets the focus.
+    fn focus_shown_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = &self.tabs[self.active];
+        let table = tab.shown_result().table.clone();
+        if table.read(cx).delegate().columns.is_empty() {
+            tab.input.update(cx, |editor, cx| editor.focus(window, cx));
+        } else {
+            table.read(cx).focus_handle(cx).focus(window, cx);
+        }
     }
 
     pub(super) fn export_results(
@@ -106,33 +130,39 @@ impl Qrow {
         }
         let tab = &self.tabs[self.active];
         let (tab_id, result_id) = (tab.saved.id, tab.shown_result().id);
+        let focused = self.results_focused(window, cx);
         self.close_result(tab_id, result_id, window, cx);
+        if focused {
+            self.focus_shown_result(window, cx);
+        }
     }
 
     pub(super) fn next_result_tab(
         &mut self,
         _: &NextResultTab,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.step_result_tab(1, cx);
+        self.step_result_tab(1, window, cx);
     }
 
     pub(super) fn previous_result_tab(
         &mut self,
         _: &PreviousResultTab,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.step_result_tab(-1, cx);
+        self.step_result_tab(-1, window, cx);
     }
 
     /// Shows the result tab `step` places away, like a click on it, and
     /// wraps at the ends of the result tabs.
-    fn step_result_tab(&mut self, step: isize, cx: &mut Context<Self>) {
+    /// A focused table gives the focus to the table that replaces it.
+    fn step_result_tab(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
         if !self.workspace_in_view(cx) {
             return;
         }
+        let focused = self.results_focused(window, cx);
         self.restore_results(cx);
         let tab = &mut self.tabs[self.active];
         let current = tab.shown_result().id;
@@ -143,6 +173,9 @@ impl Qrow {
         let next = (position as isize + step).rem_euclid(count) as usize;
         tab.active_result = tab.results[next].id;
         tab.panel.user_select(Panel::Results);
+        if focused {
+            self.focus_shown_result(window, cx);
+        }
         cx.notify();
     }
 
@@ -238,8 +271,11 @@ impl Qrow {
         self.restore_results(cx);
         let tab = &mut self.tabs[self.active];
         tab.panel.user_select(Panel::Results);
-        let focus = tab.shown_result().table.read(cx).focus_handle(cx);
-        focus.focus(window, cx);
+        // Without rows, Results shows a message and no table to focus.
+        let table = tab.shown_result().table.clone();
+        if !table.read(cx).delegate().columns.is_empty() {
+            table.read(cx).focus_handle(cx).focus(window, cx);
+        }
         cx.notify();
     }
 

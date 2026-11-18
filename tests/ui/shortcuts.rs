@@ -50,7 +50,8 @@ fn a_saved_shortcut_replaces_the_default_and_a_removed_one_does_nothing(cx: &mut
     );
     let app = TestApp::launch(cx, workspace);
     app.press(cx, "secondary-j");
-    app.settle(cx);
+    // Past the autosave delay, so a change would be in the saved workspace.
+    app.pass_time(cx, Duration::from_secs(1));
     assert!(
         !app.saved().settings.results_minimized,
         "⌘J has no command now"
@@ -58,7 +59,8 @@ fn a_saved_shortcut_replaces_the_default_and_a_removed_one_does_nothing(cx: &mut
     app.press(cx, "secondary-alt-j");
     wait_minimized(&app, cx, true);
     app.press(cx, "secondary-t");
-    app.settle(cx);
+    // Past the autosave delay, so a change would be in the saved workspace.
+    app.pass_time(cx, Duration::from_secs(1));
     assert_eq!(app.saved().tabs.len(), 1, "New tab has no shortcut");
 }
 
@@ -91,12 +93,13 @@ fn next_and_previous_tab_wrap_at_the_ends_of_the_strip(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
-fn rename_tab_and_focus_editor_have_shortcuts_when_assigned(cx: &mut TestAppContext) {
+fn rename_tab_and_focus_commands_have_shortcuts_when_assigned(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(
         &["Query 1"],
         &[
             ("rename_tab", Some("f2")),
             ("focus_editor", Some("secondary-alt-e")),
+            ("focus_catalog", Some("secondary-alt-c")),
         ],
     );
     let app = TestApp::launch(cx, workspace);
@@ -105,13 +108,51 @@ fn rename_tab_and_focus_editor_have_shortcuts_when_assigned(cx: &mut TestAppCont
     app.press(cx, "escape");
     app.wait_gone(cx, "rename-tab-name");
 
-    // Move the focus away from the editor, then bring it back.
-    app.click(cx, "show-connections");
+    // With the focus in the connection tree, typing does not reach the SQL.
+    app.type_sql(cx, "SELECT 1");
+    app.press(cx, "secondary-alt-c");
+    app.update(cx, |window, cx| window.input("x", cx));
+    // Past the autosave delay, so a change would be in the saved workspace.
+    app.pass_time(cx, Duration::from_secs(1));
+    assert_eq!(
+        app.saved().tabs[0].sql,
+        "SELECT 1",
+        "the tree has the focus"
+    );
     app.press(cx, "secondary-alt-e");
-    app.update(cx, |window, cx| window.input("SELECT 42", cx));
+    app.update(cx, |window, cx| window.input(" -- 42", cx));
     app.wait_until(cx, "typed SQL", Duration::from_secs(5), |_, _| {
-        app.saved().tabs[0].sql.contains("SELECT 42")
+        app.saved().tabs[0].sql.contains("-- 42")
     });
+}
+
+#[gpui_kit::test]
+fn an_editor_shortcut_wins_over_a_window_shortcut_with_the_same_keys(cx: &mut TestAppContext) {
+    // New Tab takes the keys of Toggle Comment. In the editor, the keys
+    // toggle the comment; elsewhere they open a tab.
+    let (workspace, _) = workspace(&["Query 1"], &[("new_tab", Some("secondary-/"))]);
+    let app = TestApp::launch(cx, workspace);
+    app.type_sql(cx, "SELECT 1");
+    app.press(cx, "secondary-/");
+    app.wait_until(cx, "the comment", Duration::from_secs(5), |_, _| {
+        app.saved().tabs[0].sql.starts_with("--")
+    });
+    assert_eq!(app.saved().tabs.len(), 1, "no new tab from the editor");
+}
+
+#[gpui_kit::test]
+fn run_query_cannot_take_the_keys_of_an_editor_command(cx: &mut TestAppContext) {
+    // Run Query also works in the SQL editor, so it conflicts there.
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-run_query");
+    app.press(cx, "secondary-/");
+    app.wait_for(cx, "replace-shortcut-run_query");
+    assert_eq!(
+        message(&app, cx, "run_query").as_deref(),
+        Some("Used by Toggle Comment.")
+    );
 }
 
 #[gpui_kit::test]
@@ -119,12 +160,37 @@ fn a_custom_scale_shortcut_replaces_the_default(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[("increase_scale", Some("secondary-alt-="))]);
     let app = TestApp::launch(cx, workspace);
     app.press(cx, "secondary-=");
-    app.settle(cx);
+    // Past the autosave delay, so a change would be in the saved workspace.
+    app.pass_time(cx, Duration::from_secs(1));
     assert_eq!(app.saved().settings.ui_scale, 1., "⌘= has no command now");
     app.press(cx, "secondary-alt-=");
     app.wait_until(cx, "larger scale", Duration::from_secs(5), |_, _| {
         app.saved().settings.ui_scale > 1.
     });
+}
+
+#[gpui_kit::test]
+fn scale_keys_work_in_a_dialog_and_an_exact_match_wins(cx: &mut TestAppContext) {
+    // ⇧⌘= decreases although ⌘= (the default of Increase) ignores Shift.
+    let (workspace, _) = workspace(
+        &["Query 1"],
+        &[
+            ("decrease_scale", Some("secondary-shift-=")),
+            ("rename_tab", Some("f2")),
+        ],
+    );
+    let app = TestApp::launch(cx, workspace);
+    app.press(cx, "f2");
+    app.wait_for(cx, "rename-tab-name");
+    app.press(cx, "secondary-=");
+    app.wait_until(cx, "larger scale", Duration::from_secs(5), |_, _| {
+        app.saved().settings.ui_scale > 1.
+    });
+    app.press(cx, "secondary-shift-=");
+    app.wait_until(cx, "the default scale", Duration::from_secs(5), |_, _| {
+        app.saved().settings.ui_scale == 1.
+    });
+    app.wait_for(cx, "rename-tab-name");
 }
 
 /// Opens Settings at the Shortcuts page.
@@ -160,7 +226,8 @@ fn a_recorded_shortcut_is_saved_and_runs_its_command(cx: &mut TestAppContext) {
     app.press(cx, "secondary-alt-k");
     wait_minimized(&app, cx, true);
     app.press(cx, "secondary-j");
-    app.settle(cx);
+    // Past the autosave delay, so a change would be in the saved workspace.
+    app.pass_time(cx, Duration::from_secs(1));
     assert!(
         app.saved().settings.results_minimized,
         "⌘J no longer toggles results"
@@ -291,4 +358,93 @@ fn remove_reset_and_reset_all_return_shortcuts(cx: &mut TestAppContext) {
     app.wait_until(cx, "default shortcuts", Duration::from_secs(5), |_, _| {
         app.saved().settings.shortcuts.is_empty()
     });
+}
+
+#[gpui_kit::test]
+fn recording_ends_when_the_focus_leaves_the_field(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-toggle_results");
+    app.wait_for(cx, "cancel-shortcut-toggle_results");
+    // Typing in the Settings search is not a shortcut.
+    app.click_labelled(cx, "Search...");
+    app.press(cx, "backspace");
+    app.pass_time(cx, Duration::from_secs(1));
+    assert_eq!(saved_shortcut(&app, "toggle_results"), None);
+    app.wait_gone(cx, "cancel-shortcut-toggle_results");
+}
+
+#[gpui_kit::test]
+fn a_reset_to_keys_that_another_command_took_offers_replace(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(
+        &["Query 1"],
+        &[
+            ("transpose_result", Some("secondary-j")),
+            ("toggle_results", None),
+        ],
+    );
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "reset-shortcut-toggle_results");
+    app.wait_for(cx, "replace-shortcut-toggle_results");
+    assert_eq!(
+        message(&app, cx, "toggle_results").as_deref(),
+        Some("Used by Transpose Result.")
+    );
+    assert_eq!(
+        saved_shortcut(&app, "toggle_results"),
+        Some(None),
+        "nothing changes yet"
+    );
+    app.click(cx, "replace-shortcut-toggle_results");
+    app.wait_until(cx, "the default back", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "toggle_results").is_none()
+            && saved_shortcut(&app, "transpose_result") == Some(None)
+    });
+}
+
+#[gpui_kit::test]
+fn fixed_keys_and_separate_places_get_the_right_message(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    // Up moves through the grid; First Row cannot take it.
+    app.click(cx, "shortcut-first_row");
+    app.press(cx, "up");
+    app.wait_for(cx, "shortcut-message-first_row");
+    assert_eq!(
+        message(&app, cx, "first_row").as_deref(),
+        Some("Used by Select Up.")
+    );
+    app.press(cx, "escape");
+    // Toggle Comment works in the SQL editor and Send Message in the
+    // message field: they can share keys without a message.
+    app.click(cx, "shortcut-send_message");
+    app.press(cx, "secondary-/");
+    app.wait_until(cx, "the shared keys", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "send_message") == Some(Some("secondary-/".into()))
+    });
+    assert_eq!(message(&app, cx, "send_message"), None);
+}
+
+#[gpui_kit::test]
+fn enter_on_a_focused_field_records(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "f7");
+    app.wait_until(cx, "F7", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("f7".into()))
+    });
+    // The field keeps the focus, so Enter records again.
+    app.press(cx, "enter");
+    app.wait_for(cx, "cancel-shortcut-cancel_query");
+    let value = app.update(cx, |window, _| {
+        window
+            .try_find("shortcut-cancel_query")
+            .and_then(|field| field.value().map(str::to_owned))
+    });
+    assert_eq!(value.as_deref(), Some("F7"));
 }

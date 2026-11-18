@@ -824,6 +824,15 @@ impl Qrow {
                 input.update(cx, |input, cx| input.set_value(text, window, cx));
             }
         }
+        // A reset of the page changes the copy format outside its picker.
+        let copy_format = self.settings.copy_format.label().to_owned();
+        if form.copy_format.read(cx).selected_value() != Some(&copy_format) {
+            form.copy_format.update(cx, |state, cx| {
+                state.set_selected_value(&copy_format, window, cx)
+            });
+        }
+        // Rows of the Shortcuts page that render in this frame set it again.
+        form.shortcuts.shown.set(false);
         let theme = self.settings.theme.clone();
         if form.theme.read(cx).selected_value() != Some(&theme) {
             form.theme
@@ -987,11 +996,16 @@ impl Qrow {
     }
 
     /// Return the Export page to its defaults.
-    pub(super) fn reset_export_settings(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reset_export_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let defaults = Settings::default();
         self.set_copy_format(defaults.copy_format, cx);
-        self.settings.export_replay_limit_mib = defaults.export_replay_limit_mib;
-        self.changed(cx);
+        // Through the setter, which drops kept downloads over the limit.
+        self.apply_number_setting(
+            NumberSetting::ExportReplayLimit,
+            defaults.export_replay_limit_mib as f32,
+            window,
+            cx,
+        );
     }
 }
 

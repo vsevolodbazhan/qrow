@@ -142,19 +142,24 @@ To set a shortcut:
    alone.
 3. The shortcut applies immediately. Menus and tooltips show it.
 
-While a field records, Escape cancels and Delete removes the shortcut. Other
-keys, for example ⌘W, do not operate their commands. To remove a shortcut
+You can also move to a field with Tab and press Enter or Space. While a
+field records, Escape cancels and Delete removes the shortcut. Other keys, for
+example ⌘W, do not operate their commands. A click in another control, or
+another page, ends the recording. To remove a shortcut
 later, move the pointer over its field and click the **Remove shortcut**
 button. A changed shortcut has a **Reset** button that shows its default.
 
 A message below the field shows a problem:
 
-- Red: the keys cannot be a shortcut. The field continues to record.
+- Red: the keys cannot be a shortcut, or a fixed key of the same place uses
+  them, for example Up in the result grid. The field continues to record.
 - Amber: another command in the same place uses the keys. Click **Replace** to
   move the keys to this command. The other command then has no shortcut.
   Press other keys or Escape to keep the other shortcut.
-- Blue: the keys also operate a command in a different place, for example in
-  the SQL editor. The message tells which command operates there.
+- Blue: the keys also operate a command in a place inside the window, for
+  example in the SQL editor. The message tells which command operates there.
+  Run Query also operates in the SQL editor, so it cannot share keys with an
+  editor command.
 
 Use **All**, **Customized**, and **No shortcut** to filter the list. Click
 **Find by keys** and press keys to show the commands that use them. The

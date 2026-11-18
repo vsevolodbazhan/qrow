@@ -165,6 +165,13 @@ fn a_settings_page_resets_only_after_confirmation(cx: &mut TestAppContext) {
     wait_saved(&app, cx, "the default copy format", |workspace| {
         workspace.settings.copy_format == CopyFormat::default()
     });
+    // The open picker shows the reset value.
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "setting-copy-format").as_deref(),
+            Some(CopyFormat::default().label())
+        );
+    });
 }
 
 #[gpui_kit::test]

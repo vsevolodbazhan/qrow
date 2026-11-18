@@ -54,25 +54,47 @@ impl Group {
     }
 }
 
-/// Where a shortcut operates. Two commands in the same scope cannot share a
-/// shortcut. In a nested scope, like the editor in the window, the inner
-/// command wins.
+/// Where a shortcut operates. Two commands in the same place cannot share a
+/// shortcut. Where one place is inside another, like the SQL editor in the
+/// window, the inner command wins there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Scope {
+    /// Everywhere in every Qrow window, before any other binding: Quit,
+    /// Settings, and the scale keys.
+    App,
+    /// The workspace of the main window.
     Window,
+    /// The SQL editor.
     Editor,
+    /// Every text field, the SQL editor and the message field included.
+    Text,
     Grid,
     Tree,
+    /// The assistant's message field.
     Composer,
+    /// Dialogs and the Settings window, outside the workspace.
     Dialog,
+}
+
+/// How two shortcuts with the same keys get along.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Relation {
+    /// Both cannot work: one hides the other.
+    Conflict,
+    /// Both work; in the inner place, its command wins.
+    Overlap {
+        inner: Scope,
+    },
+    Independent,
 }
 
 impl Scope {
     /// The start of a message about the place, like "In the SQL editor".
     pub(crate) fn where_phrase(self) -> &'static str {
         match self {
-            Self::Window => "In the window",
+            Self::App | Self::Window => "In the window",
             Self::Editor => "In the SQL editor",
+            Self::Text => "In text fields",
             Self::Grid => "In the result grid",
             Self::Tree => "In the connection tree",
             Self::Composer => "In the message field",
@@ -80,22 +102,32 @@ impl Scope {
         }
     }
 
-    /// True when a shortcut of `self` and one of `other` can both match the
-    /// same key press.
-    pub(crate) fn overlaps(self, other: Self) -> bool {
-        self == other
-            || self == Self::Window
-            || other == Self::Window
-            // The composer is a text field, so editor commands also apply in it.
-            || matches!(
-                (self, other),
-                (Self::Editor, Self::Composer) | (Self::Composer, Self::Editor)
-            )
+    /// The relation of a shortcut in `self` and one in `other` with the same
+    /// keys.
+    pub(crate) fn relation(self, other: Self) -> Relation {
+        match (self, other) {
+            _ if self == other => Relation::Conflict,
+            // An app-wide binding wins everywhere.
+            (Self::App, _) | (_, Self::App) => Relation::Conflict,
+            // The SQL editor is a text field, and text fields win over it.
+            (Self::Editor, Self::Text) | (Self::Text, Self::Editor) => Relation::Conflict,
+            (Self::Window, Self::Dialog) | (Self::Dialog, Self::Window) => Relation::Independent,
+            (Self::Window, inner) | (inner, Self::Window) => Relation::Overlap { inner },
+            (Self::Text, Self::Composer) | (Self::Composer, Self::Text) => Relation::Overlap {
+                inner: Self::Composer,
+            },
+            _ => Relation::Independent,
+        }
     }
 }
 
 /// The key context of GPUI Kit's text fields.
 const INPUT: &str = "Input";
+/// The key context of the main window's workspace. Commands of the window
+/// bind in it, so a binding of a nested place, like the editor, wins over
+/// them. A binding without a context would match at the deepest level and
+/// win over every nested binding.
+pub(crate) const WORKSPACE: &str = "Qrow";
 
 /// The default shortcut of a command.
 #[derive(Clone, Copy, Debug)]
@@ -116,6 +148,9 @@ pub(crate) struct Command {
     pub(crate) label: &'static str,
     pub(crate) group: Group,
     pub(crate) scope: Scope,
+    /// A second place of the command: Run Query also works in the SQL editor,
+    /// where it wins over the editor's own ⌘↩.
+    also: Option<Scope>,
     /// The actions that the shortcut sends, each in its key context. Some
     /// commands send one action of several, for example in different dialogs.
     targets: Targets,
@@ -123,6 +158,30 @@ pub(crate) struct Command {
 }
 
 impl Command {
+    /// The places where the shortcut of the command works.
+    pub(crate) fn places(&self) -> impl Iterator<Item = Scope> {
+        std::iter::once(self.scope).chain(self.also)
+    }
+
+    /// The relation of this command's shortcut and `other`'s with the same
+    /// keys, over all of their places.
+    pub(crate) fn relation(&self, other: &Command) -> Relation {
+        let relations: Vec<Relation> = self
+            .places()
+            .flat_map(|mine| other.places().map(move |theirs| mine.relation(theirs)))
+            .collect();
+        relations
+            .iter()
+            .find(|relation| **relation == Relation::Conflict)
+            .or_else(|| {
+                relations
+                    .iter()
+                    .find(|relation| matches!(relation, Relation::Overlap { .. }))
+            })
+            .copied()
+            .unwrap_or(Relation::Independent)
+    }
+
     pub(crate) fn targets(&self) -> Vec<(Box<dyn Action>, Option<&'static str>)> {
         (self.targets)()
     }
@@ -135,6 +194,7 @@ macro_rules! command {
             label: $label,
             group: Group::$group,
             scope: Scope::$scope,
+            also: None,
             targets: || vec![$((Box::new($action) as Box<dyn Action>, $context)),+],
             default: $default,
         }
@@ -148,6 +208,7 @@ macro_rules! select_tab {
             label: concat!("Select Tab ", $number),
             group: Group::Tabs,
             scope: Scope::Window,
+            also: None,
             targets: || vec![(Box::new(SelectTab($number - 1)) as Box<dyn Action>, Some("Qrow"))],
             default: DefaultKeys::Keys(concat!("secondary-", $number)),
         }),+]
@@ -160,14 +221,17 @@ const TREE: Option<&str> = Some("Tree");
 fn base_commands() -> Vec<Command> {
     use DefaultKeys::{Keys, Kit, None as Unset};
     let mut commands = vec![
-        command!(
-            "run_query",
-            "Run Query",
-            Query,
-            Window,
-            Keys("secondary-enter"),
-            [(RunQuery, None)]
-        ),
+        Command {
+            also: Some(Scope::Editor),
+            ..command!(
+                "run_query",
+                "Run Query",
+                Query,
+                Window,
+                Keys("secondary-enter"),
+                [(RunQuery, None), (RunQuery, Some("SqlEditor > Input"))]
+            )
+        },
         command!(
             "cancel_query",
             "Cancel Query",
@@ -387,12 +451,12 @@ fn base_commands() -> Vec<Command> {
             Keys("shift-right"),
             [(results::ExtendSelectionRight, RESULTS_TABLE)]
         ),
-        command!("find", "Find", Editor, Editor, Kit, [(Search, Some(INPUT))]),
+        command!("find", "Find", Editor, Text, Kit, [(Search, Some(INPUT))]),
         command!(
             "replace",
             "Replace",
             Editor,
-            Editor,
+            Text,
             Kit,
             [(Replace, Some(INPUT))]
         ),
@@ -400,7 +464,7 @@ fn base_commands() -> Vec<Command> {
             "indent",
             "Indent",
             Editor,
-            Editor,
+            Text,
             Kit,
             [(Indent, Some(INPUT))]
         ),
@@ -408,17 +472,17 @@ fn base_commands() -> Vec<Command> {
             "outdent",
             "Outdent",
             Editor,
-            Editor,
+            Text,
             Kit,
             [(Outdent, Some(INPUT))]
         ),
-        command!("undo", "Undo", Editor, Editor, Kit, [(Undo, Some(INPUT))]),
-        command!("redo", "Redo", Editor, Editor, Kit, [(Redo, Some(INPUT))]),
+        command!("undo", "Undo", Editor, Text, Kit, [(Undo, Some(INPUT))]),
+        command!("redo", "Redo", Editor, Text, Kit, [(Redo, Some(INPUT))]),
         command!(
             "select_all",
             "Select All",
             Editor,
-            Editor,
+            Text,
             Kit,
             [(gpui_kit::component::input::SelectAll, Some(INPUT))]
         ),
@@ -567,7 +631,7 @@ fn base_commands() -> Vec<Command> {
             "settings",
             "Settings",
             Application,
-            Window,
+            App,
             Keys("secondary-,"),
             [(OpenSettings, None)]
         ),
@@ -575,7 +639,7 @@ fn base_commands() -> Vec<Command> {
             "increase_scale",
             "Increase Scale",
             Application,
-            Window,
+            App,
             Keys("secondary-="),
             [(IncreaseUiScale, None)]
         ),
@@ -583,7 +647,7 @@ fn base_commands() -> Vec<Command> {
             "decrease_scale",
             "Decrease Scale",
             Application,
-            Window,
+            App,
             Keys("secondary--"),
             [(DecreaseUiScale, None)]
         ),
@@ -631,7 +695,7 @@ fn base_commands() -> Vec<Command> {
             "quit",
             "Quit Qrow",
             Application,
-            Window,
+            App,
             Keys("secondary-q"),
             [(Quit, None)]
         ),
@@ -829,10 +893,16 @@ pub(crate) fn display(keys: &str) -> String {
         .unwrap_or_else(|| keys.to_owned())
 }
 
-/// The name of a fixed binding of GPUI Kit's text fields with `keys`, like
-/// "Move Home". Text fields keep these bindings.
-pub(crate) fn fixed_text_binding(keys: &str, cx: &App) -> Option<String> {
-    let kit = cx.try_global::<KitBindings>()?;
+/// The fixed bindings of GPUI Kit with `keys`: their place and the name of
+/// their action, like (Text, "Move Home"). Text fields, the result grid, and
+/// the connection tree keep these bindings.
+pub(crate) fn fixed_bindings_with(keys: &str, cx: &App) -> Vec<(Scope, String)> {
+    let Some(kit) = cx.try_global::<KitBindings>() else {
+        return Vec::new();
+    };
+    let Some(pressed) = keystroke(keys) else {
+        return Vec::new();
+    };
     let customizable: Vec<(Box<dyn Action>, Option<&'static str>)> = commands()
         .iter()
         .filter(|command| matches!(command.default, DefaultKeys::Kit))
@@ -840,23 +910,33 @@ pub(crate) fn fixed_text_binding(keys: &str, cx: &App) -> Option<String> {
         .collect();
     kit.bindings
         .iter()
-        .rev()
-        .filter(|binding| {
-            binding
-                .predicate()
-                .map(|predicate| predicate.to_string())
-                .as_deref()
-                == Some(INPUT)
-        })
-        .filter(|binding| {
-            !customizable
+        .filter_map(|binding| {
+            let place = match binding.predicate()?.to_string().as_str() {
+                INPUT => Scope::Text,
+                "DataTable" => Scope::Grid,
+                "Tree" => Scope::Tree,
+                _ => return None,
+            };
+            let [keystroke] = binding.keystrokes() else {
+                return None;
+            };
+            let keystroke = keystroke.inner();
+            if keystroke.modifiers != pressed.modifiers || keystroke.key != pressed.key {
+                return None;
+            }
+            if customizable
                 .iter()
                 .any(|(action, context)| is_binding_of(binding, action.as_ref(), *context))
+            {
+                return None;
+            }
+            // Run Query takes ⌘↩ from the editor's own secondary Enter.
+            if binding.action().name().ends_with("::Enter") && pressed.modifiers.secondary() {
+                return None;
+            }
+            Some((place, humanize(binding.action().name())))
         })
-        .find(|binding| {
-            binding.keystrokes().len() == 1 && stored(binding.keystrokes()[0].inner()) == keys
-        })
-        .map(|binding| humanize(binding.action().name()))
+        .collect()
 }
 
 /// "input::MoveToStart" becomes "Move To Start".
@@ -893,12 +973,21 @@ pub(crate) fn apply(overrides: &BTreeMap<String, Option<String>>, cx: &mut App) 
         })
         .cloned()
         .collect();
+    // Bindings of GPUI Kit's actions come first: the macOS menu bar shows the
+    // first binding of an action, for example Select All in the Edit menu.
+    let mut kit_command_bindings = Vec::new();
     let mut bindings = Vec::new();
     for command in commands() {
         let Some(keys) = effective(command, overrides, cx) else {
             continue;
         };
+        let target = if matches!(command.default, DefaultKeys::Kit) {
+            &mut kit_command_bindings
+        } else {
+            &mut bindings
+        };
         for (action, context) in command.targets() {
+            let context = context.or((command.scope == Scope::Window).then_some(WORKSPACE));
             let predicate = context
                 .map(|context| KeyBindingContextPredicate::parse(context).map(std::rc::Rc::new))
                 .transpose();
@@ -909,12 +998,13 @@ pub(crate) fn apply(overrides: &BTreeMap<String, Option<String>>, cx: &mut App) 
                         .map_err(|error| error.to_string())
                 });
             match binding {
-                Ok(binding) => bindings.push(binding),
+                Ok(binding) => target.push(binding),
                 Err(error) => eprintln!("Could not bind {keys} to {}: {error}", command.id),
             }
         }
     }
     cx.clear_key_bindings();
+    cx.bind_keys(kit_command_bindings);
     cx.bind_keys(kit_bindings);
     cx.bind_keys(fixed_bindings());
     cx.bind_keys(bindings);
@@ -940,15 +1030,21 @@ pub(crate) fn scale_change(
     overrides: &BTreeMap<String, Option<String>>,
     cx: &App,
 ) -> Option<f32> {
-    [
+    let keys = [
         ("increase_scale", UI_SCALE_STEP),
         ("decrease_scale", -UI_SCALE_STEP),
     ]
     .into_iter()
-    .find_map(|(id, change)| {
-        let keys = effective(command(id)?, overrides, cx)?;
-        scale_key_matches(&keystroke(&keys)?, pressed).then_some(change)
-    })
+    .filter_map(|(id, change)| Some((keystroke(&effective(command(id)?, overrides, cx)?)?, change)))
+    .collect::<Vec<_>>();
+    // An exact match wins, so ⇧⌘= can decrease while ⌘= increases.
+    keys.iter()
+        .find(|(bound, _)| bound.modifiers == pressed.modifiers && bound.key == pressed.key)
+        .or_else(|| {
+            keys.iter()
+                .find(|(bound, _)| scale_key_matches(bound, pressed))
+        })
+        .map(|(_, change)| *change)
 }
 
 fn scale_key_matches(bound: &Keystroke, pressed: &Keystroke) -> bool {
@@ -1135,6 +1231,38 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_first_binding_of_an_editor_action_is_the_users(cx: &mut gpui_kit::TestAppContext) {
+        // The macOS menu bar shows the first binding of an action.
+        cx.update(|cx| {
+            super::super::init(cx);
+            let mut overrides = BTreeMap::new();
+            assign(
+                command("select_all").unwrap(),
+                Some("secondary-shift-a".into()),
+                &mut overrides,
+                cx,
+            );
+            apply(&overrides, cx);
+            let first = cx
+                .key_bindings()
+                .borrow()
+                .bindings_for_action(&gpui_kit::component::input::SelectAll)
+                .next()
+                .map(|binding| stored(binding.keystrokes()[0].inner()));
+            assert_eq!(first.as_deref(), Some("secondary-shift-a"));
+            // Window commands bind in the workspace context.
+            let run = cx
+                .key_bindings()
+                .borrow()
+                .bindings_for_action(&RunQuery)
+                .next()
+                .and_then(|binding| binding.predicate())
+                .map(|predicate| predicate.to_string());
+            assert_eq!(run.as_deref(), Some(WORKSPACE));
+        });
+    }
+
+    #[gpui_kit::test]
     fn one_command_binds_each_of_its_targets(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
             super::super::init(cx);
@@ -1149,9 +1277,10 @@ mod tests {
             for action in [&SaveConnection as &dyn Action, &SaveSignIn, &SubmitRename] {
                 assert_eq!(binding_keys(action, cx), vec!["secondary-s".to_owned()]);
             }
+            // Run Query binds in the window and in the SQL editor.
             assert_eq!(
                 binding_keys(&RunQuery, cx),
-                vec!["secondary-enter".to_owned()]
+                vec!["secondary-enter".to_owned(), "secondary-enter".to_owned()]
             );
         });
     }
