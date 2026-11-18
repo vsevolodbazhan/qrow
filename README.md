@@ -89,6 +89,17 @@ Or extract `Qrow-VERSION-linux-x86_64.tar.gz` or
 [latest release](https://github.com/vsevolodbazhan/qrow/releases/latest) into
 `~/.local`.
 
+Or install from the [AUR](https://aur.archlinux.org/packages/qrow-bin) on Arch
+Linux:
+
+```sh
+yay -S qrow-bin
+```
+
+```sh
+yay -S qrow-nightly-bin
+```
+
 ### Channels
 
 - **Stable** for daily work. Choose it if you want fewer surprises.
@@ -96,7 +107,7 @@ Or extract `Qrow-VERSION-linux-x86_64.tar.gz` or
   changes early and report problems.
 
 To change the channel, open **Settings → Updates → Release Channel**. A copy
-from Homebrew or Scoop keeps the channel of its package.
+from Homebrew, Scoop, or the AUR keeps the channel of its package.
 
 ## Build
 

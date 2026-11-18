@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Qrow
+Comment=SQL workbench
+Exec=qrow
+Icon=qrow
+Terminal=false
+Categories=Development;Database;

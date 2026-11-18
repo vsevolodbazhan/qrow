@@ -137,6 +137,27 @@ installs the portable archive, so stable and nightly builds can be installed
 at the same time. Both packages add Qrow to the Start menu and use the same
 workspace and settings.
 
+### AUR
+
+Install Qrow on Arch Linux from the
+[AUR](https://aur.archlinux.org/packages/qrow-bin) with an AUR helper, such as
+[yay](https://github.com/Jguer/yay):
+
+```sh
+yay -S qrow-bin
+```
+
+To install the latest nightly build, use `yay -S qrow-nightly-bin`. These
+packages install the release archive for x86-64 or ARM64 into `/usr`. To
+upgrade, use your AUR helper, for example `yay -Syu`. Qrow tells you about a
+new version, but it does not show the command of your AUR helper.
+
+To build the latest stable release from source, use `yay -S qrow`. The build
+needs a few GB of disk space and can take a long time. Qrow built from source
+does not check for updates.
+
+Only one of the three packages can be installed.
+
 ## Updates
 
 Release builds check for a new version of their channel. A stable build
