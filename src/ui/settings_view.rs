@@ -838,6 +838,7 @@ impl Qrow {
                 state.set_selected_value(&copy_format, window, cx)
             });
         }
+        form.shortcuts.drop_stale_keys(window);
         // Rows of the Shortcuts page that render in this frame set it again.
         // A recording whose field did not show in the last frame ends, so it
         // does not resume when its page shows again.

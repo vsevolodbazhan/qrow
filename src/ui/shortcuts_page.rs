@@ -17,7 +17,7 @@ use gpui_kit::component::{
     setting::{SettingGroup, SettingItem, SettingPage},
     v_flex,
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -64,10 +64,13 @@ pub(super) struct ShortcutsForm {
     pub(super) stale: Rc<Cell<bool>>,
     /// The press of Enter or Space on a field or Find by keys, and the
     /// control. Its release on the same control starts it, as a button does.
-    armed: Option<(String, Control)>,
+    /// Each Settings frame drops it when its control lost the focus.
+    armed: RefCell<Option<(String, Control)>>,
     /// A key that the recorder used and that is not released yet. Its
     /// repeats do nothing.
-    held: Option<String>,
+    /// Each Settings frame drops it when no shortcut control has the focus,
+    /// so a release that Settings did not see does not stay pending.
+    held: RefCell<Option<String>>,
     _intercept: Option<Subscription>,
 }
 
@@ -200,14 +203,12 @@ impl Qrow {
                         .is_some_and(|focus| focus.is_focused(window))
                         .then_some(Control::Find)
                 });
-            if form.held.as_deref() != Some(key) {
-                form.held = None;
-            } else if in_settings && control.is_some() {
-                // A repeat of a key that the recorder just used.
+            // A repeat of a key that the recorder just used.
+            if in_settings && control.is_some() && form.held.borrow().as_deref() == Some(key) {
                 return true;
             }
             if let (true, true, Some(control)) = (in_settings, activation, control) {
-                form.armed = Some((key.to_owned(), control));
+                *form.armed.borrow_mut() = Some((key.to_owned(), control));
                 return true;
             }
             return false;
@@ -266,8 +267,8 @@ impl Qrow {
             return false;
         }
         // The recorder uses this key; its repeats and release do nothing more.
-        form.held = Some(key.to_owned());
-        form.armed = None;
+        *form.held.borrow_mut() = Some(key.to_owned());
+        form.armed.take();
         if form.finding {
             form.finding = false;
             if !(plain && !modifiers.shift && key == "escape") {
@@ -496,16 +497,22 @@ impl Qrow {
             return;
         };
         let key = keystroke.key.as_str();
-        if form.held.as_deref() == Some(key) {
-            form.held = None;
+        if form.held.borrow().as_deref() == Some(key) {
+            form.held.take();
         }
-        if form.armed.as_ref().is_none_or(|(armed, _)| armed != key) {
+        if form
+            .armed
+            .borrow()
+            .as_ref()
+            .is_none_or(|(armed, _)| armed != key)
+        {
             return;
         }
         let Some((_, control)) = form.armed.take() else {
             return;
         };
-        if form.recording.is_some() || form.finding {
+        // A press with a modifier added before the release is not a click.
+        if keystroke.modifiers.modified() || form.recording.is_some() || form.finding {
             return;
         }
         match control {
@@ -877,6 +884,45 @@ fn filters(
 }
 
 impl ShortcutsForm {
+    fn control_focused(&self, control: Control, window: &Window) -> bool {
+        match control {
+            Control::Field(id) => self
+                .focus
+                .get(id)
+                .is_some_and(|focus| focus.is_focused(window)),
+            Control::Find => self
+                .find_focus
+                .as_ref()
+                .is_some_and(|focus| focus.is_focused(window)),
+        }
+    }
+
+    /// Drop a pending press or a held key whose control lost the focus, or
+    /// when the window is not active: Settings may not see their release.
+    pub(super) fn drop_stale_keys(&self, window: &Window) {
+        if !window.is_window_active() {
+            self.armed.take();
+            self.held.take();
+            return;
+        }
+        let armed_lost = self
+            .armed
+            .borrow()
+            .as_ref()
+            .is_some_and(|(_, control)| !self.control_focused(*control, window));
+        if armed_lost {
+            self.armed.take();
+        }
+        let on_control = self.focus.values().any(|focus| focus.is_focused(window))
+            || self
+                .find_focus
+                .as_ref()
+                .is_some_and(|focus| focus.is_focused(window));
+        if !on_control {
+            self.held.take();
+        }
+    }
+
     /// The control that records or waits for Find by keys.
     pub(super) fn active_focus(&self) -> Option<&FocusHandle> {
         if self.finding {
@@ -1294,11 +1340,19 @@ impl Qrow {
                                     // control, so the window takes the focus.
                                     window.close_dialog(cx);
                                     let _ = confirm.update(cx, |qrow, cx| {
+                                        // A filtered Shortcuts list can drop
+                                        // the row with the focus.
+                                        let filtered = page == ResetPage::Shortcuts
+                                            && qrow.settings_form.as_ref().is_some_and(|form| {
+                                                form.shortcuts.filter != Filter::All
+                                                    || form.shortcuts.found.is_some()
+                                            });
                                         qrow.reset_page(page, window, cx);
-                                        if let Some(focus) = qrow
-                                            .settings_form
-                                            .as_ref()
-                                            .and_then(|form| form.root_focus.clone())
+                                        if filtered
+                                            && let Some(focus) = qrow
+                                                .settings_form
+                                                .as_ref()
+                                                .and_then(|form| form.root_focus.clone())
                                         {
                                             focus.focus(window, cx);
                                         }

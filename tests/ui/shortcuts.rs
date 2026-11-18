@@ -701,6 +701,51 @@ fn confirming_a_reset_under_a_filter_keeps_the_keyboard_working(cx: &mut TestApp
     app.wait_gone(cx, "settings-content");
 }
 
+#[gpui_kit::test]
+fn a_press_that_left_its_field_starts_nothing(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "f7");
+    app.wait_until(cx, "F7", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("f7".into()))
+    });
+    // Enter goes down; the focus leaves and comes back before its release.
+    key_event(&app, cx, "enter", Key::Down);
+    app.press(cx, "tab");
+    app.press(cx, "shift-tab");
+    key_event(&app, cx, "enter", Key::Up);
+    assert!(app.update(cx, |window, _| {
+        window.try_find("cancel-shortcut-cancel_query").is_none()
+    }));
+    // A modifier added before the release is not a click either.
+    key_event(&app, cx, "enter", Key::Down);
+    key_event(&app, cx, "shift-enter", Key::Up);
+    assert!(app.update(cx, |window, _| {
+        window.try_find("cancel-shortcut-cancel_query").is_none()
+    }));
+}
+
+#[gpui_kit::test]
+fn another_key_during_a_held_enter_does_not_restart_recording(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    key_event(&app, cx, "enter", Key::Down);
+    key_event(&app, cx, "x", Key::Down);
+    key_event(&app, cx, "x", Key::Up);
+    key_event(&app, cx, "enter", Key::Repeat);
+    key_event(&app, cx, "enter", Key::Up);
+    app.wait_until(cx, "Enter", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("enter".into()))
+    });
+    assert!(app.update(cx, |window, _| {
+        window.try_find("cancel-shortcut-cancel_query").is_none()
+    }));
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Key {
     Down,
