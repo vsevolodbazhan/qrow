@@ -120,6 +120,16 @@ fn wheel(window: &mut Window, position: Point<Pixels>, dy: Pixels, cx: &mut gpui
     window.render_frame(cx);
 }
 
+/// Copies the selection with ⌘C, after the start of the selection scrolled
+/// out of the list, and returns the clipboard text.
+fn copy(app: &TestApp, cx: &mut TestAppContext) -> String {
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
+    app.press(cx, "secondary-c");
+    cx.read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default()
+}
+
 /// Asserts that `selected` holds the text from the start of the drag, in
 /// the last reply, back to the text in reply `first`, in document order.
 fn assert_selected_back_to(selected: &str, first: usize) {
@@ -195,11 +205,8 @@ fn a_drag_selection_follows_the_pointer_while_the_wheel_scrolls(cx: &mut TestApp
         cx.executor().advance_clock(Duration::from_millis(16));
         cx.run_until_parked();
     }
-    let selected = app.update(cx, |window, cx| {
-        release(window, pointer, cx);
-        TextSelection::selected_text(window, cx)
-    });
-    assert_selected_back_to(&selected, 2);
+    app.update(cx, |window, cx| release(window, pointer, cx));
+    assert_selected_back_to(&copy(&app, cx), 2);
 }
 
 #[gpui_kit::test]
@@ -228,7 +235,7 @@ fn a_drag_past_the_transcript_scrolls_and_extends_the_selection(cx: &mut TestApp
         cx.run_until_parked();
         app.update(cx, |window, cx| window.render_frame(cx));
     }
-    let selected = app.update(cx, |window, cx| {
+    app.update(cx, |window, cx| {
         assert!(
             entries(window)
                 .iter()
@@ -236,9 +243,8 @@ fn a_drag_past_the_transcript_scrolls_and_extends_the_selection(cx: &mut TestApp
             "auto-scroll did not stay at the start of the conversation"
         );
         release(window, above, cx);
-        TextSelection::selected_text(window, cx)
     });
-    assert_selected_back_to(&selected, 1);
+    assert_selected_back_to(&copy(&app, cx), 1);
 }
 
 #[gpui_kit::test]

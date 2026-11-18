@@ -139,6 +139,9 @@ pub(in crate::ui) struct AssistantPane {
     /// The scroll position of the conversation list.
     pub(super) thread_list_scroll: ScrollHandle,
     transcript: Entity<MessageScrollerState>,
+    /// The focus of the transcript around its messages. See
+    /// [`Self::transcript`].
+    transcript_focus: FocusHandle,
     /// The rows that `transcript` has.
     rows: TranscriptRows,
     /// The text views of the messages in `rows`.
@@ -203,6 +206,7 @@ impl AssistantPane {
             thread_list_override: None,
             thread_list_scroll: ScrollHandle::new(),
             transcript,
+            transcript_focus: cx.focus_handle(),
             rows: TranscriptRows::default(),
             message_views: MessageViews::default(),
             order_shift: 0,
@@ -324,9 +328,24 @@ impl AssistantPane {
         let pane = cx.weak_entity();
         // GPUI Kit's MessageScroller does not register its root for tests;
         // tests find the transcript through this container.
+        //
+        // A selection focuses the message where it starts. When that message
+        // scrolls out of the list, the window moves the focus to the nearest
+        // element around it that is still drawn: this container. Like a
+        // message, it copies the selection with ⌘C.
         div()
             .id("assistant-transcript")
             .test_support()
+            .key_context("TextView")
+            .track_focus(&self.transcript_focus)
+            .on_action(|_: &gpui_kit::component::input::Copy, window, cx| {
+                let text = TextSelection::selected_text(window, cx).trim().to_owned();
+                if text.is_empty() {
+                    cx.propagate();
+                    return;
+                }
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            })
             .flex_1()
             .min_h_0()
             .child(

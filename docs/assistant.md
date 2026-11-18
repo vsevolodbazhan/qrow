@@ -166,12 +166,12 @@ Select the **Copy code** icon above a code block in an assistant reply to copy i
 contents. The copy keeps spaces and line breaks. It does not include the
 Markdown fences or the text around the block.
 
-To copy text from the conversation, drag across it. When you drag past the
-top or bottom edge, the conversation scrolls. When you scroll while you hold
-the button, the selection continues to the text under the pointer. The
-selection keeps the messages that scroll out of view, and the copy contains
-the selected text in order. A message that the conversation did not show
-during the selection is not in the copy.
+To copy text from the conversation, drag across it and press **⌘C**. When
+you drag past the top or bottom edge, the conversation scrolls. When you
+scroll while you hold the button, the selection continues to the text under
+the pointer. The selection keeps the messages that scroll out of view, and
+the copy contains the selected text in order. A message that the
+conversation did not show during the selection is not in the copy.
 
 The harness sends a reply in parts of different sizes. Qrow shows the reply word by
 word at an even speed, about 0.3 seconds after the text arrives, and each word
