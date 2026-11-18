@@ -419,6 +419,12 @@ fn fixed_keys_and_separate_places_get_the_right_message(cx: &mut TestAppContext)
         message(&app, cx, "first_row").as_deref(),
         Some("Used by Select Up.")
     );
+    // The message is under the command name, left of the field.
+    app.update(cx, |window, _| {
+        let field = crate::support::bounds_of(window, "shortcut-first_row");
+        let message = crate::support::bounds_of(window, "shortcut-message-first_row");
+        assert!(message.right() <= field.left(), "{message:?} {field:?}");
+    });
     app.press(cx, "escape");
     // Toggle Comment works in the SQL editor and Send Message in the
     // message field: they can share keys without a message.

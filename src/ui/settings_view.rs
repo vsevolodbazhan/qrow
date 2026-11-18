@@ -1,4 +1,4 @@
-use super::setting_row::Rows;
+use super::setting_row::{Rows, Tone, row_message};
 use super::shortcuts_page::ResetPage;
 use super::unit_input::unit_input;
 use super::*;
@@ -9,7 +9,9 @@ use crate::model::{
 use crate::sql::KeywordCase;
 use crate::themes;
 use gpui_kit::component::{
-    IndexPath, h_flex,
+    IndexPath,
+    group_box::GroupBoxVariant,
+    h_flex,
     input::{NumberInputEvent, StepAction},
     label::Label,
     select::{SearchableVec, Select, SelectEvent, SelectState},
@@ -1488,6 +1490,23 @@ pub(super) fn setting_row<E: IntoElement>(
     stacked: bool,
     field: impl Fn(&mut Window, &mut App) -> E + 'static,
 ) -> SettingItem {
+    setting_row_with_message(title, description, keywords, stacked, field, |_| None)
+}
+
+/// A message under the description of a Settings row: its element ID, its
+/// tone, and its text.
+pub(super) type RowMessage = (SharedString, Tone, SharedString);
+
+/// A setting row like [`setting_row`], with an optional message under the
+/// description.
+pub(super) fn setting_row_with_message<E: IntoElement>(
+    title: SharedString,
+    description: SharedString,
+    keywords: &[&'static str],
+    stacked: bool,
+    field: impl Fn(&mut Window, &mut App) -> E + 'static,
+    message: impl Fn(&App) -> Option<RowMessage> + 'static,
+) -> SettingItem {
     let searchable: Vec<SharedString> = [title.clone(), description.clone()]
         .into_iter()
         .chain(keywords.iter().map(|keyword| SharedString::from(*keyword)))
@@ -1495,24 +1514,27 @@ pub(super) fn setting_row<E: IntoElement>(
     SettingItem::render(
         move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
             let rem = window.rem_size();
-            let label = v_flex().child(Label::new(title.clone()).text_sm()).when(
-                !description.is_empty(),
-                |label| {
-                    label.child(
-                        div()
-                            .id(SharedString::from(format!("setting-help-{title}")))
-                            .test_support()
-                            .role(Role::Label)
-                            .aria_label(description.clone())
-                            .text_sm()
-                            // Without it, a wrapped description inherits the
-                            // loose default line height of 1.618.
-                            .line_height(rems(DESCRIPTION_LINE_REMS))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(description.clone()),
-                    )
-                },
-            );
+            let label =
+                v_flex()
+                    .child(Label::new(title.clone()).text_sm())
+                    .when(!description.is_empty(), |label| {
+                        label.child(
+                            div()
+                                .id(SharedString::from(format!("setting-help-{title}")))
+                                .test_support()
+                                .role(Role::Label)
+                                .aria_label(description.clone())
+                                .text_sm()
+                                // Without it, a wrapped description inherits the
+                                // loose default line height of 1.618.
+                                .line_height(rems(DESCRIPTION_LINE_REMS))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(description.clone()),
+                        )
+                    })
+                    .children(message(cx).map(|(id, tone, text)| {
+                        div().mt_0p5().child(row_message(id, tone, text, cx))
+                    }));
             // The focus ring paints outside the control; the page clips at its
             // edge, so the control keeps the ring width free beside it.
             let control = div().px_1().child(field(window, cx));
@@ -1523,12 +1545,11 @@ pub(super) fn setting_row<E: IntoElement>(
                     .child(label.w_full())
                     .child(control.w_full())
             } else {
-                // Labels align with the top of their control, so a control
-                // that grows, like a field with an error below it, does not
-                // move its label.
+                // The control stays centered on the row, also when a message
+                // makes the label column taller.
                 h_flex()
                     .w_full()
-                    .items_start()
+                    .items_center()
                     .justify_between()
                     .gap_3()
                     .child(label.flex_1().min_w_0().max_w_3_5())
@@ -1556,6 +1577,9 @@ pub(super) fn settings_panel(id: &'static str, window: &Window, cx: &App) -> Set
         .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
         .sidebar_width(rem * SIDEBAR_REMS)
         .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
+        // Each group is a filled card with a divider between its rows.
+        .with_group_variant(GroupBoxVariant::Fill)
+        .item_dividers(true)
 }
 
 /// The width and height of a settings dialog in `window`.

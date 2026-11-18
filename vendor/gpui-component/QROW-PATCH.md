@@ -188,3 +188,10 @@ with the other GPUI crates as one set.
 - Find and Replace buttons have accessible names and managed tooltips. Previous
   and next match, the replacement-field toggle, and Close show their bound
   shortcuts. The replacement-field tooltip follows the current state.
+- `src/setting/settings.rs` and `src/setting/group.rs`:
+  `Settings::item_dividers(true)` draws a line between the items of a group.
+  The group content then has no padding and no gap. Each item gets its own
+  padding, so the lines run the full width of the group, also with the fill
+  variant. A search that hides items puts no line above the first item that
+  stays. Qrow uses it for the cards of Settings and the connection editor.
+  Lines are painted, so check them on screen.

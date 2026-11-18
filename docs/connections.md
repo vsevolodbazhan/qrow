@@ -75,8 +75,9 @@ search field above the pages to find a field.
 
 Connection names must be unique. **Save** checks **Name**, **Host**, **Port**,
 **Username**, and **Initial Database** together. If a field has an error, Qrow
-keeps the form open, shows the error below that field with a red border, and
-moves the focus to the first field with an error. All field errors show at
+keeps the form open, shows the error below the description of that field,
+gives the field a red border, and moves the focus to the first field with an
+error. All field errors show at
 the same time. An error that applies to no single field shows above the form
 actions. A new connection opens as **New Connection**.
 

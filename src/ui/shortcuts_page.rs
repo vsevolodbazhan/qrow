@@ -1,10 +1,12 @@
 //! The Shortcuts page of Settings. Each command shows its shortcut in a
 //! field. A click on the field records the next key press. Escape cancels,
-//! Delete removes the shortcut. Problems show below the field in one
-//! pattern: a tinted border, then an icon and one line in the same color.
+//! Delete removes the shortcut. Problems show in one pattern: a tinted
+//! border on the field, and an icon and one line in the same color under
+//! the command name.
 //! An error (red) keeps recording, a conflict (amber) offers Replace, and a
 //! note (blue) tells which command wins where two shortcuts overlap.
 
+use super::setting_row::{Tone, row_message};
 use super::shortcuts::{self, Command, Group, Relation};
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
@@ -23,7 +25,6 @@ use std::rc::Rc;
 
 /// The width of the shortcut field, as the other Settings controls.
 const CONTROL_REMS: f32 = 16.;
-const LINE_REMS: f32 = 1.25;
 
 /// Which commands the page lists.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -100,32 +101,7 @@ enum Check {
     Overlap(String),
 }
 
-#[derive(Clone, Copy)]
-enum Tone {
-    Error,
-    Warning,
-    Info,
-}
-
-impl Tone {
-    fn color(self, cx: &App) -> Hsla {
-        match self {
-            Self::Error => cx.theme().danger,
-            Self::Warning => cx.theme().warning,
-            Self::Info => cx.theme().info,
-        }
-    }
-
-    fn icon(self) -> Icon {
-        match self {
-            Self::Error => Icon::new(IconName::CircleX),
-            Self::Warning => Icon::new(AssetIconName::TriangleAlert),
-            Self::Info => Icon::new(IconName::Info),
-        }
-    }
-}
-
-/// The message below a field.
+/// The message under the command name.
 const MODIFIER_HINT: &str = if cfg!(target_os = "macos") {
     "Add ⌘, ⌃, or ⌥."
 } else {
@@ -1021,52 +997,35 @@ impl ShortcutRow {
             let message = self.message();
             h_flex()
                 .w_full()
-                .items_start()
+                .items_center()
                 .justify_between()
                 .gap_3()
                 .child(
-                    div()
+                    v_flex()
                         .flex_1()
                         .min_w_0()
-                        .input_h(Size::Medium)
-                        .flex()
-                        .items_center()
-                        .child(Label::new(self.label).text_sm()),
+                        .child(Label::new(self.label).text_sm())
+                        .children(message.as_ref().map(|(tone, text)| {
+                            div().mt_0p5().child(row_message(
+                                format!("shortcut-message-{}", self.id),
+                                *tone,
+                                text.clone(),
+                                cx,
+                            ))
+                        })),
                 )
                 .child(
-                    v_flex()
+                    div()
                         .w(rem * CONTROL_REMS)
                         .flex_shrink_0()
                         .px_1()
-                        .gap_1()
                         .child(self.field(
                             qrow.clone(),
                             message.as_ref().map(|(tone, _)| *tone),
                             shown.clone(),
                             window,
                             cx,
-                        ))
-                        .children(message.map(|(tone, text)| {
-                            h_flex()
-                                .id(SharedString::from(format!("shortcut-message-{}", self.id)))
-                                .test_support()
-                                .role(Role::Alert)
-                                .aria_label(text.clone())
-                                .w_full()
-                                .items_start()
-                                .gap_1()
-                                .text_sm()
-                                .line_height(rems(LINE_REMS))
-                                .text_color(tone.color(cx))
-                                .child(
-                                    div()
-                                        .h(rems(LINE_REMS))
-                                        .flex()
-                                        .items_center()
-                                        .child(tone.icon().xsmall()),
-                                )
-                                .child(div().flex_1().min_w_0().child(text))
-                        })),
+                        )),
                 )
         })
         .keywords(keywords)
@@ -1087,10 +1046,13 @@ impl ShortcutRow {
             .focus
             .as_ref()
             .is_some_and(|focus| focus.contains_focused(window, cx));
-        let border = match (tone, recording || focused) {
+        // At rest the field is only its keys. It draws its box on hover, on
+        // focus, and while it records; a problem tints the box.
+        let boxed = recording || focused;
+        let border = match (tone.filter(|_| recording), boxed) {
             (Some(tone), _) => tone.color(cx),
             (None, true) => cx.theme().ring,
-            (None, false) => cx.theme().input,
+            (None, false) => transparent_black(),
         };
         let button = |name: &str, icon: Icon, label: SharedString| {
             Button::new(SharedString::from(format!("{name}-{id}")))
@@ -1137,8 +1099,11 @@ impl ShortcutRow {
                 }),
             );
         } else {
+            // The keys end at the right edge, as the other Settings controls.
+            // Remove and Reset come before them.
+            content = content.child(div().flex_1());
             content = match &self.keys {
-                Some(keys) => content.children(chip(keys)).child(div().flex_1()).child({
+                Some(_) => content.child({
                     let qrow = qrow.clone();
                     // Shows on hover and keyboard focus only.
                     div()
@@ -1157,7 +1122,7 @@ impl ShortcutRow {
                             }),
                         )
                 }),
-                None => content.child(muted("None")),
+                None => content,
             };
             if self.customized {
                 let label = match &self.default_keys {
@@ -1177,6 +1142,10 @@ impl ShortcutRow {
                     }),
                 );
             }
+            content = match &self.keys {
+                Some(keys) => content.children(chip(keys)),
+                None => content.child(muted("None").flex_none()),
+            };
         }
         let label = self.label;
         let value: SharedString = self
@@ -1216,7 +1185,10 @@ impl ShortcutRow {
             .border_1()
             .border_color(border)
             .rounded(cx.theme().radius)
-            .bg(cx.theme().background)
+            .when(boxed, |field| field.bg(cx.theme().background))
+            .when(!boxed, |field| {
+                field.hover(|style| style.border_color(cx.theme().input))
+            })
             .when(!recording, |field| field.cursor_pointer())
             .on_click(move |_, window, cx| start(window, cx))
             // A recording field takes keys only while it is in view.

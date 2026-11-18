@@ -95,8 +95,10 @@ The Shortcuts page sets the keyboard shortcuts. See
 Select a page or section in the list at the left. A selected section scrolls to
 the top of the page, as far as the content allows. Use the search box above the
 list to show only settings that match a word in their name or description.
-Each setting shows a description below its name. A long description wraps, and
-the controls stay aligned at the right.
+Each section is a card, and a line separates the settings in a card. Each
+setting shows a description below its name. A long description wraps, and the
+controls stay aligned at the right. A message about a setting shows below its
+description. The control stays at the vertical center of the row.
 
 The Appearance, Export, and Shortcuts pages each have a reset button at the
 right of the page title. The button shows only when a setting of the page is
@@ -136,7 +138,8 @@ Some commands do not have a default shortcut, for example **Cancel Query**,
 
 To set a shortcut:
 
-1. Click the field of the command. The field shows **Press keys…**.
+1. Click the keys of the command, or **None** if it has no shortcut. A field
+   shows **Press keys…**.
 2. Press the new keys. A letter, a number, or a symbol must have ⌘, ⌃, or ⌥.
    Arrows, Enter, Tab, Home, End, Page Up, Page Down, and function keys can be
    alone.
@@ -149,7 +152,8 @@ another page, ends the recording. To remove a shortcut
 later, move the pointer over its field and click the **Remove shortcut**
 button. A changed shortcut has a **Reset** button that shows its default.
 
-A message below the field shows a problem:
+A message below the command name shows a problem. The field gets a border in
+the same color:
 
 - Red: the keys cannot be a shortcut, or a fixed key of the same place uses
   them, for example Up in the result grid. The field continues to record.
