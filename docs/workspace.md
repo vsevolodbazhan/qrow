@@ -152,8 +152,8 @@ another page, ends the recording. To remove a shortcut
 later, move the pointer over its field and click the **Remove shortcut**
 button. A changed shortcut has a **Reset** button that shows its default.
 
-A message below the command name shows a problem. The field gets a border in
-the same color:
+A message below the command name shows a problem. While the field records, a
+red or amber message also gives the field a border in the same color:
 
 - Red: the keys cannot be a shortcut, or a fixed key of the same place uses
   them, for example Up in the result grid. The field continues to record.
