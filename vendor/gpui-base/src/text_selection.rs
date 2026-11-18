@@ -212,6 +212,7 @@ pub struct TextSelectionRegistration {
     document_order: u64,
     text_bounds: Vec<Bounds<Pixels>>,
     self_scroll: bool,
+    keep_offscreen: bool,
     selection_edges: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
 }
 
@@ -226,8 +227,18 @@ impl TextSelectionRegistration {
             document_order: 0,
             text_bounds: Vec::new(),
             self_scroll: false,
+            keep_offscreen: false,
             selection_edges: None,
         }
+    }
+
+    /// Keeps the participant in a selection while frames do not paint it,
+    /// as a row of a virtual list that scrolled out of the list. Its owner
+    /// keeps the participant alive. Without it, a frame that does not paint
+    /// the participant removes it from the selection, as for a closed view.
+    pub fn with_keep_offscreen(mut self, keep_offscreen: bool) -> Self {
+        self.keep_offscreen = keep_offscreen;
+        self
     }
 
     /// Marks a participant that scrolls its own content in response to
@@ -661,6 +672,27 @@ impl SelectableTextState {
         cx.emit(TextSelectionEvent::SelectionChanged(snapshot));
     }
 
+    /// [`Self::set_snapshot`] for a participant that is not painted. Its
+    /// selected text was projected when it was painted last. The projection
+    /// stays while the ends and the coverage stay: only the window points
+    /// move then, and the participant cannot project again before it paints.
+    fn set_offscreen_snapshot(
+        &mut self,
+        snapshot: Option<TextSelectionSnapshot>,
+        cx: &mut Context<Self>,
+    ) {
+        let same_range = self.snapshot.zip(snapshot).is_some_and(|(old, new)| {
+            old.anchor() == new.anchor()
+                && old.cursor() == new.cursor()
+                && old.coverage() == new.coverage()
+        });
+        let projection = self.projected_copy_text.take();
+        self.set_snapshot(snapshot, cx);
+        if same_range {
+            self.projected_copy_text = projection;
+        }
+    }
+
     fn clear_state(&mut self, cx: &mut Context<Self>) -> Option<ClearHandler> {
         self.snapshot = None;
         self.projected_copy_text = None;
@@ -956,7 +988,8 @@ impl SelectionEndpoint {
     /// selection band is geometric, so the end goes far before or far after
     /// all painted text: before when the participant comes before the other
     /// end in document order, or, without another end to compare with, when
-    /// the participant went off above its viewport.
+    /// the participant went off above its viewport. When both ends are in
+    /// the participant, they keep their places from its last paint.
     fn resolve_beside(
         &self,
         other: Option<&SelectionEndpoint>,
@@ -967,11 +1000,13 @@ impl SelectionEndpoint {
         let participant = self.participant.as_ref()?;
         let registration = participants.get(&participant.entity_id())?;
         participant.upgrade()?;
-        if registration.offscreen {
+        // Both ends in one offscreen participant: its own last geometry keeps
+        // the two ends apart. Nothing painted lies between them.
+        let alone = other.and_then(SelectionEndpoint::entity_id) == Some(participant.entity_id());
+        if registration.offscreen && !alone {
             let geometry = &registration.registration;
             let other = other
                 .and_then(SelectionEndpoint::entity_id)
-                .filter(|id| *id != participant.entity_id())
                 .and_then(|id| participants.get(&id));
             let before = match other {
                 Some(other) => geometry.document_order < other.registration.document_order,
@@ -1202,22 +1237,27 @@ impl WindowSelectionState {
     /// whether a participant or the lifecycle element paints first.
     pub fn finish_frame(&mut self, cx: &mut App) -> Vec<ClearHandler> {
         self.finish_frame_scheduled = false;
-        // While there is a selection, a participant that is alive but not
-        // painted stays, offscreen: a virtual list drops the rows that scroll
-        // out of it, and its owner can keep their state. The selection then
-        // keeps its ends and its text in those rows.
-        let keep_offscreen = self.anchor.is_some() && self.cursor.is_some() && self.did_hit_text;
+        // While there is a selection, a participant that asks for it and is
+        // alive but not painted stays, offscreen: a virtual list drops the
+        // rows that scroll out of it, and its owner can keep their state. The
+        // selection then keeps its ends and its text in those rows.
+        let selection = self.anchor.is_some() && self.cursor.is_some() && self.did_hit_text;
         let stale = self
             .participants
             .iter()
             .filter_map(|(id, registration)| {
-                (registration.generation != self.frame_generation)
-                    .then(|| (*id, registration.participant.clone()))
+                (registration.generation != self.frame_generation).then(|| {
+                    (
+                        *id,
+                        registration.participant.clone(),
+                        registration.registration.keep_offscreen,
+                    )
+                })
             })
             .collect::<Vec<_>>();
         let mut handlers = Vec::new();
-        for (id, participant) in stale {
-            if keep_offscreen && participant.upgrade().is_some() {
+        for (id, participant, keep_offscreen) in stale {
+            if selection && keep_offscreen && participant.upgrade().is_some() {
                 if let Some(registration) = self.participants.get_mut(&id) {
                     registration.offscreen = true;
                 }
@@ -2022,7 +2062,14 @@ impl WindowSelectionState {
                 snapshot.coverage = self.coverage_for(*id);
                 snapshot
             });
-            participant.update(cx, |state, cx| state.set_snapshot(participant_snapshot, cx));
+            let offscreen = registration.offscreen;
+            participant.update(cx, |state, cx| {
+                if offscreen {
+                    state.set_offscreen_snapshot(participant_snapshot, cx)
+                } else {
+                    state.set_snapshot(participant_snapshot, cx)
+                }
+            });
         }
     }
 
@@ -2104,11 +2151,31 @@ impl WindowSelectionState {
         // scrollable ancestor. It remains stable as the participant itself
         // moves, so selection keeps scrolling the same related region even
         // after the anchor text has moved out of view.
-        let visible_bounds = self
-            .auto_scroll_viewport
-            .unwrap_or(registration.hitbox.content_mask.bounds);
         // Keeps the synthesized wheel event hit-testing inside the mask.
         const HIT_TEST_INSET: Pixels = px(1.);
+        let shown = registration.hitbox.content_mask.bounds;
+        let collapsed =
+            shown.size.width < HIT_TEST_INSET * 2. || shown.size.height < HIT_TEST_INSET * 2.;
+        // The viewport of the drag applies while the anchor shows, and when
+        // it scrolled out of the viewport. A mask that collapses over an
+        // anchor inside the viewport means that the viewport itself went.
+        let anchor_offscreen = self
+            .anchor
+            .as_ref()
+            .and_then(SelectionEndpoint::entity_id)
+            .and_then(|id| self.participants.get(&id))
+            .is_some_and(|registration| registration.offscreen);
+        let visible_bounds = match self.auto_scroll_viewport {
+            Some(viewport)
+                if !collapsed
+                    || anchor_offscreen
+                    || registration.bounds.bottom() < viewport.top()
+                    || registration.bounds.top() > viewport.bottom() =>
+            {
+                viewport
+            }
+            _ => shown,
+        };
         // A collapsed mask leaves an empty clamp range below — stop.
         if visible_bounds.size.width < HIT_TEST_INSET * 2.
             || visible_bounds.size.height < HIT_TEST_INSET * 2.
@@ -3104,6 +3171,31 @@ mod tests {
             document_order: u64,
             cx: &mut gpui::App,
         ) {
+            self.register_row(selection_state, y, scope, document_order, false, cx);
+        }
+
+        /// Registers a participant that asks a selection to keep it while
+        /// frames do not paint it, as a row of a virtual list.
+        fn register_kept(
+            &self,
+            selection_state: &mut WindowSelectionState,
+            y: f32,
+            document_order: u64,
+            cx: &mut gpui::App,
+        ) {
+            let scope = TextSelectionScopeId::default();
+            self.register_row(selection_state, y, scope, document_order, true, cx);
+        }
+
+        fn register_row(
+            &self,
+            selection_state: &mut WindowSelectionState,
+            y: f32,
+            scope: TextSelectionScopeId,
+            document_order: u64,
+            keep_offscreen: bool,
+            cx: &mut gpui::App,
+        ) {
             let bounds = Bounds::new(point(px(0.), px(y)), size(px(100.), px(10.)));
             selection_state.register_participant(
                 self.selection.clone(),
@@ -3118,7 +3210,8 @@ mod tests {
                 )
                 .with_scope(scope)
                 .with_document_order(document_order)
-                .with_text_bounds(vec![bounds]),
+                .with_text_bounds(vec![bounds])
+                .with_keep_offscreen(keep_offscreen),
                 cx,
             );
         }
@@ -4016,6 +4109,116 @@ mod tests {
             selection_state.finish_frame(cx);
             assert_eq!(selection_state.selected_text(cx), "");
             assert!(participant.selection.snapshot(cx).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn a_kept_participant_holds_the_selection_while_frames_do_not_paint_it(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let mut selection_state = WindowSelectionState::default();
+            let rows = ["first", "second", "third"].map(|text| FakeParticipant::new(text, cx));
+            for (index, row) in rows.iter().enumerate() {
+                row.register_kept(&mut selection_state, index as f32 * 20., index as u64, cx);
+            }
+            selection_state.finish_frame(cx);
+            selection_state.begin(point(px(1.), px(1.)), false, cx);
+            selection_state.update(point(px(8.), px(41.)), cx);
+
+            // The list scrolls up by a row, and the first row leaves it.
+            rows[1].register_kept(&mut selection_state, 0., 1, cx);
+            rows[2].register_kept(&mut selection_state, 20., 2, cx);
+            selection_state.finish_frame(cx);
+            let snapshot = selection_state
+                .snapshot()
+                .expect("the selection keeps its start");
+            let points = snapshot.window_points().unwrap();
+            assert!(points.anchor().y < px(-1000.), "{points:?}");
+            assert_eq!(
+                rows[1].selection.snapshot(cx).map(|s| s.coverage()),
+                Some(TextSelectionCoverage::Full)
+            );
+            assert!(rows[0].selection.snapshot(cx).is_some());
+
+            // Hit tests skip the offscreen row: its old place is now the
+            // second row's.
+            selection_state.update(point(px(8.), px(1.)), cx);
+            assert_eq!(
+                selection_state.cursor.as_ref().and_then(|cursor| cursor.entity_id()),
+                Some(rows[1].selection.entity_id())
+            );
+            selection_state.end(cx);
+
+            // A new selection lets the offscreen row go.
+            let handlers = selection_state.prepare_for_mouse_down(false, cx);
+            dispatch_clear_handlers(handlers, cx);
+            selection_state.finish_frame(cx);
+            assert!(!selection_state.participants.contains_key(&rows[0].selection.entity_id()));
+        });
+    }
+
+    #[gpui::test]
+    fn a_selection_inside_one_offscreen_participant_stays(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let mut selection_state = WindowSelectionState::default();
+            let row = FakeParticipant::new("row", cx);
+            row.register_kept(&mut selection_state, 0., 0, cx);
+            selection_state.finish_frame(cx);
+            selection_state.begin(point(px(1.), px(1.)), false, cx);
+            selection_state.update(point(px(8.), px(1.)), cx);
+            selection_state.end(cx);
+
+            selection_state.finish_frame(cx);
+            let points = selection_state.snapshot().unwrap().window_points().unwrap();
+            assert_eq!(
+                (points.anchor(), points.cursor()),
+                (point(px(1.), px(1.)), point(px(8.), px(1.)))
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn moved_text_under_a_held_pointer_refreshes_the_cursor(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let mut selection_state = WindowSelectionState::default();
+            let row = FakeParticipant::new("row", cx);
+            row.register(&mut selection_state, 0., TextSelectionScopeId::default(), 0, cx);
+            selection_state.begin(point(px(1.), px(1.)), false, cx);
+            row.register(&mut selection_state, 0., TextSelectionScopeId::default(), 0, cx);
+            assert!(!selection_state.refresh_held_cursor);
+            // A scroll moves the row up.
+            row.register(&mut selection_state, -20., TextSelectionScopeId::default(), 0, cx);
+            assert!(selection_state.refresh_held_cursor);
+        });
+    }
+
+    #[gpui::test]
+    fn an_offscreen_participant_keeps_its_copy_while_only_window_points_move(
+        cx: &mut TestAppContext,
+    ) {
+        let (text, layout) = laid_out_runs(&["first"], cx).pop().unwrap();
+        let painted = plain_snapshot(
+            layout.position_for_index(1).unwrap(),
+            layout.position_for_index(3).unwrap(),
+        );
+        let moved = painted.with_window_points(Some(TextSelectionWindowPoints {
+            anchor: point(px(-1000.), px(-1000.)),
+            cursor: point(px(5000.), px(5000.)),
+        }));
+        let run = text_run(0, text, layout);
+        cx.update(|cx| {
+            let participant = FakeParticipant::new("first", cx);
+            participant.selection.0.update(cx, |state, cx| {
+                state.set_snapshot(Some(painted), cx);
+                state.update_runs(std::slice::from_ref(&run));
+                state.set_offscreen_snapshot(Some(moved), cx);
+                assert_eq!(state.projected_copy_text.as_deref(), Some("ir"));
+                // Another coverage changes the selected range.
+                let full = moved.with_coverage(TextSelectionCoverage::Full);
+                state.set_offscreen_snapshot(Some(full), cx);
+                assert_eq!(state.projected_copy_text, None);
+            });
         });
     }
 

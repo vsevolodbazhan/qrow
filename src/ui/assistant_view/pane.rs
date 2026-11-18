@@ -143,6 +143,8 @@ pub(in crate::ui) struct AssistantPane {
     rows: TranscriptRows,
     /// The text views of the messages in `rows`.
     message_views: MessageViews,
+    /// The rows that loaded above the first rows. See [`selection_order`].
+    order_shift: i64,
     /// The settings that change the height of the rows.
     typography: Option<Typography>,
     /// The most rows that the message field grows to at this window height.
@@ -203,6 +205,7 @@ impl AssistantPane {
             transcript,
             rows: TranscriptRows::default(),
             message_views: MessageViews::default(),
+            order_shift: 0,
             typography: None,
             composer_max_rows: COMPOSER_MIN_ROWS,
             layout_width: None,
@@ -260,13 +263,16 @@ impl AssistantPane {
         let new = &self.rows;
         if old.source != new.source {
             self.message_views = MessageViews::default();
+            self.order_shift = 0;
+            self.transcript
+                .update(cx, |list, cx| list.reset(new.rows.len(), cx));
+            cx.notify();
+            return;
         }
+        let change = row_change(&old.rows, &new.rows);
+        // Messages that move down under older messages keep their orders.
+        self.order_shift += rows_loaded_above(&old.rows, &change);
         self.transcript.update(cx, |list, cx| {
-            if old.source != new.source {
-                list.reset(new.rows.len(), cx);
-                return;
-            }
-            let change = row_change(&old.rows, &new.rows);
             if !change.replaced.is_empty() || change.inserted > 0 {
                 list.splice(change.replaced, change.inserted, cx);
             }
@@ -335,6 +341,7 @@ impl AssistantPane {
                         let Some(row) = pane.read(cx).rows.rows.get(index).copied() else {
                             return div().into_any_element();
                         };
+                        let order = selection_order(index, pane.read(cx).order_shift);
                         let view = match row {
                             Row::Entry { id, .. } => Some(pane.update(cx, |pane, cx| {
                                 let text = |cx: &App| {
@@ -356,6 +363,7 @@ impl AssistantPane {
                             &qrow,
                             row,
                             index,
+                            order,
                             view.as_ref(),
                             &pane.downgrade(),
                             window,

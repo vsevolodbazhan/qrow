@@ -100,27 +100,35 @@ Qrow changes these files:
   line break. CommonMark joins the lines with spaces. Qrow uses the option for
   the messages that you send, so a message with SQL keeps its lines. The Qrow
   UI test `a_message_keeps_its_line_breaks` is the regression test.
-- `src/text_selection.rs`, `src/text/text_view.rs`: a drag selection works
-  in a virtual list, such as the Qrow transcript.
+- `src/text_selection.rs`, `src/text/text_view.rs`, and
+  `src/text/selection_adapter.rs`: a drag selection works in a virtual list,
+  such as the Qrow transcript.
   - A scroll during a drag, by the wheel or by drag auto-scroll, moves the
     cursor to the text under the pointer. Before, the cursor stayed on the
     text where the pointer was before the scroll. The selection grew only on
     the next pointer move, and then by the whole scrolled distance.
-  - While there is a selection, a participant that is alive but not painted
-    stays registered as offscreen. Hit tests skip it. An end in an offscreen
-    participant goes far before or far after the painted text, in document
-    order, so the painted rows between the ends show the selection. Before,
-    the frame removed the participant, and the selection disappeared when its
-    start scrolled out of the list.
-  - `TextView::state` uses a `TextViewState` that the caller owns, and
-    `TextView::document_order` gives a stable selection order. A list keeps
-    the states of its rows and orders them by their place in the list.
+  - `TextSelectionRegistration::with_keep_offscreen` and
+    `TextView::virtual_row` mark a participant that a selection keeps while
+    frames do not paint it. Its owner keeps it alive, for a text view with
+    `TextView::state`. `TextView::document_order` gives it a stable order.
+    Hit tests skip an offscreen participant. An end in it goes far before or
+    far after the painted text, in document order, so the painted rows
+    between the ends show the selection. Both ends in one offscreen
+    participant keep their places. An offscreen participant keeps its
+    projected copy while only the window points of the selection move.
+    Before, the frame removed the participant, and the selection disappeared
+    when its start scrolled out of the list. Other participants still leave
+    the selection when frames stop painting them, as for a closed view.
   - Drag auto-scroll measures the pointer against all that the anchor's
     participant showed during the drag, and finds a stalled container from
-    the cursor's participant when the anchor is offscreen. Before, an
-    anchor clipped to a slice at the bottom edge reversed the scroll.
-  The Qrow UI tests in `assistant_selection` check a wheel scroll and drag
-  auto-scroll across four replies.
+    the cursor's participant when the anchor is offscreen. Before, an anchor
+    clipped to a slice at the bottom edge reversed the scroll. A mask that
+    collapses over an anchor inside that area still stops auto-scroll.
+  The tests in `src/text_selection.rs` check these rules. The Qrow UI tests
+  in `assistant_selection` check a wheel scroll and drag auto-scroll across
+  four replies. To run the GPUI Base tests, use
+  `CARGO_TARGET_DIR=target/gpui-base-tests cargo test --manifest-path
+  vendor/gpui-base/Cargo.toml --lib text_selection::`.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.

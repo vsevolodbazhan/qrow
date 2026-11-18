@@ -3,11 +3,13 @@ use super::*;
 use gpui_kit::base::{Easing, text::TextViewMotion};
 use gpui_kit::component::text::TextViewState;
 
-/// The selection order of the row at `index`, and of the text of a tool
-/// card in it at `index * 2 + 1`. The orders start high, after the orders
-/// that other text in the window takes from the order in which it paints.
-fn selection_order(index: usize) -> u64 {
-    (1 << 40) + index as u64 * 2
+/// The selection order of the row at `index`, and one more for the text of
+/// a tool card in it. `shift` counts the rows that loaded above the first
+/// rows, so that a row keeps its order when older messages load. The orders
+/// start high, after the orders that other text in the window takes from the
+/// order in which it paints.
+pub(super) fn selection_order(index: usize, shift: i64) -> u64 {
+    ((1_i64 << 40) + 2 * (index as i64 - shift)) as u64
 }
 
 /// The text views of the messages that the transcript draws.
@@ -52,14 +54,16 @@ impl MessageViews {
     }
 }
 
-/// One row of the transcript list. `index` is the place of the row, which
-/// orders the text selection. A message shows its text in `view`.
+/// One row of the transcript list. `index` is the place of the row, and
+/// `order` orders its text in a selection. A message shows its text in
+/// `view`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn transcript_row(
     qrow: &Qrow,
     handle: &WeakEntity<Qrow>,
     row: Row,
     index: usize,
+    order: u64,
     view: Option<&Entity<TextViewState>>,
     pane: &WeakEntity<AssistantPane>,
     window: &mut Window,
@@ -100,7 +104,7 @@ pub(super) fn transcript_row(
                     .min_w_0()
                     .flex_shrink_0()
                     .opacity(entry_opacity(qrow, entry, pane, window, cx))
-                    .child(tool_entry(qrow, handle, thread, index, entry, tool, cx))
+                    .child(tool_entry(qrow, handle, thread, order, entry, tool, cx))
                     .into_any_element(),
                 None if entry.speaker == Speaker::Assistant
                     && entry.shown_text().trim().is_empty()
@@ -115,7 +119,7 @@ pub(super) fn transcript_row(
                     working_entry(qrow, cx)
                 }
                 None => match view {
-                    Some(view) => message_entry(qrow, entry, view, index, pane, window, cx),
+                    Some(view) => message_entry(qrow, entry, view, order, pane, window, cx),
                     None => div().into_any_element(),
                 },
             }
@@ -189,7 +193,7 @@ fn message_entry(
     qrow: &Qrow,
     entry: &TranscriptEntry,
     view: &Entity<TextViewState>,
-    index: usize,
+    order: u64,
     pane: &WeakEntity<AssistantPane>,
     window: &mut Window,
     cx: &App,
@@ -203,7 +207,8 @@ fn message_entry(
         entry.shown_text().clone(),
     )
     .state(view)
-    .document_order(selection_order(index))
+    .document_order(order)
+    .virtual_row()
     // Each word that a streamed reply shows fades in.
     .stream_fade(opacity == 1.)
     .when(qrow.settings.smooth_transitions && opacity == 1., |view| {
@@ -321,7 +326,7 @@ fn tool_entry(
     qrow: &Qrow,
     handle: &WeakEntity<Qrow>,
     thread: &str,
-    index: usize,
+    order: u64,
     entry: &TranscriptEntry,
     tool: &ToolActivity,
     cx: &App,
@@ -473,7 +478,7 @@ fn tool_entry(
                             .text_xs()
                             .child(
                                 SelectableText::new("detail", detail.clone())
-                                    .document_order(selection_order(index) + 1),
+                                    .document_order(order + 1),
                             ),
                     ),
             )

@@ -132,6 +132,7 @@ pub struct TextView {
     markdown_extensions: Arc<MarkdownExtensions>,
     motion: Option<TextViewMotion>,
     document_order: Option<u64>,
+    virtual_row: bool,
 }
 
 /// A plugin that can configure a [`TextView`].
@@ -178,6 +179,7 @@ impl TextView {
             markdown_extensions: Arc::default(),
             motion: None,
             document_order: None,
+            virtual_row: false,
         }
     }
 
@@ -201,6 +203,7 @@ impl TextView {
             markdown_extensions: Arc::default(),
             motion: None,
             document_order: None,
+            virtual_row: false,
         }
     }
 
@@ -224,6 +227,7 @@ impl TextView {
             markdown_extensions: Arc::default(),
             motion: None,
             document_order: None,
+            virtual_row: false,
         }
     }
 
@@ -245,6 +249,14 @@ impl TextView {
     /// selection keeps its order while rows scroll in and out of the list.
     pub fn document_order(mut self, order: u64) -> Self {
         self.document_order = Some(order);
+        self
+    }
+
+    /// Mark this view as a row of a virtual list: a window selection keeps
+    /// it while the list does not draw it. Use it with [`Self::state`], so
+    /// that the state stays alive, and [`Self::document_order`].
+    pub fn virtual_row(mut self) -> Self {
+        self.virtual_row = true;
         self
     }
 
@@ -801,6 +813,7 @@ impl Element for TextView {
                 scroll_offset,
                 document_order,
                 self_scroll,
+                self.virtual_row,
                 window,
                 cx,
             );

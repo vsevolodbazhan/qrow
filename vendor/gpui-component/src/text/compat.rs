@@ -106,6 +106,12 @@ impl TextView {
         self.inner = self.inner.document_order(order);
         self
     }
+    /// Marks this view as a row of a virtual list. See
+    /// [`gpui_base::TextView::virtual_row`].
+    pub fn virtual_row(mut self) -> Self {
+        self.inner = self.inner.virtual_row();
+        self
+    }
     /// Fades streamed text in the way Claude reveals a reply: each chunk a
     /// `set_text` or `push_str` adds starts transparent and reaches full
     /// color over 350 ms. Text that replaces rather than extends the current
