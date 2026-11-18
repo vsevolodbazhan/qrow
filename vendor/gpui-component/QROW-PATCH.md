@@ -146,6 +146,14 @@ Qrow changes these files:
 - `src/menu/popup_menu.rs`: `PopupMenu::set_trigger_focus` is public, so a
   context menu that the application opens shows the shortcuts of the view
   under the pointer.
+- `src/setting/page.rs`: `SettingPage::on_reset_page` gives the reset button
+  of a page a label and a handler of its own. The button shows while the
+  handler reports a change, also on a page that is not resettable. Qrow asks
+  for confirmation before it resets a Settings page. `SettingPage::header_content`
+  renders an element below the title of a page; the Shortcuts page puts its
+  filters there, so they stay in view while the list scrolls.
+  The title row is as tall as the reset button, so the header keeps its height
+  when the button shows or hides.
 - `src/text/compat.rs`: `TextView::markdown_line_breaks` passes the option
   of the same name to the GPUI Base text view. See the GPUI Base patch.
 
@@ -180,3 +188,22 @@ with the other GPUI crates as one set.
 - Find and Replace buttons have accessible names and managed tooltips. Previous
   and next match, the replacement-field toggle, and Close show their bound
   shortcuts. The replacement-field tooltip follows the current state.
+- `src/setting/settings.rs` and `src/setting/group.rs`:
+  `Settings::item_dividers(true)` draws a line between the items of a group.
+  The group content then has no padding and no gap. Each item gets its own
+  padding, so the lines run the full width of the group, also with the fill
+  and outline variants. A search that hides items puts no line above the first item that
+  stays. Qrow uses it for the cards of Settings and the connection editor.
+  Lines are painted, so check them on screen.
+- `src/setting/settings.rs`: a click on the current page in the Settings
+  sidebar shows or hides its sections. A click on another page selects it and
+  opens its sections, as before. Before, a click on a page name only opened
+  the sections, and only the chevron closed them. The Qrow UI test
+  `a_click_on_the_current_settings_page_shows_or_hides_its_sections` checks it.
+- `src/input/input.rs` and `src/styled.rs`: `Input::focus_color` draws the
+  focus border and ring of an input in a given color instead of the theme's
+  ring color. Before, the focus border replaced a border color that the
+  caller set, so a connection field with an error was blue, not red, while
+  it had the focus. Qrow sets the danger color on fields with an error. The
+  test in `input.rs` checks the setting; painted colors need a check on
+  screen.

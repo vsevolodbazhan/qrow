@@ -889,7 +889,9 @@ More helpers operate controls that GPUI Kit owns:
   element, for controls that show only on hover, like **Show tab** in
   Activity or the close button of a tab.
 - Settings opens in its own window. While it is open, the helpers operate
-  the Settings window.
+  the Settings window. `app.settings_page(title)` selects a page in its
+  sidebar. `app.reset_settings_page(label)` clicks the reset button of the
+  page, like "Reset appearance", and confirms the reset.
 
 Assistant tests use the synthetic Codex server in
 [`tests/desktop/fake-codex.py`](../tests/desktop/fake-codex.py).

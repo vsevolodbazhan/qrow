@@ -637,7 +637,11 @@ impl AssistantPane {
                                     );
                                     button
                                 } else {
-                                    button.tooltip("New conversation")
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("New conversation", "")
+                                            .for_action_in(&NewConversation, qrow.focus.clone()),
+                                    );
+                                    button
                                 }
                             })
                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {

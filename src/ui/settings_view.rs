@@ -1,4 +1,5 @@
-use super::setting_row::Rows;
+use super::setting_row::{Rows, Tone, row_message};
+use super::shortcuts_page::ResetPage;
 use super::unit_input::unit_input;
 use super::*;
 use crate::model::{
@@ -8,7 +9,9 @@ use crate::model::{
 use crate::sql::KeywordCase;
 use crate::themes;
 use gpui_kit::component::{
-    IndexPath, h_flex,
+    IndexPath,
+    group_box::GroupBoxVariant,
+    h_flex,
     input::{NumberInputEvent, StepAction},
     label::Label,
     select::{SearchableVec, Select, SelectEvent, SelectState},
@@ -219,6 +222,10 @@ pub(super) struct SettingsForm {
     copy_format: SettingSelect,
     /// Stable or Nightly, for copies that install updates themselves.
     update_channel: SettingSelect,
+    pub(super) shortcuts: super::shortcuts_page::ShortcutsForm,
+    /// The focus of the Settings window itself, for when a focused control
+    /// goes away.
+    pub(super) root_focus: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -520,6 +527,8 @@ impl Qrow {
             claude_executable,
             copy_format,
             update_channel,
+            shortcuts: self.init_shortcuts_form(cx),
+            root_focus: None,
             _subscriptions: subscriptions,
         });
     }
@@ -778,30 +787,25 @@ impl Qrow {
         cx.notify();
     }
 
-    /// The content of the Settings window: the sections and pages, then a
-    /// footer with Restore defaults at the right, like the actions of the
-    /// settings dialogs.
+    /// The content of the Settings window: the sections and pages. Each page
+    /// that has defaults has its own reset button in its header.
     pub(super) fn settings_window_content(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         v_flex()
+            .id("settings-content")
+            .test_support()
             .size_full()
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
+                this.key_released(&event.keystroke, window, cx)
+            }))
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .child(self.settings_content(window, cx)),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px_4()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(self.settings_footer(cx)),
             )
             .into_any_element()
     }
@@ -828,6 +832,31 @@ impl Qrow {
                 let text = setting.format(value);
                 input.update(cx, |input, cx| input.set_value(text, window, cx));
             }
+        }
+        // A reset of the page changes the copy format outside its picker.
+        let copy_format = self.settings.copy_format.label().to_owned();
+        if form.copy_format.read(cx).selected_value() != Some(&copy_format) {
+            form.copy_format.update(cx, |state, cx| {
+                state.set_selected_value(&copy_format, window, cx)
+            });
+        }
+        form.shortcuts.drop_stale_keys(window);
+        // Rows of the Shortcuts page that render in this frame set it again.
+        // A recording whose field did not show in the last frame ends, so it
+        // does not resume when its page shows again.
+        form.shortcuts.shown.set(false);
+        // A recording on a page that did not show in the last frame ends,
+        // so it does not resume when its page shows again.
+        // So does one whose control lost the focus, for example to the search
+        // field or a dialog, so its prompt does not stay on screen.
+        let focus_left = form
+            .shortcuts
+            .active_focus()
+            .is_some_and(|focus| !focus.contains_focused(window, cx));
+        if !form.shortcuts.page_shown.replace(false) || focus_left {
+            form.shortcuts.stale.set(true);
+            let qrow = cx.entity();
+            cx.defer(move |cx| qrow.update(cx, |qrow, cx| qrow.drop_hidden_recording(cx)));
         }
         let theme = self.settings.theme.clone();
         if form.theme.read(cx).selected_value() != Some(&theme) {
@@ -904,10 +933,26 @@ impl Qrow {
                         form,
                         cx.entity().downgrade(),
                         &self.settings,
+                        self.changed_on_page(ResetPage::Appearance, cx),
                     ))
                     .page(
                         SettingPage::new("Export")
                             .resettable(false)
+                            .on_reset_page(
+                                "Reset export",
+                                {
+                                    let changed = self.changed_on_page(ResetPage::Export, cx);
+                                    move |_| changed > 0
+                                },
+                                {
+                                    let owner = cx.weak_entity();
+                                    move |window, cx| {
+                                        let _ = owner.update(cx, |qrow, cx| {
+                                            qrow.confirm_page_reset(ResetPage::Export, window, cx)
+                                        });
+                                    }
+                                },
+                            )
                             .group(SettingGroup::new().title("Copy").item(setting_item(
                                 "Copy Format",
                                 "Default format when copying result cells.",
@@ -934,7 +979,9 @@ impl Qrow {
                         cx.weak_entity(),
                         self.settings.assistant.enabled,
                         self.settings.assistant.web_search,
-                    ));
+                        shortcuts::action_display(&ToggleAssistant, cx),
+                    ))
+                    .page(self.shortcuts_page(cx));
                 match updates {
                     Some(page) => panel.page(page),
                     None => panel,
@@ -973,17 +1020,17 @@ impl Qrow {
         }
     }
 
-    fn settings_footer(&self, cx: &mut Context<Self>) -> AnyElement {
-        h_flex()
-            .w_full()
-            .gap_2()
-            .justify_end()
-            .child(
-                Button::new("reset-settings")
-                    .label("Restore defaults")
-                    .on_click(cx.listener(|this, _, window, cx| this.reset_settings(window, cx))),
-            )
-            .into_any_element()
+    /// Return the Export page to its defaults.
+    pub(super) fn reset_export_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let defaults = Settings::default();
+        self.set_copy_format(defaults.copy_format, cx);
+        // Through the setter, which drops kept downloads over the limit.
+        self.apply_number_setting(
+            NumberSetting::ExportReplayLimit,
+            defaults.export_replay_limit_mib as f32,
+            window,
+            cx,
+        );
     }
 }
 
@@ -1035,7 +1082,9 @@ fn appearance_page(
     form: &SettingsForm,
     owner: WeakEntity<Qrow>,
     settings: &Settings,
+    changed: usize,
 ) -> SettingPage {
+    let reset_owner = owner.clone();
     let smooth_caret = settings.editor_smooth_caret;
     let smooth_scrolling = settings.editor_smooth_scrolling;
     let autocomplete = settings.editor_autocomplete;
@@ -1051,9 +1100,16 @@ fn appearance_page(
     let scrolling_owner = owner.clone();
     SettingPage::new("Appearance")
         .default_open(true)
-        // The footer resets all appearance settings, so this page does not
-        // need a second reset action.
         .resettable(false)
+        .on_reset_page(
+            "Reset appearance",
+            move |_| changed > 0,
+            move |window, cx| {
+                let _ = reset_owner.update(cx, |qrow, cx| {
+                    qrow.confirm_page_reset(ResetPage::Appearance, window, cx)
+                });
+            },
+        )
         .group(
             SettingGroup::new()
                 .title("Interface")
@@ -1082,11 +1138,7 @@ fn appearance_page(
                 ))
                 .item(setting_item(
                     "Scale",
-                    if cfg!(target_os = "macos") {
-                        "Size of all text and controls. Also ⌘+ and ⌘−."
-                    } else {
-                        "Size of all text and controls. Also Ctrl+ and Ctrl−."
-                    },
+                    "Size of all text and controls.",
                     &["zoom", "interface", "ui"],
                     number_field(form, NumberSetting::Scale),
                 ))
@@ -1319,6 +1371,7 @@ fn assistant_page(
     owner: WeakEntity<Qrow>,
     enabled: bool,
     web_search: bool,
+    toggle_shortcut: Option<String>,
 ) -> SettingPage {
     let search_owner = owner.clone();
     let executable = form.assistant_executable.clone();
@@ -1328,14 +1381,15 @@ fn assistant_page(
         .group(
             SettingGroup::new()
                 .title("General")
-                .item(setting_item(
-                    "Enabled",
-                    if cfg!(target_os = "macos") {
-                        "Shows the assistant button and turns on ⌘R."
-                    } else {
-                        "Shows the assistant button and turns on Ctrl+R."
-                    },
+                .item(setting_row(
+                    "Enabled".into(),
+                    match toggle_shortcut {
+                        Some(keys) => format!("Shows the assistant button and turns on {keys}."),
+                        None => "Shows the assistant button.".to_owned(),
+                    }
+                    .into(),
                     &["assistant", "enable", "codex", "claude", "ai"],
+                    false,
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();
                         Switch::new("enable-assistant")
@@ -1436,6 +1490,23 @@ pub(super) fn setting_row<E: IntoElement>(
     stacked: bool,
     field: impl Fn(&mut Window, &mut App) -> E + 'static,
 ) -> SettingItem {
+    setting_row_with_message(title, description, keywords, stacked, field, |_| None)
+}
+
+/// A message under the description of a Settings row: its element ID, its
+/// tone, and its text.
+pub(super) type RowMessage = (SharedString, Tone, SharedString);
+
+/// A setting row like [`setting_row`], with an optional message under the
+/// description.
+pub(super) fn setting_row_with_message<E: IntoElement>(
+    title: SharedString,
+    description: SharedString,
+    keywords: &[&'static str],
+    stacked: bool,
+    field: impl Fn(&mut Window, &mut App) -> E + 'static,
+    message: impl Fn(&App) -> Option<RowMessage> + 'static,
+) -> SettingItem {
     let searchable: Vec<SharedString> = [title.clone(), description.clone()]
         .into_iter()
         .chain(keywords.iter().map(|keyword| SharedString::from(*keyword)))
@@ -1443,24 +1514,27 @@ pub(super) fn setting_row<E: IntoElement>(
     SettingItem::render(
         move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
             let rem = window.rem_size();
-            let label = v_flex().child(Label::new(title.clone()).text_sm()).when(
-                !description.is_empty(),
-                |label| {
-                    label.child(
-                        div()
-                            .id(SharedString::from(format!("setting-help-{title}")))
-                            .test_support()
-                            .role(Role::Label)
-                            .aria_label(description.clone())
-                            .text_sm()
-                            // Without it, a wrapped description inherits the
-                            // loose default line height of 1.618.
-                            .line_height(rems(DESCRIPTION_LINE_REMS))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(description.clone()),
-                    )
-                },
-            );
+            let label =
+                v_flex()
+                    .child(Label::new(title.clone()).text_sm())
+                    .when(!description.is_empty(), |label| {
+                        label.child(
+                            div()
+                                .id(SharedString::from(format!("setting-help-{title}")))
+                                .test_support()
+                                .role(Role::Label)
+                                .aria_label(description.clone())
+                                .text_sm()
+                                // Without it, a wrapped description inherits the
+                                // loose default line height of 1.618.
+                                .line_height(rems(DESCRIPTION_LINE_REMS))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(description.clone()),
+                        )
+                    })
+                    .children(message(cx).map(|(id, tone, text)| {
+                        div().mt_0p5().child(row_message(id, tone, text, cx))
+                    }));
             // The focus ring paints outside the control; the page clips at its
             // edge, so the control keeps the ring width free beside it.
             let control = div().px_1().child(field(window, cx));
@@ -1471,12 +1545,11 @@ pub(super) fn setting_row<E: IntoElement>(
                     .child(label.w_full())
                     .child(control.w_full())
             } else {
-                // Labels align with the top of their control, so a control
-                // that grows, like a field with an error below it, does not
-                // move its label.
+                // The control stays centered on the row, also when a message
+                // makes the label column taller.
                 h_flex()
                     .w_full()
-                    .items_start()
+                    .items_center()
                     .justify_between()
                     .gap_3()
                     .child(label.flex_1().min_w_0().max_w_3_5())
@@ -1504,6 +1577,10 @@ pub(super) fn settings_panel(id: &'static str, window: &Window, cx: &App) -> Set
         .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
         .sidebar_width(rem * SIDEBAR_REMS)
         .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
+        // Each group is an outlined card with a divider between its rows. A
+        // fill is too faint in the light theme.
+        .with_group_variant(GroupBoxVariant::Outline)
+        .item_dividers(true)
 }
 
 /// The width and height of a settings dialog in `window`.

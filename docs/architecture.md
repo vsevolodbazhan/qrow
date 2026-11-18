@@ -11,6 +11,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | --- | --- |
 | [Application](../src/main.rs) | Select the user or demo environment and open the window. |
 | [UI entry points](../src/ui.rs) | Initialize GPUI Kit, themes, the SQL language, key bindings, and menus. Wrap the root view. |
+| [Shortcuts](../src/ui/shortcuts.rs) | List the commands that can have a shortcut and their defaults. Build the keymap from GPUI Kit's bindings and the user's changes, and set the menus again. The [Shortcuts page](../src/ui/shortcuts_page.rs) records and checks new shortcuts. |
 | [UI environment](../src/ui/environment.rs) | Select the workspace file, the password and token stores, and the trusted certificate authorities of a window. |
 | [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, Logs history, and commands. |
 | [Export](../src/export.rs) | Keep shared preview snapshots, write CSV, and publish complete files. |

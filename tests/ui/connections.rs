@@ -45,14 +45,14 @@ fn saved_names(app: &TestApp) -> Vec<String> {
 fn connection_save_completes_after_the_settings_window_closes(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, qrow::ui::OpenSettings);
-    app.wait_for(cx, "reset-settings");
+    app.wait_for(cx, "settings-content");
     // Close without the helper's next main-window frame. Let the poll task
     // run while Settings is still the entity's last rendered window.
     app.update(cx, |window, cx| window.press("secondary-w", cx));
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(50));
     cx.run_until_parked();
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
 
     open_new_connection(&app, cx);
     fill_connection(&app, cx, "After Settings");
@@ -605,6 +605,31 @@ fn new_connection_saves_its_password_in_the_injected_store(cx: &mut TestAppConte
         !json.contains("synthetic-password"),
         "The workspace file must not contain the password"
     );
+}
+
+#[gpui_kit::test]
+fn a_field_error_shows_under_the_description_and_the_field_stays_centered(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    fill_connection(&app, cx, "Synthetic");
+    app.fill(cx, "connection-port", "0");
+    app.click(cx, "save-profile");
+    wait_error(&app, cx, "Port must be a number from 1 to 65535.");
+    app.update(cx, |window, _| {
+        let field = bounds_of(window, "connection-port");
+        let help = bounds_of(window, "setting-help-Port");
+        let error = bounds_of(window, "connection-form-error-accessibility");
+        // The error is in the label column, under the description.
+        assert!(error.right() <= field.left(), "{error:?} {field:?}");
+        assert!(error.top() >= help.bottom(), "{error:?} {help:?}");
+        // The field is centered on the taller row, not at its top.
+        let center = field.center().y;
+        assert!(
+            center > help.top() && center < error.bottom(),
+            "{field:?} {help:?} {error:?}"
+        );
+    });
+    cancel_form(&app, cx);
 }
 
 #[gpui_kit::test]

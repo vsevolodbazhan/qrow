@@ -27,6 +27,7 @@ mod panel_motion;
 mod queries;
 mod result_tabs;
 mod results;
+mod shortcuts;
 mod sign_ins;
 mod smooth_caret;
 mod smooth_scrolling;

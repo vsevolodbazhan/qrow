@@ -819,7 +819,7 @@ fn autocomplete_turned_off_closes_the_list_and_tab_indents(cx: &mut TestAppConte
     });
     app.wait_gone(cx, "sql-completion");
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
 
     let sql = "SELECT * FROM avia.bo";
     app.type_sql(cx, sql);
@@ -832,8 +832,8 @@ fn autocomplete_turned_off_closes_the_list_and_tab_indents(cx: &mut TestAppConte
 
     // Reset turns it on again.
     app.dispatch(cx, OpenSettings);
-    app.wait_for(cx, "reset-settings");
-    app.click(cx, "reset-settings");
+    app.wait_for(cx, "settings-content");
+    app.reset_settings_page(cx, "Reset appearance");
     app.wait_saved(cx, "autocomplete on", |workspace| {
         workspace.settings.editor_autocomplete
     });
@@ -934,7 +934,7 @@ fn autocomplete_off_loads_no_metadata_and_the_first_tab_after_it_turns_on_sugges
         workspace.settings.editor_autocomplete
     });
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
 
     // The first Tab loads the cache. The list can show its loading row
     // first, then the names.

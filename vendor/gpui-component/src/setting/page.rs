@@ -29,6 +29,17 @@ pub struct SettingPage {
     pub(super) description: Option<SharedString>,
     pub(super) groups: Vec<SettingGroup>,
     pub(super) header_style: StyleRefinement,
+    reset_handler: Option<PageReset>,
+    pub(super) header_content: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>>,
+}
+
+/// A reset of the whole page that the owner handles, for example after a
+/// confirmation.
+#[derive(Clone)]
+struct PageReset {
+    label: SharedString,
+    is_dirty: Rc<dyn Fn(&App) -> bool>,
+    reset: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 impl SettingPage {
@@ -42,6 +53,8 @@ impl SettingPage {
             description: None,
             groups: Vec::new(),
             header_style: StyleRefinement::default(),
+            reset_handler: None,
+            header_content: None,
         }
     }
 
@@ -88,6 +101,36 @@ impl SettingPage {
     /// If true and the items in this page has changed, the reset button will appear.
     pub fn resettable(mut self, resettable: bool) -> Self {
         self.resettable = resettable;
+        self
+    }
+
+    /// Handle the reset button of the page. The button shows while `is_dirty`
+    /// returns true, has `label` as its tooltip and accessible name, and
+    /// calls `reset` instead of resetting each item. This applies even when
+    /// the page is not [`resettable`](Self::resettable).
+    pub fn on_reset_page<D, R>(mut self, label: impl Into<SharedString>, is_dirty: D, reset: R) -> Self
+    where
+        D: Fn(&App) -> bool + 'static,
+        R: Fn(&mut Window, &mut App) + 'static,
+    {
+        self.reset_handler = Some(PageReset {
+            label: label.into(),
+            is_dirty: Rc::new(is_dirty),
+            reset: Rc::new(reset),
+        });
+        self
+    }
+
+    /// Set an element to render below the title and the description in the
+    /// page header, for example filters of the page.
+    pub fn header_content<F, E>(mut self, content: F) -> Self
+    where
+        E: IntoElement,
+        F: Fn(&mut Window, &mut App) -> E + 'static,
+    {
+        self.header_content = Some(Rc::new(move |window, cx| {
+            content(window, cx).into_any_element()
+        }));
         self
     }
 
@@ -191,6 +234,9 @@ impl SettingPage {
                     .child(
                         h_flex()
                             .justify_between()
+                            // As tall as the reset button, so the header keeps
+                            // its height when the button shows.
+                            .min_h_6()
                             .child(
                                 h_flex()
                                     .gap_1()
@@ -199,7 +245,26 @@ impl SettingPage {
                                         this.child(suffix(window, cx))
                                     }),
                             )
-                            .when(self.is_resettable(&query, cx), |this| {
+                            .when_some(
+                                self.reset_handler
+                                    .clone()
+                                    .filter(|handler| (handler.is_dirty)(cx)),
+                                |this, handler| {
+                                    let reset = handler.reset.clone();
+                                    this.child(
+                                        Button::new("reset")
+                                            .icon(IconName::Undo2)
+                                            .ghost()
+                                            .small()
+                                            .tooltip(handler.label.clone())
+                                            .accessibility_label(handler.label.clone())
+                                            .on_click(move |_, window, cx| reset(window, cx)),
+                                    )
+                                },
+                            )
+                            .when(
+                                self.reset_handler.is_none() && self.is_resettable(&query, cx),
+                                |this| {
                                 this.child(
                                     Button::new("reset")
                                         .icon(IconName::Undo2)
@@ -214,7 +279,8 @@ impl SettingPage {
                                             }
                                         }),
                                 )
-                            }),
+                            },
+                            ),
                     )
                     .when_some(self.description.clone(), |this, description| {
                         this.child(
@@ -222,6 +288,9 @@ impl SettingPage {
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground),
                         )
+                    })
+                    .when_some(self.header_content.clone(), |this, content| {
+                        this.child(content(window, cx))
                     }),
             )
             .child(

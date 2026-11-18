@@ -17,7 +17,9 @@ Select **Show activity** in the notification to see the error in the
 Right-click a tab and select **Save as SQL file…** to save its full SQL text.
 Press **⇧⌘S** to save the active tab.
 Choose a path in the save panel. The suggested name has a `.sql` extension.
-On Linux and Windows, use Ctrl in place of ⌘.
+On Linux and Windows, use Ctrl in place of ⌘. Shortcuts on this page are the
+defaults; see [Keyboard shortcuts](workspace.md#keyboard-shortcuts) to change
+them.
 
 After a save, a notification shows the file name. Use **Reveal in Finder**
 to locate the file. On Windows, the action is **Reveal in File Explorer**. On

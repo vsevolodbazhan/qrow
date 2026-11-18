@@ -468,6 +468,13 @@ impl Qrow {
                         } else {
                             "Cancel"
                         })
+                        .map(|mut button| {
+                            button.interactivity().tooltip(
+                                StatusTooltip::new("Cancel query", "")
+                                    .for_action(&CancelQuery, None),
+                            );
+                            button
+                        })
                         .disabled(tab.cancelling)
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
@@ -1232,6 +1239,22 @@ impl Qrow {
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
+            .on_action(cx.listener(Self::cancel_query))
+            .on_action(cx.listener(Self::export_results))
+            .on_action(cx.listener(Self::rename_active_tab))
+            .on_action(cx.listener(Self::next_tab))
+            .on_action(cx.listener(Self::previous_tab))
+            .on_action(cx.listener(Self::pin_result))
+            .on_action(cx.listener(Self::close_shown_result))
+            .on_action(cx.listener(Self::next_result_tab))
+            .on_action(cx.listener(Self::previous_result_tab))
+            .on_action(cx.listener(Self::copy_shown_query))
+            .on_action(cx.listener(Self::refresh_metadata))
+            .on_action(cx.listener(Self::new_conversation))
+            .on_action(cx.listener(Self::focus_editor))
+            .on_action(cx.listener(Self::focus_results))
+            .on_action(cx.listener(Self::focus_catalog))
+            .on_action(cx.listener(Self::check_for_updates_now))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 if let Some((start, initial)) = this.assistant_state.resizing {
                     if e.pressed_button != Some(MouseButton::Left) {
@@ -1634,21 +1657,23 @@ impl Render for WindowView {
                 this.content
                     .update(cx, |content, cx| content.request_user_quit(window, cx));
             }))
+            // Settings opens also from a dialog, which is outside the workspace.
+            .on_action(cx.listener(|this, action: &OpenSettings, window, cx| {
+                this.content
+                    .update(cx, |content, cx| content.open_settings(action, window, cx));
+            }))
             // Capture above editor and dialog focus scopes, before text input consumes keys.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let key = &event.keystroke;
-                let primary = if cfg!(target_os = "macos") {
-                    key.modifiers.platform && !key.modifiers.control
-                } else {
-                    key.modifiers.control && !key.modifiers.platform
+                let change = {
+                    let content = this.content.read(cx);
+                    super::shortcuts::scale_change(
+                        &event.keystroke,
+                        &content.settings.shortcuts,
+                        cx,
+                    )
                 };
-                if !primary || key.modifiers.alt {
+                let Some(change) = change else {
                     return;
-                }
-                let change = match key.key.as_str() {
-                    "+" | "=" => UI_SCALE_STEP,
-                    "-" => -UI_SCALE_STEP,
-                    _ => return,
                 };
                 this.content.update(cx, |content, cx| {
                     content.adjust_ui_scale(change, window, cx)

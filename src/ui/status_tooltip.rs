@@ -169,12 +169,15 @@ impl StatusTooltip {
                 if let Some(focus) = &self.shortcut_focus {
                     return window.highest_precedence_binding_for_action_in(action, focus);
                 }
+                // Commands of the window bind in the workspace context.
                 window.highest_precedence_binding_for_action_in_context(
                     action,
-                    self.key_context
-                        .as_deref()
-                        .and_then(|context| KeyContext::parse(context).ok())
-                        .unwrap_or_default(),
+                    KeyContext::parse(
+                        self.key_context
+                            .as_deref()
+                            .unwrap_or(super::shortcuts::WORKSPACE),
+                    )
+                    .unwrap_or_default(),
                 )
             })
             .and_then(|binding| {

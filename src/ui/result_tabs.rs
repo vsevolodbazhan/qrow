@@ -131,7 +131,26 @@ impl Qrow {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::Close)
-                                .tooltip("Close result")
+                                // Close Result closes the shown result, so only
+                                // its button shows the shortcut.
+                                .map(|mut button| {
+                                    if id == tab.active_result {
+                                        button.interactivity().tooltip(
+                                            StatusTooltip::new("Close result", "")
+                                                .for_action(&CloseResult, None),
+                                        );
+                                        button
+                                    } else {
+                                        // The managed tooltip, like the shown
+                                        // result's: a plain button tooltip
+                                        // loses to the tooltip of its tab.
+                                        button.interactivity().tooltip({
+                                            let tooltip = StatusTooltip::new("Close result", "");
+                                            move |window, cx| tooltip.build(None, window, cx)
+                                        });
+                                        button
+                                    }
+                                })
                                 .accessibility_label(format!("Close {title}"))
                                 .disabled(!tab.can_close_result(id))
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -262,7 +281,13 @@ impl Qrow {
         }
     }
 
-    fn close_result(&mut self, tab_id: Uuid, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_result(
+        &mut self,
+        tab_id: Uuid,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(index) = self.tabs.iter().position(|tab| tab.saved.id == tab_id) else {
             return;
         };

@@ -147,7 +147,7 @@ Select a rectangle of cells on the current page, then press ⌘C to copy it.
 | Click the `#` header, or press ⌘A in the table | All cells of the current page. |
 | Arrow keys | The next cell. Shift with an arrow key extends the rectangle. |
 | Home, End | The first or last cell of the row. |
-| ⌘↑ or ⌘Home, ⌘↓ or ⌘End | The cell in the first or last row of the page. |
+| ⌘↑, ⌘↓ | The cell in the first or last row of the page. |
 | Page Up, Page Down | The cell one screen up or down. |
 
 In the [transposed layout](#transpose-a-result), the headings and the keys

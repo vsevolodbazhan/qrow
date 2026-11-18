@@ -1,4 +1,7 @@
-use super::settings_view::{setting_row, settings_dialog_size, settings_panel};
+use super::setting_row::Tone;
+use super::settings_view::{
+    setting_row, setting_row_with_message, settings_dialog_size, settings_panel,
+};
 use super::*;
 use gpui_kit::component::{
     alert::Alert,
@@ -46,7 +49,55 @@ pub(super) fn connection_row(
     )
 }
 
-/// A text input of the connection form, by field index.
+/// A row of Connection Settings with the text field `index` of the form.
+/// A validation error of the field shows under the description, and the
+/// field gets a red border.
+pub(super) fn connection_field_row(
+    qrow: &WeakEntity<Qrow>,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    keywords: &[&'static str],
+    index: usize,
+    label: &'static str,
+) -> SettingItem {
+    let field_qrow = qrow.clone();
+    let message_qrow = qrow.clone();
+    setting_row_with_message(
+        title.into(),
+        description.into(),
+        keywords,
+        false,
+        move |_: &mut Window, cx: &mut App| {
+            let Some(qrow) = field_qrow.upgrade() else {
+                return div().into_any_element();
+            };
+            match &qrow.read(cx).form {
+                Some(form) => form_input(form, index, label, cx),
+                None => div().into_any_element(),
+            }
+        },
+        move |cx: &App| {
+            let qrow = message_qrow.upgrade()?;
+            let error = field_error(qrow.read(cx).form.as_ref()?, index)?;
+            Some((
+                "connection-form-error-accessibility".into(),
+                Tone::Error,
+                error.into(),
+            ))
+        },
+    )
+}
+
+/// The validation error of the field `index` of `form`.
+fn field_error(form: &ProfileEditor, index: usize) -> Option<String> {
+    form.field_errors
+        .iter()
+        .find(|(field, _)| *field == index)
+        .map(|(_, error)| error.clone())
+}
+
+/// A text input of the connection form, by field index, with a red border
+/// when the field has a validation error.
 pub(super) fn form_input(
     form: &ProfileEditor,
     index: usize,
@@ -58,53 +109,17 @@ pub(super) fn form_input(
         .w_full()
         .disabled(form.saving.is_some())
         .aria_label(label);
-    field_with_error(form, index, input, cx)
-}
-
-/// `control` with the validation error of the field `index` below it.
-pub(super) fn field_with_error(
-    form: &ProfileEditor,
-    index: usize,
-    control: Input,
-    cx: &App,
-) -> AnyElement {
-    let error = form
-        .field_errors
-        .iter()
-        .find(|(field, _)| *field == index)
-        .map(|(_, error)| error.clone());
-    let Some(error) = error else {
-        return control.into_any_element();
-    };
-    // The row grows to hold the error below the field. Rows align their
-    // labels with the top of the control, so the label does not move.
-    v_flex()
-        .w_full()
-        .gap_1()
-        .child(control.border_color(cx.theme().danger))
-        .child(
-            h_flex()
-                .id("connection-form-error-accessibility")
-                .test_support()
-                .role(Role::Alert)
-                .aria_label(error.clone())
-                .w_full()
-                .items_start()
-                .gap_1()
-                .text_sm()
-                .line_height(rems(1.25))
-                .text_color(cx.theme().danger)
-                .child(
-                    // The icon sits on the first line of a wrapped message.
-                    div()
-                        .h(rems(1.25))
-                        .flex()
-                        .items_center()
-                        .child(gpui_kit::component::Icon::new(IconName::CircleX).xsmall()),
-                )
-                .child(div().flex_1().min_w_0().child(error)),
-        )
-        .into_any_element()
+    if field_error(form, index).is_some() {
+        // The field stays red while it has the focus, so the field to fix
+        // looks invalid too.
+        let danger = cx.theme().danger;
+        input
+            .border_color(danger)
+            .focus_color(danger)
+            .into_any_element()
+    } else {
+        input.into_any_element()
+    }
 }
 
 impl Qrow {
@@ -254,29 +269,29 @@ impl Qrow {
                         .into_any_element()
                 },
             ))
-            .item(connection_row(
+            .item(connection_field_row(
                 qrow,
                 "Name",
                 "Shown in the connections sidebar.",
                 &["connection"],
-                false,
-                |_, form, _, cx| form_input(form, 0, "Name", cx),
+                0,
+                "Name",
             ))
-            .item(connection_row(
+            .item(connection_field_row(
                 qrow,
                 "Host",
                 "Hostname or IP address of the server.",
                 &["server", "address", "kyuubi"],
-                false,
-                |_, form, _, cx| form_input(form, 1, "Host", cx),
+                1,
+                "Host",
             ))
-            .item(connection_row(
+            .item(connection_field_row(
                 qrow,
                 "Port",
                 "Port on that host.",
                 &["server"],
-                false,
-                |_, form, _, cx| form_input(form, 2, "Port", cx),
+                2,
+                "Port",
             ))
             .items(postgres.then(|| {
                 connection_row(
@@ -364,16 +379,16 @@ impl Qrow {
                     |this, form, _, cx| this.sign_in_field(form, cx),
                 )
             }))
-            .item(connection_row(
+            .item(connection_field_row(
                 qrow,
                 "Username",
                 "The database account used to connect.",
                 &["user", "account", "login"],
-                false,
-                |_, form, _, cx| form_input(form, 3, "Username", cx),
+                3,
+                "Username",
             ))
             .items((!uses_sign_in && !uses_external).then(|| {
-                connection_row(
+                connection_field_row(
                     qrow,
                     "Password",
                     if trino {
@@ -382,11 +397,11 @@ impl Qrow {
                         "The password for this account."
                     },
                     &["ldap", "secret"],
-                    false,
-                    |_, form, _, cx| form_input(form, 4, "Password", cx),
+                    4,
+                    "Password",
                 )
             }))
-            .item(connection_row(
+            .item(connection_field_row(
                 qrow,
                 if trino {
                     "Initial Catalog"
@@ -395,18 +410,11 @@ impl Qrow {
                 },
                 "Selected when the session opens.",
                 &["schema", "database", "use"],
-                false,
-                move |_, form, _, cx| {
-                    form_input(
-                        form,
-                        5,
-                        if trino {
-                            "Initial Catalog"
-                        } else {
-                            "Initial Database"
-                        },
-                        cx,
-                    )
+                5,
+                if trino {
+                    "Initial Catalog"
+                } else {
+                    "Initial Database"
                 },
             ))
             .items(trino.then(|| {

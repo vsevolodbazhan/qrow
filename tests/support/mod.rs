@@ -919,6 +919,51 @@ impl TestApp {
         self.update(cx, |window, cx| window.click(id, cx));
     }
 
+    /// Clicks near the start of an element, at its vertical center, for
+    /// controls whose buttons can sit at their center, like a shortcut field
+    /// with long key names.
+    pub fn click_start(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.record(format!("click the start of {id:?}"));
+        self.reveal(cx, &id);
+        self.update(cx, |window, cx| {
+            let bounds = window.find(id).bounds();
+            let position = point(bounds.left() + px(8.), bounds.center().y);
+            let modifiers = Modifiers::default();
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
     /// Waits for an enabled, visible control, then dispatches input once.
     /// Use `click` directly when testing disabled controls.
     pub fn click_ready(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
@@ -960,6 +1005,27 @@ impl TestApp {
 
     /// Opens the page `title` of the Connection Settings dialog with its
     /// sidebar item.
+    /// Selects a page of the Settings window in its sidebar.
+    pub fn settings_page(&self, cx: &mut TestAppContext, title: &str) {
+        let index = ["Appearance", "Export", "Assistant", "Shortcuts", "Updates"]
+            .iter()
+            .position(|page| *page == title)
+            .unwrap_or_else(|| panic!("No Settings page {title}"));
+        let item = ElementId::Name(format!("0-{index}").into());
+        self.update(cx, |window, cx| {
+            let element = elements(window)
+                .into_iter()
+                .find(|element| {
+                    element.path().last() == Some(&item)
+                        && element.path().contains(&ElementId::Name("settings".into()))
+                })
+                .unwrap_or_else(|| panic!("No sidebar item for the Settings page {title}"));
+            click_element(window, &element, cx);
+            window.render_frame(cx);
+        });
+        self.settle(cx);
+    }
+
     pub fn connection_page(&self, cx: &mut TestAppContext, title: &str) {
         let index = ["General", "Export", "Metadata", "dbt", "Assistant"]
             .iter()
@@ -993,6 +1059,15 @@ impl TestApp {
         self.update_main(cx, |window, cx| {
             window.dispatch_action(action.boxed_clone(), cx)
         });
+    }
+
+    /// Clicks the reset button of the shown Settings page, named like
+    /// "Reset appearance", and confirms the reset.
+    pub fn reset_settings_page(&self, cx: &mut TestAppContext, label: &str) {
+        self.click_labelled(cx, label);
+        self.wait_for(cx, "confirm-reset-page");
+        self.click(cx, "confirm-reset-page");
+        self.wait_gone(cx, "confirm-reset-page");
     }
 
     /// Waits until the element `id` is in the frame.

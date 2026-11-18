@@ -205,6 +205,10 @@ pub struct Settings {
     /// The release channel that updates follow. `None` follows the channel
     /// of the running build.
     pub update_channel: Option<crate::update::Channel>,
+    /// The keyboard shortcuts that differ from their defaults, by command.
+    /// `None` removes the shortcut of a command.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub shortcuts: BTreeMap<String, Option<String>>,
 }
 
 impl Default for Settings {
@@ -237,6 +241,7 @@ impl Default for Settings {
             results_minimized: false,
             check_for_updates: true,
             update_channel: None,
+            shortcuts: BTreeMap::new(),
         }
     }
 }

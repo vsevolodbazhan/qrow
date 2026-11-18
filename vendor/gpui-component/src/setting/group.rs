@@ -99,16 +99,34 @@ impl SettingGroup {
                 ))
             })
             .gap_4()
-            .children(self.items.iter().enumerate().filter_map(|(item_ix, item)| {
-                if item.is_match(&query, cx) {
-                    Some(
-                        item.clone()
-                            .render_item(&options.with_item_ix(item_ix), window, cx),
-                    )
-                } else {
-                    None
-                }
-            }))
+            .when(options.item_dividers(), |this| {
+                this.content_style(StyleRefinement::default().p_0().gap_0())
+            })
+            .children(
+                self.items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| item.is_match(&query, cx))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(shown_ix, (item_ix, item))| {
+                        let item = item
+                            .clone()
+                            .render_item(&options.with_item_ix(item_ix), window, cx);
+                        if options.item_dividers() {
+                            // The divider runs the full width of the group;
+                            // only the content keeps the padding.
+                            item.px_4()
+                                .py_2p5()
+                                .when(shown_ix > 0, |item| {
+                                    item.border_t_1().border_color(cx.theme().border)
+                                })
+                        } else {
+                            item
+                        }
+                    }),
+            )
             .refine_style(&self.style)
     }
 

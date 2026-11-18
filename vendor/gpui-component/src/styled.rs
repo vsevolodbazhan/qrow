@@ -179,15 +179,7 @@ impl<T: Styled + Sized> ThemeStyled for T {
         // The ring is painted outside the border, so a clipping ancestor cuts
         // it off. An application whose layout clips heavily turns it off in the
         // theme and keeps the tinted border, which takes no space.
-        if !cx.theme().focus_ring {
-            return self.border_color(cx.theme().ring);
-        }
-
-        focus_ring(
-            self.border_color(cx.theme().ring),
-            window,
-            cx.theme().ring.alpha(FOCUS_RING_OPACITY),
-        )
+        focus_ring_in_color(self, cx.theme().ring, window, cx)
     }
 
     fn popover_style(self, cx: &App) -> Self {
@@ -202,6 +194,25 @@ impl<T: Styled + Sized> ThemeStyled for T {
 }
 
 /// Paint only the outside band, preserving translucent control backgrounds.
+/// The focus border and ring of [`ThemeStyled::focus_ring_style`] in
+/// `color` instead of the theme's ring color, for example red for a field
+/// with an error.
+pub(crate) fn focus_ring_in_color<T: Styled + ParentElement>(
+    element: T,
+    color: Hsla,
+    window: &Window,
+    cx: &App,
+) -> T {
+    if !cx.theme().focus_ring {
+        return element.border_color(color);
+    }
+    focus_ring(
+        element.border_color(color),
+        window,
+        color.alpha(FOCUS_RING_OPACITY),
+    )
+}
+
 pub(crate) fn focus_ring<T: Styled + ParentElement>(
     mut element: T,
     window: &Window,

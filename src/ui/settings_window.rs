@@ -18,13 +18,6 @@ const HEIGHT_REMS: f32 = 42.;
 const MIN_WIDTH: f32 = 640.;
 const MIN_HEIGHT: f32 = 420.;
 
-pub(super) fn bindings() -> [KeyBinding; 2] {
-    [
-        KeyBinding::new("secondary-w", CloseSettings, Some(CONTEXT)),
-        KeyBinding::new("escape", CloseSettings, Some(CONTEXT)),
-    ]
-}
-
 /// The root view of the Settings window. Qrow owns the settings and the
 /// form; the view renders them and renders again when Qrow changes.
 pub(super) struct SettingsWindow {
@@ -129,6 +122,12 @@ pub(super) fn open(qrow: WeakEntity<Qrow>, cx: &mut App) {
         });
         let focus = view.read(cx).focus.clone();
         focus.focus(window, cx);
+        let root_focus = focus.clone();
+        let _ = qrow.update(cx, |qrow, _| {
+            if let Some(form) = &mut qrow.settings_form {
+                form.root_focus = Some(root_focus);
+            }
+        });
         cx.new(|cx| Root::new(view, window, cx))
     });
     let _ = qrow.update(cx, |qrow, cx| {

@@ -4,6 +4,7 @@ mod assistant_tools;
 mod assistant_view;
 mod button_pair;
 mod catalog_tree;
+mod commands;
 mod comments;
 mod connection_form;
 mod connection_sharing;
@@ -24,6 +25,8 @@ mod run_highlight;
 mod setting_row;
 mod settings_view;
 mod settings_window;
+mod shortcuts;
+mod shortcuts_page;
 mod sign_in_view;
 mod sql_completion;
 mod sql_files;
@@ -113,7 +116,23 @@ actions!(
         InsertCatalogName,
         MoveConnectionUp,
         MoveConnectionDown,
-        Quit
+        Quit,
+        CancelQuery,
+        ExportResults,
+        RenameTab,
+        NextTab,
+        PreviousTab,
+        PinResult,
+        CloseResult,
+        NextResultTab,
+        PreviousResultTab,
+        CopyQuery,
+        RefreshMetadata,
+        NewConversation,
+        FocusEditor,
+        FocusResults,
+        FocusCatalog,
+        CheckForUpdates
     ]
 );
 #[derive(Action, Clone, PartialEq, Eq)]
@@ -143,81 +162,10 @@ pub fn init(cx: &mut App) {
             "",
         ),
     );
-    cx.bind_keys(results::bindings());
-    cx.bind_keys(settings_window::bindings());
-    cx.bind_keys([
-        KeyBinding::new("secondary-enter", RunQuery, None),
-        KeyBinding::new("alt-secondary-l", FormatSql, None),
-        KeyBinding::new("secondary-/", ToggleComment, Some("SqlEditor")),
-        KeyBinding::new(
-            "secondary-enter",
-            SendAssistantMessage,
-            Some("AssistantComposer > Input"),
-        ),
-        KeyBinding::new("secondary-t", NewTab, None),
-        KeyBinding::new("secondary-o", ImportSqlFile, None),
-        KeyBinding::new("secondary-shift-s", SaveAsSqlFile, None),
-        KeyBinding::new("secondary-w", CloseTab, None),
-        KeyBinding::new("secondary-b", ShowConnections, None),
-        KeyBinding::new("secondary-r", ToggleAssistant, None),
-        KeyBinding::new(
-            "secondary-shift-r",
-            MaximizeAssistant,
-            Some("Qrow && !AssistantMaximized"),
-        ),
-        KeyBinding::new(
-            "secondary-shift-r",
-            MinimizeAssistant,
-            Some("Qrow && AssistantMaximized"),
-        ),
-        KeyBinding::new("secondary-j", ToggleResults, None),
-        KeyBinding::new("alt-secondary-t", TransposeResult, None),
-        KeyBinding::new("secondary-shift-u", ToggleActivity, None),
-        KeyBinding::new(
-            "escape",
-            activity_view::CloseActivity,
-            Some(activity_view::CONTEXT),
-        ),
-        KeyBinding::new("secondary-=", IncreaseUiScale, None),
-        KeyBinding::new("secondary-+", IncreaseUiScale, None),
-        KeyBinding::new("secondary--", DecreaseUiScale, None),
-        KeyBinding::new("secondary-q", Quit, None),
-        KeyBinding::new("secondary-,", OpenSettings, None),
-        // ⌘W closes the topmost dialog, like a macOS window, before it
-        // closes a query tab.
-        KeyBinding::new(
-            "secondary-w",
-            gpui_kit::base::actions::Cancel,
-            Some("Dialog"),
-        ),
-        KeyBinding::new(
-            "secondary-enter",
-            SaveConnection,
-            Some("ConnectionSettings"),
-        ),
-        KeyBinding::new("secondary-enter", SaveSignIn, Some("SignInSettings")),
-        KeyBinding::new("secondary-enter", SubmitRename, Some("RenameDialog")),
-        KeyBinding::new(
-            "secondary-c",
-            CopyCatalogName,
-            Some(gpui_kit::base::tree_key_context()),
-        ),
-        KeyBinding::new(
-            "shift-enter",
-            InsertCatalogName,
-            Some(gpui_kit::base::tree_key_context()),
-        ),
-        KeyBinding::new("alt-up", MoveConnectionUp, Some("Connections > Tree")),
-        KeyBinding::new("alt-down", MoveConnectionDown, Some("Connections > Tree")),
-    ]);
-    cx.bind_keys((1..=9).map(|number| {
-        KeyBinding::new(
-            &format!("secondary-{number}"),
-            SelectTab(number - 1),
-            Some("Qrow"),
-        )
-    }));
-    set_menus(cx, false);
+    // Before Qrow binds keys: the keymap of GPUI Kit is the base of each
+    // rebuild.
+    shortcuts::init(cx);
+    shortcuts::apply(&BTreeMap::new(), cx);
 }
 
 /// Wraps a Qrow view in its window shell and the GPUI Kit root.
@@ -227,6 +175,7 @@ pub fn root(qrow: Entity<Qrow>, window: &mut Window, cx: &mut Context<Root>) -> 
 }
 
 fn set_menus(cx: &mut App, assistant_enabled: bool) {
+    shortcuts::set_assistant_menu(cx, assistant_enabled);
     let mut menus = vec![
         Menu {
             disabled: false,
@@ -784,7 +733,7 @@ fn text_width(window: &mut Window, text: &str, font: &Font, size: Pixels) -> Pix
         .width
 }
 
-fn panel_empty_state(message: &'static str, cx: &App) -> Div {
+fn panel_empty_state(message: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .size_full()
         .flex()
@@ -793,7 +742,7 @@ fn panel_empty_state(message: &'static str, cx: &App) -> Div {
         .font_family(cx.theme().font_family.clone())
         .text_size(rems(13. / 14.))
         .text_color(cx.theme().muted_foreground)
-        .child(message)
+        .child(message.into())
 }
 
 pub struct Qrow {
@@ -1002,6 +951,7 @@ impl Qrow {
         }
         let scale = workspace.settings.ui_scale;
         set_menus(cx, workspace.settings.assistant.enabled);
+        shortcuts::apply(&workspace.settings.shortcuts, cx);
         themes::apply(&workspace.settings.theme, Some(window), cx);
         apply_ui_theme(&workspace.settings, window, cx);
         let quit = cx.on_app_quit(|this, cx| {
@@ -1248,11 +1198,7 @@ impl Qrow {
                 .language("sql")
                 .soft_wrap(false)
                 .tab_size(editor_tab_size(&self.settings))
-                .placeholder(if cfg!(target_os = "macos") {
-                    "Write SQL, then press ⌘↩ to run"
-                } else {
-                    "Write SQL, then press Ctrl+Enter to run"
-                })
+                .placeholder(shortcuts::run_hint(cx))
                 .default_value(saved.sql.clone())
         });
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {

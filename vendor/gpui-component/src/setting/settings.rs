@@ -35,6 +35,7 @@ pub struct Settings {
     id: ElementId,
     pages: Vec<SettingPage>,
     group_variant: GroupBoxVariant,
+    item_dividers: bool,
     size: Size,
     sidebar_width: Pixels,
     sidebar_size_range: Range<Pixels>,
@@ -50,6 +51,7 @@ impl Settings {
             id: id.into(),
             pages: vec![],
             group_variant: GroupBoxVariant::default(),
+            item_dividers: false,
             size: Size::default(),
             sidebar_width: px(250.0),
             sidebar_size_range: px(160.0)..px(360.0),
@@ -88,6 +90,15 @@ impl Settings {
     /// All setting groups will use this variant unless overridden individually.
     pub fn with_group_variant(mut self, variant: GroupBoxVariant) -> Self {
         self.group_variant = variant;
+        self
+    }
+
+    /// Separate the items of each group with dividers, default is false.
+    ///
+    /// The group content has no padding and no gap. Each item gets its own
+    /// padding, so the dividers run the full width of the group.
+    pub fn item_dividers(mut self, item_dividers: bool) -> Self {
+        self.item_dividers = item_dividers;
         self
     }
 
@@ -157,8 +168,12 @@ impl Settings {
                     let groups = &filter.groups[page_ix];
                     let is_page_active = selected_index.page_ix == page_ix
                         && (selected_index.group_ix.is_none() || groups.len() == 1);
+                    // A click on another page opens its sections. A click on
+                    // the current page shows or hides them.
+                    let is_page_current = selected_index.page_ix == page_ix;
                     SidebarMenuItem::new(page.title.clone())
-                        .click_to_open(true)
+                        .click_to_open(!is_page_current)
+                        .click_to_toggle(is_page_current)
                         .when_some(page.icon.clone(), |this, icon| this.icon(icon))
                         .default_open(page.default_open)
                         .active(is_page_active)
@@ -286,6 +301,7 @@ pub struct RenderOptions {
     item_ix: usize,
     size: Size,
     group_variant: GroupBoxVariant,
+    item_dividers: bool,
     layout: Axis,
     disabled: bool,
 }
@@ -298,6 +314,7 @@ impl RenderOptions {
             item_ix: 0,
             size: Size::default(),
             group_variant: GroupBoxVariant::default(),
+            item_dividers: false,
             layout: Axis::Horizontal,
             disabled: false,
         }
@@ -325,6 +342,11 @@ impl RenderOptions {
 
     pub fn with_group_variant(mut self, group_variant: GroupBoxVariant) -> Self {
         self.group_variant = group_variant;
+        self
+    }
+
+    pub fn with_item_dividers(mut self, item_dividers: bool) -> Self {
+        self.item_dividers = item_dividers;
         self
     }
 
@@ -356,6 +378,10 @@ impl RenderOptions {
 
     pub fn group_variant(&self) -> GroupBoxVariant {
         self.group_variant
+    }
+
+    pub fn item_dividers(&self) -> bool {
+        self.item_dividers
     }
 
     pub fn layout(&self) -> Axis {
@@ -407,7 +433,8 @@ impl RenderOnce for Settings {
         }
         let options = RenderOptions::new()
             .with_size(self.size)
-            .with_group_variant(self.group_variant);
+            .with_group_variant(self.group_variant)
+            .with_item_dividers(self.item_dividers);
         let sidebar_size_range = self.sidebar_size_range.clone();
         let sidebar = self
             .render_sidebar(&state, &filter, window, cx)

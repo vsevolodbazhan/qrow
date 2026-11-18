@@ -293,7 +293,13 @@ impl Qrow {
                                     .small()
                                     .ghost()
                                     .icon(gpui_kit::assets::IconName::Download)
-                                    .tooltip("Export results")
+                                    .map(|mut button| {
+                                        button.interactivity().tooltip(
+                                            StatusTooltip::new("Export results", "")
+                                                .for_action(&ExportResults, None),
+                                        );
+                                        button
+                                    })
                                     .accessibility_label("Export results")
                                     .disabled(export_disabled || draining)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -305,7 +311,13 @@ impl Qrow {
                                     .ghost()
                                     .small()
                                     .icon(Icon::new(AssetIconName::FileCode))
-                                    .tooltip("Copy query")
+                                    .map(|mut button| {
+                                        button.interactivity().tooltip(
+                                            StatusTooltip::new("Copy query", "")
+                                                .for_action(&CopyQuery, None),
+                                        );
+                                        button
+                                    })
                                     .accessibility_label("Copy query")
                                     .disabled(result.sql.is_none())
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -318,10 +330,19 @@ impl Qrow {
                                     .small()
                                     .icon(Icon::new(AssetIconName::Pin))
                                     .selected(result.pinned)
-                                    .tooltip(if result.pinned {
-                                        "Unpin result"
-                                    } else {
-                                        "Pin result"
+                                    .map(|mut button| {
+                                        button.interactivity().tooltip(
+                                            StatusTooltip::new(
+                                                if result.pinned {
+                                                    "Unpin result"
+                                                } else {
+                                                    "Pin result"
+                                                },
+                                                "",
+                                            )
+                                            .for_action(&PinResult, None),
+                                        );
+                                        button
                                     })
                                     .accessibility_label(if result.pinned {
                                         "Unpin result"

@@ -89,16 +89,26 @@ The Export page has the **Copy** and **Replay** sections. See
 The Assistant page has the **General**, **Codex**, and **Claude Code** sections. See
 [AI assistant](assistant.md#set-up-the-assistant) for these settings.
 
-Select a page or section in the list at the left. A selected section scrolls to
-the top of the page, as far as the content allows. Use the search box above the
-list to show only settings that match a word in their name or description.
-Each setting shows a description below its name. A long description wraps, and
-the controls stay aligned at the right.
+The Shortcuts page sets the keyboard shortcuts. See
+[Keyboard shortcuts](#keyboard-shortcuts).
 
-**Restore defaults** restores the defaults of all appearance settings,
-including the System theme, the default fonts, and SQL Keyword Case. It does
-not change the Assistant page. If a saved font or theme is unavailable, Qrow
-uses a default and reports the substitution.
+Select a page or section in the list at the left. A selected section scrolls to
+the top of the page, as far as the content allows. Click the name of the
+current page to show or hide its sections. Use the search box above the
+list to show only settings that match a word in their name or description.
+Each section is a card with a border, and a line separates the settings in a card. Each
+setting shows a description below its name. A long description wraps, and the
+controls stay aligned at the right. A message about a setting shows below its
+description. The control stays at the vertical center of the row.
+
+The Appearance, Export, and Shortcuts pages each have a reset button at the
+right of the page title. The button shows only when a setting of the page is
+different from its default. Click it, then click **Reset** in the confirmation
+to restore the defaults of that page. The reset of Appearance includes the
+System theme, the default fonts, and SQL Keyword Case. Other pages do not
+change. The Assistant and Updates pages do not have a reset button. If a saved
+font or theme is unavailable, Qrow uses a default and reports the
+substitution.
 
 The sidebar at the left of the window shows
 [Connections](connections.md) or [Sign-Ins](connections.md#sign-in-with-openid-connect).
@@ -116,6 +126,65 @@ work area would be narrower than 560 points. Drag the divider above Results or L
 editor height.
 These two divider positions are not saved in the workspace. Qrow saves the
 optional [assistant pane](assistant.md) width.
+
+## Keyboard shortcuts
+
+The shortcuts in this documentation are the defaults. On Linux and Windows,
+Ctrl replaces ⌘. To change a shortcut, open **Settings → Shortcuts**. The page lists the
+commands in groups: Query, Tabs, Results, Result Grid, Editor, Connections,
+Assistant, Dialogs, and Application. Each command has one shortcut or none.
+Some commands do not have a default shortcut, for example **Cancel Query**,
+**Export Results**, **Next Tab**, **Pin Result**, **Refresh Metadata**, and
+**Focus Editor**. Give them a shortcut on this page.
+
+To set a shortcut:
+
+1. Click the keys of the command, or **None** if it has no shortcut. A field
+   shows **Press keys…**.
+2. Press the new keys. A letter, a number, or a symbol must have ⌘, ⌃, or ⌥.
+   Arrows, Enter, Tab, Home, End, Page Up, Page Down, and function keys can be
+   alone.
+3. The shortcut applies immediately. Menus and tooltips show it.
+
+You can also move to a field with Tab and press Enter or Space. While a
+field records, Escape cancels and Delete removes the shortcut. Other keys, for
+example ⌘W, do not operate their commands. A click in another control, or
+another page, ends the recording. To remove a shortcut
+later, move the pointer over its field and click the **Remove shortcut**
+button. A changed shortcut has a **Reset** button that shows its default.
+
+A message below the command name shows a problem. While the field records, a
+red or amber message also gives the field a border in the same color:
+
+- Red: the keys cannot be a shortcut, or a fixed key of the same place uses
+  them, for example Up in the result grid. The field continues to record.
+- Amber: another command in the same place uses the keys. Click **Replace** to
+  move the keys to this command. The other command then has no shortcut.
+  Press other keys or Escape to keep the other shortcut.
+- Blue: the keys also operate a command in a place inside the window, for
+  example in the SQL editor. The message tells which command operates there.
+  Run Query also operates in the SQL editor, so it cannot share keys with an
+  editor command.
+
+Use **All**, **Customized**, and **No shortcut** to filter the list. Click
+**Find by keys** and press keys to show the commands that use them. The
+Settings search also finds commands by name.
+
+The editor commands (Find, Replace, Indent, Outdent, Undo, Redo, and Select
+All) apply to text fields. The other editor keys, for example the arrow keys,
+do not change. Escape always closes Activity, Settings, and dialogs.
+
+Qrow saves only the shortcuts that you change. Other commands get new default
+shortcuts from later versions.
+
+Known limitations:
+
+- Without a shortcut for the editor's Select All, **Edit → Select all** in
+  the macOS menu bar still shows ⌘A. Read-only text keeps ⌘A.
+- On Linux and Windows, Ctrl is the primary modifier. Shortcuts that a
+  workspace from macOS saved with ⌃ and with ⌘ can then use the same keys.
+- A Settings search can hide the Shortcuts page and its filters. Clear the
+  search to show them again.
 
 ## Saved state
 
