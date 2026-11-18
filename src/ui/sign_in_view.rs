@@ -1833,10 +1833,9 @@ impl Qrow {
                         Button::new("save-sign-in-editor")
                             .primary()
                             .label("Save")
-                            .tooltip(if cfg!(target_os = "macos") {
-                                "Save sign-in · ⌘Enter"
-                            } else {
-                                "Save sign-in · Ctrl+Enter"
+                            .tooltip(match super::shortcuts::action_display(&SaveSignIn, cx) {
+                                Some(keys) => format!("Save sign-in · {keys}"),
+                                None => "Save sign-in".to_owned(),
                             })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.save_sign_in_editor(window, cx)

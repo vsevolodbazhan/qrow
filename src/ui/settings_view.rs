@@ -934,6 +934,7 @@ impl Qrow {
                         cx.weak_entity(),
                         self.settings.assistant.enabled,
                         self.settings.assistant.web_search,
+                        shortcuts::action_display(&ToggleAssistant, cx),
                     ));
                 match updates {
                     Some(page) => panel.page(page),
@@ -1082,11 +1083,7 @@ fn appearance_page(
                 ))
                 .item(setting_item(
                     "Scale",
-                    if cfg!(target_os = "macos") {
-                        "Size of all text and controls. Also ⌘+ and ⌘−."
-                    } else {
-                        "Size of all text and controls. Also Ctrl+ and Ctrl−."
-                    },
+                    "Size of all text and controls.",
                     &["zoom", "interface", "ui"],
                     number_field(form, NumberSetting::Scale),
                 ))
@@ -1319,6 +1316,7 @@ fn assistant_page(
     owner: WeakEntity<Qrow>,
     enabled: bool,
     web_search: bool,
+    toggle_shortcut: Option<String>,
 ) -> SettingPage {
     let search_owner = owner.clone();
     let executable = form.assistant_executable.clone();
@@ -1328,14 +1326,15 @@ fn assistant_page(
         .group(
             SettingGroup::new()
                 .title("General")
-                .item(setting_item(
-                    "Enabled",
-                    if cfg!(target_os = "macos") {
-                        "Shows the assistant button and turns on ⌘R."
-                    } else {
-                        "Shows the assistant button and turns on Ctrl+R."
-                    },
+                .item(setting_row(
+                    "Enabled".into(),
+                    match toggle_shortcut {
+                        Some(keys) => format!("Shows the assistant button and turns on {keys}."),
+                        None => "Shows the assistant button.".to_owned(),
+                    }
+                    .into(),
                     &["assistant", "enable", "codex", "claude", "ai"],
+                    false,
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();
                         Switch::new("enable-assistant")

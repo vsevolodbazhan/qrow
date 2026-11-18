@@ -840,6 +840,7 @@ fn settings_restore_defaults_and_stay_within_supported_bounds() {
         results_minimized: false,
         check_for_updates: true,
         update_channel: None,
+        shortcuts: Default::default(),
     };
     settings.sanitize();
     assert_eq!(settings, Settings::default());
@@ -1306,4 +1307,27 @@ fn shared_catalog_names_are_required_and_bounded() {
     assert!(catalog.validate().is_err());
     catalog.name = "x".repeat(MAX_SHARED_CATALOG_NAME + 1);
     assert!(catalog.validate().is_err());
+}
+
+#[test]
+fn settings_keep_only_changed_shortcuts() {
+    let mut settings = Settings::default();
+    assert!(
+        !serde_json::to_string(&settings)
+            .unwrap()
+            .contains("shortcuts"),
+        "default shortcuts are not saved"
+    );
+    settings
+        .shortcuts
+        .insert("toggle_results".into(), Some("alt-secondary-j".into()));
+    settings.shortcuts.insert("quit".into(), None);
+    let saved = serde_json::to_string(&settings).unwrap();
+    let restored: Settings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.shortcuts, settings.shortcuts);
+    assert_eq!(
+        restored.shortcuts.get("quit"),
+        Some(&None),
+        "a removed shortcut stays removed"
+    );
 }

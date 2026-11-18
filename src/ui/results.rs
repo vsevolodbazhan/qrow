@@ -25,6 +25,8 @@ use std::{
     time::Duration,
 };
 
+// The table binds the plain arrow keys; the results view handles these
+// actions before the table does. Shortcuts lists their default keys.
 actions!(
     qrow_results,
     [
@@ -39,26 +41,6 @@ actions!(
 
 /// The key context around the results table.
 const CONTEXT: &str = "Results";
-
-/// Key bindings of the results table. The table binds the plain arrow keys;
-/// the results view handles those actions before the table does. Like other
-/// macOS grids, ⌘↑ and ⌘Home go to the first row and ⌘↓ and ⌘End to the
-/// last row of the page; Home and End go to the first and last column.
-pub(super) fn bindings() -> [KeyBinding; 10] {
-    let context = Some("Results > DataTable");
-    [
-        KeyBinding::new("secondary-up", SelectFirstRow, context),
-        KeyBinding::new("secondary-home", SelectFirstRow, context),
-        KeyBinding::new("secondary-down", SelectLastRow, context),
-        KeyBinding::new("secondary-end", SelectLastRow, context),
-        KeyBinding::new("shift-up", ExtendSelectionUp, context),
-        KeyBinding::new("shift-down", ExtendSelectionDown, context),
-        KeyBinding::new("shift-left", ExtendSelectionLeft, context),
-        KeyBinding::new("shift-right", ExtendSelectionRight, context),
-        KeyBinding::new("secondary-c", Copy, context),
-        KeyBinding::new("secondary-a", SelectAll, context),
-    ]
-}
 
 /// A rectangle of result cells. Rows are indices into all downloaded rows.
 /// Columns are indices into the result columns, without the row number column.
@@ -589,14 +571,14 @@ impl Results {
     }
 
     fn empty_state(&self, cx: &App) -> Div {
-        super::panel_empty_state(
-            self.empty_message.unwrap_or(if cfg!(target_os = "macos") {
-                "Press ⌘↩ to run a query and preview its results"
-            } else {
-                "Press Ctrl+Enter to run a query and preview its results"
-            }),
-            cx,
-        )
+        let message: SharedString = match self.empty_message {
+            Some(message) => message.into(),
+            None => match super::shortcuts::action_display(&super::RunQuery, cx) {
+                Some(keys) => format!("Press {keys} to run a query and preview its results").into(),
+                None => "Run a query to preview its results".into(),
+            },
+        };
+        super::panel_empty_state(message, cx)
     }
 }
 /// Measures the name and the data type of a column header, so that a narrow

@@ -18,13 +18,6 @@ const HEIGHT_REMS: f32 = 42.;
 const MIN_WIDTH: f32 = 640.;
 const MIN_HEIGHT: f32 = 420.;
 
-pub(super) fn bindings() -> [KeyBinding; 2] {
-    [
-        KeyBinding::new("secondary-w", CloseSettings, Some(CONTEXT)),
-        KeyBinding::new("escape", CloseSettings, Some(CONTEXT)),
-    ]
-}
-
 /// The root view of the Settings window. Qrow owns the settings and the
 /// form; the view renders them and renders again when Qrow changes.
 pub(super) struct SettingsWindow {

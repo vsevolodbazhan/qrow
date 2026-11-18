@@ -711,7 +711,7 @@ fn a_held_drag_scrolls_both_axes_and_escape_releases_it(cx: &mut TestAppContext)
         "horizontal scrolling extends past the original viewport"
     );
     // Escape must release capture without letting an active timer select again.
-    app.press(cx, "secondary-home");
+    app.press(cx, "secondary-up");
     app.press(cx, "home");
     app.settle(cx);
     let row = app.update(cx, |window, _| {
