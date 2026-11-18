@@ -55,8 +55,8 @@ impl Group {
 }
 
 /// Where a shortcut operates. Two commands in the same place cannot share a
-/// shortcut. Where one place is inside another, like the SQL editor in the
-/// window, the inner command wins there.
+/// shortcut. Where one place is inside another, the inner command wins there,
+/// so most nested places cannot share keys with the place around them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Scope {
     /// Everywhere in every Qrow window, before any other binding: Quit,
@@ -109,17 +109,23 @@ impl Scope {
             _ if self == other => Relation::Conflict,
             // An app-wide binding wins everywhere.
             (Self::App, _) | (_, Self::App) => Relation::Conflict,
-            // The SQL editor is a text field, and text fields win over it.
-            (Self::Editor, Self::Text) | (Self::Text, Self::Editor) => Relation::Conflict,
             (Self::Window, Self::Dialog) | (Self::Dialog, Self::Window) => Relation::Independent,
-            // Dialogs have text fields, which take their keys first.
-            (Self::Dialog, Self::Text) | (Self::Text, Self::Dialog) => {
-                Relation::Overlap { inner: Self::Text }
-            }
-            (Self::Window, inner) | (inner, Self::Window) => Relation::Overlap { inner },
-            (Self::Text, Self::Composer) | (Self::Composer, Self::Text) => Relation::Overlap {
+            // The message field has one command, which takes its keys there:
+            // ⌘↩ sends the message and runs the query elsewhere.
+            (Self::Window | Self::Text, Self::Composer)
+            | (Self::Composer, Self::Window | Self::Text) => Relation::Overlap {
                 inner: Self::Composer,
             },
+            // Text fields, the SQL editor, the grid, and the tree take their
+            // keys first, and they have the focus most of the time. A command
+            // of the window or of a dialog with the same keys would seldom
+            // work, so these places cannot share keys with it.
+            (Self::Window, Self::Text | Self::Editor | Self::Grid | Self::Tree)
+            | (Self::Text | Self::Editor | Self::Grid | Self::Tree, Self::Window)
+            | (Self::Dialog, Self::Text)
+            | (Self::Text, Self::Dialog)
+            | (Self::Editor, Self::Text)
+            | (Self::Text, Self::Editor) => Relation::Conflict,
             _ => Relation::Independent,
         }
     }
@@ -1174,6 +1180,36 @@ mod tests {
             &parse("secondary-k"),
             &parse("secondary-shift-k")
         ));
+    }
+
+    #[gpui_kit::test]
+    fn the_default_shortcuts_do_not_hide_each_other(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            super::super::init(cx);
+            let defaults: Vec<(&Command, String)> = commands()
+                .iter()
+                .filter_map(|command| default_keys(command, cx).map(|keys| (command, keys)))
+                .collect();
+            for (index, (command, keys)) in defaults.iter().enumerate() {
+                for (other, theirs) in &defaults[index + 1..] {
+                    assert!(
+                        keys != theirs || command.relation(other) != Relation::Conflict,
+                        "{} and {} share {keys}",
+                        command.id,
+                        other.id
+                    );
+                }
+                for (place, name) in fixed_bindings_with(keys, cx) {
+                    assert!(
+                        command
+                            .places()
+                            .all(|mine| mine.relation(place) == Relation::Independent),
+                        "{} shares {keys} with {name}",
+                        command.id
+                    );
+                }
+            }
+        });
     }
 
     #[gpui_kit::test]

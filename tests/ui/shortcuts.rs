@@ -488,19 +488,58 @@ fn replace_takes_the_keys_from_every_command_that_uses_them(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
-fn a_dialog_shortcut_notes_the_text_field_key(cx: &mut TestAppContext) {
+fn a_wider_command_cannot_take_the_keys_of_a_focused_place(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
+    // Text fields, the SQL editor among them, take ⌘[ first.
+    app.click_start(cx, "shortcut-cancel_query");
+    app.press(cx, "secondary-[");
+    app.wait_for(cx, "replace-shortcut-cancel_query");
+    assert_eq!(
+        message(&app, cx, "cancel_query").as_deref(),
+        Some("Used by Outdent.")
+    );
+    app.press(cx, "escape");
+    app.wait_gone(cx, "cancel-shortcut-cancel_query");
+    // The connection tree takes ⌥↑ first.
+    app.click_start(cx, "shortcut-next_tab");
+    app.press(cx, "alt-up");
+    app.wait_for(cx, "replace-shortcut-next_tab");
+    assert_eq!(
+        message(&app, cx, "next_tab").as_deref(),
+        Some("Used by Move Connection Up.")
+    );
+    app.press(cx, "escape");
+    app.wait_gone(cx, "cancel-shortcut-next_tab");
+    // The text fields of a dialog take ⇧← first.
     app.click_start(cx, "shortcut-close_dialog");
     app.press(cx, "shift-left");
-    app.wait_until(cx, "the new shortcut", Duration::from_secs(5), |_, _| {
-        saved_shortcut(&app, "close_dialog") == Some(Some("shift-left".into()))
+    app.wait_for(cx, "shortcut-message-close_dialog");
+    assert_eq!(
+        message(&app, cx, "close_dialog").as_deref(),
+        Some("Used by Select Left.")
+    );
+    app.press(cx, "escape");
+    app.wait_gone(cx, "cancel-shortcut-close_dialog");
+    for id in ["cancel_query", "next_tab", "close_dialog"] {
+        assert_eq!(saved_shortcut(&app, id), None, "{id} changed");
+    }
+}
+
+#[gpui_kit::test]
+fn a_window_command_shares_keys_with_the_message_field(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[("send_message", Some("f9"))]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click_start(cx, "shortcut-next_tab");
+    app.press(cx, "f9");
+    app.wait_until(cx, "the shared keys", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "next_tab") == Some(Some("f9".into()))
     });
-    let text = message(&app, cx, "close_dialog").unwrap_or_default();
-    assert!(
-        text.starts_with("In text fields, "),
-        "unexpected message {text:?}"
+    assert_eq!(
+        message(&app, cx, "next_tab").as_deref(),
+        Some("In the message field, F9 runs Send Message.")
     );
 }
 
@@ -616,14 +655,15 @@ fn a_recorded_enter_does_not_start_another_recording(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click_start(cx, "shortcut-cancel_query");
-    // Enter alone is a valid shortcut; its release must not record again.
+    app.click_start(cx, "shortcut-first_row");
+    // Enter alone is a valid shortcut in the grid; its release must not
+    // record again.
     press_and_release(&app, cx, "enter");
     app.wait_until(cx, "Enter", Duration::from_secs(5), |_, _| {
-        saved_shortcut(&app, "cancel_query") == Some(Some("enter".into()))
+        saved_shortcut(&app, "first_row") == Some(Some("enter".into()))
     });
     assert!(app.update(cx, |window, _| {
-        window.try_find("cancel-shortcut-cancel_query").is_none()
+        window.try_find("cancel-shortcut-first_row").is_none()
     }));
 }
 
@@ -655,16 +695,16 @@ fn a_held_enter_records_once(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click_start(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-first_row");
     key_event(&app, cx, "enter", Key::Down);
     key_event(&app, cx, "enter", Key::Repeat);
     key_event(&app, cx, "enter", Key::Up);
     app.wait_until(cx, "Enter", Duration::from_secs(5), |_, _| {
-        saved_shortcut(&app, "cancel_query") == Some(Some("enter".into()))
+        saved_shortcut(&app, "first_row") == Some(Some("enter".into()))
     });
     assert!(
         app.update(cx, |window, _| window
-            .try_find("cancel-shortcut-cancel_query")
+            .try_find("cancel-shortcut-first_row")
             .is_none()),
         "the repeat and the release do not record again"
     );
@@ -738,17 +778,17 @@ fn another_key_during_a_held_enter_does_not_restart_recording(cx: &mut TestAppCo
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click_start(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-first_row");
     key_event(&app, cx, "enter", Key::Down);
     key_event(&app, cx, "x", Key::Down);
     key_event(&app, cx, "x", Key::Up);
     key_event(&app, cx, "enter", Key::Repeat);
     key_event(&app, cx, "enter", Key::Up);
     app.wait_until(cx, "Enter", Duration::from_secs(5), |_, _| {
-        saved_shortcut(&app, "cancel_query") == Some(Some("enter".into()))
+        saved_shortcut(&app, "first_row") == Some(Some("enter".into()))
     });
     assert!(app.update(cx, |window, _| {
-        window.try_find("cancel-shortcut-cancel_query").is_none()
+        window.try_find("cancel-shortcut-first_row").is_none()
     }));
 }
 

@@ -339,21 +339,14 @@ impl Qrow {
             })
             .collect();
         let shown = shortcuts::display(keys);
-        let mut overlap = None;
+        // A fixed binding cannot share keys with a command: either the fixed
+        // binding hides the command in its place, or the command hides it.
         for (place, name) in shortcuts::fixed_bindings_with(keys, cx) {
-            for mine in command.places() {
-                match mine.relation(place) {
-                    Relation::Conflict => return Check::Reserved(name),
-                    // The fixed binding works in its place; the command, elsewhere.
-                    Relation::Overlap { inner } if inner == place => {
-                        overlap.get_or_insert_with(|| {
-                            format!("{}, {shown} runs {name}.", place.where_phrase())
-                        });
-                    }
-                    // The command would hide the fixed binding in its place.
-                    Relation::Overlap { .. } => return Check::Reserved(name),
-                    Relation::Independent => {}
-                }
+            if command
+                .places()
+                .any(|mine| mine.relation(place) != Relation::Independent)
+            {
+                return Check::Reserved(name);
             }
         }
         let conflicts: Vec<&'static Command> = users
@@ -381,7 +374,6 @@ impl Qrow {
                 }
                 _ => None,
             })
-            .or(overlap)
             .map(Check::Overlap)
             .unwrap_or(Check::Free)
     }

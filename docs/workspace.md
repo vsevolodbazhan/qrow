@@ -156,15 +156,18 @@ button. A changed shortcut has a **Reset** button that shows its default.
 A message below the command name shows a problem. While the field records, a
 red or amber message also gives the field a border in the same color:
 
-- Red: the keys cannot be a shortcut, or a fixed key of the same place uses
-  them, for example Up in the result grid. The field continues to record.
-- Amber: another command in the same place uses the keys. Click **Replace** to
-  move the keys to this command. The other command then has no shortcut.
-  Press other keys or Escape to keep the other shortcut.
-- Blue: the keys also operate a command in a place inside the window, for
-  example in the SQL editor. The message tells which command operates there.
-  Run Query also operates in the SQL editor, so it cannot share keys with an
-  editor command.
+- Red: the keys cannot be a shortcut, or a fixed key uses them, for example
+  Up in the result grid. The field continues to record.
+- Amber: another command uses the keys, and both cannot operate. Click
+  **Replace** to move the keys to this command. The other command then has
+  no shortcut. Press other keys or Escape to keep the other shortcut.
+- Blue: the keys also operate **Send Message** in the assistant's message
+  field. Each command operates in its place, as ⌘↩ does by default.
+
+Text fields, the SQL editor, the result grid, and the connection tree use
+their keys first. A command of the window or of a dialog cannot use the same
+keys, because it would not operate where the focus usually is. For example,
+**Cancel Query** cannot use ⌘[, which outdents in text fields.
 
 Use **All**, **Customized**, and **No shortcut** to filter the list. Click
 **Find by keys** and press keys to show the commands that use them. The
