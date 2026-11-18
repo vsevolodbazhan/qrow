@@ -6,7 +6,7 @@
 //! assistant state from Qrow and renders again when Qrow changes. Commands go
 //! to Qrow through [`on_qrow`].
 use super::*;
-use gpui_kit::base::FocusableExt as _;
+use gpui_kit::base::{FocusableExt as _, TextSelection};
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 
 /// The most rows of the message field in a window `height` high.
@@ -139,8 +139,15 @@ pub(in crate::ui) struct AssistantPane {
     /// The scroll position of the conversation list.
     pub(super) thread_list_scroll: ScrollHandle,
     transcript: Entity<MessageScrollerState>,
+    /// The focus of the transcript around its messages. See
+    /// [`Self::transcript`].
+    transcript_focus: FocusHandle,
     /// The rows that `transcript` has.
     rows: TranscriptRows,
+    /// The text views of the messages in `rows`.
+    message_views: MessageViews,
+    /// The rows that loaded above the first rows. See [`selection_order`].
+    order_shift: i64,
     /// The settings that change the height of the rows.
     typography: Option<Typography>,
     /// The most rows that the message field grows to at this window height.
@@ -199,7 +206,10 @@ impl AssistantPane {
             thread_list_override: None,
             thread_list_scroll: ScrollHandle::new(),
             transcript,
+            transcript_focus: cx.focus_handle(),
             rows: TranscriptRows::default(),
+            message_views: MessageViews::default(),
+            order_shift: 0,
             typography: None,
             composer_max_rows: COMPOSER_MIN_ROWS,
             layout_width: None,
@@ -255,12 +265,18 @@ impl AssistantPane {
         }
         let old = std::mem::replace(&mut self.rows, rows);
         let new = &self.rows;
+        if old.source != new.source {
+            self.message_views = MessageViews::default();
+            self.order_shift = 0;
+            self.transcript
+                .update(cx, |list, cx| list.reset(new.rows.len(), cx));
+            cx.notify();
+            return;
+        }
+        let change = row_change(&old.rows, &new.rows);
+        // Messages that move down under older messages keep their orders.
+        self.order_shift += rows_loaded_above(&old.rows, &change);
         self.transcript.update(cx, |list, cx| {
-            if old.source != new.source {
-                list.reset(new.rows.len(), cx);
-                return;
-            }
-            let change = row_change(&old.rows, &new.rows);
             if !change.replaced.is_empty() || change.inserted > 0 {
                 list.splice(change.replaced, change.inserted, cx);
             }
@@ -294,6 +310,8 @@ impl Render for AssistantPane {
         if unread_visible {
             self.read_visible_reply(window, cx);
         }
+        self.message_views
+            .begin_render(TextSelection::has_selection(window, cx));
         self.sync_composer_rows(window, cx);
         let qrow = qrow.read(cx);
         let width = self
@@ -310,9 +328,24 @@ impl AssistantPane {
         let pane = cx.weak_entity();
         // GPUI Kit's MessageScroller does not register its root for tests;
         // tests find the transcript through this container.
+        //
+        // A selection focuses the message where it starts. When that message
+        // scrolls out of the list, the window moves the focus to the nearest
+        // element around it that is still drawn: this container. Like a
+        // message, it copies the selection with ⌘C.
         div()
             .id("assistant-transcript")
             .test_support()
+            .key_context("TextView")
+            .track_focus(&self.transcript_focus)
+            .on_action(|_: &gpui_kit::component::input::Copy, window, cx| {
+                let text = TextSelection::selected_text(window, cx).trim().to_owned();
+                if text.is_empty() {
+                    cx.propagate();
+                    return;
+                }
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            })
             .flex_1()
             .min_h_0()
             .child(
@@ -327,11 +360,30 @@ impl AssistantPane {
                         let Some(row) = pane.read(cx).rows.rows.get(index).copied() else {
                             return div().into_any_element();
                         };
+                        let order = selection_order(index, pane.read(cx).order_shift);
+                        let view = match row {
+                            Row::Entry { id, .. } => Some(pane.update(cx, |pane, cx| {
+                                let text = |cx: &App| {
+                                    qrow_entity
+                                        .read(cx)
+                                        .shown_conversation()
+                                        .entries
+                                        .iter()
+                                        .find(|entry| entry.id == id)
+                                        .map(|entry| entry.shown_text().clone())
+                                        .unwrap_or_default()
+                                };
+                                pane.message_views.view(id, text, cx)
+                            })),
+                            _ => None,
+                        };
                         transcript_row(
                             qrow_entity.read(cx),
                             &qrow,
                             row,
                             index,
+                            order,
+                            view.as_ref(),
                             &pane.downgrade(),
                             window,
                             cx,

@@ -544,6 +544,19 @@ pub(in crate::ui) fn row_change(old: &[Row], new: &[Row]) -> RowChange {
     }
 }
 
+/// How far `change` moves the messages when it changes the rows above all
+/// messages, as when older messages load. Other changes move no message
+/// that keeps a selection order. See [`super::selection_order`].
+pub(in crate::ui) fn rows_loaded_above(old: &[Row], change: &RowChange) -> i64 {
+    if old[..change.replaced.start]
+        .iter()
+        .any(|row| matches!(row, Row::Entry { .. }))
+    {
+        return 0;
+    }
+    change.inserted as i64 - change.replaced.len() as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,6 +791,44 @@ mod tests {
         // The last page removes the button.
         assert_eq!(row_change(&rows, &rows[1..]), change(0..1, 0, &[]));
         assert_eq!(row_change(&[], &rows), change(0..0, 3, &[]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn messages_keep_their_selection_order_when_older_messages_load() {
+        use super::super::selection_order;
+        let order = |rows: &[Row], id: u128, shift: i64| {
+            let index = rows.iter().position(|row| *row == entry(id, 0)).unwrap();
+            selection_order(index, shift)
+        };
+        let rows = [Row::Older, entry(1, 0), entry(2, 0)];
+        let pages = [
+            // A page between the button and the first message.
+            vec![
+                Row::Older,
+                entry(8, 0),
+                entry(9, 0),
+                entry(1, 0),
+                entry(2, 0),
+            ],
+            // The last page, which removes the button.
+            vec![entry(8, 0), entry(9, 0), entry(1, 0), entry(2, 0)],
+        ];
+        for page in pages {
+            let shift = rows_loaded_above(&rows, &row_change(&rows, &page));
+            for id in [1, 2] {
+                assert_eq!(order(&rows, id, 0), order(&page, id, shift));
+            }
+            assert!(order(&page, 9, shift) < order(&page, 1, shift));
+        }
+        // New messages at the end move no message.
+        let working = [
+            Row::Older,
+            entry(1, 0),
+            entry(2, 0),
+            entry(3, 0),
+            Row::Working,
+        ];
+        assert_eq!(rows_loaded_above(&rows, &row_change(&rows, &working)), 0);
     }
 
     #[::core::prelude::v1::test]

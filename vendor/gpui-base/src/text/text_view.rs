@@ -131,6 +131,8 @@ pub struct TextView {
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
     markdown_extensions: Arc<MarkdownExtensions>,
     motion: Option<TextViewMotion>,
+    document_order: Option<u64>,
+    virtual_row: bool,
 }
 
 /// A plugin that can configure a [`TextView`].
@@ -176,6 +178,8 @@ impl TextView {
             link_click_handler: None,
             markdown_extensions: Arc::default(),
             motion: None,
+            document_order: None,
+            virtual_row: false,
         }
     }
 
@@ -198,6 +202,8 @@ impl TextView {
             link_click_handler: None,
             markdown_extensions: Arc::default(),
             motion: None,
+            document_order: None,
+            virtual_row: false,
         }
     }
 
@@ -220,7 +226,38 @@ impl TextView {
             link_click_handler: None,
             markdown_extensions: Arc::default(),
             motion: None,
+            document_order: None,
+            virtual_row: false,
         }
+    }
+
+    /// Use `state`, which the caller owns, instead of a state that the
+    /// element keeps. The text of [`Self::markdown`] or [`Self::html`] still
+    /// goes to the state on each render.
+    ///
+    /// A row of a virtual list keeps its state, and with it a part of a
+    /// window selection, while the list does not draw the row.
+    pub fn state(mut self, state: &Entity<TextViewState>) -> Self {
+        self.state = Some(state.clone());
+        self
+    }
+
+    /// Set the order of this view in a window selection, in place of the
+    /// order in which the frame paints it.
+    ///
+    /// Give each row of a virtual list its place in the list, so that a
+    /// selection keeps its order while rows scroll in and out of the list.
+    pub fn document_order(mut self, order: u64) -> Self {
+        self.document_order = Some(order);
+        self
+    }
+
+    /// Mark this view as a row of a virtual list: a window selection keeps
+    /// it while the list does not draw it. Use it with [`Self::state`], so
+    /// that the state stays alive, and [`Self::document_order`].
+    pub fn virtual_row(mut self) -> Self {
+        self.virtual_row = true;
+        self
     }
 
     /// Set [`TextViewStyle`].
@@ -767,13 +804,16 @@ impl Element for TextView {
                     state.text_view_style.selection().alpha(1.),
                 )
             };
-            let document_order = GlobalState::global_mut(cx).next_selection_document_order();
+            let document_order = self.document_order.unwrap_or_else(|| {
+                GlobalState::global_mut(cx).next_selection_document_order()
+            });
             adapter.register(
                 prepaint.hitbox.clone(),
                 content_bounds,
                 scroll_offset,
                 document_order,
                 self_scroll,
+                self.virtual_row,
                 window,
                 cx,
             );

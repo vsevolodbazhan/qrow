@@ -156,6 +156,9 @@ Qrow changes these files:
   when the button shows or hides.
 - `src/text/compat.rs`: `TextView::markdown_line_breaks` passes the option
   of the same name to the GPUI Base text view. See the GPUI Base patch.
+- `src/text/compat.rs`: `TextView::state`, `TextView::document_order`, and
+  `TextView::virtual_row` pass a caller-owned state, a selection order, and
+  the virtual row mark to the GPUI Base text view. See the GPUI Base patch.
 
 Remove the patch when a GPUI Kit release includes the fixes. Update the crate
 with the other GPUI crates as one set.

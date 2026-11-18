@@ -7,6 +7,7 @@ mod assistant_harness;
 mod assistant_idle;
 mod assistant_layout;
 mod assistant_notes;
+mod assistant_selection;
 mod assistant_sql;
 mod assistant_tabs;
 mod assistant_threads;

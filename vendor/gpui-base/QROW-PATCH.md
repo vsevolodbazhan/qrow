@@ -100,6 +100,47 @@ Qrow changes these files:
   line break. CommonMark joins the lines with spaces. Qrow uses the option for
   the messages that you send, so a message with SQL keeps its lines. The Qrow
   UI test `a_message_keeps_its_line_breaks` is the regression test.
+- `src/text_selection.rs`, `src/text/text_view.rs`, and
+  `src/text/selection_adapter.rs`: a drag selection works in a virtual list,
+  such as the Qrow transcript.
+  - A scroll during a drag, by the wheel or by drag auto-scroll, moves the
+    cursor to the text under the pointer. Before, the cursor stayed on the
+    text where the pointer was before the scroll. The selection grew only on
+    the next pointer move, and then by the whole scrolled distance.
+  - `TextSelectionRegistration::with_keep_offscreen` and
+    `TextView::virtual_row` mark a participant that a selection keeps while
+    frames do not paint it. Its owner keeps it alive, for a text view with
+    `TextView::state`. `TextView::document_order` gives it a stable order.
+    Hit tests skip an offscreen participant. An end in it goes far before or
+    far after the painted text, in document order, so the painted rows
+    between the ends show the selection. Both ends in one offscreen
+    participant keep their places. An offscreen participant keeps its
+    projected copy while only the window points of the selection move.
+    Before, the frame removed the participant, and the selection disappeared
+    when its start scrolled out of the list. Other participants still leave
+    the selection when frames stop painting them, as for a closed view.
+  - Drag auto-scroll measures the pointer against all that the anchor's
+    participant showed during the drag, and finds a stalled container from
+    the cursor's participant when the anchor is offscreen. Before, an anchor
+    clipped to a slice at the bottom edge reversed the scroll. A mask that
+    collapses over an anchor inside that area still stops auto-scroll.
+  The tests in `src/text_selection.rs` check these rules. The Qrow UI tests
+  in `assistant_selection` check a wheel scroll and drag auto-scroll across
+  four replies. To run the GPUI Base tests, use
+  `CARGO_TARGET_DIR=target/gpui-base-tests cargo test --manifest-path
+  vendor/gpui-base/Cargo.toml --lib text_selection::`.
+- `src/scrollbar.rs` and `src/scrollable_mask.rs`: the vertical
+  `ScrollableMask` clamps a wheel step to `ScrollbarHandle::max_wheel_offset`
+  (new). By default, it is the content size less the viewport. A `ListState`
+  also reaches its current offset: `max_offset_for_scrollbar` leaves out the
+  padding of the list, but at its end the offset includes the padding.
+  Before, the mask clamped the offset to the rows first, so the first wheel
+  step from the end of the Qrow transcript moved it 10.5 points more than the
+  step. The content size, and with it the scrollbar thumb, does not change.
+  The test in `src/scrollable_mask.rs` and the Qrow UI test
+  `a_wheel_step_from_the_end_moves_the_transcript_by_its_delta` check it. A
+  step of at most 1 point from the end still returns to the end: GPUI's list
+  takes that place for its end and follows new rows from there.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.
