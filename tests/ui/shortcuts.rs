@@ -146,7 +146,7 @@ fn run_query_cannot_take_the_keys_of_an_editor_command(cx: &mut TestAppContext) 
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-run_query");
+    app.click_start(cx, "shortcut-run_query");
     app.press(cx, "secondary-/");
     app.wait_for(cx, "replace-shortcut-run_query");
     assert_eq!(
@@ -215,7 +215,7 @@ fn a_recorded_shortcut_is_saved_and_runs_its_command(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-toggle_results");
+    app.click_start(cx, "shortcut-toggle_results");
     app.press(cx, "secondary-alt-k");
     app.wait_until(cx, "the new shortcut", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "toggle_results") == Some(Some("secondary-alt-k".into()))
@@ -239,7 +239,7 @@ fn a_conflict_keeps_recording_until_replace(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "secondary-j");
     app.wait_for(cx, "replace-shortcut-cancel_query");
     assert_eq!(
@@ -267,7 +267,7 @@ fn escape_cancels_recording_and_delete_removes_the_shortcut(cx: &mut TestAppCont
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-toggle_results");
+    app.click_start(cx, "shortcut-toggle_results");
     app.wait_for(cx, "cancel-shortcut-toggle_results");
     app.press(cx, "escape");
     app.wait_gone(cx, "cancel-shortcut-toggle_results");
@@ -275,7 +275,7 @@ fn escape_cancels_recording_and_delete_removes_the_shortcut(cx: &mut TestAppCont
     assert_eq!(saved_shortcut(&app, "toggle_results"), None);
 
     // While a field records, ⌘W is a shortcut to record, not Close.
-    app.click(cx, "shortcut-transpose_result");
+    app.click_start(cx, "shortcut-transpose_result");
     app.press(cx, "secondary-w");
     app.wait_for(cx, "replace-shortcut-transpose_result");
     assert_eq!(
@@ -285,7 +285,7 @@ fn escape_cancels_recording_and_delete_removes_the_shortcut(cx: &mut TestAppCont
     app.press(cx, "escape");
     app.wait_gone(cx, "replace-shortcut-transpose_result");
 
-    app.click(cx, "shortcut-toggle_results");
+    app.click_start(cx, "shortcut-toggle_results");
     app.press(cx, "backspace");
     app.wait_until(cx, "no shortcut", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "toggle_results") == Some(None)
@@ -297,7 +297,7 @@ fn a_letter_without_a_modifier_is_not_a_shortcut(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-new_conversation");
+    app.click_start(cx, "shortcut-new_conversation");
     app.press(cx, "k");
     app.wait_for(cx, "shortcut-message-new_conversation");
     let text = message(&app, cx, "new_conversation").unwrap_or_default();
@@ -365,7 +365,7 @@ fn recording_ends_when_the_focus_leaves_the_field(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-toggle_results");
+    app.click_start(cx, "shortcut-toggle_results");
     app.wait_for(cx, "cancel-shortcut-toggle_results");
     // The prompt ends with the focus, before any key.
     app.click_labelled(cx, "Search...");
@@ -412,7 +412,7 @@ fn fixed_keys_and_separate_places_get_the_right_message(cx: &mut TestAppContext)
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
     // Up moves through the grid; First Row cannot take it.
-    app.click(cx, "shortcut-first_row");
+    app.click_start(cx, "shortcut-first_row");
     app.press(cx, "up");
     app.wait_for(cx, "shortcut-message-first_row");
     assert_eq!(
@@ -428,7 +428,7 @@ fn fixed_keys_and_separate_places_get_the_right_message(cx: &mut TestAppContext)
     app.press(cx, "escape");
     // Toggle Comment works in the SQL editor and Send Message in the
     // message field: they can share keys without a message.
-    app.click(cx, "shortcut-send_message");
+    app.click_start(cx, "shortcut-send_message");
     app.press(cx, "secondary-/");
     app.wait_until(cx, "the shared keys", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "send_message") == Some(Some("secondary-/".into()))
@@ -441,7 +441,7 @@ fn enter_on_a_focused_field_records(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "f7");
     app.wait_until(cx, "F7", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "cancel_query") == Some(Some("f7".into()))
@@ -462,7 +462,7 @@ fn replace_takes_the_keys_from_every_command_that_uses_them(cx: &mut TestAppCont
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-quit");
+    app.click_start(cx, "shortcut-quit");
     // Quit works everywhere, so ⌘↩ would hide all three of its other uses.
     app.press(cx, "secondary-enter");
     app.wait_for(cx, "replace-shortcut-quit");
@@ -492,7 +492,7 @@ fn a_dialog_shortcut_notes_the_text_field_key(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-close_dialog");
+    app.click_start(cx, "shortcut-close_dialog");
     app.press(cx, "shift-left");
     app.wait_until(cx, "the new shortcut", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "close_dialog") == Some(Some("shift-left".into()))
@@ -511,7 +511,7 @@ fn the_changed_row_stays_in_a_filter_that_no_longer_matches(cx: &mut TestAppCont
     open_shortcuts(&app, cx);
     app.click(cx, "shortcut-filter-No shortcut");
     app.wait_gone(cx, "shortcut-run_query");
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "f8");
     app.wait_until(cx, "F8", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "cancel_query") == Some(Some("f8".into()))
@@ -534,7 +534,7 @@ fn a_conflict_can_be_resolved_with_the_keyboard_only(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "secondary-j");
     app.wait_for(cx, "replace-shortcut-cancel_query");
     // Tab moves to Replace; Enter presses it.
@@ -551,7 +551,7 @@ fn escape_on_replace_cancels_and_keeps_settings_open(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "secondary-j");
     app.wait_for(cx, "replace-shortcut-cancel_query");
     app.press(cx, "tab");
@@ -570,7 +570,7 @@ fn a_recording_on_a_page_left_does_not_resume(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-refresh_metadata");
+    app.click_start(cx, "shortcut-refresh_metadata");
     app.wait_for(cx, "cancel-shortcut-refresh_metadata");
     app.settings_page(cx, "Appearance");
     app.wait_gone(cx, "shortcut-refresh_metadata");
@@ -587,7 +587,7 @@ fn tab_out_of_the_field_ends_a_conflict(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "secondary-j");
     app.wait_for(cx, "replace-shortcut-cancel_query");
     // Replace, Cancel, then out of the field.
@@ -603,7 +603,7 @@ fn a_dialog_over_the_recorder_ends_the_recording(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[("new_tab", Some("secondary-alt-n"))]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.wait_for(cx, "cancel-shortcut-cancel_query");
     app.click_labelled(cx, "Reset shortcuts");
     app.wait_for(cx, "confirm-reset-page");
@@ -616,7 +616,7 @@ fn a_recorded_enter_does_not_start_another_recording(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     // Enter alone is a valid shortcut; its release must not record again.
     press_and_release(&app, cx, "enter");
     app.wait_until(cx, "Enter", Duration::from_secs(5), |_, _| {
@@ -632,7 +632,7 @@ fn closing_the_reset_dialog_returns_the_focus_to_the_field(cx: &mut TestAppConte
     let (workspace, _) = workspace(&["Query 1"], &[("new_tab", Some("secondary-alt-n"))]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "secondary-j");
     app.wait_for(cx, "replace-shortcut-cancel_query");
     // The focus is on Replace when the dialog opens.
@@ -655,7 +655,7 @@ fn a_held_enter_records_once(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     key_event(&app, cx, "enter", Key::Down);
     key_event(&app, cx, "enter", Key::Repeat);
     key_event(&app, cx, "enter", Key::Up);
@@ -675,7 +675,7 @@ fn a_release_after_the_focus_moved_starts_nothing(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "f7");
     app.wait_until(cx, "F7", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "cancel_query") == Some(Some("f7".into()))
@@ -696,7 +696,7 @@ fn confirming_a_reset_under_a_filter_keeps_the_keyboard_working(cx: &mut TestApp
     open_shortcuts(&app, cx);
     app.click(cx, "shortcut-filter-Customized");
     app.wait_gone(cx, "shortcut-run_query");
-    app.click(cx, "shortcut-new_tab");
+    app.click_start(cx, "shortcut-new_tab");
     app.wait_for(cx, "cancel-shortcut-new_tab");
     app.reset_settings_page(cx, "Reset shortcuts");
     app.wait_until(cx, "the defaults", Duration::from_secs(5), |_, _| {
@@ -712,7 +712,7 @@ fn a_press_that_left_its_field_starts_nothing(cx: &mut TestAppContext) {
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     app.press(cx, "f7");
     app.wait_until(cx, "F7", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "cancel_query") == Some(Some("f7".into()))
@@ -738,7 +738,7 @@ fn another_key_during_a_held_enter_does_not_restart_recording(cx: &mut TestAppCo
     let (workspace, _) = workspace(&["Query 1"], &[]);
     let app = TestApp::launch(cx, workspace);
     open_shortcuts(&app, cx);
-    app.click(cx, "shortcut-cancel_query");
+    app.click_start(cx, "shortcut-cancel_query");
     key_event(&app, cx, "enter", Key::Down);
     key_event(&app, cx, "x", Key::Down);
     key_event(&app, cx, "x", Key::Up);
