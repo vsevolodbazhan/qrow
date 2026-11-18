@@ -6,7 +6,7 @@
 //! assistant state from Qrow and renders again when Qrow changes. Commands go
 //! to Qrow through [`on_qrow`].
 use super::*;
-use gpui_kit::base::FocusableExt as _;
+use gpui_kit::base::{FocusableExt as _, TextSelection};
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 
 /// The most rows of the message field in a window `height` high.
@@ -141,6 +141,8 @@ pub(in crate::ui) struct AssistantPane {
     transcript: Entity<MessageScrollerState>,
     /// The rows that `transcript` has.
     rows: TranscriptRows,
+    /// The text views of the messages in `rows`.
+    message_views: MessageViews,
     /// The settings that change the height of the rows.
     typography: Option<Typography>,
     /// The most rows that the message field grows to at this window height.
@@ -200,6 +202,7 @@ impl AssistantPane {
             thread_list_scroll: ScrollHandle::new(),
             transcript,
             rows: TranscriptRows::default(),
+            message_views: MessageViews::default(),
             typography: None,
             composer_max_rows: COMPOSER_MIN_ROWS,
             layout_width: None,
@@ -255,6 +258,9 @@ impl AssistantPane {
         }
         let old = std::mem::replace(&mut self.rows, rows);
         let new = &self.rows;
+        if old.source != new.source {
+            self.message_views = MessageViews::default();
+        }
         self.transcript.update(cx, |list, cx| {
             if old.source != new.source {
                 list.reset(new.rows.len(), cx);
@@ -294,6 +300,8 @@ impl Render for AssistantPane {
         if unread_visible {
             self.read_visible_reply(window, cx);
         }
+        self.message_views
+            .begin_render(TextSelection::has_selection(window, cx));
         self.sync_composer_rows(window, cx);
         let qrow = qrow.read(cx);
         let width = self
@@ -327,11 +335,18 @@ impl AssistantPane {
                         let Some(row) = pane.read(cx).rows.rows.get(index).copied() else {
                             return div().into_any_element();
                         };
+                        let view = match row {
+                            Row::Entry { id, .. } => {
+                                Some(pane.update(cx, |pane, cx| pane.message_views.view(id, cx)))
+                            }
+                            _ => None,
+                        };
                         transcript_row(
                             qrow_entity.read(cx),
                             &qrow,
                             row,
                             index,
+                            view.as_ref(),
                             &pane.downgrade(),
                             window,
                             cx,

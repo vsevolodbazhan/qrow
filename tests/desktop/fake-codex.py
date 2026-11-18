@@ -993,7 +993,8 @@ for line in sys.stdin:
                 if message.startswith("Report the SQL style")
                 else f"Tab SQL: {context['selected_tab']['sql']}"
                 if message.startswith("Report the tab SQL")
-                else "\n\n".join(f"Line {number}: synthetic assistant text" for number in range(1, 41))
+                # A suffix after the request names the reply in its lines.
+                else "\n\n".join(f"Line {number}: synthetic assistant text{message[15:]}" for number in range(1, 41))
                 if message.startswith("Show many lines")
                 else (
                     "Here are two examples.\n\n```sql\n-- Пример\nSELECT '你好',\n    42;\n```\n\n"

@@ -916,6 +916,10 @@ struct ParticipantRegistration {
     participant: WeakEntity<SelectableTextState>,
     registration: Rc<TextSelectionRegistration>,
     generation: u64,
+    /// The last frame did not paint the participant, but a selection keeps
+    /// it: a row of a virtual list that scrolled out of the list. Its
+    /// geometry is from the frame that painted it last, so hit tests skip it.
+    offscreen: bool,
 }
 
 #[derive(Clone)]
@@ -942,9 +946,45 @@ impl SelectionEndpoint {
         &self,
         participants: &HashMap<EntityId, ParticipantRegistration>,
     ) -> Option<Point<Pixels>> {
+        self.resolve_beside(None, participants)
+    }
+
+    /// The window point of this end. `other` is the opposite end of the
+    /// selection.
+    ///
+    /// An end in an offscreen participant has no place in this frame. The
+    /// selection band is geometric, so the end goes far before or far after
+    /// all painted text: before when the participant comes before the other
+    /// end in document order, or, without another end to compare with, when
+    /// the participant went off above its viewport.
+    fn resolve_beside(
+        &self,
+        other: Option<&SelectionEndpoint>,
+        participants: &HashMap<EntityId, ParticipantRegistration>,
+    ) -> Option<Point<Pixels>> {
+        // Far enough to be outside any window, near enough for f32 precision.
+        const OFFSCREEN: Pixels = px(1_000_000.);
         let participant = self.participant.as_ref()?;
         let registration = participants.get(&participant.entity_id())?;
         participant.upgrade()?;
+        if registration.offscreen {
+            let geometry = &registration.registration;
+            let other = other
+                .and_then(SelectionEndpoint::entity_id)
+                .filter(|id| *id != participant.entity_id())
+                .and_then(|id| participants.get(&id));
+            let before = match other {
+                Some(other) => geometry.document_order < other.registration.document_order,
+                None => {
+                    geometry.bounds.center().y < geometry.hitbox.content_mask.bounds.center().y
+                }
+            };
+            return Some(if before {
+                point(-OFFSCREEN, -OFFSCREEN)
+            } else {
+                point(OFFSCREEN, OFFSCREEN)
+            });
+        }
         Some(
             self.point
                 + registration.registration.scroll_offset
@@ -1028,6 +1068,11 @@ struct WindowSelectionState {
     /// cannot scroll further; pushing it on would only make one that
     /// bounces stretch and snap back on every tick.
     auto_scroll_stall: (Option<(Bounds<Pixels>, Point<Pixels>)>, u8),
+    /// The viewport that drag auto-scroll measures the pointer against: all
+    /// that the anchor's participant showed of itself during the drag. One
+    /// frame can clip the participant to a slice at an edge, and an
+    /// offscreen participant shows nothing.
+    auto_scroll_viewport: Option<Bounds<Pixels>>,
     touch: TouchSelection,
     /// This entity, so that touch changes can notify observers from paths that
     /// only hold an [`App`].
@@ -1157,6 +1202,11 @@ impl WindowSelectionState {
     /// whether a participant or the lifecycle element paints first.
     pub fn finish_frame(&mut self, cx: &mut App) -> Vec<ClearHandler> {
         self.finish_frame_scheduled = false;
+        // While there is a selection, a participant that is alive but not
+        // painted stays, offscreen: a virtual list drops the rows that scroll
+        // out of it, and its owner can keep their state. The selection then
+        // keeps its ends and its text in those rows.
+        let keep_offscreen = self.anchor.is_some() && self.cursor.is_some() && self.did_hit_text;
         let stale = self
             .participants
             .iter()
@@ -1167,6 +1217,12 @@ impl WindowSelectionState {
             .collect::<Vec<_>>();
         let mut handlers = Vec::new();
         for (id, participant) in stale {
+            if keep_offscreen && participant.upgrade().is_some() {
+                if let Some(registration) = self.participants.get_mut(&id) {
+                    registration.offscreen = true;
+                }
+                continue;
+            }
             self.participants.remove(&id);
             if let Some(participant) = participant.upgrade() {
                 if let Some(handler) = participant.update(cx, |state, cx| state.clear_state(cx)) {
@@ -1195,16 +1251,20 @@ impl WindowSelectionState {
         cx: &mut App,
     ) {
         self.prune_dead_participants();
+        // Text that moves under a held pointer moves the cursor: a scroll by
+        // the wheel or by drag auto-scroll, or a participant that scrolls its
+        // own content. The cursor then follows the text under the pointer, as
+        // after a pointer move.
         if self.is_selecting
-            && registration.self_scroll
-            && self.anchor.as_ref().and_then(SelectionEndpoint::entity_id)
-                == Some(selection.entity_id())
             && self
                 .participants
                 .get(&selection.entity_id())
-                .is_some_and(|previous| {
-                    previous.registration.scroll_offset != registration.scroll_offset
-                        || previous.registration.bounds != registration.bounds
+                .is_none_or(|previous| {
+                    previous.offscreen
+                        || previous.registration.scroll_offset != registration.scroll_offset
+                        || previous.registration.bounds.origin != registration.bounds.origin
+                        || (registration.self_scroll
+                            && previous.registration.bounds != registration.bounds)
                 })
         {
             self.refresh_held_cursor = true;
@@ -1224,8 +1284,12 @@ impl WindowSelectionState {
                 participant: selection.downgrade(),
                 registration: Rc::new(registration),
                 generation: self.frame_generation,
+                offscreen: false,
             },
         );
+        if self.is_selecting {
+            self.note_auto_scroll_viewport();
+        }
         self.publish_snapshots(cx);
         if edges_moved {
             self.touch_changed(cx);
@@ -1369,8 +1433,8 @@ impl WindowSelectionState {
         }
         let anchor_endpoint = self.anchor.as_ref()?;
         let cursor_endpoint = self.cursor.as_ref()?;
-        let anchor = anchor_endpoint.resolve(&self.participants)?;
-        let cursor = cursor_endpoint.resolve(&self.participants)?;
+        let anchor = anchor_endpoint.resolve_beside(Some(cursor_endpoint), &self.participants)?;
+        let cursor = cursor_endpoint.resolve_beside(Some(anchor_endpoint), &self.participants)?;
         (anchor != cursor).then(|| {
             TextSelectionSnapshot::new(anchor_endpoint.snapshot(), cursor_endpoint.snapshot())
                 .with_selecting(self.is_selecting)
@@ -1422,7 +1486,10 @@ impl WindowSelectionState {
         let mut end: Option<(u64, Bounds<Pixels>, bool)> = None;
         for registration in self.participants.values() {
             let geometry = &registration.registration;
-            if geometry.scope != self.active_scope || registration.participant.upgrade().is_none() {
+            if geometry.scope != self.active_scope
+                || registration.offscreen
+                || registration.participant.upgrade().is_none()
+            {
                 continue;
             }
             let Some((edge_start, edge_end)) = geometry.selection_edges else {
@@ -1477,6 +1544,7 @@ impl WindowSelectionState {
         let others = self.participants.iter().filter(|(id, registration)| {
             **id != participant
                 && registration.registration.scope == self.active_scope
+                && !registration.offscreen
                 && registration.registration.selection_edges.is_some()
                 && registration.participant.upgrade().is_some()
         });
@@ -1630,6 +1698,8 @@ impl WindowSelectionState {
         self.anchor = Some(anchor);
         self.cursor = Some(cursor);
         self.is_selecting = true;
+        self.auto_scroll_viewport = None;
+        self.note_auto_scroll_viewport();
         self.touch.active = true;
         self.touch.menu_open = false;
         self.touch.drag = Some(drag);
@@ -1799,6 +1869,8 @@ impl WindowSelectionState {
         self.cursor = Some(endpoint.clone());
         self.did_hit_text = anchor.inside_text || endpoint.inside_text;
         self.is_selecting = true;
+        self.auto_scroll_viewport = None;
+        self.note_auto_scroll_viewport();
         if let Some(participant) = focus_participant.and_then(|participant| participant.upgrade()) {
             if let Some(window) = window {
                 participant.update(cx, |state, cx| state.focus(window, cx));
@@ -1843,6 +1915,7 @@ impl WindowSelectionState {
 
         for registration in self.participants.values() {
             if registration.registration.scope != self.active_scope
+                || registration.offscreen
                 || registration.participant.upgrade().is_none()
             {
                 continue;
@@ -2031,7 +2104,9 @@ impl WindowSelectionState {
         // scrollable ancestor. It remains stable as the participant itself
         // moves, so selection keeps scrolling the same related region even
         // after the anchor text has moved out of view.
-        let visible_bounds = registration.hitbox.content_mask.bounds;
+        let visible_bounds = self
+            .auto_scroll_viewport
+            .unwrap_or(registration.hitbox.content_mask.bounds);
         // Keeps the synthesized wheel event hit-testing inside the mask.
         const HIT_TEST_INSET: Pixels = px(1.);
         // A collapsed mask leaves an empty clamp range below — stop.
@@ -2063,9 +2138,7 @@ impl WindowSelectionState {
             // it has nowhere left to go; the next move of the finger asks
             // again.
             const STALLED_TICKS: u8 = 3;
-            let geometry = state
-                .anchor_registration()
-                .map(|(_, registration)| (registration.bounds, registration.scroll_offset));
+            let geometry = state.scroll_probe();
             let (last, stalled) = &mut state.auto_scroll_stall;
             if *last == geometry {
                 *stalled = stalled.saturating_add(1);
@@ -2126,6 +2199,47 @@ impl WindowSelectionState {
             .participant
             .as_ref()?
             .upgrade()
+    }
+
+    /// Adds what the anchor's participant shows of itself in this frame to
+    /// the auto-scroll viewport.
+    fn note_auto_scroll_viewport(&mut self) {
+        let Some(registration) = self
+            .anchor
+            .as_ref()
+            .filter(|anchor| anchor.inside)
+            .and_then(SelectionEndpoint::entity_id)
+            .and_then(|id| self.participants.get(&id))
+            .filter(|registration| !registration.offscreen)
+        else {
+            return;
+        };
+        let shown = registration.registration.hitbox.content_mask.bounds;
+        if shown.size.width <= px(0.) || shown.size.height <= px(0.) {
+            return;
+        }
+        self.auto_scroll_viewport = Some(
+            self.auto_scroll_viewport
+                .map_or(shown, |viewport| viewport.union(&shown)),
+        );
+    }
+
+    /// Where painted text of the selection is: the anchor's participant, or
+    /// the cursor's when the anchor is offscreen. Auto-scroll compares it
+    /// between ticks to find a container that stopped scrolling.
+    fn scroll_probe(&self) -> Option<(Bounds<Pixels>, Point<Pixels>)> {
+        [self.anchor.as_ref(), self.cursor.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(SelectionEndpoint::entity_id)
+            .filter_map(|id| self.participants.get(&id))
+            .find(|registration| !registration.offscreen)
+            .map(|registration| {
+                (
+                    registration.registration.bounds,
+                    registration.registration.scroll_offset,
+                )
+            })
     }
 
     /// The anchor participant together with its current frame registration.
@@ -2539,8 +2653,9 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
             };
             let handlers = state.update(cx, |state, cx| state.finish_frame(cx));
             dispatch_clear_handlers(handlers, cx);
-            // Direct participant scrolling produces no wheel event. Refresh
-            // the held cursor after paint registers the new scroll geometry.
+            // A scroll moves text under a held pointer without a pointer
+            // move. Refresh the held cursor after paint registers the new
+            // geometry.
             let refresh_cursor = state.update(cx, |state, cx| {
                 if std::mem::take(&mut state.refresh_held_cursor) && state.is_selecting {
                     // A handle drag holds the finger off the text; keep the
@@ -2550,7 +2665,20 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
                         .touch
                         .drag
                         .map_or(position, |drag| drag.text_position(position));
-                    state.update_in_window(position, window, cx);
+                    let self_scroll = state
+                        .anchor_registration()
+                        .is_some_and(|(_, registration)| registration.self_scroll);
+                    if self_scroll {
+                        // Direct participant scrolling measures its speed
+                        // from this position.
+                        state.update_in_window(position, window, cx);
+                    } else if !cx.has_active_drag() {
+                        // Only the cursor: a synthetic wheel of drag
+                        // auto-scroll moved the mouse position to the edge
+                        // of the viewport, and the speed of auto-scroll
+                        // comes from the last pointer move.
+                        state.update_impl(position, Some(window), cx);
+                    }
                     true
                 } else {
                     false

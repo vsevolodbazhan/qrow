@@ -1,14 +1,59 @@
 //! The rows of the conversation transcript.
 use super::*;
 use gpui_kit::base::{Easing, text::TextViewMotion};
+use gpui_kit::component::text::TextViewState;
+
+/// The selection order of the row at `index`, and of the text of a tool
+/// card in it at `index * 2 + 1`. The orders start high, after the orders
+/// that other text in the window takes from the order in which it paints.
+fn selection_order(index: usize) -> u64 {
+    (1 << 40) + index as u64 * 2
+}
+
+/// The text views of the messages that the transcript draws.
+///
+/// A message keeps its view while the window has a text selection. A
+/// selection that starts in a message then keeps its start, and copies the
+/// text of messages that scrolled out of the list. Without a selection, only
+/// the views that the last render drew stay.
+#[derive(Default)]
+pub(super) struct MessageViews {
+    /// Each view, with the render that drew it last.
+    views: HashMap<Uuid, (Entity<TextViewState>, u64)>,
+    render: u64,
+}
+
+impl MessageViews {
+    /// Starts a render of the transcript.
+    pub(super) fn begin_render(&mut self, has_selection: bool) {
+        self.render += 1;
+        if !has_selection {
+            let last = self.render - 1;
+            self.views.retain(|_, (_, drawn)| *drawn >= last);
+        }
+    }
+
+    /// The view of the entry `id`, for this render.
+    pub(super) fn view(&mut self, id: Uuid, cx: &mut App) -> Entity<TextViewState> {
+        let render = self.render;
+        let (view, drawn) = self
+            .views
+            .entry(id)
+            .or_insert_with(|| (cx.new(|cx| TextViewState::markdown("", cx)), render));
+        *drawn = render;
+        view.clone()
+    }
+}
 
 /// One row of the transcript list. `index` is the place of the row, which
-/// orders the text selection.
+/// orders the text selection. A message shows its text in `view`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn transcript_row(
     qrow: &Qrow,
     handle: &WeakEntity<Qrow>,
     row: Row,
     index: usize,
+    view: Option<&Entity<TextViewState>>,
     pane: &WeakEntity<AssistantPane>,
     window: &mut Window,
     cx: &App,
@@ -62,7 +107,10 @@ pub(super) fn transcript_row(
                 {
                     working_entry(qrow, cx)
                 }
-                None => message_entry(qrow, entry, pane, window, cx),
+                None => match view {
+                    Some(view) => message_entry(qrow, entry, view, index, pane, window, cx),
+                    None => div().into_any_element(),
+                },
             }
         }
     }
@@ -133,6 +181,8 @@ fn entry_opacity(
 fn message_entry(
     qrow: &Qrow,
     entry: &TranscriptEntry,
+    view: &Entity<TextViewState>,
+    index: usize,
     pane: &WeakEntity<AssistantPane>,
     window: &mut Window,
     cx: &App,
@@ -145,6 +195,8 @@ fn message_entry(
         format!("assistant-markdown-{}", entry.id),
         entry.shown_text().clone(),
     )
+    .state(view)
+    .document_order(selection_order(index))
     // Each word that a streamed reply shows fades in.
     .stream_fade(opacity == 1.)
     .when(qrow.settings.smooth_transitions && opacity == 1., |view| {
@@ -414,7 +466,7 @@ fn tool_entry(
                             .text_xs()
                             .child(
                                 SelectableText::new("detail", detail.clone())
-                                    .document_order(index as u64 * 2 + 1),
+                                    .document_order(selection_order(index) + 1),
                             ),
                     ),
             )
