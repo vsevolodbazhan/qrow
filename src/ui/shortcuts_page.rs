@@ -86,18 +86,20 @@ enum Control {
 struct Recording {
     id: &'static str,
     error: Option<SharedString>,
-    /// Keys that other commands in the same place use, and those commands.
+    /// Keys that other commands use, and those commands. Neither shortcut
+    /// could operate where the other operates.
     conflict: Option<(String, Vec<&'static str>)>,
 }
 
 /// What a new shortcut means for the other shortcuts.
 enum Check {
     Free,
-    /// Other commands in the same place have the keys. Replace moves them.
+    /// Other commands have the keys, and only one shortcut can operate.
+    /// Replace moves the keys.
     Conflict(Vec<&'static Command>),
-    /// A fixed binding in the same place has the keys.
+    /// A fixed binding of a text field, the grid, or the tree has the keys.
     Reserved(String),
-    /// Both apply, and the inner place wins.
+    /// Both apply, and Send Message wins in the message field.
     Overlap(String),
 }
 
