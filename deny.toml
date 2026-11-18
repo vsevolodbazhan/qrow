@@ -12,6 +12,8 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant 5 via the Linux D-Bus stack. Unmaintained; migrate with upstream to zbus 6. review-by: 2026-12-11" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 via the Linux D-Bus stack. Unmaintained; migrate with upstream to zbus 6. review-by: 2026-12-11" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 via the Linux D-Bus stack. Unmaintained; migrate with upstream to zbus 6. review-by: 2026-12-11" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono via Qrow and GPUI Kit. Unmaintained; Qrow migration in #339, GPUI Kit with upstream. review-by: 2026-12-11" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz via Qrow. Unmaintained; migrate in #339. review-by: 2026-12-11" },
 ]
 
 [licenses]
