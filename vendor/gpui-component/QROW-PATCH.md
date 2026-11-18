@@ -195,3 +195,8 @@ with the other GPUI crates as one set.
   and outline variants. A search that hides items puts no line above the first item that
   stays. Qrow uses it for the cards of Settings and the connection editor.
   Lines are painted, so check them on screen.
+- `src/setting/settings.rs`: a click on the current page in the Settings
+  sidebar shows or hides its sections. A click on another page selects it and
+  opens its sections, as before. Before, a click on a page name only opened
+  the sections, and only the chevron closed them. The Qrow UI test
+  `a_click_on_the_current_settings_page_shows_or_hides_its_sections` checks it.

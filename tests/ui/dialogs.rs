@@ -94,6 +94,77 @@ fn left_edge(app: &TestApp, cx: &mut TestAppContext, id: &str) -> f32 {
     app.update(cx, |window, _| f32::from(bounds_of(window, id).origin.x))
 }
 
+/// Whether the Settings sidebar shows the sections of its first page.
+fn appearance_sections_shown(app: &TestApp, cx: &mut TestAppContext) -> bool {
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        crate::support::elements(window).iter().any(|element| {
+            let path = element.path();
+            element.visible()
+                && path.contains(&gpui_kit::ElementId::Name("0-0".into()))
+                && path.contains(&gpui_kit::ElementId::Name("submenu".into()))
+        })
+    })
+}
+
+/// Clicks the name of the first Settings page in the sidebar. The name is
+/// at the top of its item, above the sections.
+fn click_appearance(app: &TestApp, cx: &mut TestAppContext) {
+    use gpui_kit::{InputEvent as _, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent};
+    app.update(cx, |window, cx| {
+        let item = crate::support::elements(window)
+            .into_iter()
+            .find(|element| {
+                element.path().last() == Some(&gpui_kit::ElementId::Name("0-0".into()))
+                    && element
+                        .path()
+                        .contains(&gpui_kit::ElementId::Name("settings".into()))
+            })
+            .expect("No sidebar item for Appearance");
+        let bounds = item.bounds();
+        let position = gpui_kit::point(bounds.left() + px(16.), bounds.top() + px(14.));
+        let modifiers = Modifiers::default();
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers,
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers,
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+}
+
+#[gpui_kit::test]
+fn a_click_on_the_current_settings_page_shows_or_hides_its_sections(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.wait_for(cx, "settings-content");
+    // Appearance is the current page, and its sections show.
+    assert!(appearance_sections_shown(&app, cx));
+    click_appearance(&app, cx);
+    assert!(!appearance_sections_shown(&app, cx));
+    click_appearance(&app, cx);
+    assert!(appearance_sections_shown(&app, cx));
+    // A click on another page selects it and keeps Appearance as it is.
+    app.settings_page(cx, "Shortcuts");
+    assert!(appearance_sections_shown(&app, cx));
+}
+
 #[gpui_kit::test]
 fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppContext) {
     let field = "setting-export-replay-limit";
