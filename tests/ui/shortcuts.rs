@@ -448,3 +448,75 @@ fn enter_on_a_focused_field_records(cx: &mut TestAppContext) {
     });
     assert_eq!(value.as_deref(), Some("F7"));
 }
+
+#[gpui_kit::test]
+fn replace_takes_the_keys_from_every_command_that_uses_them(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-quit");
+    // Quit works everywhere, so ⌘↩ would hide all three of its other uses.
+    app.press(cx, "secondary-enter");
+    app.wait_for(cx, "replace-shortcut-quit");
+    assert_eq!(
+        message(&app, cx, "quit").as_deref(),
+        Some("Used by Run Query, Send Message, and Save or Confirm.")
+    );
+    // Tab moves to the buttons of the field; it is not the new shortcut.
+    app.press(cx, "tab");
+    app.settle(cx);
+    assert_eq!(
+        message(&app, cx, "quit").as_deref(),
+        Some("Used by Run Query, Send Message, and Save or Confirm.")
+    );
+    app.click(cx, "replace-shortcut-quit");
+    app.wait_until(cx, "the moved keys", Duration::from_secs(5), |_, _| {
+        let saved = app.saved().settings.shortcuts;
+        saved.get("quit") == Some(&Some("secondary-enter".into()))
+            && ["run_query", "send_message", "confirm_dialog"]
+                .iter()
+                .all(|id| saved.get(*id) == Some(&None))
+    });
+}
+
+#[gpui_kit::test]
+fn a_dialog_shortcut_notes_the_text_field_key(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-close_dialog");
+    app.press(cx, "shift-left");
+    app.wait_until(cx, "the new shortcut", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "close_dialog") == Some(Some("shift-left".into()))
+    });
+    let text = message(&app, cx, "close_dialog").unwrap_or_default();
+    assert!(
+        text.starts_with("In text fields, "),
+        "unexpected message {text:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn the_changed_row_stays_in_a_filter_that_no_longer_matches(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-filter-No shortcut");
+    app.wait_gone(cx, "shortcut-run_query");
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "f8");
+    app.wait_until(cx, "F8", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("f8".into()))
+    });
+    app.wait_for(cx, "shortcut-cancel_query");
+}
+
+#[gpui_kit::test]
+fn settings_open_from_a_dialog(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[("rename_tab", Some("f2"))]);
+    let app = TestApp::launch(cx, workspace);
+    app.press(cx, "f2");
+    app.wait_for(cx, "rename-tab-name");
+    app.press(cx, "secondary-,");
+    app.wait_for(cx, "settings-content");
+}

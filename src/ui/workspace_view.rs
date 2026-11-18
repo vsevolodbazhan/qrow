@@ -1657,6 +1657,11 @@ impl Render for WindowView {
                 this.content
                     .update(cx, |content, cx| content.request_user_quit(window, cx));
             }))
+            // Settings opens also from a dialog, which is outside the workspace.
+            .on_action(cx.listener(|this, action: &OpenSettings, window, cx| {
+                this.content
+                    .update(cx, |content, cx| content.open_settings(action, window, cx));
+            }))
             // Capture above editor and dialog focus scopes, before text input consumes keys.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let change = {

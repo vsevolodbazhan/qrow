@@ -9,7 +9,7 @@ use super::shortcuts::{self, Command, Group, Relation};
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable, Size, StyleSized as _,
+    ElementExt as _, Icon, Selectable, Size, StyleSized as _,
     button::ButtonGroup,
     h_flex,
     kbd::Kbd,
@@ -45,6 +45,9 @@ pub(super) struct ShortcutsForm {
     found: Option<String>,
     /// A note below the field of one command after a change.
     notice: Option<(&'static str, SharedString)>,
+    /// The command changed last. Its row stays listed, so the focus stays
+    /// on a field that shows.
+    last: Option<&'static str>,
     /// The focus of each field. A field records only while it has the focus.
     focus: HashMap<&'static str, FocusHandle>,
     /// The focus of Find by keys while it waits.
@@ -60,15 +63,15 @@ pub(super) struct ShortcutsForm {
 struct Recording {
     id: &'static str,
     error: Option<SharedString>,
-    /// Keys that another command in the same place uses, and that command.
-    conflict: Option<(String, &'static str)>,
+    /// Keys that other commands in the same place use, and those commands.
+    conflict: Option<(String, Vec<&'static str>)>,
 }
 
 /// What a new shortcut means for the other shortcuts.
 enum Check {
     Free,
-    /// Another command in the same place has the keys. Replace moves them.
-    Conflict(&'static Command),
+    /// Other commands in the same place have the keys. Replace moves them.
+    Conflict(Vec<&'static Command>),
     /// A fixed binding in the same place has the keys.
     Reserved(String),
     /// Both apply, and the inner place wins.
@@ -173,8 +176,15 @@ impl Qrow {
                 .as_ref()
                 .and_then(|recording| form.focus.get(recording.id))
         };
-        let active = form.shown.get() && target.is_some_and(|focus| focus.is_focused(window));
-        if !in_settings || !active {
+        let on_control = form.shown.get() && target.is_some_and(|focus| focus.is_focused(window));
+        // A button in the field, like Replace, has the focus: keep the state
+        // and let the button take the key.
+        let in_control =
+            !on_control && target.is_some_and(|focus| focus.contains_focused(window, cx));
+        if in_settings && in_control {
+            return false;
+        }
+        if !in_settings || !on_control {
             form.recording = None;
             form.finding = false;
             cx.notify();
@@ -199,6 +209,14 @@ impl Qrow {
         else {
             return false;
         };
+        // During a conflict, Tab moves to Replace and Cancel.
+        let pending = form
+            .recording
+            .as_ref()
+            .is_some_and(|recording| recording.conflict.is_some());
+        if pending && key == "tab" && !(modifiers.platform || modifiers.control || modifiers.alt) {
+            return false;
+        }
         if plain && !modifiers.shift && key == "escape" {
             form.recording = None;
             cx.notify();
@@ -224,10 +242,11 @@ impl Qrow {
             return true;
         };
         match check {
-            Check::Conflict(other) => {
+            Check::Conflict(others) => {
                 if let Some(recording) = &mut form.recording {
                     recording.error = None;
-                    recording.conflict = Some((keys, other.id));
+                    recording.conflict =
+                        Some((keys, others.iter().map(|other| other.id).collect()));
                 }
                 cx.notify();
             }
@@ -261,12 +280,6 @@ impl Qrow {
                     && shortcuts::effective(other, overrides, cx).as_deref() == Some(keys)
             })
             .collect();
-        if let Some(other) = users
-            .iter()
-            .find(|other| command.relation(other) == Relation::Conflict)
-        {
-            return Check::Conflict(other);
-        }
         let shown = shortcuts::display(keys);
         let mut overlap = None;
         for (place, name) in shortcuts::fixed_bindings_with(keys, cx) {
@@ -284,6 +297,14 @@ impl Qrow {
                     Relation::Independent => {}
                 }
             }
+        }
+        let conflicts: Vec<&'static Command> = users
+            .iter()
+            .copied()
+            .filter(|other| command.relation(other) == Relation::Conflict)
+            .collect();
+        if !conflicts.is_empty() {
+            return Check::Conflict(conflicts);
         }
         users
             .iter()
@@ -315,6 +336,9 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) {
         shortcuts::assign(command, keys, &mut self.settings.shortcuts, cx);
+        if let Some(form) = self.shortcuts_form() {
+            form.last = Some(command.id);
+        }
         self.apply_shortcuts(window, cx);
     }
 
@@ -355,29 +379,39 @@ impl Qrow {
     }
 
     /// Give the keys of a conflict to the recording command, and remove them
-    /// from the other one.
+    /// from the commands that still use them.
     fn replace_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = self.shortcuts_form() else {
             return;
         };
-        let Some((id, (keys, other))) = form
+        let Some((id, (keys, others))) = form
             .recording
             .take()
             .and_then(|recording| Some((recording.id, recording.conflict?)))
         else {
             return;
         };
-        let (Some(command), Some(other)) = (shortcuts::command(id), shortcuts::command(other))
-        else {
+        form.notice = None;
+        let Some(command) = shortcuts::command(id) else {
             return;
         };
-        // The other command can have changed since the conflict showed.
-        form.notice = None;
-        if shortcuts::effective(other, &self.settings.shortcuts, cx).as_deref() == Some(&keys) {
-            if let Some(form) = self.shortcuts_form() {
-                form.notice = Some((id, format!("{} has no shortcut now.", other.label).into()));
-            }
+        // The other commands can have changed since the conflict showed.
+        let owners: Vec<&'static Command> = others
+            .iter()
+            .filter_map(|other| shortcuts::command(other))
+            .filter(|other| {
+                shortcuts::effective(other, &self.settings.shortcuts, cx).as_deref() == Some(&keys)
+            })
+            .collect();
+        for other in &owners {
             shortcuts::assign(other, None, &mut self.settings.shortcuts, cx);
+        }
+        if !owners.is_empty()
+            && let Some(form) = self.shortcuts_form()
+        {
+            let names = list(owners.iter().map(|other| other.label));
+            let verb = if owners.len() == 1 { "has" } else { "have" };
+            form.notice = Some((id, format!("{names} {verb} no shortcut now.").into()));
         }
         self.set_shortcut(command, Some(keys), window, cx);
     }
@@ -408,13 +442,14 @@ impl Qrow {
             return;
         };
         match self.check_shortcut(command, &keys, cx) {
-            Check::Conflict(other) => {
+            Check::Conflict(others) => {
                 self.start_recording(id, window, cx);
                 if let Some(recording) = self
                     .shortcuts_form()
                     .and_then(|form| form.recording.as_mut())
                 {
-                    recording.conflict = Some((keys, other.id));
+                    recording.conflict =
+                        Some((keys, others.iter().map(|other| other.id).collect()));
                 }
             }
             check => {
@@ -588,7 +623,7 @@ fn filters(
                     }
                 }
             });
-        let find = match &found {
+        let find: AnyElement = match &found {
             Some(keys) => h_flex()
                 .gap_1()
                 .items_center()
@@ -621,11 +656,14 @@ fn filters(
                     .on_click(move |_, window, cx| {
                         let _ = qrow.update(cx, |qrow, cx| qrow.find_by_keys(window, cx));
                     });
-                match &find_focus {
-                    Some(focus) => div().track_focus(focus).child(button).into_any_element(),
-                    None => button.into_any_element(),
-                }
+                button.into_any_element()
             }
+        };
+        // One focus for both states, so the focus stays on a control that
+        // shows when Find by keys ends.
+        let find = match &find_focus {
+            Some(focus) => div().track_focus(focus).child(find).into_any_element(),
+            None => find,
         };
         h_flex()
             .gap_2()
@@ -678,7 +716,7 @@ impl ShortcutRow {
 
     /// Whether the filters list the row. The recording row stays listed.
     fn listed(&self, form: &ShortcutsForm) -> bool {
-        if self.recording.is_some() {
+        if self.recording.is_some() || form.last == Some(self.id) {
             return true;
         }
         let filtered = match form.filter {
@@ -698,10 +736,14 @@ impl ShortcutRow {
             if let Some(error) = &recording.error {
                 return Some((Tone::Error, error.clone()));
             }
-            if let Some((_, other)) = &recording.conflict {
-                let other =
-                    shortcuts::command(other).map_or("another command", |other| other.label);
-                return Some((Tone::Warning, format!("Used by {other}.").into()));
+            if let Some((_, others)) = &recording.conflict {
+                let names = list(
+                    others
+                        .iter()
+                        .filter_map(|other| shortcuts::command(other))
+                        .map(|other| other.label),
+                );
+                return Some((Tone::Warning, format!("Used by {names}.").into()));
             }
             return None;
         }
@@ -716,9 +758,6 @@ impl ShortcutRow {
             keywords.push(shortcuts::display(keys).into());
         }
         SettingItem::render(move |_, window: &mut Window, cx: &mut App| {
-            if self.recording.is_some() {
-                shown.set(true);
-            }
             let rem = window.rem_size();
             let message = self.message();
             h_flex()
@@ -744,6 +783,7 @@ impl ShortcutRow {
                         .child(self.field(
                             qrow.clone(),
                             message.as_ref().map(|(tone, _)| *tone),
+                            shown.clone(),
                             window,
                             cx,
                         ))
@@ -777,6 +817,7 @@ impl ShortcutRow {
         &self,
         qrow: WeakEntity<Qrow>,
         tone: Option<Tone>,
+        shown: Rc<Cell<bool>>,
         window: &Window,
         cx: &App,
     ) -> impl IntoElement {
@@ -898,6 +939,7 @@ impl ShortcutRow {
             }
         };
         let start_by_key = start.clone();
+        let own_focus = self.focus.clone();
         h_flex()
             .id(field_id.clone())
             .test_support()
@@ -909,7 +951,12 @@ impl ShortcutRow {
             // Enter or Space records, like a click.
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
                 let key = &event.keystroke;
-                if !recording
+                // Not for a key press on a button in the field.
+                let on_field = own_focus
+                    .as_ref()
+                    .is_some_and(|focus| focus.is_focused(window));
+                if on_field
+                    && !recording
                     && matches!(key.key.as_str(), "enter" | "space")
                     && !key.modifiers.modified()
                 {
@@ -929,6 +976,15 @@ impl ShortcutRow {
             .bg(cx.theme().background)
             .when(!recording, |field| field.cursor_pointer())
             .on_click(move |_, window, cx| start(window, cx))
+            // A recording field takes keys only while it is in view.
+            .relative()
+            .when(recording, |field| {
+                field.on_prepaint(move |bounds, window, _| {
+                    if window.content_mask().bounds.intersects(&bounds) {
+                        shown.set(true);
+                    }
+                })
+            })
             .child(content)
     }
 }
@@ -1040,5 +1096,16 @@ impl Qrow {
             ResetPage::Export => self.reset_export_settings(window, cx),
             ResetPage::Shortcuts => self.reset_all_shortcuts(window, cx),
         }
+    }
+}
+
+/// "A", "A and B", or "A, B, and C".
+fn list<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let names: Vec<&str> = names.collect();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [first, second] => format!("{first} and {second}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
 }

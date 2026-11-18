@@ -172,6 +172,15 @@ do not change. Escape always closes Activity, Settings, and dialogs.
 Qrow saves only the shortcuts that you change. Other commands get new default
 shortcuts from later versions.
 
+Known limitations:
+
+- Without a shortcut for the editor's Select All, **Edit → Select all** in
+  the macOS menu bar still shows ⌘A. Read-only text keeps ⌘A.
+- On Linux and Windows, Ctrl is the primary modifier. Shortcuts that a
+  workspace from macOS saved with ⌃ and with ⌘ can then use the same keys.
+- A Settings search can hide the Shortcuts page and its filters. Clear the
+  search to show them again.
+
 ## Saved state
 
 The workspace file contains connection profiles, connection-owned tabs, tab

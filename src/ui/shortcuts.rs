@@ -112,6 +112,10 @@ impl Scope {
             // The SQL editor is a text field, and text fields win over it.
             (Self::Editor, Self::Text) | (Self::Text, Self::Editor) => Relation::Conflict,
             (Self::Window, Self::Dialog) | (Self::Dialog, Self::Window) => Relation::Independent,
+            // Dialogs have text fields, which take their keys first.
+            (Self::Dialog, Self::Text) | (Self::Text, Self::Dialog) => {
+                Relation::Overlap { inner: Self::Text }
+            }
             (Self::Window, inner) | (inner, Self::Window) => Relation::Overlap { inner },
             (Self::Text, Self::Composer) | (Self::Composer, Self::Text) => Relation::Overlap {
                 inner: Self::Composer,
