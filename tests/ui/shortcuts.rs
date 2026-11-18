@@ -440,8 +440,8 @@ fn enter_on_a_focused_field_records(cx: &mut TestAppContext) {
     app.wait_until(cx, "F7", Duration::from_secs(5), |_, _| {
         saved_shortcut(&app, "cancel_query") == Some(Some("f7".into()))
     });
-    // The field keeps the focus, so Enter records again.
-    app.press(cx, "enter");
+    // The field keeps the focus, so Enter records again, on its release.
+    press_and_release(&app, cx, "enter");
     app.wait_for(cx, "cancel-shortcut-cancel_query");
     let value = app.update(cx, |window, _| {
         window
@@ -555,7 +555,7 @@ fn escape_on_replace_cancels_and_keeps_settings_open(cx: &mut TestAppContext) {
     app.wait_for(cx, "settings-content");
     assert_eq!(saved_shortcut(&app, "cancel_query"), None);
     // The field has the focus again, so Enter records.
-    app.press(cx, "enter");
+    press_and_release(&app, cx, "enter");
     app.wait_for(cx, "cancel-shortcut-cancel_query");
 }
 
@@ -603,6 +603,22 @@ fn a_dialog_over_the_recorder_ends_the_recording(cx: &mut TestAppContext) {
     app.wait_for(cx, "confirm-reset-page");
     // The prompt does not stay behind the dialog.
     app.wait_gone(cx, "cancel-shortcut-cancel_query");
+}
+
+#[gpui_kit::test]
+fn a_recorded_enter_does_not_start_another_recording(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    // Enter alone is a valid shortcut; its release must not record again.
+    press_and_release(&app, cx, "enter");
+    app.wait_until(cx, "Enter", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("enter".into()))
+    });
+    assert!(app.update(cx, |window, _| {
+        window.try_find("cancel-shortcut-cancel_query").is_none()
+    }));
 }
 
 /// A key press with its release, as a keyboard sends it. A button clicks on

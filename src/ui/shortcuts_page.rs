@@ -62,6 +62,9 @@ pub(super) struct ShortcutsForm {
     /// Set in a frame without the Shortcuts page. A recording or Find by
     /// keys from before then is over, also before its state is cleared.
     pub(super) stale: Rc<Cell<bool>>,
+    /// The press of Enter or Space on a field or Find by keys, which its
+    /// release completes. A release after a recorded key starts nothing.
+    armed: Rc<Cell<bool>>,
     _intercept: Option<Subscription>,
 }
 
@@ -171,7 +174,21 @@ impl Qrow {
             return false;
         };
         if form.recording.is_none() && !form.finding {
-            return false;
+            // A field or Find by keys starts on the release of Enter or Space,
+            // as a button does. Its press, and the repeats of a held key, do
+            // nothing else, so they cannot reach a binding of the window.
+            let activation = matches!(keystroke.key.as_str(), "enter" | "space")
+                && !keystroke.modifiers.modified();
+            let on_control = form
+                .focus
+                .values()
+                .chain(form.find_focus.as_ref())
+                .any(|focus| focus.is_focused(window));
+            let used = in_settings && activation && on_control;
+            if used {
+                form.armed.set(true);
+            }
+            return used;
         }
         if form.stale.get() {
             form.recording = None;
@@ -668,27 +685,45 @@ impl Qrow {
             )
             .header_content(filters(
                 qrow,
-                form.filter,
-                form.finding,
-                form.found.clone(),
-                form.find_focus.clone(),
-                form.shown.clone(),
-                form.page_shown.clone(),
+                Header {
+                    filter: form.filter,
+                    finding: form.finding,
+                    found: form.found.clone(),
+                    find_focus: form.find_focus.clone(),
+                    shown: form.shown.clone(),
+                    page_shown: form.page_shown.clone(),
+                    armed: form.armed.clone(),
+                },
             ))
             .groups(groups)
     }
 }
 
-/// The filters below the page title.
-fn filters(
-    qrow: WeakEntity<Qrow>,
+/// The state that the filters below the page title show and share.
+struct Header {
     filter: Filter,
     finding: bool,
     found: Option<String>,
     find_focus: Option<FocusHandle>,
     shown: Rc<Cell<bool>>,
     page_shown: Rc<Cell<bool>>,
+    armed: Rc<Cell<bool>>,
+}
+
+/// The filters below the page title.
+fn filters(
+    qrow: WeakEntity<Qrow>,
+    header: Header,
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
+    let Header {
+        filter,
+        finding,
+        found,
+        find_focus,
+        shown,
+        page_shown,
+        armed,
+    } = header;
     move |_, cx| {
         page_shown.set(true);
         if finding {
@@ -761,11 +796,13 @@ fn filters(
                 // Space on it starts Find by keys, like a press of its button.
                 let wrapper = focus.clone();
                 let qrow = qrow.clone();
+                let armed = armed.clone();
                 div()
                     .track_focus(focus)
-                    .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                    .on_key_up(move |event: &KeyUpEvent, window, cx| {
                         let key = &event.keystroke;
-                        if wrapper.is_focused(window)
+                        if armed.replace(false)
+                            && wrapper.is_focused(window)
                             && matches!(key.key.as_str(), "enter" | "space")
                             && !key.modifiers.modified()
                         {
@@ -811,6 +848,7 @@ struct ShortcutRow {
     recording: Option<Recording>,
     notice: Option<SharedString>,
     focus: Option<FocusHandle>,
+    armed: Rc<Cell<bool>>,
 }
 
 impl ShortcutRow {
@@ -836,6 +874,7 @@ impl ShortcutRow {
                 .filter(|(id, _)| *id == command.id)
                 .map(|(_, text)| text.clone()),
             focus: form.focus.get(command.id).cloned(),
+            armed: form.armed.clone(),
         }
     }
 
@@ -1065,6 +1104,7 @@ impl ShortcutRow {
         };
         let start_by_key = start.clone();
         let own_focus = self.focus.clone();
+        let armed = self.armed.clone();
         h_flex()
             .id(field_id.clone())
             .test_support()
@@ -1074,13 +1114,14 @@ impl ShortcutRow {
             .aria_label(SharedString::from(format!("{label} shortcut")))
             .aria_value(value)
             // Enter or Space records, like a click.
-            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            .on_key_up(move |event: &KeyUpEvent, window, cx| {
                 let key = &event.keystroke;
                 // Not for a key press on a button in the field.
                 let on_field = own_focus
                     .as_ref()
                     .is_some_and(|focus| focus.is_focused(window));
-                if on_field
+                if armed.replace(false)
+                    && on_field
                     && !recording
                     && matches!(key.key.as_str(), "enter" | "space")
                     && !key.modifiers.modified()
