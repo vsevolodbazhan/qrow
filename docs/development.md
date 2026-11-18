@@ -48,6 +48,13 @@ dependencies still use the older D-Bus stack. The dependency policy has
 dated exceptions for their maintenance advisories. Remove the exceptions
 when that stack moves to zbus 6.
 
+`chrono` and `chrono-tz` are unmaintained. Qrow uses them for export and
+Trino temporal values, and GPUI Kit also uses `chrono`. The dependency policy
+has dated exceptions for their maintenance advisories. Remove the `chrono-tz`
+exception when Qrow moves to a maintained date and time crate
+([#339](https://github.com/vsevolodbazhan/qrow/issues/339)). Remove the
+`chrono` exception when GPUI Kit also moves.
+
 ## Run checks
 
 Run `./qtest` for the fast local checks, and `./qtest run all` for the full
