@@ -62,10 +62,20 @@ pub(super) struct ShortcutsForm {
     /// Set in a frame without the Shortcuts page. A recording or Find by
     /// keys from before then is over, also before its state is cleared.
     pub(super) stale: Rc<Cell<bool>>,
-    /// The press of Enter or Space on a field or Find by keys, which its
-    /// release completes. A release after a recorded key starts nothing.
-    armed: Rc<Cell<bool>>,
+    /// The press of Enter or Space on a field or Find by keys, and the
+    /// control. Its release on the same control starts it, as a button does.
+    armed: Option<(String, Control)>,
+    /// A key that the recorder used and that is not released yet. Its
+    /// repeats do nothing.
+    held: Option<String>,
     _intercept: Option<Subscription>,
+}
+
+/// A control that Enter or Space starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Control {
+    Field(&'static str),
+    Find,
 }
 
 #[derive(Clone)]
@@ -177,18 +187,30 @@ impl Qrow {
             // A field or Find by keys starts on the release of Enter or Space,
             // as a button does. Its press, and the repeats of a held key, do
             // nothing else, so they cannot reach a binding of the window.
-            let activation = matches!(keystroke.key.as_str(), "enter" | "space")
-                && !keystroke.modifiers.modified();
-            let on_control = form
+            let key = keystroke.key.as_str();
+            let activation = matches!(key, "enter" | "space") && !keystroke.modifiers.modified();
+            let control = form
                 .focus
-                .values()
-                .chain(form.find_focus.as_ref())
-                .any(|focus| focus.is_focused(window));
-            let used = in_settings && activation && on_control;
-            if used {
-                form.armed.set(true);
+                .iter()
+                .find(|(_, focus)| focus.is_focused(window))
+                .map(|(id, _)| Control::Field(id))
+                .or_else(|| {
+                    form.find_focus
+                        .as_ref()
+                        .is_some_and(|focus| focus.is_focused(window))
+                        .then_some(Control::Find)
+                });
+            if form.held.as_deref() != Some(key) {
+                form.held = None;
+            } else if in_settings && control.is_some() {
+                // A repeat of a key that the recorder just used.
+                return true;
             }
-            return used;
+            if let (true, true, Some(control)) = (in_settings, activation, control) {
+                form.armed = Some((key.to_owned(), control));
+                return true;
+            }
+            return false;
         }
         if form.stale.get() {
             form.recording = None;
@@ -243,6 +265,9 @@ impl Qrow {
             cx.notify();
             return false;
         }
+        // The recorder uses this key; its repeats and release do nothing more.
+        form.held = Some(key.to_owned());
+        form.armed = None;
         if form.finding {
             form.finding = false;
             if !(plain && !modifiers.shift && key == "escape") {
@@ -456,6 +481,52 @@ impl Qrow {
             form.recording = None;
             form.finding = false;
             cx.notify();
+        }
+    }
+
+    /// A key release in the Settings window. The release of an armed Enter
+    /// or Space on the control that took its press starts that control.
+    pub(super) fn key_released(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(form) = self.shortcuts_form() else {
+            return;
+        };
+        let key = keystroke.key.as_str();
+        if form.held.as_deref() == Some(key) {
+            form.held = None;
+        }
+        if form.armed.as_ref().is_none_or(|(armed, _)| armed != key) {
+            return;
+        }
+        let Some((_, control)) = form.armed.take() else {
+            return;
+        };
+        if form.recording.is_some() || form.finding {
+            return;
+        }
+        match control {
+            Control::Field(id) => {
+                if form
+                    .focus
+                    .get(id)
+                    .is_some_and(|focus| focus.is_focused(window))
+                {
+                    self.start_recording(id, window, cx);
+                }
+            }
+            Control::Find => {
+                if form
+                    .find_focus
+                    .as_ref()
+                    .is_some_and(|focus| focus.is_focused(window))
+                {
+                    self.find_by_keys(window, cx);
+                }
+            }
         }
     }
 
@@ -692,7 +763,6 @@ impl Qrow {
                     find_focus: form.find_focus.clone(),
                     shown: form.shown.clone(),
                     page_shown: form.page_shown.clone(),
-                    armed: form.armed.clone(),
                 },
             ))
             .groups(groups)
@@ -707,7 +777,6 @@ struct Header {
     find_focus: Option<FocusHandle>,
     shown: Rc<Cell<bool>>,
     page_shown: Rc<Cell<bool>>,
-    armed: Rc<Cell<bool>>,
 }
 
 /// The filters below the page title.
@@ -722,7 +791,6 @@ fn filters(
         find_focus,
         shown,
         page_shown,
-        armed,
     } = header;
     move |_, cx| {
         page_shown.set(true);
@@ -794,24 +862,7 @@ fn filters(
             Some(focus) => {
                 // Clear key filter gives the focus to this wrapper; Enter or
                 // Space on it starts Find by keys, like a press of its button.
-                let wrapper = focus.clone();
-                let qrow = qrow.clone();
-                let armed = armed.clone();
-                div()
-                    .track_focus(focus)
-                    .on_key_up(move |event: &KeyUpEvent, window, cx| {
-                        let key = &event.keystroke;
-                        if armed.replace(false)
-                            && wrapper.is_focused(window)
-                            && matches!(key.key.as_str(), "enter" | "space")
-                            && !key.modifiers.modified()
-                        {
-                            cx.stop_propagation();
-                            let _ = qrow.update(cx, |qrow, cx| qrow.find_by_keys(window, cx));
-                        }
-                    })
-                    .child(find)
-                    .into_any_element()
+                div().track_focus(focus).child(find).into_any_element()
             }
             None => find,
         };
@@ -848,7 +899,6 @@ struct ShortcutRow {
     recording: Option<Recording>,
     notice: Option<SharedString>,
     focus: Option<FocusHandle>,
-    armed: Rc<Cell<bool>>,
 }
 
 impl ShortcutRow {
@@ -874,7 +924,6 @@ impl ShortcutRow {
                 .filter(|(id, _)| *id == command.id)
                 .map(|(_, text)| text.clone()),
             focus: form.focus.get(command.id).cloned(),
-            armed: form.armed.clone(),
         }
     }
 
@@ -1102,9 +1151,6 @@ impl ShortcutRow {
                 });
             }
         };
-        let start_by_key = start.clone();
-        let own_focus = self.focus.clone();
-        let armed = self.armed.clone();
         h_flex()
             .id(field_id.clone())
             .test_support()
@@ -1113,23 +1159,8 @@ impl ShortcutRow {
             .role(Role::Button)
             .aria_label(SharedString::from(format!("{label} shortcut")))
             .aria_value(value)
-            // Enter or Space records, like a click.
-            .on_key_up(move |event: &KeyUpEvent, window, cx| {
-                let key = &event.keystroke;
-                // Not for a key press on a button in the field.
-                let on_field = own_focus
-                    .as_ref()
-                    .is_some_and(|focus| focus.is_focused(window));
-                if armed.replace(false)
-                    && on_field
-                    && !recording
-                    && matches!(key.key.as_str(), "enter" | "space")
-                    && !key.modifiers.modified()
-                {
-                    cx.stop_propagation();
-                    start_by_key(window, cx);
-                }
-            })
+            // Enter or Space records on its release, like a click; see
+            // `key_released`.
             .w_full()
             .input_h(Size::Medium)
             .pl_1p5()
@@ -1258,9 +1289,20 @@ impl Qrow {
                                 .danger()
                                 .label("Reset")
                                 .on_click(move |_, window, cx| {
-                                    let _ = confirm
-                                        .update(cx, |qrow, cx| qrow.reset_page(page, window, cx));
+                                    // The dialog returns the focus when it
+                                    // closes; the reset can remove that
+                                    // control, so the window takes the focus.
                                     window.close_dialog(cx);
+                                    let _ = confirm.update(cx, |qrow, cx| {
+                                        qrow.reset_page(page, window, cx);
+                                        if let Some(focus) = qrow
+                                            .settings_form
+                                            .as_ref()
+                                            .and_then(|form| form.root_focus.clone())
+                                        {
+                                            focus.focus(window, cx);
+                                        }
+                                    });
                                 }),
                         ),
                 )

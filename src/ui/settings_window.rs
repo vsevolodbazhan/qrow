@@ -122,6 +122,12 @@ pub(super) fn open(qrow: WeakEntity<Qrow>, cx: &mut App) {
         });
         let focus = view.read(cx).focus.clone();
         focus.focus(window, cx);
+        let root_focus = focus.clone();
+        let _ = qrow.update(cx, |qrow, _| {
+            if let Some(form) = &mut qrow.settings_form {
+                form.root_focus = Some(root_focus);
+            }
+        });
         cx.new(|cx| Root::new(view, window, cx))
     });
     let _ = qrow.update(cx, |qrow, cx| {

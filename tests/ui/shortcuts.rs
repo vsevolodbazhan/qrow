@@ -644,6 +644,90 @@ fn closing_the_reset_dialog_returns_the_focus_to_the_field(cx: &mut TestAppConte
     app.wait_for(cx, "settings-content");
 }
 
+#[gpui_kit::test]
+fn a_held_enter_records_once(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    key_event(&app, cx, "enter", Key::Down);
+    key_event(&app, cx, "enter", Key::Repeat);
+    key_event(&app, cx, "enter", Key::Up);
+    app.wait_until(cx, "Enter", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("enter".into()))
+    });
+    assert!(
+        app.update(cx, |window, _| window
+            .try_find("cancel-shortcut-cancel_query")
+            .is_none()),
+        "the repeat and the release do not record again"
+    );
+}
+
+#[gpui_kit::test]
+fn a_release_after_the_focus_moved_starts_nothing(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "f7");
+    app.wait_until(cx, "F7", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("f7".into()))
+    });
+    // Enter goes down on the field; the focus moves before its release.
+    key_event(&app, cx, "enter", Key::Down);
+    app.click_labelled(cx, "Search...");
+    key_event(&app, cx, "enter", Key::Up);
+    assert!(app.update(cx, |window, _| {
+        window.try_find("cancel-shortcut-cancel_query").is_none()
+    }));
+}
+
+#[gpui_kit::test]
+fn confirming_a_reset_under_a_filter_keeps_the_keyboard_working(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[("new_tab", Some("secondary-alt-n"))]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-filter-Customized");
+    app.wait_gone(cx, "shortcut-run_query");
+    app.click(cx, "shortcut-new_tab");
+    app.wait_for(cx, "cancel-shortcut-new_tab");
+    app.reset_settings_page(cx, "Reset shortcuts");
+    app.wait_until(cx, "the defaults", Duration::from_secs(5), |_, _| {
+        app.saved().settings.shortcuts.is_empty()
+    });
+    // The Settings window has the focus, so Escape closes it.
+    app.press(cx, "escape");
+    app.wait_gone(cx, "settings-content");
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Key {
+    Down,
+    Repeat,
+    Up,
+}
+
+/// One key event, as the keyboard sends it.
+fn key_event(app: &TestApp, cx: &mut TestAppContext, key: &str, kind: Key) {
+    use gpui_kit::{InputEvent as _, KeyDownEvent, KeyUpEvent, Keystroke};
+    let keystroke = Keystroke::parse(key).unwrap();
+    app.update(cx, |window, cx| {
+        let event = match kind {
+            Key::Up => KeyUpEvent { keystroke }.to_platform_input(),
+            _ => KeyDownEvent {
+                keystroke,
+                is_held: kind == Key::Repeat,
+                prefer_character_input: false,
+            }
+            .to_platform_input(),
+        };
+        window.dispatch_event(event, cx);
+        window.render_frame(cx);
+    });
+    app.settle(cx);
+}
+
 /// A key press with its release, as a keyboard sends it. A button clicks on
 /// the release.
 fn press_and_release(app: &TestApp, cx: &mut TestAppContext, key: &str) {

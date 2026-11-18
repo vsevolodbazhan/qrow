@@ -221,6 +221,9 @@ pub(super) struct SettingsForm {
     /// Stable or Nightly, for copies that install updates themselves.
     update_channel: SettingSelect,
     pub(super) shortcuts: super::shortcuts_page::ShortcutsForm,
+    /// The focus of the Settings window itself, for when a focused control
+    /// goes away.
+    pub(super) root_focus: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -523,6 +526,7 @@ impl Qrow {
             copy_format,
             update_channel,
             shortcuts: self.init_shortcuts_form(cx),
+            root_focus: None,
             _subscriptions: subscriptions,
         });
     }
@@ -792,6 +796,9 @@ impl Qrow {
             .id("settings-content")
             .test_support()
             .size_full()
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
+                this.key_released(&event.keystroke, window, cx)
+            }))
             .child(
                 div()
                     .flex_1()
