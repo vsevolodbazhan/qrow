@@ -26,7 +26,6 @@ pub(crate) enum Group {
     Application,
 }
 
-#[allow(dead_code)] // TODO(shortcuts page): the Settings page uses it.
 impl Group {
     pub(crate) const ALL: [Self; 9] = [
         Self::Query,
@@ -68,17 +67,16 @@ pub(crate) enum Scope {
     Dialog,
 }
 
-#[allow(dead_code)] // TODO(shortcuts page): the Settings page uses it.
 impl Scope {
-    /// The name of the place, for messages like "In the SQL editor, …".
-    pub(crate) fn place(self) -> &'static str {
+    /// The start of a message about the place, like "In the SQL editor".
+    pub(crate) fn where_phrase(self) -> &'static str {
         match self {
-            Self::Window => "window",
-            Self::Editor => "SQL editor",
-            Self::Grid => "result grid",
-            Self::Tree => "connection tree",
-            Self::Composer => "message field",
-            Self::Dialog => "dialogs",
+            Self::Window => "In the window",
+            Self::Editor => "In the SQL editor",
+            Self::Grid => "In the result grid",
+            Self::Tree => "In the connection tree",
+            Self::Composer => "In the message field",
+            Self::Dialog => "In dialogs",
         }
     }
 
@@ -112,7 +110,6 @@ enum DefaultKeys {
 type Targets = fn() -> Vec<(Box<dyn Action>, Option<&'static str>)>;
 
 /// A command that can have a shortcut.
-#[allow(dead_code)] // TODO(shortcuts page): the Settings page uses it.
 pub(crate) struct Command {
     /// The stable name in the saved settings.
     pub(crate) id: &'static str,
@@ -745,7 +742,6 @@ pub(crate) fn effective(
 }
 
 /// True when the user changed the shortcut of `command`.
-#[allow(dead_code)] // TODO(shortcuts page): the Settings page uses it.
 pub(crate) fn is_customized(
     command: &Command,
     overrides: &BTreeMap<String, Option<String>>,
@@ -757,7 +753,6 @@ pub(crate) fn is_customized(
 
 /// Set the shortcut of `command`. A shortcut equal to the default removes
 /// the override, so a later default reaches the command.
-#[allow(dead_code)] // TODO(shortcuts page): the Settings page uses it.
 pub(crate) fn assign(
     command: &Command,
     keys: Option<String>,
@@ -828,22 +823,53 @@ pub(crate) fn keystroke(keys: &str) -> Option<Keystroke> {
 }
 
 /// The keys as the platform shows them, like "⇧⌘S" or "Ctrl+Shift+S".
-#[allow(dead_code)] // TODO(shortcuts page): the Settings page uses it.
 pub(crate) fn display(keys: &str) -> String {
     keystroke(keys)
         .map(|keystroke| gpui_kit::component::kbd::Kbd::format(&keystroke))
         .unwrap_or_else(|| keys.to_owned())
 }
 
-/// The shortcut of the command with `id`, as the platform shows it.
-#[allow(dead_code)] // TODO(shortcuts page): the Settings page uses it.
-pub(crate) fn display_for(
-    id: &str,
-    overrides: &BTreeMap<String, Option<String>>,
-    cx: &App,
-) -> Option<String> {
-    let command = command(id)?;
-    effective(command, overrides, cx).map(|keys| display(&keys))
+/// The name of a fixed binding of GPUI Kit's text fields with `keys`, like
+/// "Move Home". Text fields keep these bindings.
+pub(crate) fn fixed_text_binding(keys: &str, cx: &App) -> Option<String> {
+    let kit = cx.try_global::<KitBindings>()?;
+    let customizable: Vec<(Box<dyn Action>, Option<&'static str>)> = commands()
+        .iter()
+        .filter(|command| matches!(command.default, DefaultKeys::Kit))
+        .flat_map(Command::targets)
+        .collect();
+    kit.bindings
+        .iter()
+        .rev()
+        .filter(|binding| {
+            binding
+                .predicate()
+                .map(|predicate| predicate.to_string())
+                .as_deref()
+                == Some(INPUT)
+        })
+        .filter(|binding| {
+            !customizable
+                .iter()
+                .any(|(action, context)| is_binding_of(binding, action.as_ref(), *context))
+        })
+        .find(|binding| {
+            binding.keystrokes().len() == 1 && stored(binding.keystrokes()[0].inner()) == keys
+        })
+        .map(|binding| humanize(binding.action().name()))
+}
+
+/// "input::MoveToStart" becomes "Move To Start".
+fn humanize(name: &str) -> String {
+    let name = name.rsplit("::").next().unwrap_or(name);
+    let mut words = String::new();
+    for (index, character) in name.char_indices() {
+        if index > 0 && character.is_uppercase() {
+            words.push(' ');
+        }
+        words.push(character);
+    }
+    words
 }
 
 /// Build the keymap from GPUI Kit's bindings and the shortcuts of the

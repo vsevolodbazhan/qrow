@@ -126,3 +126,169 @@ fn a_custom_scale_shortcut_replaces_the_default(cx: &mut TestAppContext) {
         app.saved().settings.ui_scale > 1.
     });
 }
+
+/// Opens Settings at the Shortcuts page.
+fn open_shortcuts(app: &TestApp, cx: &mut TestAppContext) {
+    app.dispatch(cx, qrow::ui::OpenSettings);
+    app.wait_for(cx, "settings-content");
+    app.settings_page(cx, "Shortcuts");
+    app.wait_for(cx, "shortcut-run_query");
+}
+
+fn saved_shortcut(app: &TestApp, id: &str) -> Option<Option<String>> {
+    app.saved().settings.shortcuts.get(id).cloned()
+}
+
+fn message(app: &TestApp, cx: &mut TestAppContext, id: &str) -> Option<String> {
+    let id = gpui_kit::SharedString::from(format!("shortcut-message-{id}"));
+    app.update(cx, |window, _| crate::support::label(window, id.clone()))
+}
+
+#[gpui_kit::test]
+fn a_recorded_shortcut_is_saved_and_runs_its_command(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-toggle_results");
+    app.press(cx, "secondary-alt-k");
+    app.wait_until(cx, "the new shortcut", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "toggle_results") == Some(Some("secondary-alt-k".into()))
+    });
+    // ⌘W closes Settings again once the field stops recording.
+    app.press(cx, "secondary-w");
+    app.wait_gone(cx, "settings-content");
+    app.press(cx, "secondary-alt-k");
+    wait_minimized(&app, cx, true);
+    app.press(cx, "secondary-j");
+    app.settle(cx);
+    assert!(
+        app.saved().settings.results_minimized,
+        "⌘J no longer toggles results"
+    );
+}
+
+#[gpui_kit::test]
+fn a_conflict_keeps_recording_until_replace(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-cancel_query");
+    app.press(cx, "secondary-j");
+    app.wait_for(cx, "replace-shortcut-cancel_query");
+    assert_eq!(
+        message(&app, cx, "cancel_query").as_deref(),
+        Some("Used by Toggle Results.")
+    );
+    assert_eq!(
+        saved_shortcut(&app, "cancel_query"),
+        None,
+        "nothing changes before Replace"
+    );
+    app.click(cx, "replace-shortcut-cancel_query");
+    app.wait_until(cx, "the moved shortcut", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "cancel_query") == Some(Some("secondary-j".into()))
+            && saved_shortcut(&app, "toggle_results") == Some(None)
+    });
+    assert_eq!(
+        message(&app, cx, "cancel_query").as_deref(),
+        Some("Toggle Results has no shortcut now.")
+    );
+}
+
+#[gpui_kit::test]
+fn escape_cancels_recording_and_delete_removes_the_shortcut(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-toggle_results");
+    app.wait_for(cx, "cancel-shortcut-toggle_results");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "cancel-shortcut-toggle_results");
+    app.wait_for(cx, "settings-content");
+    assert_eq!(saved_shortcut(&app, "toggle_results"), None);
+
+    // While a field records, ⌘W is a shortcut to record, not Close.
+    app.click(cx, "shortcut-transpose_result");
+    app.press(cx, "secondary-w");
+    app.wait_for(cx, "replace-shortcut-transpose_result");
+    assert_eq!(
+        message(&app, cx, "transpose_result").as_deref(),
+        Some("Used by Close Tab.")
+    );
+    app.press(cx, "escape");
+    app.wait_gone(cx, "replace-shortcut-transpose_result");
+
+    app.click(cx, "shortcut-toggle_results");
+    app.press(cx, "backspace");
+    app.wait_until(cx, "no shortcut", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "toggle_results") == Some(None)
+    });
+}
+
+#[gpui_kit::test]
+fn a_letter_without_a_modifier_is_not_a_shortcut(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.click(cx, "shortcut-new_conversation");
+    app.press(cx, "k");
+    app.wait_for(cx, "shortcut-message-new_conversation");
+    let text = message(&app, cx, "new_conversation").unwrap_or_default();
+    assert!(text.starts_with("Add "), "unexpected message {text:?}");
+    assert_eq!(saved_shortcut(&app, "new_conversation"), None);
+    // A function key needs no modifier.
+    app.press(cx, "f6");
+    app.wait_until(cx, "F6", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "new_conversation") == Some(Some("f6".into()))
+    });
+}
+
+#[gpui_kit::test]
+fn filters_and_find_by_keys_narrow_the_list(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(&["Query 1"], &[("new_tab", Some("secondary-alt-n"))]);
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    let shown = |app: &TestApp, cx: &mut TestAppContext, id: &str| {
+        let id = gpui_kit::SharedString::from(format!("shortcut-{id}"));
+        app.update(cx, |window, _| window.try_find(id.clone()).is_some())
+    };
+    app.click(cx, "shortcut-filter-Customized");
+    app.wait_gone(cx, "shortcut-run_query");
+    assert!(shown(&app, cx, "new_tab"));
+    app.click(cx, "shortcut-filter-No shortcut");
+    app.wait_for(cx, "shortcut-cancel_query");
+    assert!(!shown(&app, cx, "new_tab"));
+    app.click(cx, "shortcut-filter-All");
+    app.click(cx, "find-by-keys");
+    app.press(cx, "secondary-enter");
+    app.wait_for(cx, "clear-found-keys");
+    for id in ["run_query", "send_message", "confirm_dialog"] {
+        assert!(shown(&app, cx, id), "{id} uses ⌘↩");
+    }
+    assert!(!shown(&app, cx, "new_tab"));
+    app.click(cx, "clear-found-keys");
+    app.wait_for(cx, "shortcut-new_tab");
+}
+
+#[gpui_kit::test]
+fn remove_reset_and_reset_all_return_shortcuts(cx: &mut TestAppContext) {
+    let (workspace, _) = workspace(
+        &["Query 1"],
+        &[("new_tab", Some("secondary-alt-n")), ("quit", None)],
+    );
+    let app = TestApp::launch(cx, workspace);
+    open_shortcuts(&app, cx);
+    app.hover(cx, "shortcut-close_tab");
+    app.click(cx, "remove-shortcut-close_tab");
+    app.wait_until(cx, "Close Tab removed", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "close_tab") == Some(None)
+    });
+    app.click(cx, "reset-shortcut-close_tab");
+    app.wait_until(cx, "Close Tab reset", Duration::from_secs(5), |_, _| {
+        saved_shortcut(&app, "close_tab").is_none()
+    });
+    app.reset_settings_page(cx, "Reset shortcuts");
+    app.wait_until(cx, "default shortcuts", Duration::from_secs(5), |_, _| {
+        app.saved().settings.shortcuts.is_empty()
+    });
+}

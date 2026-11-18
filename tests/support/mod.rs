@@ -960,6 +960,27 @@ impl TestApp {
 
     /// Opens the page `title` of the Connection Settings dialog with its
     /// sidebar item.
+    /// Selects a page of the Settings window in its sidebar.
+    pub fn settings_page(&self, cx: &mut TestAppContext, title: &str) {
+        let index = ["Appearance", "Export", "Assistant", "Shortcuts", "Updates"]
+            .iter()
+            .position(|page| *page == title)
+            .unwrap_or_else(|| panic!("No Settings page {title}"));
+        let item = ElementId::Name(format!("0-{index}").into());
+        self.update(cx, |window, cx| {
+            let element = elements(window)
+                .into_iter()
+                .find(|element| {
+                    element.path().last() == Some(&item)
+                        && element.path().contains(&ElementId::Name("settings".into()))
+                })
+                .unwrap_or_else(|| panic!("No sidebar item for the Settings page {title}"));
+            click_element(window, &element, cx);
+            window.render_frame(cx);
+        });
+        self.settle(cx);
+    }
+
     pub fn connection_page(&self, cx: &mut TestAppContext, title: &str) {
         let index = ["General", "Export", "Metadata", "dbt", "Assistant"]
             .iter()
@@ -993,6 +1014,15 @@ impl TestApp {
         self.update_main(cx, |window, cx| {
             window.dispatch_action(action.boxed_clone(), cx)
         });
+    }
+
+    /// Clicks the reset button of the shown Settings page, named like
+    /// "Reset appearance", and confirms the reset.
+    pub fn reset_settings_page(&self, cx: &mut TestAppContext, label: &str) {
+        self.click_labelled(cx, label);
+        self.wait_for(cx, "confirm-reset-page");
+        self.click(cx, "confirm-reset-page");
+        self.wait_gone(cx, "confirm-reset-page");
     }
 
     /// Waits until the element `id` is in the frame.

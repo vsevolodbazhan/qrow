@@ -35,7 +35,8 @@ const STATUS_BAR_ICONS: [&str; 5] = [
 // `RotateCwSquare` for Transpose result, and the Logs
 // toolbar uses `Trash` for Clear. The Connections search uses `ListFilter`.
 // The conversation list toggle uses `List`. The status bar Updates button uses
-// `CircleFadingArrowUp`.
+// `CircleFadingArrowUp`. The Shortcuts settings page uses `Keyboard` for
+// Find by keys.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
@@ -63,6 +64,7 @@ gpui_kit::assets::icon_assets!(
         ListFilter,
         List,
         CircleFadingArrowUp,
+        Keyboard,
     ]
 );
 

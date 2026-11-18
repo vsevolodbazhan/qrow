@@ -12,7 +12,7 @@ For build and launch instructions, see the [project README](../README.md).
 | [Queries](queries.md) | Use tabs, run selected SQL, and cancel work. |
 | [Activity](activity.md) | See the background work and errors of each connection. |
 | [Results](results.md) | Browse pages, select cells, export or copy results, and understand preview limits. |
-| [Workspace](workspace.md) | Change appearance settings and understand saved state. |
+| [Workspace](workspace.md) | Change appearance settings and keyboard shortcuts, and understand saved state. |
 | [Architecture](architecture.md) | Understand component responsibilities and data flow. |
 | [Development](development.md) | Set up the tools, use hooks and CI, package the app, and maintain dependencies. |
 | [Testing](testing.md) | Run and write checks and tests, including tests with real servers and the desktop. |

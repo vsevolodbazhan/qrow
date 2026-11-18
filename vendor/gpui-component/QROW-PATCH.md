@@ -146,6 +146,14 @@ Qrow changes these files:
 - `src/menu/popup_menu.rs`: `PopupMenu::set_trigger_focus` is public, so a
   context menu that the application opens shows the shortcuts of the view
   under the pointer.
+- `src/setting/page.rs`: `SettingPage::on_reset_page` gives the reset button
+  of a page a label and a handler of its own. The button shows while the
+  handler reports a change, also on a page that is not resettable. Qrow asks
+  for confirmation before it resets a Settings page. `SettingPage::header_content`
+  renders an element below the title of a page; the Shortcuts page puts its
+  filters there, so they stay in view while the list scrolls.
+  The title row is as tall as the reset button, so the header keeps its height
+  when the button shows or hides.
 - `src/text/compat.rs`: `TextView::markdown_line_breaks` passes the option
   of the same name to the GPUI Base text view. See the GPUI Base patch.
 

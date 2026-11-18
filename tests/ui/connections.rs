@@ -45,14 +45,14 @@ fn saved_names(app: &TestApp) -> Vec<String> {
 fn connection_save_completes_after_the_settings_window_closes(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, qrow::ui::OpenSettings);
-    app.wait_for(cx, "reset-settings");
+    app.wait_for(cx, "settings-content");
     // Close without the helper's next main-window frame. Let the poll task
     // run while Settings is still the entity's last rendered window.
     app.update(cx, |window, cx| window.press("secondary-w", cx));
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(50));
     cx.run_until_parked();
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
 
     open_new_connection(&app, cx);
     fill_connection(&app, cx, "After Settings");

@@ -26,6 +26,7 @@ mod setting_row;
 mod settings_view;
 mod settings_window;
 mod shortcuts;
+mod shortcuts_page;
 mod sign_in_view;
 mod sql_completion;
 mod sql_files;

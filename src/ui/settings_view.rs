@@ -1,4 +1,5 @@
 use super::setting_row::Rows;
+use super::shortcuts_page::ResetPage;
 use super::unit_input::unit_input;
 use super::*;
 use crate::model::{
@@ -219,6 +220,7 @@ pub(super) struct SettingsForm {
     copy_format: SettingSelect,
     /// Stable or Nightly, for copies that install updates themselves.
     update_channel: SettingSelect,
+    pub(super) shortcuts: super::shortcuts_page::ShortcutsForm,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -520,6 +522,7 @@ impl Qrow {
             claude_executable,
             copy_format,
             update_channel,
+            shortcuts: self.init_shortcuts_form(cx),
             _subscriptions: subscriptions,
         });
     }
@@ -778,30 +781,22 @@ impl Qrow {
         cx.notify();
     }
 
-    /// The content of the Settings window: the sections and pages, then a
-    /// footer with Restore defaults at the right, like the actions of the
-    /// settings dialogs.
+    /// The content of the Settings window: the sections and pages. Each page
+    /// that has defaults has its own reset button in its header.
     pub(super) fn settings_window_content(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         v_flex()
+            .id("settings-content")
+            .test_support()
             .size_full()
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .child(self.settings_content(window, cx)),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px_4()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(self.settings_footer(cx)),
             )
             .into_any_element()
     }
@@ -904,10 +899,26 @@ impl Qrow {
                         form,
                         cx.entity().downgrade(),
                         &self.settings,
+                        self.changed_on_page(ResetPage::Appearance, cx),
                     ))
                     .page(
                         SettingPage::new("Export")
                             .resettable(false)
+                            .on_reset_page(
+                                "Reset export",
+                                {
+                                    let changed = self.changed_on_page(ResetPage::Export, cx);
+                                    move |_| changed > 0
+                                },
+                                {
+                                    let owner = cx.weak_entity();
+                                    move |window, cx| {
+                                        let _ = owner.update(cx, |qrow, cx| {
+                                            qrow.confirm_page_reset(ResetPage::Export, window, cx)
+                                        });
+                                    }
+                                },
+                            )
                             .group(SettingGroup::new().title("Copy").item(setting_item(
                                 "Copy Format",
                                 "Default format when copying result cells.",
@@ -935,7 +946,8 @@ impl Qrow {
                         self.settings.assistant.enabled,
                         self.settings.assistant.web_search,
                         shortcuts::action_display(&ToggleAssistant, cx),
-                    ));
+                    ))
+                    .page(self.shortcuts_page(cx));
                 match updates {
                     Some(page) => panel.page(page),
                     None => panel,
@@ -974,17 +986,12 @@ impl Qrow {
         }
     }
 
-    fn settings_footer(&self, cx: &mut Context<Self>) -> AnyElement {
-        h_flex()
-            .w_full()
-            .gap_2()
-            .justify_end()
-            .child(
-                Button::new("reset-settings")
-                    .label("Restore defaults")
-                    .on_click(cx.listener(|this, _, window, cx| this.reset_settings(window, cx))),
-            )
-            .into_any_element()
+    /// Return the Export page to its defaults.
+    pub(super) fn reset_export_settings(&mut self, cx: &mut Context<Self>) {
+        let defaults = Settings::default();
+        self.set_copy_format(defaults.copy_format, cx);
+        self.settings.export_replay_limit_mib = defaults.export_replay_limit_mib;
+        self.changed(cx);
     }
 }
 
@@ -1036,7 +1043,9 @@ fn appearance_page(
     form: &SettingsForm,
     owner: WeakEntity<Qrow>,
     settings: &Settings,
+    changed: usize,
 ) -> SettingPage {
+    let reset_owner = owner.clone();
     let smooth_caret = settings.editor_smooth_caret;
     let smooth_scrolling = settings.editor_smooth_scrolling;
     let autocomplete = settings.editor_autocomplete;
@@ -1052,9 +1061,16 @@ fn appearance_page(
     let scrolling_owner = owner.clone();
     SettingPage::new("Appearance")
         .default_open(true)
-        // The footer resets all appearance settings, so this page does not
-        // need a second reset action.
         .resettable(false)
+        .on_reset_page(
+            "Reset appearance",
+            move |_| changed > 0,
+            move |window, cx| {
+                let _ = reset_owner.update(cx, |qrow, cx| {
+                    qrow.confirm_page_reset(ResetPage::Appearance, window, cx)
+                });
+            },
+        )
         .group(
             SettingGroup::new()
                 .title("Interface")

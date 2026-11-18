@@ -217,7 +217,7 @@ fn a_conversation_of_the_other_harness_shows_its_saved_copy(cx: &mut TestAppCont
     app.select(cx, "setting-assistant-harness", "Claude Code");
     // Settings apply as they change; ⌘W closes the dialog.
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     app.wait_claude(cx);
 
     // The Codex conversation still shows, but it cannot get a message.
@@ -281,7 +281,7 @@ fn a_claude_code_conversation_stays_read_only_while_claude_code_is_signed_out(
     app.select(cx, "setting-assistant-harness", "Codex");
     // Settings apply as they change; ⌘W closes the dialog.
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     app.open_assistant(cx);
     app.wait_label(cx, "This conversation uses Claude Code.");
     app.update(cx, |window, _| assert_eq!(transcript(window), live));
@@ -382,7 +382,7 @@ fn web_search_asks_first_and_restarts_claude_code_with_it(cx: &mut TestAppContex
     });
     // Settings apply as they change; ⌘W closes the dialog.
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
 
     // The next message starts Claude Code again with its search tool.
     app.wait_claude(cx);
@@ -427,7 +427,7 @@ fn turning_off_web_search_during_a_search_asks_and_cancels_its_card(cx: &mut Tes
     });
     // Settings apply as they change; ⌘W closes the dialog.
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     let cancelled = "Tool Call: Search the web: Cancelled";
     app.wait_until(cx, cancelled, REPLY_TIMEOUT, |window, _| {
         labelled(window, cancelled).is_some()

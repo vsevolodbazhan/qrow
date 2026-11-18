@@ -1,4 +1,4 @@
-use crate::support::{TestApp, bounds_of, label, value};
+use crate::support::{TestApp, bounds_of, label, labelled, value};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, px};
 use qrow::{
@@ -113,7 +113,7 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
     app.fill(cx, field, "0");
     // Settings apply as they change; ⌘W closes the dialog.
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     wait_saved(&app, cx, "disabled replay retention", |workspace| {
         workspace.settings.export_replay_limit_mib == 0
     });
@@ -137,17 +137,33 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
-fn settings_restore_defaults_sits_at_the_right_like_the_dialog_actions(cx: &mut TestAppContext) {
-    let app = TestApp::launch(cx, Workspace::default());
+fn a_settings_page_resets_only_after_confirmation(cx: &mut TestAppContext) {
+    let mut workspace = Workspace::default();
+    workspace.settings.copy_format = CopyFormat::Json;
+    let app = TestApp::launch(cx, workspace);
     app.dispatch(cx, OpenSettings);
-    app.wait_for(cx, "reset-settings");
-    app.update(cx, |window, _| {
-        let button = bounds_of(window, "reset-settings");
-        let width = window.viewport_size().width;
-        assert!(
-            width - button.right() < button.left(),
-            "Restore defaults must sit at the right: {button:?} in {width:?}"
-        );
+    app.wait_for(cx, "settings-content");
+    // Appearance has its defaults, so it has no reset button.
+    assert!(
+        app.update(cx, |window, _| labelled(window, "Reset appearance")
+            .is_none()),
+        "a page with its defaults has no reset button"
+    );
+    app.fill_labelled(cx, "Search...", "clipboard");
+    app.wait_for(cx, "setting-copy-format");
+    app.click_labelled(cx, "Reset export");
+    app.wait_for(cx, "confirm-reset-page");
+    app.click(cx, "cancel-reset-page");
+    app.wait_gone(cx, "confirm-reset-page");
+    assert_eq!(
+        app.saved().settings.copy_format,
+        CopyFormat::Json,
+        "Cancel keeps the setting"
+    );
+    app.click_labelled(cx, "Reset export");
+    app.click(cx, "confirm-reset-page");
+    wait_saved(&app, cx, "the default copy format", |workspace| {
+        workspace.settings.copy_format == CopyFormat::default()
     });
 }
 
@@ -160,7 +176,7 @@ fn copy_format_is_saved(cx: &mut TestAppContext) {
     app.select(cx, "setting-copy-format", "JSON");
     // Settings apply as they change; ⌘W closes the dialog.
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     wait_saved(&app, cx, "the copy format", |workspace| {
         workspace.settings.copy_format == CopyFormat::Json
     });
@@ -179,7 +195,7 @@ fn copy_format_is_saved(cx: &mut TestAppContext) {
 fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, OpenSettings);
-    app.wait_for(cx, "reset-settings");
+    app.wait_for(cx, "settings-content");
     app.update(cx, |window, _| {
         assert_eq!(value(window, "setting-theme").as_deref(), Some("System"));
     });
@@ -247,7 +263,7 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
     app.select(cx, "setting-logs-font-family", "System Font");
 
     app.fill_labelled(cx, "Search...", "");
-    app.click(cx, "reset-settings");
+    app.reset_settings_page(cx, "Reset appearance");
     app.fill_labelled(cx, "Search...", "messages");
     app.wait_until(
         cx,
@@ -273,7 +289,7 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
     });
     // Settings apply as they change; ⌘W closes the dialog.
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     wait_saved(&app, cx, "the restored default fonts", |w| {
         w.settings.editor_font_size == 13.
             && w.settings.assistant_font_size == 14.
@@ -296,7 +312,7 @@ fn smooth_caret_is_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
         workspace.settings.editor_smooth_caret
     });
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     app.dispatch(cx, OpenSettings);
     app.fill_labelled(cx, "Search...", "smooth");
     app.wait_for(cx, "editor-smooth-caret");
@@ -308,7 +324,7 @@ fn smooth_caret_is_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
     wait_saved(&app, cx, "smooth caret enabled again", |workspace| {
         workspace.settings.editor_smooth_caret
     });
-    app.click(cx, "reset-settings");
+    app.reset_settings_page(cx, "Reset appearance");
     wait_saved(&app, cx, "smooth caret default", |workspace| {
         !workspace.settings.editor_smooth_caret
     });
@@ -333,7 +349,7 @@ fn scrolling_and_panel_motion_are_independent_opt_ins_and_resettable(cx: &mut Te
             && !workspace.settings.editor_smooth_caret
     });
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     app.dispatch(cx, OpenSettings);
     app.fill_labelled(cx, "Search...", "smooth");
     app.wait_for(cx, "smooth-transitions");
@@ -341,7 +357,7 @@ fn scrolling_and_panel_motion_are_independent_opt_ins_and_resettable(cx: &mut Te
     wait_saved(&app, cx, "wheel scrolling disabled", |workspace| {
         workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
     });
-    app.click(cx, "reset-settings");
+    app.reset_settings_page(cx, "Reset appearance");
     wait_saved(&app, cx, "motion defaults", |workspace| {
         !workspace.settings.smooth_transitions && !workspace.settings.editor_smooth_scrolling
     });
@@ -366,7 +382,7 @@ fn composer_motion_options_are_independent_saved_and_resettable(cx: &mut TestApp
             && !workspace.settings.editor_smooth_caret
     });
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     app.dispatch(cx, OpenSettings);
     app.fill_labelled(cx, "Search...", "composer");
     app.wait_for(cx, "assistant-smooth-resize");
@@ -374,7 +390,7 @@ fn composer_motion_options_are_independent_saved_and_resettable(cx: &mut TestApp
     wait_saved(&app, cx, "composer caret disabled", |workspace| {
         !workspace.settings.assistant_smooth_caret && workspace.settings.assistant_smooth_resize
     });
-    app.click(cx, "reset-settings");
+    app.reset_settings_page(cx, "Reset appearance");
     wait_saved(&app, cx, "composer defaults", |workspace| {
         !workspace.settings.assistant_smooth_caret && !workspace.settings.assistant_smooth_resize
     });
@@ -397,7 +413,7 @@ fn buffered_replies_are_opt_in_saved_and_resettable(cx: &mut TestAppContext) {
     app.dispatch(cx, OpenSettings);
     app.fill_labelled(cx, "Search...", "buffered");
     app.wait_for(cx, "assistant-buffer-replies");
-    app.click(cx, "reset-settings");
+    app.reset_settings_page(cx, "Reset appearance");
     wait_saved(&app, cx, "buffered replies reset", |workspace| {
         !workspace.settings.assistant_buffer_replies
     });

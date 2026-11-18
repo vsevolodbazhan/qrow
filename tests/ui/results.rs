@@ -376,7 +376,7 @@ fn the_copy_format_setting_applies_to_command_c_and_the_menu_but_not_copy_as(
     app.select(cx, "setting-copy-format", "Plain text");
     // Settings apply as they change; ⌘W closes the dialog.
     app.press(cx, "secondary-w");
-    app.wait_gone(cx, "reset-settings");
+    app.wait_gone(cx, "settings-content");
     // A new result keeps the format.
     app.press(cx, "secondary-enter");
     app.wait_until(
