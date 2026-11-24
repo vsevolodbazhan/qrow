@@ -14,6 +14,7 @@ mod demo;
 mod environment;
 mod export_dialog;
 mod format_sql;
+mod groups;
 mod log_row;
 mod motion;
 mod output;
@@ -137,7 +138,8 @@ actions!(
         NewWorkspace,
         ManageWorkspaces,
         RevealWorkspaceFolder,
-        SubmitWorkspaceName
+        SubmitWorkspaceName,
+        SubmitGroupName
     ]
 );
 #[derive(Action, Clone, PartialEq, Eq)]
@@ -574,6 +576,9 @@ struct ProfileEditor {
     transfer: connection_form::transfer::TransferForm,
     database_type: connection_form::RowSelect,
     _database_type_subscription: Subscription,
+    environment: connection_form::RowSelect,
+    group: connection_form::RowSelect,
+    group_choices: Vec<(Option<Uuid>, String)>,
     postgres_ssl_mode: connection_form::RowSelect,
     _postgres_ssl_mode_subscription: Subscription,
     profile: Profile,
@@ -806,6 +811,8 @@ pub struct Qrow {
     /// Update checks of a release build and their state.
     updates: updates::Updates,
     settings_form: Option<settings_view::SettingsForm>,
+    groups: Vec<crate::model::ConnectionGroup>,
+    group_name_form: Option<groups::GroupNameForm>,
     profiles: Vec<Profile>,
     /// The schema catalogs that several connections share.
     shared_catalogs: Vec<SharedCatalog>,
@@ -1167,6 +1174,8 @@ impl Qrow {
             about_open: false,
             updates: updates::Updates::new(environment.updates(), &environment.trust()),
             settings_form: None,
+            groups: workspace.groups,
+            group_name_form: None,
             profiles: workspace.profiles,
             shared_catalogs: workspace.shared_catalogs,
             tabs: vec![],
@@ -1417,6 +1426,7 @@ impl Qrow {
         Workspace {
             version: WORKSPACE_VERSION,
             settings: self.settings.clone(),
+            groups: self.groups.clone(),
             assistant: {
                 let mut assistant = self.assistant.clone();
                 assistant.remove_unstarted(&self.assistant_state.unstarted_threads);
@@ -2491,6 +2501,7 @@ impl Qrow {
             || self.workspace_manager_open
             || self.workspace_name_form.is_some()
             || self.workspace_switch_warning_open
+            || self.group_name_form.is_some()
     }
     fn select_tab(&mut self, action: &SelectTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -3364,6 +3375,7 @@ impl Qrow {
             cx.listener(move |this, _: &ClickEvent, _, cx| this.move_connection(id, false, cx));
         let move_down =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.move_connection(id, true, cx));
+        let current_group = profile.group_id;
         let has_dbt = profile.dbt.is_some();
         let dbt_parsing = self.dbt_parsing(id);
         let edited = profile.clone();
@@ -3406,13 +3418,20 @@ impl Qrow {
                 this.refresh_catalog(id, crate::catalog::Scope::Connection, cx);
             }
         });
+        let groups_list: Vec<(Uuid, String)> = self
+            .groups
+            .iter()
+            .map(|group| (group.id, group.name.clone()))
+            .collect();
+        let weak_for_group = cx.weak_entity();
         let tree = self.catalog.state.read(cx).focus_handle(cx);
         self.open_context_menu_from(
             position,
             Some(tree),
-            move |menu, _, _| {
+            move |menu, window, cx| {
                 // Labeled sections: what the row is, then what it contains.
-                menu.item(menu_section("Connection"))
+                let menu = menu
+                    .item(menu_section("Connection"))
                     .item(
                         PopupMenuItem::new("Disconnect")
                             .on_click(disconnect)
@@ -3422,6 +3441,51 @@ impl Qrow {
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(PopupMenuItem::new("Copy settings").on_click(copy_settings))
                     .item(PopupMenuItem::new("Show activity").on_click(show_activity))
+                    .submenu("Move to group", window, cx, {
+                        let groups_list = groups_list.clone();
+                        let weak = weak_for_group.clone();
+                        move |mut sub, _, _| {
+                            let none_weak = weak.clone();
+                            sub = sub.item(
+                                PopupMenuItem::new("None")
+                                    .checked(current_group.is_none())
+                                    .on_click(move |_, _, cx| {
+                                        let _ = none_weak.update(cx, |this, cx| {
+                                            this.set_connection_group(id, None, cx);
+                                        });
+                                    }),
+                            );
+                            if !groups_list.is_empty() {
+                                sub = sub.separator();
+                                for (group_id, group_name) in &groups_list {
+                                    let target_group = *group_id;
+                                    let move_weak = weak.clone();
+                                    sub = sub.item(
+                                        PopupMenuItem::new(group_name.clone())
+                                            .checked(current_group == Some(target_group))
+                                            .on_click(move |_, _, cx| {
+                                                let _ = move_weak.update(cx, |this, cx| {
+                                                    this.set_connection_group(
+                                                        id,
+                                                        Some(target_group),
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    );
+                                }
+                            }
+                            let new_weak = weak.clone();
+                            sub.separator()
+                                .item(PopupMenuItem::new("New group…").on_click(
+                                    move |_, window, cx| {
+                                        let _ = new_weak.update(cx, |this, cx| {
+                                            this.open_group_name_dialog(None, Some(id), window, cx);
+                                        });
+                                    },
+                                ))
+                        }
+                    })
                     // The actions only show the shortcuts: a click runs the handler.
                     .item(
                         PopupMenuItem::new("Move up")
@@ -3439,31 +3503,31 @@ impl Qrow {
                         PopupMenuItem::new("Delete")
                             .on_click(delete)
                             .disabled(in_use),
-                    )
-                    .when(browses, |menu| {
-                        menu.separator()
-                            .item(menu_section("Schemas"))
-                            .item(
-                                PopupMenuItem::new(if refreshing {
-                                    "Stop refresh"
-                                } else {
-                                    "Refresh metadata"
-                                })
-                                .on_click(refresh),
-                            )
-                            .item(
-                                PopupMenuItem::new("Collapse")
-                                    .on_click(collapse)
-                                    .disabled(!has_expanded),
-                            )
-                    })
-                    .when(has_dbt, |menu| {
-                        menu.separator().item(menu_section("dbt")).item(
-                            PopupMenuItem::new("Refresh manifest")
-                                .on_click(refresh_dbt)
-                                .disabled(dbt_parsing),
+                    );
+                menu.when(browses, |menu| {
+                    menu.separator()
+                        .item(menu_section("Schemas"))
+                        .item(
+                            PopupMenuItem::new(if refreshing {
+                                "Stop refresh"
+                            } else {
+                                "Refresh metadata"
+                            })
+                            .on_click(refresh),
                         )
-                    })
+                        .item(
+                            PopupMenuItem::new("Collapse")
+                                .on_click(collapse)
+                                .disabled(!has_expanded),
+                        )
+                })
+                .when(has_dbt, |menu| {
+                    menu.separator().item(menu_section("dbt")).item(
+                        PopupMenuItem::new("Refresh manifest")
+                            .on_click(refresh_dbt)
+                            .disabled(dbt_parsing),
+                    )
+                })
             },
             window,
             cx,
@@ -3890,11 +3954,22 @@ impl Qrow {
                     cx.notify();
                 }
             });
+        let environment = connection_form::choice_select(
+            &connection_form::environment_choices(),
+            &profile.environment,
+            window,
+            cx,
+        );
+        let group_choices = connection_form::group_choices(&self.groups);
+        let group = connection_form::choice_select(&group_choices, &profile.group_id, window, cx);
         self.form = Some(ProfileEditor {
             transfer: connection_form::transfer::TransferForm::new(&profile.transfer, window, cx),
             dbt,
             database_type,
             _database_type_subscription: database_type_subscription,
+            environment,
+            group,
+            group_choices,
             postgres_ssl_mode,
             _postgres_ssl_mode_subscription: postgres_ssl_mode_subscription,
             parameters,
@@ -4044,6 +4119,14 @@ impl Qrow {
             &connection_form::database_type_choices(),
             cx,
         );
+        profile.environment = connection_form::chosen(
+            &form.environment,
+            &connection_form::environment_choices(),
+            cx,
+        );
+        if !self.groups.is_empty() {
+            profile.group_id = connection_form::chosen(&form.group, &form.group_choices, cx);
+        }
         profile.name = values[0].trim().into();
         profile.host = values[1].trim().into();
         profile.username = values[3].trim().into();
@@ -4586,6 +4669,7 @@ fn demo_workspace(manifest: Option<&tempfile::NamedTempFile>) -> Workspace {
     Workspace {
         version: WORKSPACE_VERSION,
         settings: Settings::default(),
+        groups: Vec::new(),
         assistant: AssistantWorkspace::default(),
         profiles: profiles.clone(),
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],

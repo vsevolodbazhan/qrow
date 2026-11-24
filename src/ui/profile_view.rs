@@ -277,6 +277,38 @@ impl Qrow {
                 0,
                 "Name",
             ))
+            .item(connection_row(
+                qrow,
+                "Environment",
+                "Optional badge shown in the sidebar and status bar.",
+                &["badge", "production", "staging", "development", "local"],
+                false,
+                |_, form, _, _| {
+                    Select::new(&form.environment)
+                        .id("connection-environment")
+                        .w_full()
+                        .disabled(form.saving.is_some())
+                        .accessibility_label("Environment")
+                        .into_any_element()
+                },
+            ))
+            .items((!self.groups.is_empty()).then(|| {
+                connection_row(
+                    qrow,
+                    "Group",
+                    "Optional folder in the connections sidebar.",
+                    &["folder", "group"],
+                    false,
+                    |_, form, _, _| {
+                        Select::new(&form.group)
+                            .id("connection-group")
+                            .w_full()
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("Group")
+                            .into_any_element()
+                    },
+                )
+            }))
             .item(connection_field_row(
                 qrow,
                 "Host",

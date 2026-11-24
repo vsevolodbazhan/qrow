@@ -469,6 +469,7 @@ impl Qrow {
         self.message = new_saver.newer.as_ref().map(storage::NewerData::notice);
         self.saver = Some(new_saver);
         self.dirty = None;
+        self.groups = workspace.groups;
         self.profiles = workspace.profiles;
         self.shared_catalogs = workspace.shared_catalogs;
         self.sign_ins = workspace.sign_ins;
@@ -480,6 +481,7 @@ impl Qrow {
         self.completion_reads.clear();
         self.completion_statements = None;
         self.form = None;
+        self.group_name_form = None;
         self.tab_form = None;
         self.result_form = None;
 

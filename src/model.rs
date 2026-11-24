@@ -15,6 +15,7 @@ pub const REGISTRY_MIN_READER_VERSION: u32 = 1;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
+pub const MAX_GROUP_NAME: usize = 60;
 pub const MAX_SIGN_IN_NAME: usize = 60;
 pub const MAX_WORKSPACE_NAME: usize = 60;
 pub const DEFAULT_WORKSPACE_NAME: &str = "Default";
@@ -85,6 +86,29 @@ where
         name.to_owned()
     } else {
         copied_name(name, MAX_SIGN_IN_NAME, is_taken)
+    }
+}
+
+/// Validate a connection group name, returning its trimmed form.
+pub fn validate_group_name(name: &str) -> anyhow::Result<String> {
+    let trimmed = name.trim();
+    anyhow::ensure!(!trimmed.is_empty(), "Give the group a name.");
+    anyhow::ensure!(
+        trimmed.chars().count() <= MAX_GROUP_NAME,
+        "Group name must be {MAX_GROUP_NAME} characters or fewer."
+    );
+    Ok(trimmed.to_owned())
+}
+
+/// Keep a group name when it is available, otherwise append a copy suffix.
+pub fn unique_group_name<F>(name: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    if !is_taken(name) {
+        name.to_owned()
+    } else {
+        copied_name(name, MAX_GROUP_NAME, is_taken)
     }
 }
 
@@ -619,6 +643,62 @@ fn sanitize_optional_string(value: &mut Option<String>) {
     }
 }
 
+/// A named collapsible folder that organizes connections in the sidebar.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConnectionGroup {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+impl ConnectionGroup {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            collapsed: false,
+        }
+    }
+}
+
+/// Optional semantic environment label for a connection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionEnvironment {
+    Production,
+    Staging,
+    Development,
+    Local,
+}
+
+impl ConnectionEnvironment {
+    pub const ALL: [Self; 4] = [
+        Self::Production,
+        Self::Staging,
+        Self::Development,
+        Self::Local,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Production => "Production",
+            Self::Staging => "Staging",
+            Self::Development => "Development",
+            Self::Local => "Local",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Production => "Prod",
+            Self::Staging => "Staging",
+            Self::Development => "Dev",
+            Self::Local => "Local",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
     #[serde(default)]
@@ -660,6 +740,12 @@ pub struct Profile {
     /// The dbt project that describes the tables of the connection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dbt: Option<DbtProject>,
+    /// Optional sidebar connection group containing this connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<Uuid>,
+    /// Optional semantic environment badge (Production, Staging, Development, Local).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<ConnectionEnvironment>,
 }
 
 /// The most schema mapping rules of a dbt project.
@@ -1199,6 +1285,8 @@ impl Default for Profile {
             authentication: Authentication::Password,
             assistant_notes: String::new(),
             dbt: None,
+            group_id: None,
+            environment: None,
         }
     }
 }
@@ -1811,6 +1899,8 @@ pub struct Workspace {
     pub version: u32,
     #[serde(default)]
     pub settings: Settings,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<ConnectionGroup>,
     pub profiles: Vec<Profile>,
     pub tabs: Vec<SavedTab>,
     pub active_tab: usize,
@@ -2054,11 +2144,21 @@ impl Workspace {
             catalog.id = new_id;
         }
 
+        let mut group_map: BTreeMap<Uuid, Uuid> = BTreeMap::new();
+        for group in &mut self.groups {
+            let new_id = Uuid::new_v4();
+            group_map.insert(group.id, new_id);
+            group.id = new_id;
+        }
+
         let mut profile_map: BTreeMap<Uuid, Uuid> = BTreeMap::new();
         for profile in &mut self.profiles {
             let new_id = Uuid::new_v4();
             profile_map.insert(profile.id, new_id);
             profile.id = new_id;
+            profile.group_id = profile
+                .group_id
+                .and_then(|old| group_map.get(&old).copied());
             profile.shared_catalog = profile
                 .shared_catalog
                 .and_then(|old| catalog_map.get(&old).copied());
@@ -2130,8 +2230,28 @@ impl Workspace {
         self.sign_ins
             .retain(|sign_in| sign_in.provider != SignInProvider::TrinoExternal);
         let conversations_without_tabs = self.version < 4;
+        let mut seen_group_ids = BTreeSet::new();
+        self.groups.retain(|group| seen_group_ids.insert(group.id));
+        let mut seen_group_names = BTreeSet::new();
+        for group in &mut self.groups {
+            let base = if group.name.trim().is_empty() {
+                "Group".to_owned()
+            } else {
+                group.name.trim().chars().take(MAX_GROUP_NAME).collect()
+            };
+            group.name = unique_group_name(&base, |candidate| {
+                seen_group_names.contains(&candidate.to_lowercase())
+            });
+            seen_group_names.insert(group.name.to_lowercase());
+        }
         for profile in &mut self.profiles {
             profile.sanitize();
+            if profile
+                .group_id
+                .is_some_and(|id| !seen_group_ids.contains(&id))
+            {
+                profile.group_id = None;
+            }
         }
         let active_profile = self.tabs.get(self.active_tab).and_then(|tab| tab.profile);
         let fallback = active_profile.filter(|id| self.profiles.iter().any(|p| p.id == *id));
@@ -2231,6 +2351,7 @@ impl Default for Workspace {
         Self {
             version: WORKSPACE_VERSION,
             settings: Settings::default(),
+            groups: Vec::new(),
             profiles: vec![],
             tabs: vec![SavedTab::new(1, None)],
             active_tab: 0,

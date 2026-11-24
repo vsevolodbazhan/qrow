@@ -324,3 +324,89 @@ fn dismissing_delete_confirmation_with_escape_reopens_manager(cx: &mut TestAppCo
         2
     );
 }
+
+#[gpui_kit::test]
+fn connection_groups_and_environment_badges_workflow(cx: &mut TestAppContext) {
+    use qrow::model::{ConnectionEnvironment, Profile, SavedTab, Workspace};
+
+    let mut profile = Profile {
+        name: "Prod Spark".into(),
+        host: "spark.example.com".into(),
+        username: "analyst".into(),
+        database: "analytics".into(),
+        environment: Some(ConnectionEnvironment::Production),
+        ..Profile::default()
+    };
+    profile.catalog.refresh = qrow::model::CatalogRefresh::Disabled;
+    let profile_id = profile.id;
+    let workspace = Workspace {
+        profiles: vec![profile],
+        tabs: vec![SavedTab::new(1, Some(profile_id))],
+        ..Workspace::default()
+    };
+    let app = TestApp::launch(cx, workspace);
+
+    // Environment badge renders in both the connections sidebar and the status bar.
+    app.wait_for(cx, format!("connection-env-{profile_id}"));
+    app.wait_for(cx, "status-bar-connection-env");
+
+    // Create a group via the sidebar header button (testing inline validation first).
+    app.click(cx, "add-group");
+    app.wait_for(cx, "group-name-input");
+    app.click(cx, "submit-group-name");
+    app.wait_for(cx, "group-name-error");
+    app.fill(cx, "group-name-input", "Analytics");
+    app.click(cx, "submit-group-name");
+    app.wait_until(cx, "group persisted", Duration::from_secs(10), |_, _| {
+        app.saved().groups.len() == 1 && app.saved().groups[0].name == "Analytics"
+    });
+    let group_id = app.saved().groups[0].id;
+    app.wait_for(cx, format!("group-{group_id}"));
+
+    // Move connection into the group via right-click context menu.
+    app.context_menu(cx, format!("profile-{profile_id}"));
+    app.choose_in_submenu(cx, "Move to group", "Analytics");
+    app.wait_until(
+        cx,
+        "connection moved to group",
+        Duration::from_secs(10),
+        |_, _| {
+            app.saved()
+                .profiles
+                .iter()
+                .find(|p| p.id == profile_id)
+                .and_then(|p| p.group_id)
+                == Some(group_id)
+        },
+    );
+
+    // Rename the group via its context menu.
+    app.context_menu(cx, format!("group-{group_id}"));
+    app.choose(cx, "popup-menu", "Rename group…");
+    app.wait_for(cx, "group-name-input");
+    app.fill(cx, "group-name-input", "Warehouse");
+    app.click(cx, "submit-group-name");
+    app.wait_until(cx, "group renamed", Duration::from_secs(10), |_, _| {
+        app.saved()
+            .groups
+            .first()
+            .is_some_and(|g| g.name == "Warehouse")
+    });
+
+    // Delete the group via its context menu: the group goes away while the
+    // connection stays intact and ungrouped.
+    app.context_menu(cx, format!("group-{group_id}"));
+    app.choose(cx, "popup-menu", "Delete group");
+    app.wait_until(
+        cx,
+        "group deleted keeping connection",
+        Duration::from_secs(10),
+        |_, _| {
+            let saved = app.saved();
+            saved.groups.is_empty()
+                && saved.profiles.len() == 1
+                && saved.profiles[0].id == profile_id
+                && saved.profiles[0].group_id.is_none()
+        },
+    );
+}

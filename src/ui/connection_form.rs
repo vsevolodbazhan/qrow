@@ -1,6 +1,6 @@
 use crate::model::{
-    CatalogColumnReads, CatalogRefresh, CatalogSettings, ConnectionLifecycle, Profile,
-    SharedCatalog,
+    CatalogColumnReads, CatalogRefresh, CatalogSettings, ConnectionEnvironment, ConnectionGroup,
+    ConnectionLifecycle, Profile, SharedCatalog,
 };
 use gpui_kit::component::ActiveTheme;
 use uuid::Uuid;
@@ -219,6 +219,28 @@ pub(super) enum CatalogChoice {
     Private,
     Shared(Uuid),
     New,
+}
+
+/// The choices of the Environment dropdown: None, then each semantic environment.
+pub(super) fn environment_choices() -> Vec<(Option<ConnectionEnvironment>, String)> {
+    std::iter::once((None, "None".to_owned()))
+        .chain(
+            ConnectionEnvironment::ALL
+                .into_iter()
+                .map(|env| (Some(env), env.label().to_owned())),
+        )
+        .collect()
+}
+
+/// The choices of the Group dropdown: None (ungrouped), then each workspace group.
+pub(super) fn group_choices(groups: &[ConnectionGroup]) -> Vec<(Option<Uuid>, String)> {
+    std::iter::once((None, "None".to_owned()))
+        .chain(
+            groups
+                .iter()
+                .map(|group| (Some(group.id), group.name.clone())),
+        )
+        .collect()
 }
 
 /// The choices of the Schema catalog list: the catalog of the connection
