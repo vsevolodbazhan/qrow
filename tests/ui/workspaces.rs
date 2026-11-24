@@ -1,5 +1,5 @@
-use crate::support::{MemoryCredentials, TestApp};
-use gpui_kit::{TestAppContext, test::TestWindowExt as _};
+use crate::support::{MemoryCredentials, TestApp, bounds_of, label};
+use gpui_kit::{TestAppContext, px, test::TestWindowExt as _};
 use qrow::storage;
 use std::time::Duration;
 
@@ -522,4 +522,42 @@ fn export_import_and_backup_workspace_workflow(cx: &mut TestAppContext) {
     app.wait_for(cx, "workspace-backup-toast");
     let backup_ws = storage::load(&backup_path).unwrap();
     assert_eq!(backup_ws.tabs[0].sql, "SELECT 'portable_bundle'");
+}
+
+#[gpui_kit::test]
+fn export_workspace_dialog_shows_single_line_option_checkboxes(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+
+    app.dispatch(cx, qrow::ui::ExportWorkspace);
+    app.wait_for(cx, "export-workspace-dialog");
+
+    let checkboxes = [
+        ("export-workspace-include-sql", "Include saved SQL"),
+        (
+            "export-workspace-include-parameters",
+            "Include session parameters",
+        ),
+        ("export-workspace-include-notes", "Include assistant notes"),
+    ];
+
+    app.update(cx, |window, _| {
+        // Small checkboxes use 0.875 rem text with 1.25 relative line height,
+        // without secondary description lines underneath.
+        let single_line = window.rem_size() * 0.875 * 1.25;
+        for (id, expected_label) in checkboxes {
+            assert_eq!(label(window, id).as_deref(), Some(expected_label));
+            let height = bounds_of(window, id).size.height;
+            assert!(
+                (height - single_line).abs() <= px(2.),
+                "{id}: height {height:?} should match a single label line (~{single_line:?})"
+            );
+        }
+    });
+
+    for (id, _) in checkboxes {
+        app.click(cx, id);
+    }
+    app.press(cx, "escape");
+    app.wait_gone(cx, "export-workspace-dialog");
 }

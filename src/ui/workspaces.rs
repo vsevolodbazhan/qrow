@@ -251,12 +251,6 @@ impl Qrow {
         };
         let options = form.options;
         let summary = "Export this workspace as a portable .qrow-workspace.json file. Passwords, sign-in tokens, account identities, dbt manifest paths, custom keep-alive SQL, settings, and assistant transcripts are never exported.";
-        let option_description = |text: &'static str, cx: &Context<Self>| {
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(text)
-        };
         v_flex()
             .id("export-workspace-dialog")
             .test_support()
@@ -282,11 +276,7 @@ impl Qrow {
                                         form.options.include_sql = *checked;
                                     }
                                     cx.notify();
-                                }))
-                                .child(option_description(
-                                    "Saved SQL is exported as plain text.",
-                                    cx,
-                                )),
+                                })),
                         ),
                     )
                     .child(
@@ -300,11 +290,7 @@ impl Qrow {
                                         form.options.include_parameters = *checked;
                                     }
                                     cx.notify();
-                                }))
-                                .child(option_description(
-                                    "Session parameters can contain secrets.",
-                                    cx,
-                                )),
+                                })),
                         ),
                     )
                     .child(
@@ -318,11 +304,7 @@ impl Qrow {
                                         form.options.include_assistant_notes = *checked;
                                     }
                                     cx.notify();
-                                }))
-                                .child(option_description(
-                                    "Assistant notes are exported as plain text.",
-                                    cx,
-                                )),
+                                })),
                         ),
                     ),
             )
