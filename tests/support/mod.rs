@@ -1298,7 +1298,7 @@ impl TestApp {
     pub fn scroll_to(&self, cx: &mut TestAppContext, target: &str) {
         let mut positions = Vec::new();
         let mut extra_step = true;
-        for _ in 0..30 {
+        for _ in 0..45 {
             let position = self.update(cx, |window, _| {
                 // A settings page renders only the groups near its visible
                 // part, so a row lower on the page is not in the frame yet.

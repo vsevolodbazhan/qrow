@@ -471,13 +471,24 @@ fn export_import_and_backup_workspace_workflow(cx: &mut TestAppContext) {
             .input("SELECT 'portable_bundle'", cx);
     });
 
-    // Export Default workspace to a portable `.qrow-workspace.json` bundle.
+    // Export Default workspace to a portable `.qrow-workspace.json` bundle
+    // with saved SQL explicitly opted in.
     let bundle_path = export_dir.path().join("Default.qrow-workspace.json");
     let bundle_for_export = bundle_path.clone();
     app.update(cx, |window, cx| {
         app.qrow
             .update(cx, |qrow, cx| {
-                qrow.export_workspace_to_path(default_id, bundle_for_export, window, cx);
+                qrow.export_workspace_to_path_with_options(
+                    default_id,
+                    bundle_for_export,
+                    qrow::model::workspace_export::ExportOptions {
+                        include_sql: true,
+                        include_parameters: false,
+                        include_assistant_notes: false,
+                    },
+                    window,
+                    cx,
+                );
             })
             .unwrap();
     });

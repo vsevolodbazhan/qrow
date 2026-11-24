@@ -802,39 +802,61 @@ impl Qrow {
         }
     }
 
-    fn switch_active_work_description(&self, cx: &App) -> Option<&'static str> {
-        let assistant = self.assistant_working();
-        let query = self.tabs.iter().any(|tab| tab.busy);
-        let export = cx.global::<crate::export::Jobs>().active_count() > 0;
-        let sign_in = self.sign_ins_working();
-        let refresh = self
+    fn switch_active_work_description(&self, cx: &App) -> Option<String> {
+        let mut active: Vec<&'static str> = Vec::new();
+        if cx.global::<crate::export::Jobs>().active_count() > 0 {
+            active.push("an export");
+        }
+        if self.assistant_working() {
+            active.push("an assistant turn");
+        }
+        if self.tabs.iter().any(|tab| tab.busy) {
+            active.push("a query");
+        }
+        if self.sign_ins_working() {
+            active.push("a sign-in");
+        }
+        if self
             .profiles
             .iter()
-            .any(|profile| self.catalog.is_refreshing(profile.id));
-        if export {
-            return Some(if assistant || query || sign_in || refresh {
-                "Exports and other work are still running. Switch workspaces now to stop them?"
-            } else {
-                "An export is still running. Switch workspaces now to stop it?"
-            });
+            .any(|profile| self.catalog.is_refreshing(profile.id))
+        {
+            active.push("a metadata refresh");
         }
-        match (assistant, query, sign_in, refresh) {
-            (true, true, _, _) => Some(
-                "An assistant turn and a query are still running. Switch workspaces now to stop both?",
-            ),
-            (true, false, _, _) => {
-                Some("The assistant is still working. Switch workspaces now to stop the turn?")
+        match active.as_slice() {
+            [] => None,
+            [one] => {
+                let mut first = one.chars();
+                let capitalized = match first.next() {
+                    Some(c) => format!("{}{}", c.to_uppercase(), first.as_str()),
+                    None => String::new(),
+                };
+                Some(format!(
+                    "{capitalized} is still running. Switch workspaces now to stop it?"
+                ))
             }
-            (false, true, _, _) => {
-                Some("A query is still running. Switch workspaces now to stop it?")
+            [first, second] => {
+                let mut chars = first.chars();
+                let capitalized = match chars.next() {
+                    Some(c) => format!("{}{}", c.to_uppercase(), chars.as_str()),
+                    None => String::new(),
+                };
+                Some(format!(
+                    "{capitalized} and {second} are still running. Switch workspaces now to stop them?"
+                ))
             }
-            (false, false, true, _) => {
-                Some("A sign-in is still in progress. Switch workspaces now to cancel it?")
+            many => {
+                let last = many.last().unwrap();
+                let head = many[..many.len() - 1].join(", ");
+                let mut chars = head.chars();
+                let capitalized = match chars.next() {
+                    Some(c) => format!("{}{}", c.to_uppercase(), chars.as_str()),
+                    None => String::new(),
+                };
+                Some(format!(
+                    "{capitalized}, and {last} are still running. Switch workspaces now to stop them?"
+                ))
             }
-            (false, false, false, true) => {
-                Some("A metadata refresh is still running. Switch workspaces now to stop it?")
-            }
-            (false, false, false, false) => None,
         }
     }
 
@@ -874,7 +896,7 @@ impl Qrow {
     fn confirm_switch_while_working(
         &mut self,
         action: SwitchAction,
-        description: &'static str,
+        description: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -889,7 +911,7 @@ impl Qrow {
             let dismiss = weak.clone();
             alert
                 .title("Work is still running")
-                .description(description)
+                .description(description.clone())
                 .width(px(560.))
                 .on_close(move |_, _, cx| {
                     let dismiss = dismiss.clone();
@@ -1008,7 +1030,7 @@ impl Qrow {
                 let _ = wake.try_send(());
             })
         });
-        let (mut workspace, mut new_saver) = match open_result {
+        let (workspace, mut new_saver) = match open_result {
             Some(Ok(opened)) => opened,
             Some(Err(error)) => {
                 self.report_failure(
@@ -1093,7 +1115,6 @@ impl Qrow {
         //    (exports, sign-ins, OIDC token writes, dbt index writes,
         //    transcripts, query sessions, catalog workers, and workspace lock)
         //    BEFORE deleting any workspace credentials or directories.
-        workspace.normalize();
         self.sign_in_ui.cancel_all();
         self.assistant_state.save_transcripts = None;
         self.save_transcripts(None);

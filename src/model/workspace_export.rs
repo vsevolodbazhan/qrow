@@ -28,23 +28,13 @@ const DEFAULT_IMPORTED_NAME: &str = "Imported workspace";
 
 /// Explicit content selection for portable workspace export.
 ///
-/// Safe defaults exclude session parameters and assistant notes because they
-/// can contain secrets or local paths.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Safe defaults exclude saved SQL, session parameters, and assistant notes
+/// because they can contain secrets or local paths.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExportOptions {
     pub include_sql: bool,
     pub include_parameters: bool,
     pub include_assistant_notes: bool,
-}
-
-impl Default for ExportOptions {
-    fn default() -> Self {
-        Self {
-            include_sql: true,
-            include_parameters: false,
-            include_assistant_notes: false,
-        }
-    }
 }
 
 /// Result of parsing a portable `.qrow-workspace.json` bundle.
@@ -372,7 +362,7 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
         sign_in
             .validate()
             .context("A sign-in in the workspace file is not valid.")?;
-        let key = sign_in.name.trim().to_lowercase();
+        let key = sign_in.name.trim().to_owned();
         anyhow::ensure!(
             seen_sign_ins.insert(key),
             "The workspace file contains duplicate sign-in \"{}\".",
@@ -394,7 +384,7 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
         catalog
             .validate()
             .context("A shared metadata definition in the workspace file is not valid.")?;
-        let key = catalog.name.to_lowercase();
+        let key = catalog.name.clone();
         anyhow::ensure!(
             seen_catalogs.insert(key),
             "The workspace file contains duplicate shared metadata \"{}\".",
@@ -475,7 +465,7 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
         profile
             .validate()
             .with_context(|| format!("Connection \"{}\" is not valid.", profile.name))?;
-        let key = profile.name.to_lowercase();
+        let key = profile.name.clone();
         anyhow::ensure!(
             seen_profiles.insert(key),
             "The workspace file contains duplicate connection \"{}\".",
@@ -497,6 +487,12 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
                         catalog.name
                     )
                 })?;
+                anyhow::ensure!(
+                    profile.shared_catalog == Some(catalog.id),
+                    "Shared metadata \"{}\" names preferred connection \"{}\", which does not use that shared metadata.",
+                    catalog.name,
+                    profile.name
+                );
                 Some(profile.id)
             }
             None => None,
@@ -523,6 +519,14 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
             sql: raw_tab.sql,
             profile,
         });
+    }
+    if !tabs.is_empty() {
+        anyhow::ensure!(
+            exported.active_tab < tabs.len(),
+            "Active tab index {} is out of range for {} tabs.",
+            exported.active_tab,
+            tabs.len()
+        );
     }
 
     let mut workspace = Workspace {
@@ -630,8 +634,9 @@ mod tests {
         let (workspace, orig_profile_id, orig_group_id, orig_sign_in_id) = sample_workspace();
 
         let exported_json = export_workspace("Analytics", &workspace).unwrap();
-        // Safe defaults must omit secrets, parameters, assistant notes, custom keep-alive SQL,
+        // Safe defaults must omit secrets, saved SQL, parameters, assistant notes, custom keep-alive SQL,
         // local paths, assistant threads, settings, and original UUIDs.
+        assert!(!exported_json.contains("SELECT sum(amount)"));
         assert!(!exported_json.contains("sub-secret-user"));
         assert!(!exported_json.contains("alice@example.com"));
         assert!(!exported_json.contains("top-secret"));
@@ -672,10 +677,7 @@ mod tests {
         assert!(p.dbt.is_none());
 
         assert_eq!(imported.workspace.tabs[0].title, "Revenue");
-        assert_eq!(
-            imported.workspace.tabs[0].sql,
-            "SELECT sum(amount) FROM sales"
-        );
+        assert_eq!(imported.workspace.tabs[0].sql, "");
         assert_eq!(imported.workspace.tabs[0].profile, Some(p.id));
         assert_eq!(
             imported.workspace.layout.as_ref().map(|l| l.sidebar_open),
@@ -690,13 +692,13 @@ mod tests {
             "Analytics",
             &workspace,
             ExportOptions {
-                include_sql: false,
+                include_sql: true,
                 include_parameters: true,
                 include_assistant_notes: true,
             },
         )
         .unwrap();
-        assert!(!exported.contains("SELECT sum(amount)"));
+        assert!(exported.contains("SELECT sum(amount)"));
         assert!(exported.contains("top-secret"));
         assert!(exported.contains("Internal secret note"));
         assert!(!exported.contains("dangerous_proc"));

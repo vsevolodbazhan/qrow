@@ -439,10 +439,13 @@ impl Qrow {
         }
         self.sign_in_ui.clear_error(id);
         let service = self.oidc.clone();
+        let prepared = service.prepare_sign_out(id);
         let outcomes = self.sign_in_ui.outcomes.0.clone();
         let wake = self.wake.clone();
         std::thread::spawn(move || {
-            let result = service.sign_out(id).map_err(|error| format!("{error:#}"));
+            let result = prepared
+                .and_then(|handle| service.finish_sign_out(handle))
+                .map_err(|error| format!("{error:#}"));
             let _ = outcomes.send(Outcome::SignedOut(id, result));
             let _ = wake.try_send(());
         });

@@ -59,10 +59,10 @@ Workspace** dialog lets you review what to include before saving a portable
 connection groups, connection settings, sign-in definitions, shared metadata,
 tabs, and pane layout. It always omits passwords, sign-in tokens, account
 identities, local dbt manifest paths, custom keep-alive SQL, app-wide settings,
-and assistant transcripts. **Include saved SQL** is selected by default;
-**Include session parameters** and **Include assistant notes** are unchecked by
-default because they can contain secrets or local paths. Check included SQL,
-session parameters, and assistant notes for secrets before you share the file.
+and assistant transcripts. **Include saved SQL**, **Include session
+parameters**, and **Include assistant notes** are unchecked by default because
+they can contain secrets or local paths. Check any included SQL, session
+parameters, and assistant notes for secrets before you share the file.
 
 Use **Import workspace…** to import a `.qrow-workspace.json` file (up to
 16 MiB). Qrow creates a new workspace with a unique name and new identifiers,

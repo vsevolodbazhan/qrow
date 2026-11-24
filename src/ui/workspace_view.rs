@@ -1382,10 +1382,11 @@ impl Qrow {
                         .clamp(this.ui_px(180.), this.ui_px(360.));
                 } else {
                     this.pending_editor_height_ratio = None;
-                    this.editor_height = (initial + e.position.y - start.y).clamp(
-                        this.ui_px(100.),
-                        window.viewport_size().height - this.ui_px(294.),
-                    );
+                    let min_height = this.ui_px(100.);
+                    let max_height =
+                        (window.viewport_size().height - this.ui_px(294.)).max(min_height);
+                    this.editor_height =
+                        (initial + e.position.y - start.y).clamp(min_height, max_height);
                 }
                 cx.notify();
             }))

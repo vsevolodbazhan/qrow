@@ -431,14 +431,21 @@ impl DataStore {
         // Only remove a leftover legacy `workspace.json` once the migrated
         // workspace snapshot is present and the active workspace opened cleanly.
         // Hold the legacy lock so an older Qrow process cannot race with removal.
+        // On a resumed run (when `legacy_lock` was not held continuously from
+        // migration), only delete `legacy_path` if its bytes still match the
+        // pre-migration backup so edits made by an older build are never lost.
         if let Some(migrated_id) = store.registry.migrated_workspace
             && store.workspace_path(migrated_id).exists()
             && legacy_path.exists()
         {
+            let migrated_in_this_open = legacy_lock.is_some();
             if legacy_lock.is_none() {
                 legacy_lock = acquire_lock(&legacy_path.with_extension("lock"), "workspace").ok();
             }
-            if legacy_lock.is_some() {
+            if legacy_lock.is_some()
+                && (migrated_in_this_open
+                    || legacy_matches_migration_backup(&legacy_path, &store.backups_dir()))
+            {
                 let _ = fs::remove_file(&legacy_path);
             }
         }
@@ -911,6 +918,24 @@ pub fn write_workspace_backup(workspace: &Workspace, destination: &Path) -> Resu
     }
     migrations::stamp_envelope(&mut value, &WORKSPACE_SPEC, None);
     write_atomically(destination, &serde_json::to_vec_pretty(&value)?)
+}
+
+fn legacy_matches_migration_backup(legacy_path: &Path, backups_dir: &Path) -> bool {
+    let Ok(legacy_bytes) = fs::read(legacy_path) else {
+        return false;
+    };
+    let Ok(entries) = fs::read_dir(backups_dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        name.starts_with("workspace.v")
+            && name.ends_with(".backup.json")
+            && fs::read(entry.path()).is_ok_and(|backup| backup == legacy_bytes)
+    })
 }
 
 fn has_existing_managed_workspaces(data_dir: &Path) -> bool {

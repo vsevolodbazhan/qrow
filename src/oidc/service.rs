@@ -56,6 +56,14 @@ pub struct Service {
     token_lock: Mutex<()>,
 }
 
+/// A captured OIDC record handle prepared on the caller thread before
+/// dispatching a background sign-out.
+pub struct SignOutHandle {
+    id: Uuid,
+    record: Arc<Record>,
+    generation: u64,
+}
+
 struct Record {
     config: Mutex<SignIn>,
     /// Sign-out, removal, and requirement changes increment it. Work that
@@ -342,11 +350,26 @@ impl Service {
         self.store.save_tokens(id, &record)
     }
 
-    /// Removes the tokens from Keychain. On failure, the sign-in stays
-    /// signed in, because its tokens remain available.
-    pub fn sign_out(&self, id: Uuid) -> Result<()> {
+    /// Captures the currently registered record for `id` so a background
+    /// sign-out task cannot bind to a replacement record created after a
+    /// workspace switch.
+    pub fn prepare_sign_out(&self, id: Uuid) -> Result<SignOutHandle> {
         let record = self.record(id)?;
         let generation = record.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(SignOutHandle {
+            id,
+            record,
+            generation,
+        })
+    }
+
+    /// Executes a previously prepared sign-out against its captured record.
+    pub fn finish_sign_out(&self, handle: SignOutHandle) -> Result<()> {
+        let SignOutHandle {
+            id,
+            record,
+            generation,
+        } = handle;
         // Wait for a running refresh. It sees the new generation and does
         // not save its result.
         let mut work = record.work.lock_unpoisoned();
@@ -370,6 +393,13 @@ impl Service {
         *record.problem.lock_unpoisoned() = None;
         self.changed();
         Ok(())
+    }
+
+    /// Removes the tokens from Keychain. On failure, the sign-in stays
+    /// signed in, because its tokens remain available.
+    pub fn sign_out(&self, id: Uuid) -> Result<()> {
+        let handle = self.prepare_sign_out(id)?;
+        self.finish_sign_out(handle)
     }
 
     /// Returns an access token of sign-in `id` for `host`, for the identity
