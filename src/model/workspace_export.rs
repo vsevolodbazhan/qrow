@@ -384,6 +384,11 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
         catalog
             .validate()
             .context("A shared metadata definition in the workspace file is not valid.")?;
+        anyhow::ensure!(
+            catalog.name != "Not shared" && catalog.name != "New shared metadata",
+            "Shared metadata name \"{}\" is reserved.",
+            catalog.name
+        );
         let key = catalog.name.clone();
         anyhow::ensure!(
             seen_catalogs.insert(key),
@@ -520,7 +525,13 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
             profile,
         });
     }
-    if !tabs.is_empty() {
+    if tabs.is_empty() {
+        anyhow::ensure!(
+            exported.active_tab == 0,
+            "Active tab index {} is out of range for an empty tab list.",
+            exported.active_tab
+        );
+    } else {
         anyhow::ensure!(
             exported.active_tab < tabs.len(),
             "Active tab index {} is out of range for {} tabs.",

@@ -479,10 +479,13 @@ impl Qrow {
         // the tokens are deleted, so a failure keeps the sign-in.
         self.sign_in_ui.signing_out.insert(id);
         let service = self.oidc.clone();
+        let prepared = service.prepare_sign_out(id);
         let outcomes = self.sign_in_ui.outcomes.0.clone();
         let wake = self.wake.clone();
         std::thread::spawn(move || {
-            let result = service.sign_out(id).map_err(|error| format!("{error:#}"));
+            let result = prepared
+                .and_then(|handle| service.finish_sign_out(handle))
+                .map_err(|error| format!("{error:#}"));
             let _ = outcomes.send(Outcome::Removed(id, result));
             let _ = wake.try_send(());
         });
@@ -917,9 +920,11 @@ impl Qrow {
             .count()
     }
 
-    /// Whether a browser sign-in or a sign-out runs.
+    /// Whether a browser sign-in, sign-out, or sign-in retry runs.
     pub(super) fn sign_ins_working(&self) -> bool {
-        !self.sign_in_ui.pending.is_empty() || !self.sign_in_ui.signing_out.is_empty()
+        !self.sign_in_ui.pending.is_empty()
+            || !self.sign_in_ui.signing_out.is_empty()
+            || !self.sign_in_ui.retrying.is_empty()
     }
 
     /// Runs `action` on the sign-in `id`.
