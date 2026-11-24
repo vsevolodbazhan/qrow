@@ -28,8 +28,9 @@ From the **Workspace** menu, you can:
 
 When you switch workspaces, Qrow saves the active workspace, closes its live
 sessions and background workers, and loads the next workspace in the same
-window. If a query, an export, a browser sign-in, or an assistant turn is
-running, Qrow asks you to confirm before it switches.
+window. Qrow opens one workspace per window. If a query, an export, a browser
+sign-in, a metadata refresh, or an assistant turn is running, Qrow asks you to
+confirm before it switches.
 
 **Manage Workspaces** lists each workspace with its connection count and tab
 count. For each workspace, you can:
@@ -40,35 +41,44 @@ count. For each workspace, you can:
 - **Duplicate** to copy its groups, connections, sign-in definitions, shared
   metadata, tabs, layout, and SQL into a new workspace with new identifiers.
   Passwords, sign-in tokens, account identities, and assistant transcripts are
-  not copied.
-- **Export** to save a portable `.qrow-workspace.json` file.
+  not copied. You must enter passwords or sign in again in the new workspace.
+- **Export** to review export options and save a portable
+  `.qrow-workspace.json` file.
 - **Reveal** to open its folder in your file manager.
-- **Delete** to remove the workspace after confirmation. Qrow deletes its
-  workspace folder, its local cache folder, and its saved passwords and sign-in
-  tokens from the system secret store. You cannot delete the only workspace.
+- **Delete** to remove the workspace after confirmation. You cannot delete the
+  only workspace. After removing the workspace from the list, Qrow attempts to
+  delete its workspace folder, its local cache folder, and its saved passwords
+  and sign-in tokens from the system secret store. If any cleanup step fails,
+  Qrow records the failure in [Activity](activity.md).
 
 ### Share and back up workspaces
 
-Use **Export workspace…** to share a workspace structure with a colleague. The
-`.qrow-workspace.json` file contains connection groups, connection settings,
-sign-in definitions, shared metadata, tabs, and SQL. It omits passwords,
-sign-in tokens, account identities, local dbt manifest paths, app-wide
-settings, and assistant conversation transcripts. Remove secrets from session
-parameters and saved SQL before you export a workspace.
+Use **Export workspace…** to share a workspace with a colleague. The **Export
+Workspace** dialog lets you review what to include before saving a portable
+`.qrow-workspace.json` file (up to 16 MiB). The bundle always includes
+connection groups, connection settings, sign-in definitions, shared metadata,
+tabs, and pane layout. It always omits passwords, sign-in tokens, account
+identities, local dbt manifest paths, custom keep-alive SQL, app-wide settings,
+and assistant transcripts. **Include saved SQL** is selected by default;
+**Include session parameters** and **Include assistant notes** are unchecked by
+default because they can contain secrets or local paths. Check included SQL,
+session parameters, and assistant notes for secrets before you share the file.
 
-Use **Import workspace…** to open a `.qrow-workspace.json` file. Qrow creates a
-new workspace with a unique name and new identifiers, so the import does not
-overwrite existing workspaces or share entries in the secret store. Enter your
-passwords or sign in again for imported connections.
+Use **Import workspace…** to import a `.qrow-workspace.json` file (up to
+16 MiB). Qrow creates a new workspace with a unique name and new identifiers,
+so the import does not overwrite existing workspaces or share secret-store
+entries. Imported connections disable automatic keep-alive queries until you
+enable them. You must enter passwords or sign in again for imported
+connections. **Workspace → Import workspace…** requests a switch to the new
+workspace; **Manage Workspaces → Import…** adds the workspace and keeps the
+dialog open.
 
-Use **Back up workspace…** to write a full JSON copy of a workspace, including
-its local dbt manifest paths and assistant metadata, to a file that you choose.
-
-Known limitations:
-
-- Qrow opens one workspace per window.
-- Duplicated and imported workspaces do not copy passwords or sign-in tokens.
-  You must enter passwords or sign in again in the new workspace.
+Use **Back up workspace…** to write a snapshot of one workspace's
+`workspace.json` file, including its local dbt manifest paths, assistant
+conversation metadata, and any fields from newer Qrow versions, to a file that
+you choose. A backup does not include app-wide settings, local caches, saved
+conversation transcripts, or credentials. **Import workspace…** does not open a
+backup file because it requires the portable `.qrow-workspace.json` format.
 
 ## Appearance and layout
 
@@ -185,17 +195,21 @@ shows the connection of the active tab, which **Run** uses. The toolbar of the
 editor does not show the connection. The right end of the status bar shows the
 save state of the workspace. Press **⌘B** to show or hide the
 Connections sidebar. **View → Toggle sidebar** hides or shows the sidebar that
-was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. When the focused part of
+was visible last. The **View** menu has the commands of both buttons. A workspace without a saved
+layout opens with the Connections sidebar. When the focused part of
 the workspace closes, for example the result table after a failed query, the
 SQL editor gets the focus. Thus shortcuts like **⌘B** continue to operate. Drag the sidebar divider
 to change its width. In a narrow window, the sidebar gets narrower only when the
 work area would be narrower than 560 points. Drag the divider above Results or Logs to change the
 editor height.
-Qrow saves the sidebar state, sidebar width, editor height ratio, and optional
-[assistant pane](assistant.md) width in each workspace. Qrow saves the main
-window position, size, and display separately on each computer. If the saved
-display is not connected at the next start, Qrow places the window on an
-available display.
+Qrow saves the left sidebar visibility, selected sidebar panel, sidebar width,
+and editor height ratio in each workspace. Qrow saves the optional
+[assistant pane](assistant.md) width in app-wide `settings.json`. Qrow saves
+the main window's normal or maximized state, position, size, and display in
+`window.json` on each computer; full-screen state is not saved. If the saved
+display is not connected or the saved bounds cannot be restored safely, Qrow
+centers the window at its default size. On Wayland, the compositor controls
+window placement.
 
 ## Keyboard shortcuts
 
@@ -205,7 +219,8 @@ commands in groups: Query, Tabs, Results, Result Grid, Editor, Connections,
 Assistant, Dialogs, and Application. Each command has one shortcut or none.
 Some commands do not have a default shortcut, for example **Cancel Query**,
 **Export Results**, **Next Tab**, **Pin Result**, **Refresh Metadata**,
-**Focus Editor**, **New Workspace**, and **Manage Workspaces**. Give them a
+**Focus Editor**, **New Workspace**, **Manage Workspaces**, **Import
+Workspace**, **Export Workspace**, and **Back Up Workspace**. Give them a
 shortcut on this page.
 
 To set a shortcut:
@@ -300,8 +315,9 @@ protects the workspace's local directory.
 
 The local data directory contains:
 
-- `window.json`: the saved position, size, and display identifier of the main
-  window on this computer.
+- `window.json`: the saved normal or maximized state, position, size, and
+  display identifier of the main window on this computer. Full-screen state is
+  not saved.
 - `workspaces/<id>/catalog/`: the [schema copies](connections.md#browse-schemas)
   of the workspace.
 - `workspaces/<id>/dbt/`: the compact copies of attached
@@ -384,10 +400,13 @@ version of Qrow cannot open a version 6 workspace.
 Workspace version 9 separates application settings into `settings.json`, moves
 workspace files into `workspaces/<id>/workspace.json`, adds `workspaces.json`,
 and adds connection groups, environment badges, and saved pane layout. On the
-first launch with a legacy `workspace.json` (version 8 or earlier), Qrow copies
-the legacy file into `backups/` before it creates `settings.json`,
-`workspaces.json`, and the default workspace, and moves local cache folders
-into the workspace's local directory.
+first launch with a legacy `workspace.json` (version 8 or earlier), Qrow saves
+a verbatim copy as `backups/workspace.v<version>.backup.json` before it creates
+`settings.json`, `workspaces.json`, and the default workspace, and moves local
+cache folders into the workspace's local directory. Once the migrated workspace
+opens cleanly, Qrow removes the legacy root `workspace.json`. Earlier Qrow
+builds that expect a root `workspace.json` cannot open the migrated layout
+through their normal startup path.
 
 From version 9 onward, managed files (`settings.json`, `workspaces.json`, and
 `workspace.json`) record `version` and `min_reader_version`. Future schema
@@ -414,12 +433,15 @@ before it exits.
 
 ## Newer and older versions
 
-Stable and nightly builds, and different versions of Qrow, can use the same
-workspace. A newer version can save settings that an older version does not
-know. When an older version opens such a workspace, it keeps those settings
-when it saves. It also saves a copy of the file as `workspace.backup.json`
-next to the workspace, and shows a notice that names the version that saved
-the file. Each save records the version of Qrow that wrote the file.
+Stable and nightly builds on the version 9 layout can share the same data
+directory and workspaces. Earlier builds that expect a single root
+`workspace.json` cannot open a migrated version 9 data directory through their
+normal startup path. A newer version can save settings that an older version
+does not know. When an older version opens such a file, it keeps those
+settings when it saves. It also saves a copy of the file as
+`workspace.backup.json` next to the workspace, and shows a notice that names
+the version that saved the file. Each save records the version of Qrow that
+wrote the file.
 
 A setting of an item that you delete, such as a connection or a tab, goes
 with the item. New settings inside the sign-in method or the metadata refresh
@@ -437,10 +459,12 @@ reports the failure. It leaves the file untouched and disables saving for that
 run. New edits from that run will not be saved. Preserve the original file before
 attempting recovery. Qrow does not provide an automatic repair tool.
 
-Only one Qrow process can write to a workspace directory. If another process
-has the workspace open, the new process reports the conflict and disables
-saving. Use the original process. The operating system releases the lock when
-that process exits or crashes. Do not delete `workspace.lock` to remove a lock.
+Only one Qrow process can write to a data directory (`app.lock`) or to a
+workspace file (`workspace.lock`). If another process has the same data
+directory open, the new process reports the conflict and disables saving even
+if you intend to use a different workspace. Use the original process. The
+operating system releases each lock when that process exits or crashes. Do not
+delete `app.lock` or `workspace.lock` to remove a lock.
 
 A save failure is reported in the application. Do not assume changes reached
 disk after a save error. If a save fails during Quit or window close, Qrow keeps
@@ -476,9 +500,9 @@ claims an operating-system lock before it loads a writable workspace and holds
 that lock until the saver stops or the window switches to another workspace.
 Storage records the paths of fields that the model does not know, and puts them
 back into each save; list items are matched by `id`. Each save uses a unique
-temporary file. Storage flushes the file, replaces the target file, and flushes
-the parent directory before it confirms success. This avoids a partially written
-file after a normal write failure.
+temporary file. Storage flushes the file and replaces the target file on all
+platforms, and flushes the parent directory on Unix before it confirms success.
+This avoids a partially written file after a normal write failure.
 
 The [UI](../src/ui.rs) schedules saves after edits and flushes the latest state
 before confirmed quit. Existing workspace versions, profile UUIDs, and secret-store service

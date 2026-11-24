@@ -3,18 +3,23 @@
 
 use super::setting_row::Rows;
 use super::*;
-use crate::model::{MAX_WORKSPACE_NAME, validate_workspace_name};
+use crate::model::{
+    MAX_WORKSPACE_NAME, validate_workspace_name,
+    workspace_export::{ExportOptions, MAX_EXPORTED_WORKSPACE_BYTES},
+};
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     Icon,
     alert::Alert,
+    checkbox::Checkbox,
     form::{field, v_form},
     h_flex,
     scroll::ScrollableElement as _,
     tag::Tag,
     v_flex,
 };
+use std::io::Read as _;
 
 const NAME_DIALOG_REMS: f32 = 28.;
 const MANAGER_DIALOG_REMS: f32 = 38.;
@@ -30,6 +35,12 @@ pub(super) struct WorkspaceNameForm {
     pub(super) reopen_manager: bool,
     pub(super) name: Entity<InputState>,
     pub(super) error: Option<String>,
+}
+
+pub(super) struct ExportWorkspaceForm {
+    pub(super) target: Uuid,
+    pub(super) name: String,
+    pub(super) options: ExportOptions,
 }
 
 /// What happens after the user confirms stopping active work before a switch.
@@ -139,7 +150,7 @@ impl Qrow {
         else {
             return;
         };
-        self.prompt_export_workspace(id, window, cx);
+        self.open_export_workspace_dialog(id, window, cx);
     }
 
     pub(super) fn backup_workspace_action(
@@ -180,7 +191,186 @@ impl Qrow {
         format!("{base}{suffix}")
     }
 
-    fn prompt_export_workspace(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens the Export Workspace review dialog so the user can choose which
+    /// potentially sensitive plain-text fields to include before saving.
+    fn open_export_workspace_dialog(
+        &mut self,
+        id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Some(entry) = store.workspace_entry(id) else {
+            return;
+        };
+        self.export_workspace_form = Some(ExportWorkspaceForm {
+            target: id,
+            name: entry.name.clone(),
+            options: ExportOptions::default(),
+        });
+        let weak = cx.weak_entity();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let close = weak.clone();
+            let content = weak
+                .update(cx, |this, cx| this.export_workspace_content(cx))
+                .ok();
+            let footer = weak
+                .update(cx, |this, cx| this.export_workspace_footer(cx))
+                .ok();
+            dialog
+                .title("Export Workspace")
+                .w(Rows::dialog_width(window, NAME_DIALOG_REMS))
+                .overlay_closable(true)
+                .children(content)
+                .when_some(footer, |dialog, footer| dialog.footer(footer))
+                .on_close(move |_, _, cx| {
+                    let close = close.clone();
+                    cx.defer(move |cx| {
+                        let _ = close.update(cx, |this, cx| {
+                            this.export_workspace_form = None;
+                            cx.notify();
+                        });
+                    });
+                })
+        });
+        cx.notify();
+    }
+
+    fn export_workspace_content(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(form) = &self.export_workspace_form else {
+            return div().into_any_element();
+        };
+        let options = form.options;
+        let summary = format!(
+            "Export \"{}\" as a portable .qrow-workspace.json file. Passwords, sign-in tokens, account identities, dbt manifest paths, custom keep-alive SQL, settings, and assistant transcripts are never exported.",
+            form.name
+        );
+        v_flex()
+            .id("export-workspace-dialog")
+            .test_support()
+            .w_full()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(summary),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(
+                                Checkbox::new("export-workspace-include-sql")
+                                    .small()
+                                    .label("Include saved SQL")
+                                    .checked(options.include_sql)
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        if let Some(form) = &mut this.export_workspace_form {
+                                            form.options.include_sql = *checked;
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .pl_5()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Saved SQL is exported as plain text."),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(
+                                Checkbox::new("export-workspace-include-parameters")
+                                    .small()
+                                    .label("Include session parameters")
+                                    .checked(options.include_parameters)
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        if let Some(form) = &mut this.export_workspace_form {
+                                            form.options.include_parameters = *checked;
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .pl_5()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Session parameters can contain secrets."),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_0p5()
+                            .child(
+                                Checkbox::new("export-workspace-include-notes")
+                                    .small()
+                                    .label("Include assistant notes")
+                                    .checked(options.include_assistant_notes)
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        if let Some(form) = &mut this.export_workspace_form {
+                                            form.options.include_assistant_notes = *checked;
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .pl_5()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Assistant notes are exported as plain text."),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn export_workspace_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        h_flex()
+            .w_full()
+            .justify_end()
+            .gap_2()
+            .child(
+                Button::new("export-workspace-cancel")
+                    .label("Cancel")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.export_workspace_form = None;
+                        window.close_dialog(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("export-workspace-confirm")
+                    .primary()
+                    .label("Export…")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let Some(form) = this.export_workspace_form.take() else {
+                            return;
+                        };
+                        window.close_dialog(cx);
+                        this.prompt_export_workspace(form.target, form.options, window, cx);
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn prompt_export_workspace(
+        &mut self,
+        id: Uuid,
+        options: ExportOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(store) = &self.store else {
             return;
         };
@@ -214,17 +404,31 @@ impl Qrow {
                 }
             };
             let _ = this.update_in(cx, |this, window, cx| {
-                this.export_workspace_to_path(id, path, window, cx);
+                this.export_workspace_to_path_with_options(id, path, options, window, cx);
             });
         })
         .detach();
     }
 
-    /// Exports workspace `id` as a portable `.qrow-workspace.json` bundle to `path`.
+    /// Exports workspace `id` as a portable `.qrow-workspace.json` bundle to
+    /// `path` using safe default [`ExportOptions`].
     pub fn export_workspace_to_path(
         &mut self,
         id: Uuid,
         path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_workspace_to_path_with_options(id, path, ExportOptions::default(), window, cx);
+    }
+
+    /// Exports workspace `id` as a portable `.qrow-workspace.json` bundle to
+    /// `path` with explicit `options`.
+    pub fn export_workspace_to_path_with_options(
+        &mut self,
+        id: Uuid,
+        path: std::path::PathBuf,
+        options: ExportOptions,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -244,7 +448,11 @@ impl Qrow {
                 Some(ws) => ws,
                 None => storage::load_existing(&source_path)?,
             };
-            let json = crate::model::workspace_export::export_workspace(&export_name, &workspace);
+            let json = crate::model::workspace_export::export_workspace_with_options(
+                &export_name,
+                &workspace,
+                options,
+            )?;
             if let Some(parent) = write_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -328,7 +536,8 @@ impl Qrow {
         .detach();
     }
 
-    /// Writes a full JSON backup of workspace `id` to `path`.
+    /// Writes a full JSON backup of workspace `id` to `path`, preserving any
+    /// unknown fields and newer-version metadata.
     pub fn backup_workspace_to_path(
         &mut self,
         id: Uuid,
@@ -343,15 +552,48 @@ impl Qrow {
             return;
         };
         let name = entry.name.clone();
-        let live_snapshot = (store.active_workspace_id() == id).then(|| self.snapshot(cx));
+        let is_active = store.active_workspace_id() == id;
         let source_path = store.workspace_path(id);
         let write_path = path.clone();
+        let active_receipt = if is_active {
+            let snapshot = self.snapshot(cx);
+            self.saver
+                .as_ref()
+                .map(|saver| saver.backup(snapshot.clone(), write_path.clone()))
+                .transpose()
+        } else {
+            Ok(None)
+        };
+        let active_receipt = match active_receipt {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.report_failure(
+                    toast::Failure {
+                        id: "workspace-backup-error",
+                        title: "Could not back up workspace",
+                        file: Some(toast::file_name(&path)),
+                        log: crate::activity::APPLICATION,
+                        source: WORKSPACES_SOURCE,
+                        error: format!("{error:#}"),
+                    },
+                    window,
+                    cx,
+                );
+                return;
+            }
+        };
+        let fallback_snapshot = (is_active && active_receipt.is_none()).then(|| self.snapshot(cx));
         let result = cx.background_spawn(async move {
-            let workspace = match live_snapshot {
-                Some(ws) => ws,
-                None => storage::load_existing(&source_path)?,
-            };
-            storage::store::write_workspace_backup(&workspace, &write_path)
+            if let Some(receipt) = active_receipt {
+                receipt
+                    .recv()
+                    .map_err(|_| anyhow::anyhow!("Workspace saver stopped before backup finished"))?
+                    .map_err(anyhow::Error::msg)
+            } else if let Some(snapshot) = fallback_snapshot {
+                storage::store::write_workspace_backup(&snapshot, &write_path)
+            } else {
+                storage::store::backup_workspace_file(&source_path, &write_path)
+            }
         });
         cx.spawn_in(window, async move |this, cx| {
             let outcome = result.await;
@@ -444,16 +686,36 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(data_dir) = self.store.as_ref().map(|store| store.data_dir().to_owned()) else {
+            return;
+        };
+        let cleanup_data_dir = data_dir.clone();
         let read_path = path.clone();
-        let parsed = cx.background_spawn(async move {
-            let text = std::fs::read_to_string(&read_path)?;
-            crate::model::workspace_export::import_workspace(&text)
+        let staged = cx.background_spawn(async move {
+            let file = std::fs::File::open(&read_path)?;
+            let mut bytes = Vec::new();
+            file.take((MAX_EXPORTED_WORKSPACE_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)?;
+            anyhow::ensure!(
+                bytes.len() <= MAX_EXPORTED_WORKSPACE_BYTES,
+                "The workspace file is too large to import."
+            );
+            let text = String::from_utf8(bytes)
+                .map_err(|_| anyhow::anyhow!("The selected file is not valid UTF-8 text."))?;
+            let imported = crate::model::workspace_export::import_workspace(&text)?;
+            let counts = (
+                imported.workspace.profiles.len(),
+                imported.workspace.tabs.len(),
+            );
+            let id =
+                storage::store::prepare_imported_workspace_file(&data_dir, &imported.workspace)?;
+            Ok::<_, anyhow::Error>((id, imported.name, counts))
         });
         cx.spawn_in(window, async move |this, cx| {
-            let result = parsed.await;
+            let result = staged.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                let imported = match result {
-                    Ok(imported) => imported,
+                let (id, name, counts) = match result {
+                    Ok(staged) => staged,
                     Err(error) => {
                         this.report_failure(
                             toast::Failure {
@@ -470,12 +732,12 @@ impl Qrow {
                         return;
                     }
                 };
-                let entry = match this
+                let (entry, sync_error) = match this
                     .store
                     .as_mut()
-                    .map(|store| store.import_workspace(&imported.name, imported.workspace))
+                    .map(|store| store.commit_imported_workspace(id, &name))
                 {
-                    Some(Ok(entry)) => entry,
+                    Some(Ok(outcome)) => outcome,
                     Some(Err(error)) => {
                         this.report_failure(
                             toast::Failure {
@@ -491,9 +753,26 @@ impl Qrow {
                         );
                         return;
                     }
-                    None => return,
+                    None => {
+                        let _ = std::fs::remove_dir_all(storage::workspace_directory(
+                            &cleanup_data_dir,
+                            id,
+                        ));
+                        return;
+                    }
                 };
-                this.refresh_workspace_summaries();
+                if let Some(error) = sync_error {
+                    let activity_entry = crate::activity::ActivityEntry::new(
+                        Severity::Error,
+                        format!(
+                            "Imported workspace \"{}\", but syncing registry directory failed: {error:#}",
+                            entry.name
+                        ),
+                    )
+                    .with_source(WORKSPACES_SOURCE);
+                    this.record_activity(crate::activity::APPLICATION, activity_entry, cx);
+                }
+                this.workspace_summaries.insert(entry.id, counts);
                 this.sync_workspace_menus(cx);
                 if keep_manager_open && this.workspace_manager_open {
                     cx.notify();
@@ -527,29 +806,35 @@ impl Qrow {
         let assistant = self.assistant_working();
         let query = self.tabs.iter().any(|tab| tab.busy);
         let export = cx.global::<crate::export::Jobs>().active_count() > 0;
+        let sign_in = self.sign_ins_working();
         let refresh = self
             .profiles
             .iter()
             .any(|profile| self.catalog.is_refreshing(profile.id));
         if export {
-            return Some(if assistant || query || refresh {
+            return Some(if assistant || query || sign_in || refresh {
                 "Exports and other work are still running. Switch workspaces now to stop them?"
             } else {
                 "An export is still running. Switch workspaces now to stop it?"
             });
         }
-        match (assistant, query, refresh) {
-            (true, true, _) => Some(
+        match (assistant, query, sign_in, refresh) {
+            (true, true, _, _) => Some(
                 "An assistant turn and a query are still running. Switch workspaces now to stop both?",
             ),
-            (true, false, _) => {
+            (true, false, _, _) => {
                 Some("The assistant is still working. Switch workspaces now to stop the turn?")
             }
-            (false, true, _) => Some("A query is still running. Switch workspaces now to stop it?"),
-            (false, false, true) => {
+            (false, true, _, _) => {
+                Some("A query is still running. Switch workspaces now to stop it?")
+            }
+            (false, false, true, _) => {
+                Some("A sign-in is still in progress. Switch workspaces now to cancel it?")
+            }
+            (false, false, false, true) => {
                 Some("A metadata refresh is still running. Switch workspaces now to stop it?")
             }
-            (false, false, false) => None,
+            (false, false, false, false) => None,
         }
     }
 
@@ -1424,11 +1709,13 @@ impl Qrow {
                                         .icon(Icon::new(AssetIconName::Download).small())
                                         .accessibility_label(format!("Export {reveal_name}"))
                                         .tooltip("Export workspace…")
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                this.prompt_export_workspace(id, window, cx);
-                                            }),
-                                        ),
+                                            .on_click(
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.open_export_workspace_dialog(
+                                                        id, window, cx,
+                                                    );
+                                                }),
+                                            ),
                                     )
                                     .child(
                                         Button::new(SharedString::from(format!(

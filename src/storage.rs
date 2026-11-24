@@ -395,6 +395,15 @@ impl WorkspaceFile {
 
     /// Writes `workspace` with the kept fields and the version of this build.
     pub fn save(&self, workspace: &Workspace) -> Result<()> {
+        self.save_to(workspace, &self.path)
+    }
+
+    /// Writes `workspace` to `destination`, restoring any kept unknown fields
+    /// and preserving any newer schema version metadata.
+    pub fn save_to(&self, workspace: &Workspace, destination: &Path) -> Result<()> {
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let mut value = serde_json::to_value(workspace)?;
         self.unknown.restore(&mut value);
         if self.omit_settings
@@ -403,7 +412,7 @@ impl WorkspaceFile {
             object.remove("settings");
         }
         migrations::stamp_envelope(&mut value, &WORKSPACE_SPEC, self.preserved_version);
-        write_atomically(&self.path, &serde_json::to_vec_pretty(&value)?)
+        write_atomically(destination, &serde_json::to_vec_pretty(&value)?)
     }
 }
 
@@ -503,6 +512,7 @@ pub type SaveReceipt = mpsc::Receiver<SaveResult>;
 enum SaveCommand {
     Save(Workspace),
     Flush(Workspace, mpsc::Sender<SaveResult>),
+    Backup(Workspace, PathBuf, mpsc::Sender<SaveResult>),
     Stop,
 }
 
@@ -542,31 +552,41 @@ impl Saver {
         let handle = thread::spawn(move || {
             let mut pending = None;
             while let Some(command) = pending.take().or_else(|| rx.recv().ok()) {
-                let (mut state, receipt) = match command {
-                    SaveCommand::Save(state) => (state, None),
-                    SaveCommand::Flush(state, receipt) => (state, Some(receipt)),
+                match command {
+                    SaveCommand::Backup(state, destination, receipt) => {
+                        let result = file
+                            .save_to(&state, &destination)
+                            .map_err(|e| format!("Workspace backup failed: {e:#}"));
+                        let _ = receipt.send(result);
+                        wake();
+                        continue;
+                    }
                     SaveCommand::Stop => break,
-                };
-                if receipt.is_none() {
-                    while let Ok(next) = rx.try_recv() {
-                        match next {
-                            SaveCommand::Save(next) => state = next,
-                            next => {
-                                pending = Some(next);
-                                break;
+                    SaveCommand::Save(mut state) => {
+                        while let Ok(next) = rx.try_recv() {
+                            match next {
+                                SaveCommand::Save(next) => state = next,
+                                next => {
+                                    pending = Some(next);
+                                    break;
+                                }
                             }
                         }
+                        if let Err(error) = file
+                            .save(&state)
+                            .map_err(|e| format!("Workspace save failed: {e:#}"))
+                        {
+                            let _ = errors_tx.send(error);
+                            wake();
+                        }
                     }
-                }
-                let result = file
-                    .save(&state)
-                    .map_err(|e| format!("Workspace save failed: {e:#}"));
-                if let Some(receipt) = receipt {
-                    let _ = receipt.send(result);
-                    wake();
-                } else if let Err(error) = result {
-                    let _ = errors_tx.send(error);
-                    wake();
+                    SaveCommand::Flush(state, receipt) => {
+                        let result = file
+                            .save(&state)
+                            .map_err(|e| format!("Workspace save failed: {e:#}"));
+                        let _ = receipt.send(result);
+                        wake();
+                    }
                 }
             }
         });
@@ -592,6 +612,16 @@ impl Saver {
         let (tx, rx) = mpsc::channel();
         self.tx
             .send(SaveCommand::Flush(state, tx))
+            .context("Workspace saver stopped")?;
+        Ok(rx)
+    }
+
+    /// Writes a full backup of `state` to `destination` on the saver thread,
+    /// preserving any unknown fields and newer-version metadata loaded from disk.
+    pub fn backup(&self, state: Workspace, destination: PathBuf) -> Result<SaveReceipt> {
+        let (tx, rx) = mpsc::channel();
+        self.tx
+            .send(SaveCommand::Backup(state, destination, tx))
             .context("Workspace saver stopped")?;
         Ok(rx)
     }

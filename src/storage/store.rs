@@ -340,13 +340,16 @@ impl DataStore {
         let reg_path = registry_path(&data_dir);
         let legacy_path = data_dir.join("workspace.json");
         let mut notices = Vec::new();
+        let mut legacy_lock: Option<fs::File> = None;
 
         if !reg_path.exists() {
             if legacy_path.exists() {
                 // Legacy `workspace.json` is still present, so any existing
                 // workspace subfolder without `workspaces.json` came from an
-                // interrupted migration before the commit point.
-                migrate_legacy_layout(&data_dir, &legacy_path)?;
+                // interrupted migration before the commit point. Keep the
+                // legacy lock held until cleanup completes after the migrated
+                // workspace opens cleanly.
+                legacy_lock = Some(migrate_legacy_layout(&data_dir, &legacy_path)?);
             } else {
                 anyhow::ensure!(
                     !has_existing_managed_workspaces(&data_dir),
@@ -427,12 +430,19 @@ impl DataStore {
         }
         // Only remove a leftover legacy `workspace.json` once the migrated
         // workspace snapshot is present and the active workspace opened cleanly.
+        // Hold the legacy lock so an older Qrow process cannot race with removal.
         if let Some(migrated_id) = store.registry.migrated_workspace
             && store.workspace_path(migrated_id).exists()
             && legacy_path.exists()
         {
-            let _ = fs::remove_file(&legacy_path);
+            if legacy_lock.is_none() {
+                legacy_lock = acquire_lock(&legacy_path.with_extension("lock"), "workspace").ok();
+            }
+            if legacy_lock.is_some() {
+                let _ = fs::remove_file(&legacy_path);
+            }
         }
+        drop(legacy_lock);
 
         Ok(OpenedStore {
             store,
@@ -647,8 +657,28 @@ impl DataStore {
     pub fn import_workspace(
         &mut self,
         preferred_name: &str,
-        mut workspace: Workspace,
+        workspace: Workspace,
     ) -> Result<WorkspaceEntry> {
+        let id = prepare_imported_workspace_file(&self.data_dir, &workspace)?;
+        let (entry, sync_error) = self.commit_imported_workspace(id, preferred_name)?;
+        if let Some(error) = sync_error {
+            return Err(error);
+        }
+        Ok(entry)
+    }
+
+    /// Commits a workspace file previously staged by
+    /// [`prepare_imported_workspace_file`] into `workspaces.json`.
+    ///
+    /// Returns `Ok((entry, None))` when published and directory-synced,
+    /// `Ok((entry, Some(sync_error)))` when the workspace is already published
+    /// on disk and in memory but directory sync failed afterward, or `Err` when
+    /// the registry was not modified (removing the staged directory).
+    pub fn commit_imported_workspace(
+        &mut self,
+        id: Uuid,
+        preferred_name: &str,
+    ) -> Result<(WorkspaceEntry, Option<anyhow::Error>)> {
         let base = if preferred_name.trim().is_empty() {
             "Imported workspace"
         } else {
@@ -657,27 +687,17 @@ impl DataStore {
         let name = crate::model::unique_workspace_name(base, |candidate| {
             self.registry.name_taken(candidate, None)
         });
-        workspace.normalize();
         let now = now_unix_seconds();
         let entry = WorkspaceEntry {
-            id: Uuid::new_v4(),
+            id,
             name,
             created_at: now,
             last_opened_at: now,
         };
-        let file = WorkspaceFile::acquire_managed_create(
-            self.workspace_path(entry.id),
-            self.backups_dir(),
-            entry.id,
-        )?;
-        file.save(&workspace)?;
-        drop(file);
-
         let mut candidate = self.registry.clone();
         candidate.workspaces.push(entry.clone());
         match self.commit_registry(candidate) {
-            Ok(None) => Ok(entry),
-            Ok(Some(sync_error)) => Err(sync_error),
+            Ok(sync_error) => Ok((entry, sync_error)),
             Err(error) => {
                 let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
                 Err(error)
@@ -686,7 +706,9 @@ impl DataStore {
     }
 
     /// Writes a full JSON backup of workspace `id` (using `live_snapshot` when
-    /// backing up the currently open workspace) atomically to `destination`.
+    /// backing up the currently open workspace, or copying the on-disk file
+    /// verbatim for an inactive workspace so unknown fields and version
+    /// metadata are preserved) atomically to `destination`.
     pub fn backup_workspace(
         &self,
         id: Uuid,
@@ -697,11 +719,10 @@ impl DataStore {
             self.workspace_entry(id).is_some(),
             "Workspace {id} does not exist"
         );
-        let workspace = match live_snapshot {
-            Some(live) => live.clone(),
-            None => super::load_existing(&self.workspace_path(id))?,
-        };
-        write_workspace_backup(&workspace, destination)
+        match live_snapshot {
+            Some(live) => write_workspace_backup(live, destination),
+            None => backup_workspace_file(&self.workspace_path(id), destination),
+        }
     }
 
     /// Deletes workspace `id`, verifying no live saver holds its lock,
@@ -853,6 +874,32 @@ impl DataStore {
     }
 }
 
+/// Stages a newly imported workspace into `workspaces/<id>/workspace.json`
+/// without mutating `workspaces.json`. Safe to run on a background thread.
+pub fn prepare_imported_workspace_file(data_dir: &Path, workspace: &Workspace) -> Result<Uuid> {
+    let mut normalized = workspace.clone();
+    normalized.normalize();
+    let id = Uuid::new_v4();
+    let file = WorkspaceFile::acquire_managed_create(
+        workspace_file_path(data_dir, id),
+        backups_directory(data_dir),
+        id,
+    )?;
+    file.save(&normalized)?;
+    Ok(id)
+}
+
+/// Copies an on-disk workspace file verbatim to `destination` atomically,
+/// preserving any unknown fields and newer-version metadata.
+pub fn backup_workspace_file(source: &Path, destination: &Path) -> Result<()> {
+    let raw = fs::read(source)
+        .with_context(|| format!("Could not read workspace file {}", source.display()))?;
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_atomically(destination, &raw)
+}
+
 /// Writes a full v9 JSON backup of `workspace` atomically to `destination`.
 pub fn write_workspace_backup(workspace: &Workspace, destination: &Path) -> Result<()> {
     if let Some(parent) = destination.parent() {
@@ -956,10 +1003,12 @@ fn initialize_fresh_store(data_dir: &Path) -> Result<()> {
 /// Local folders (`catalog`, `dbt`, `assistant/transcripts`) are relocated
 /// *after* `workspaces.json` is committed in [`DataStore::open`], so an
 /// interrupted migration never strands transcripts under an abandoned UUID.
-fn migrate_legacy_layout(data_dir: &Path, legacy_path: &Path) -> Result<()> {
+/// Returns the held legacy `workspace.lock` handle so the caller keeps the lock
+/// until legacy cleanup finishes.
+fn migrate_legacy_layout(data_dir: &Path, legacy_path: &Path) -> Result<fs::File> {
     // Claim the legacy workspace lock too so a competing older Qrow process
     // cannot be writing while we migrate.
-    let _legacy_lock = acquire_lock(&legacy_path.with_extension("lock"), "workspace")?;
+    let legacy_lock = acquire_lock(&legacy_path.with_extension("lock"), "workspace")?;
 
     let raw = fs::read(legacy_path).context("Could not read saved workspace")?;
     let MigratedDocument {
@@ -1060,8 +1109,8 @@ fn migrate_legacy_layout(data_dir: &Path, legacy_path: &Path) -> Result<()> {
 
     // Legacy root `workspace.json` is removed by `DataStore::open` only after
     // the migrated workspace opens cleanly, keeping local data intact if
-    // opening the replacement fails.
-    Ok(())
+    // opening the replacement fails. Keep `legacy_lock` held through cleanup.
+    Ok(legacy_lock)
 }
 
 fn relocate_local_subdirs(local_dir: &Path, target_local: &Path) -> Result<()> {

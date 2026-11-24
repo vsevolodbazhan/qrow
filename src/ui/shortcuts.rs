@@ -698,6 +698,30 @@ fn base_commands() -> Vec<Command> {
             [(ManageWorkspaces, None)]
         ),
         command!(
+            "import_workspace",
+            "Import Workspace",
+            Application,
+            Window,
+            Unset,
+            [(ImportWorkspace, None)]
+        ),
+        command!(
+            "export_workspace",
+            "Export Workspace",
+            Application,
+            Window,
+            Unset,
+            [(ExportWorkspace, None)]
+        ),
+        command!(
+            "backup_workspace",
+            "Back Up Workspace",
+            Application,
+            Window,
+            Unset,
+            [(BackupWorkspace, None)]
+        ),
+        command!(
             "check_for_updates",
             "Check for Updates",
             Application,

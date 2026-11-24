@@ -2,26 +2,50 @@
 //!
 //! Uses an explicit field whitelist — mirroring [`super::sharing`] — so secrets
 //! (passwords, OIDC tokens, signed-in identities), machine-local paths (dbt
-//! manifests, cache directories), app-wide settings, and assistant transcripts
-//! are never exported by accident. Every imported object receives fresh UUIDs
-//! so importing never collides with existing Keychain items or local caches.
+//! manifests, cache directories), app-wide settings, custom keep-alive SQL, and
+//! assistant transcripts are never exported by accident. Sensitive optional
+//! fields (session parameters, assistant notes) are excluded by default and
+//! require explicit opt-in via [`ExportOptions`]. Every imported object
+//! receives fresh UUIDs so importing never collides with existing Keychain
+//! items or local caches.
 
 use super::{
     Authentication, CatalogColumnReads, CatalogSettings, ConnectionEnvironment, ConnectionGroup,
     ConnectionLifecycle, DatabaseType, MAX_WORKSPACE_NAME, PostgresSslMode, Profile, SavedTab,
     SharedCatalog, SharedSignIn, SignIn, SignInProvider, Workspace, WorkspaceLayout,
-    transfer::Transfer,
+    transfer::Transfer, validate_group_name,
 };
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
 /// Format version of `.qrow-workspace.json` bundles.
 pub const EXPORTED_WORKSPACE_VERSION: u32 = 1;
-/// Largest portable workspace bundle Qrow will read (16 MiB).
-const MAX_EXPORTED_WORKSPACE_BYTES: usize = 16 * 1024 * 1024;
+/// Largest portable workspace bundle Qrow will export or read (16 MiB).
+pub const MAX_EXPORTED_WORKSPACE_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_IMPORTED_NAME: &str = "Imported workspace";
+
+/// Explicit content selection for portable workspace export.
+///
+/// Safe defaults exclude session parameters and assistant notes because they
+/// can contain secrets or local paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExportOptions {
+    pub include_sql: bool,
+    pub include_parameters: bool,
+    pub include_assistant_notes: bool,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            include_sql: true,
+            include_parameters: false,
+            include_assistant_notes: false,
+        }
+    }
+}
 
 /// Result of parsing a portable `.qrow-workspace.json` bundle.
 #[derive(Clone, Debug, PartialEq)]
@@ -144,10 +168,30 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn sanitized_portable_lifecycle(lifecycle: &ConnectionLifecycle) -> ConnectionLifecycle {
+    ConnectionLifecycle {
+        idle_seconds: lifecycle.idle_seconds,
+        // Never export or import background keep-alive SQL or automatic
+        // keep-alive intervals; recipients must opt in explicitly.
+        keep_alive_seconds: 0,
+        keep_alive_sql: ConnectionLifecycle::default().keep_alive_sql,
+        response_timeout_seconds: lifecycle.response_timeout_seconds,
+    }
+}
+
 /// Serializes `workspace` (with display `name`) into a portable
-/// `.qrow-workspace.json` document containing no credentials, local paths,
-/// app-wide settings, or assistant transcripts.
-pub fn export_workspace(name: &str, workspace: &Workspace) -> String {
+/// `.qrow-workspace.json` document using safe default [`ExportOptions`].
+pub fn export_workspace(name: &str, workspace: &Workspace) -> Result<String> {
+    export_workspace_with_options(name, workspace, ExportOptions::default())
+}
+
+/// Serializes `workspace` (with display `name`) into a portable
+/// `.qrow-workspace.json` document using explicit `options`.
+pub fn export_workspace_with_options(
+    name: &str,
+    workspace: &Workspace,
+    options: ExportOptions,
+) -> Result<String> {
     let group_index: HashMap<Uuid, usize> = workspace
         .groups
         .iter()
@@ -213,16 +257,24 @@ pub fn export_workspace(name: &str, workspace: &Workspace) -> String {
                 username: profile.username.clone(),
                 database: profile.database.clone(),
                 trino_schema: profile.trino_schema.clone(),
-                parameters: profile.parameters.clone(),
+                parameters: if options.include_parameters {
+                    profile.parameters.clone()
+                } else {
+                    BTreeMap::new()
+                },
                 tls: profile.tls,
                 postgres_ssl_mode: (profile.database_type == DatabaseType::Postgres)
                     .then(|| profile.postgres_ssl_mode()),
                 authentication,
                 transfer: profile.transfer.clone(),
-                lifecycle: profile.lifecycle.clone(),
+                lifecycle: sanitized_portable_lifecycle(&profile.lifecycle),
                 catalog: profile.catalog.clone(),
                 catalog_column_reads: profile.catalog_column_reads,
-                assistant_notes: profile.assistant_notes.clone(),
+                assistant_notes: if options.include_assistant_notes {
+                    profile.assistant_notes.clone()
+                } else {
+                    String::new()
+                },
                 environment: profile.environment,
                 group: profile
                     .group_id
@@ -238,7 +290,11 @@ pub fn export_workspace(name: &str, workspace: &Workspace) -> String {
         .iter()
         .map(|tab| ExportedTab {
             title: tab.title.clone(),
-            sql: tab.sql.clone(),
+            sql: if options.include_sql {
+                tab.sql.clone()
+            } else {
+                String::new()
+            },
             profile: tab.profile.and_then(|id| profile_index.get(&id).copied()),
         })
         .collect();
@@ -254,11 +310,17 @@ pub fn export_workspace(name: &str, workspace: &Workspace) -> String {
         active_tab: workspace.active_tab,
         layout: workspace.layout.clone(),
     };
-    serde_json::to_string_pretty(&bundle).expect("exported workspace serializes")
+    let json = serde_json::to_string_pretty(&bundle).context("Could not serialize workspace.")?;
+    anyhow::ensure!(
+        json.len() <= MAX_EXPORTED_WORKSPACE_BYTES,
+        "The exported workspace exceeds the {} MiB portable bundle limit.",
+        MAX_EXPORTED_WORKSPACE_BYTES / (1024 * 1024)
+    );
+    Ok(json)
 }
 
-/// Parses a portable `.qrow-workspace.json` document into a fresh [`Workspace`]
-/// with newly minted UUIDs.
+/// Parses and validates a portable `.qrow-workspace.json` document into a fresh
+/// [`Workspace`] with newly minted UUIDs.
 pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
     anyhow::ensure!(
         text.len() <= MAX_EXPORTED_WORKSPACE_BYTES,
@@ -281,17 +343,25 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
     let exported: ExportedWorkspace<serde_json::Value> = serde_json::from_value(value)
         .map_err(|error| anyhow::Error::new(error).context("The workspace file is not valid."))?;
 
-    let groups: Vec<ConnectionGroup> = exported
-        .groups
-        .into_iter()
-        .map(|group| ConnectionGroup {
+    let mut groups: Vec<ConnectionGroup> = Vec::with_capacity(exported.groups.len());
+    let mut seen_groups: HashSet<String> = HashSet::new();
+    for raw_group in exported.groups {
+        let name = validate_group_name(&raw_group.name)
+            .context("A connection group in the workspace file is not valid.")?;
+        let key = name.to_lowercase();
+        anyhow::ensure!(
+            seen_groups.insert(key),
+            "The workspace file contains duplicate connection group \"{name}\"."
+        );
+        groups.push(ConnectionGroup {
             id: Uuid::new_v4(),
-            name: group.name,
-            collapsed: group.collapsed,
-        })
-        .collect();
+            name,
+            collapsed: raw_group.collapsed,
+        });
+    }
 
     let mut sign_ins: Vec<SignIn> = Vec::with_capacity(exported.sign_ins.len());
+    let mut seen_sign_ins: HashSet<String> = HashSet::new();
     for raw_sign_in in exported.sign_ins {
         let sign_in = SharedSignIn::read(raw_sign_in)
             .context("A sign-in in the workspace file is not valid.")?;
@@ -299,29 +369,79 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
             sign_in.provider == SignInProvider::Oidc,
             "Sign-ins in an exported workspace must use OpenID Connect."
         );
+        sign_in
+            .validate()
+            .context("A sign-in in the workspace file is not valid.")?;
+        let key = sign_in.name.trim().to_lowercase();
+        anyhow::ensure!(
+            seen_sign_ins.insert(key),
+            "The workspace file contains duplicate sign-in \"{}\".",
+            sign_in.name
+        );
         sign_ins.push(sign_in);
     }
 
-    let mut shared_catalogs: Vec<SharedCatalog> = exported
-        .shared_catalogs
-        .iter()
-        .map(|catalog| SharedCatalog {
+    let mut shared_catalogs: Vec<SharedCatalog> =
+        Vec::with_capacity(exported.shared_catalogs.len());
+    let mut seen_catalogs: HashSet<String> = HashSet::new();
+    for raw_catalog in &exported.shared_catalogs {
+        let catalog = SharedCatalog {
             id: Uuid::new_v4(),
-            name: catalog.name.clone(),
-            settings: catalog.settings.clone(),
+            name: raw_catalog.name.trim().to_owned(),
+            settings: raw_catalog.settings.clone(),
             preferred: None,
-        })
-        .collect();
+        };
+        catalog
+            .validate()
+            .context("A shared metadata definition in the workspace file is not valid.")?;
+        let key = catalog.name.to_lowercase();
+        anyhow::ensure!(
+            seen_catalogs.insert(key),
+            "The workspace file contains duplicate shared metadata \"{}\".",
+            catalog.name
+        );
+        shared_catalogs.push(catalog);
+    }
 
     let mut profiles: Vec<Profile> = Vec::with_capacity(exported.profiles.len());
+    let mut seen_profiles: HashSet<String> = HashSet::new();
     for raw_profile in exported.profiles {
         let authentication = match raw_profile.authentication {
             ExportedAuthentication::Password => Authentication::Password,
             ExportedAuthentication::TrinoExternal => Authentication::TrinoExternal,
-            ExportedAuthentication::Oidc { sign_in } => match sign_ins.get(sign_in) {
-                Some(si) => Authentication::Oidc { sign_in: si.id },
-                None => Authentication::Password,
-            },
+            ExportedAuthentication::Oidc { sign_in } => {
+                let si = sign_ins.get(sign_in).with_context(|| {
+                    format!(
+                        "Connection \"{}\" references missing sign-in index {sign_in}.",
+                        raw_profile.name
+                    )
+                })?;
+                Authentication::Oidc { sign_in: si.id }
+            }
+        };
+        let shared_catalog = match raw_profile.shared_catalog {
+            Some(ix) => {
+                let catalog = shared_catalogs.get(ix).with_context(|| {
+                    format!(
+                        "Connection \"{}\" references missing shared metadata index {ix}.",
+                        raw_profile.name
+                    )
+                })?;
+                Some(catalog.id)
+            }
+            None => None,
+        };
+        let group_id = match raw_profile.group {
+            Some(ix) => {
+                let group = groups.get(ix).with_context(|| {
+                    format!(
+                        "Connection \"{}\" references missing group index {ix}.",
+                        raw_profile.name
+                    )
+                })?;
+                Some(group.id)
+            }
+            None => None,
         };
         let mut profile = Profile {
             database_type: raw_profile.database_type,
@@ -335,26 +455,32 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
             trino_schema: raw_profile.trino_schema.trim().to_owned(),
             parameters: raw_profile.parameters,
             transfer: raw_profile.transfer,
-            lifecycle: raw_profile.lifecycle,
+            // Never run bundle-supplied keep-alive SQL in the background.
+            lifecycle: sanitized_portable_lifecycle(&raw_profile.lifecycle),
             catalog: raw_profile.catalog,
             catalog_column_reads: raw_profile.catalog_column_reads,
-            shared_catalog: raw_profile
-                .shared_catalog
-                .and_then(|ix| shared_catalogs.get(ix).map(|c| c.id)),
+            shared_catalog,
             tls: raw_profile.tls,
             postgres_ssl_mode: raw_profile.postgres_ssl_mode,
             authentication,
             assistant_notes: raw_profile.assistant_notes.trim().to_owned(),
             dbt: None,
-            group_id: raw_profile
-                .group
-                .and_then(|ix| groups.get(ix).map(|g| g.id)),
+            group_id,
             environment: raw_profile.environment,
             ..Profile::default()
         };
         if profile.database_type == DatabaseType::Postgres {
             profile.postgres_ssl_mode = Some(profile.postgres_ssl_mode());
         }
+        profile
+            .validate()
+            .with_context(|| format!("Connection \"{}\" is not valid.", profile.name))?;
+        let key = profile.name.to_lowercase();
+        anyhow::ensure!(
+            seen_profiles.insert(key),
+            "The workspace file contains duplicate connection \"{}\".",
+            profile.name
+        );
         profiles.push(profile);
     }
 
@@ -363,21 +489,41 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
         .iter()
         .zip(shared_catalogs.iter_mut())
     {
-        catalog.preferred = raw_catalog
-            .preferred_profile
-            .and_then(|ix| profiles.get(ix).map(|p| p.id));
+        catalog.preferred = match raw_catalog.preferred_profile {
+            Some(ix) => {
+                let profile = profiles.get(ix).with_context(|| {
+                    format!(
+                        "Shared metadata \"{}\" references missing preferred connection index {ix}.",
+                        catalog.name
+                    )
+                })?;
+                Some(profile.id)
+            }
+            None => None,
+        };
     }
 
-    let tabs: Vec<SavedTab> = exported
-        .tabs
-        .into_iter()
-        .map(|tab| SavedTab {
+    let mut tabs: Vec<SavedTab> = Vec::with_capacity(exported.tabs.len());
+    for raw_tab in exported.tabs {
+        let profile = match raw_tab.profile {
+            Some(ix) => {
+                let p = profiles.get(ix).with_context(|| {
+                    format!(
+                        "Tab \"{}\" references missing connection index {ix}.",
+                        raw_tab.title
+                    )
+                })?;
+                Some(p.id)
+            }
+            None => None,
+        };
+        tabs.push(SavedTab {
             id: Uuid::new_v4(),
-            title: tab.title,
-            sql: tab.sql,
-            profile: tab.profile.and_then(|ix| profiles.get(ix).map(|p| p.id)),
-        })
-        .collect();
+            title: raw_tab.title,
+            sql: raw_tab.sql,
+            profile,
+        });
+    }
 
     let mut workspace = Workspace {
         groups,
@@ -409,8 +555,7 @@ mod tests {
     use super::*;
     use crate::model::{AssistantConversation, AssistantExecutionMode, DbtProject, Identity};
 
-    #[test]
-    fn export_omits_secrets_local_paths_settings_and_assistant_and_remaps_ids() {
+    fn sample_workspace() -> (Workspace, Uuid, Uuid, Uuid) {
         let group = ConnectionGroup::new("Production");
         let sign_in = SignIn {
             name: "Corp SSO".into(),
@@ -429,8 +574,16 @@ mod tests {
             host: "spark.internal".into(),
             username: "analyst".into(),
             database: "warehouse".into(),
+            parameters: BTreeMap::from([("spark.secret.token".into(), "top-secret".into())]),
             authentication: Authentication::Oidc {
                 sign_in: sign_in.id,
+            },
+            assistant_notes: "Internal secret note".into(),
+            lifecycle: ConnectionLifecycle {
+                idle_seconds: 900,
+                keep_alive_seconds: 60,
+                keep_alive_sql: "CALL dangerous_proc()".into(),
+                response_timeout_seconds: 300,
             },
             group_id: Some(group.id),
             environment: Some(ConnectionEnvironment::Production),
@@ -469,11 +622,21 @@ mod tests {
                 "thread-private",
                 AssistantExecutionMode::AskBeforeRunning,
             ));
+        (workspace, orig_profile_id, orig_group_id, orig_sign_in_id)
+    }
 
-        let exported_json = export_workspace("Analytics", &workspace);
-        // Must not contain any secrets, local paths, assistant threads, or settings.
+    #[test]
+    fn export_safe_defaults_omit_secrets_parameters_notes_keep_alive_and_remaps_ids() {
+        let (workspace, orig_profile_id, orig_group_id, orig_sign_in_id) = sample_workspace();
+
+        let exported_json = export_workspace("Analytics", &workspace).unwrap();
+        // Safe defaults must omit secrets, parameters, assistant notes, custom keep-alive SQL,
+        // local paths, assistant threads, settings, and original UUIDs.
         assert!(!exported_json.contains("sub-secret-user"));
         assert!(!exported_json.contains("alice@example.com"));
+        assert!(!exported_json.contains("top-secret"));
+        assert!(!exported_json.contains("Internal secret note"));
+        assert!(!exported_json.contains("dangerous_proc"));
         assert!(!exported_json.contains("/Users/secret"));
         assert!(!exported_json.contains("thread-private"));
         assert!(!exported_json.contains("\"settings\""));
@@ -496,6 +659,10 @@ mod tests {
         assert_ne!(p.id, orig_profile_id);
         assert_eq!(p.group_id, Some(imported.workspace.groups[0].id));
         assert_eq!(p.environment, Some(ConnectionEnvironment::Production));
+        assert!(p.parameters.is_empty());
+        assert!(p.assistant_notes.is_empty());
+        assert_eq!(p.lifecycle.keep_alive_seconds, 0);
+        assert_eq!(p.lifecycle.keep_alive_sql, "SELECT 1");
         assert_eq!(
             p.authentication,
             Authentication::Oidc {
@@ -514,6 +681,93 @@ mod tests {
             imported.workspace.layout.as_ref().map(|l| l.sidebar_open),
             Some(false)
         );
+    }
+
+    #[test]
+    fn export_with_explicit_options_controls_sql_parameters_and_notes() {
+        let (workspace, ..) = sample_workspace();
+        let exported = export_workspace_with_options(
+            "Analytics",
+            &workspace,
+            ExportOptions {
+                include_sql: false,
+                include_parameters: true,
+                include_assistant_notes: true,
+            },
+        )
+        .unwrap();
+        assert!(!exported.contains("SELECT sum(amount)"));
+        assert!(exported.contains("top-secret"));
+        assert!(exported.contains("Internal secret note"));
+        assert!(!exported.contains("dangerous_proc"));
+    }
+
+    #[test]
+    fn import_disables_crafted_keep_alive_sql_and_rejects_bad_references_or_profiles() {
+        // Crafted bundle with background keep-alive SQL must be neutralized.
+        let crafted_keep_alive = r#"{
+            "qrow_workspace": 1,
+            "name": "Crafted",
+            "profiles": [{
+                "name": "P1",
+                "host": "db.internal",
+                "username": "alice",
+                "database": "main",
+                "lifecycle": {
+                    "idle_seconds": 900,
+                    "keep_alive_seconds": 30,
+                    "keep_alive_sql": "DROP TABLE audit_log",
+                    "response_timeout_seconds": 300
+                }
+            }]
+        }"#;
+        let imported = import_workspace(crafted_keep_alive).unwrap();
+        assert_eq!(
+            imported.workspace.profiles[0].lifecycle.keep_alive_seconds,
+            0
+        );
+        assert_eq!(
+            imported.workspace.profiles[0].lifecycle.keep_alive_sql,
+            "SELECT 1"
+        );
+
+        // Invalid OIDC sign-in index must be rejected (never silently downgraded to Password).
+        let bad_oidc = r#"{
+            "qrow_workspace": 1,
+            "profiles": [{
+                "name": "P1",
+                "host": "db.internal",
+                "username": "alice",
+                "database": "main",
+                "authentication": { "method": "oidc", "sign_in": 4 }
+            }]
+        }"#;
+        assert!(import_workspace(bad_oidc).is_err());
+
+        // Invalid tab profile index must be rejected (never redirected to another connection).
+        let bad_tab = r#"{
+            "qrow_workspace": 1,
+            "profiles": [{
+                "name": "P1",
+                "host": "db.internal",
+                "username": "alice",
+                "database": "main"
+            }],
+            "tabs": [{ "title": "Q1", "sql": "SELECT 1", "profile": 9 }]
+        }"#;
+        assert!(import_workspace(bad_tab).is_err());
+
+        // Invalid profile (missing host) must fail Profile::validate.
+        let bad_profile = r#"{
+            "qrow_workspace": 1,
+            "profiles": [{
+                "name": "P1",
+                "host": "",
+                "username": "alice",
+                "database": "main"
+            }]
+        }"#;
+        assert!(import_workspace(bad_profile).is_err());
     }
 
     #[test]

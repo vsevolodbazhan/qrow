@@ -10,37 +10,42 @@ The connection icon identifies the connection type. Kyuubi connections use the
 Spark icon. Postgres connections use the elephant icon. Trino connections use the rabbit icon.
 
 Drag a connection name to change the order of the connections or to move a
-connection into or out of a group. Drop above or below the center of another
-connection row to reorder, or drop onto a group row to move the connection into
-that group. A line or highlight shows the new position. Qrow saves the order
-and group membership and restores them at the next start. Reordering keeps the
-current connection, query tabs, sessions, and expanded schemas.
+connection between groups. Drop above or below the center of another connection
+row to place the connection beside it and assign the target connection's group.
+Drop onto a group row to move the connection into that group. A line or
+highlight shows the new position. Qrow saves the order and group membership and
+restores them at the next start. Reordering keeps the current connection, query
+tabs, sessions, and expanded schemas.
 
 You can also select **Move up** or **Move down** in the connection context
 menu. With a connection row selected in the tree, press **⌥↑** or **⌥↓**.
-These commands move a connection among its siblings in the same group (or among
-ungrouped connections). Schema, table, and column rows cannot be reordered.
+These commands move a connection among its siblings in the same group, or among
+ungrouped connections. Schema, table, and column rows cannot be reordered.
 
 ## Organize connections in groups
 
-You can group connections into collapsible folders in the Connections sidebar.
+You can organize connections into collapsible groups in the Connections
+sidebar.
 
-- Click the **New group** button beside **+** in the Connections sidebar header,
-  or right-click a connection and select **Move to group → New group…**.
+- Click the **New group** button beside **+** in the Connections sidebar header
+  to create a group.
+- Right-click a connection and select **Move to group → New group…** to create
+  a group and move that connection into it.
 - Click a group row to expand or collapse it. Qrow saves the collapsed state in
   the workspace.
 - Right-click a connection and select **Move to group** to move it to another
-  group or to **Ungrouped**, or drag it onto a group row.
-- Right-click a group to **Rename** or **Delete** it. Deleting a group removes
-  the folder and keeps all of its connections as ungrouped connections.
+  group or to **No group**. You can also drag a connection onto a group row.
+- Right-click a group and select **Rename group…** to rename it.
+- Right-click a group and select **Delete group** to delete it. Deleting a
+  group removes the group and keeps its connections as ungrouped connections.
 
 ## Environment badges
 
-On the **General** page of **Connection Settings**, you can select an
+In **Connection Settings → General → Organization**, you can select an
 **Environment** for each connection: **None**, **Production**, **Staging**,
-**Development**, or **Local**. Qrow shows a compact badge beside the connection
-name in the Connections sidebar and a full badge beside the active connection
-in the status bar. Each badge uses semantic theme colors.
+**Development**, or **Local**. **None** hides the badge. When an environment is
+selected, Qrow shows a compact semantic badge beside the connection name in the
+Connections sidebar and beside the active connection in the status bar.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
@@ -77,17 +82,18 @@ search field above the pages to find a field.
 1. Click **+** beside Connections.
 2. On the **General** page, select **Connection Type**.
 3. Enter a name, the server hostname or IP address, and the port.
-4. Optional: Select an **Environment** badge and a **Group**.
-5. For Kyuubi or Trino, turn on **TLS** if the server accepts TLS on this port.
+4. For Kyuubi or Trino, turn on **TLS** if the server accepts TLS on this port.
    For Postgres, select a [TLS Mode](#use-postgres).
-6. For Kyuubi, select the authentication:
+5. For Kyuubi, select the authentication:
    - **Password**: enter your LDAP username and password.
    - **Sign-in**: select a
      [sign-in](#sign-in-with-openid-connect) and enter the database username.
 
    For Postgres, enter the role name and password. For Trino, see [Use Trino](#use-trino).
-7. Enter the initial database. For Trino, enter the initial catalog and optional schema.
-8. Enter session parameters as a JSON object with string values.
+6. Enter the initial database. For Trino, enter the initial catalog and optional schema.
+7. Enter session parameters as a JSON object with string values.
+8. Optional: Under **Organization**, select an **Environment** badge. If the
+   workspace has groups, you can also select a **Group**.
 9. Optional: To [browse the schemas](#browse-schemas) of the connection, go
    to the **Metadata** page and set **Refresh** to **Manual** or **While
    connected**. Then you can enter [schema patterns](#show-or-hide-schemas).
@@ -335,7 +341,7 @@ memory reservation until it stops. Failed cleanup closes the session.
   buffer has a 1 MiB limit. Qrow keeps a raw JSON page and decodes one row at a
   time. Decoding and one response page use memory in addition to the retained
   result limits. Direct fetches contain at most 1,000 rows and 48 MiB, with one
-  pending row of up to 16 MiB. See [Export downloaded rows](results.md#export-downloaded-rows).
+  pending row of up to 16 MiB. See [Export all rows](results.md#export-all-rows-and-reuse-a-download).
 - A schema can have 4,096 columns. Column names have a 1 KiB limit, type names
   have a 4 KiB limit, and their combined text has a 1 MiB limit. Session state
   can have 1,024 settings and 256 KiB of text. Each setting or encoded prepared
@@ -851,7 +857,7 @@ the sign-in that Qrow adds. Make sure that you trust the issuer.
 ## Browse schemas
 
 The Connections sidebar is a tree. Each connection group and each ungrouped
-connection is a root row; grouped connections appear inside their group. Under a
+connection is a root row. Grouped connections appear inside their group. Under a
 connection that browses schemas, the tree shows its schemas, then the tables
 and views of each schema, then the columns of each table or view. A column
 row shows a minus icon under the icon of its table or view, the column name,

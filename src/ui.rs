@@ -896,6 +896,7 @@ pub struct Qrow {
     browser: Option<environment::Browser>,
     workspace_manager_open: bool,
     workspace_name_form: Option<workspaces::WorkspaceNameForm>,
+    export_workspace_form: Option<workspaces::ExportWorkspaceForm>,
     workspace_switch_warning_open: bool,
     workspace_summaries: std::collections::HashMap<Uuid, (usize, usize)>,
     /// Reusable sign-ins. The service owns their tokens and identities.
@@ -912,7 +913,8 @@ pub struct Qrow {
     sidebar_focus: FocusHandle,
     editor_height: Pixels,
     editor_height_ratio: Option<f32>,
-    resize: Option<(bool, Point<Pixels>, Pixels)>,
+    pending_editor_height_ratio: Option<f32>,
+    resize: Option<(bool, Point<Pixels>, Pixels, bool)>,
     window_state_path: Option<std::path::PathBuf>,
     window_bounds_dirty: Option<(Instant, storage::SavedWindowBounds)>,
     focus: FocusHandle,
@@ -1264,6 +1266,7 @@ impl Qrow {
             browser: environment.browser(),
             workspace_manager_open: false,
             workspace_name_form: None,
+            export_workspace_form: None,
             workspace_switch_warning_open: false,
             workspace_summaries: std::collections::HashMap::new(),
             sign_ins: workspace.sign_ins,
@@ -1277,6 +1280,7 @@ impl Qrow {
             sidebar_focus: cx.focus_handle(),
             editor_height: initial_editor_height,
             editor_height_ratio: initial_layout.editor_height_ratio,
+            pending_editor_height_ratio: initial_layout.editor_height_ratio,
             resize: None,
             window_state_path,
             window_bounds_dirty: None,
@@ -1510,10 +1514,17 @@ impl Qrow {
         self.sidebar_panel = layout.sidebar_panel.into();
         self.sidebar_width = px(layout.sidebar_width * scale);
         self.editor_height_ratio = layout.editor_height_ratio;
-        self.editor_height = layout
-            .editor_height_ratio
-            .map(|ratio| editor_height_for_ratio(ratio, window.viewport_size().height, scale))
-            .unwrap_or_else(|| px(285. * scale));
+        let viewport_height = window.viewport_size().height;
+        if viewport_height > px(0.) {
+            self.pending_editor_height_ratio = None;
+            self.editor_height = layout
+                .editor_height_ratio
+                .map(|ratio| editor_height_for_ratio(ratio, viewport_height, scale))
+                .unwrap_or_else(|| px(285. * scale));
+        } else {
+            self.pending_editor_height_ratio = layout.editor_height_ratio;
+            self.editor_height = px(285. * scale);
+        }
     }
 
     fn record_window_bounds(&mut self, window: &Window, cx: &App) {
@@ -2643,6 +2654,7 @@ impl Qrow {
             || self.sign_in_ui.editor.is_some()
             || self.workspace_manager_open
             || self.workspace_name_form.is_some()
+            || self.export_workspace_form.is_some()
             || self.workspace_switch_warning_open
             || self.group_name_form.is_some()
     }

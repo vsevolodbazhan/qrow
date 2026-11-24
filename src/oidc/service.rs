@@ -346,11 +346,21 @@ impl Service {
     /// signed in, because its tokens remain available.
     pub fn sign_out(&self, id: Uuid) -> Result<()> {
         let record = self.record(id)?;
-        record.generation.fetch_add(1, Ordering::SeqCst);
+        let generation = record.generation.fetch_add(1, Ordering::SeqCst) + 1;
         // Wait for a running refresh. It sees the new generation and does
         // not save its result.
         let mut work = record.work.lock_unpoisoned();
-        self.store.delete_tokens(id)?;
+        {
+            let _token_guard = self.token_lock.lock_unpoisoned();
+            // If this sign-in record was removed or superseded by a workspace
+            // switch while we waited on `record.work`, do not touch Keychain.
+            if record.removed.load(Ordering::SeqCst)
+                || record.generation.load(Ordering::SeqCst) != generation
+            {
+                return Ok(());
+            }
+            self.store.delete_tokens(id)?;
+        }
         *work = Work {
             loaded: true,
             ..Work::default()
