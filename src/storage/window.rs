@@ -37,6 +37,10 @@ pub struct SavedWindowBounds {
     pub height: f32,
     #[serde(default)]
     pub maximized: bool,
+    /// Stable display UUID from GPUI so multi-monitor and mixed-DPI layouts
+    /// reopen on the exact monitor where the window was last placed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_uuid: Option<uuid::Uuid>,
 }
 
 /// Path to the machine-local window geometry file inside `local_dir`.
@@ -120,6 +124,7 @@ mod tests {
             width: 1400.,
             height: 900.,
             maximized: false,
+            display_uuid: None,
         };
         save_window_bounds(&path, bounds).unwrap();
         assert_eq!(load_window_bounds(&path), Some(bounds));
@@ -133,6 +138,7 @@ mod tests {
             width: 1280.,
             height: 820.,
             maximized: false,
+            display_uuid: None,
         };
         assert!(!offscreen.fits_any_display(&[(0., 0., 1920., 1080.)]));
         // Title bar stranded above top edge is rejected.
@@ -142,6 +148,7 @@ mod tests {
             width: 1280.,
             height: 820.,
             maximized: false,
+            display_uuid: None,
         };
         assert!(!top_cut.fits_any_display(&[(0., 0., 1920., 1080.)]));
         // Below minimum size is rejected.
@@ -151,6 +158,7 @@ mod tests {
             width: 500.,
             height: 400.,
             maximized: false,
+            display_uuid: None,
         };
         assert!(!too_small.fits_any_display(&[(0., 0., 1920., 1080.)]));
     }

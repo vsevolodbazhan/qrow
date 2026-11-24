@@ -287,6 +287,7 @@ impl Qrow {
             && let Some(group) = self.groups.iter_mut().find(|g| g.id == id)
         {
             group.collapsed = false;
+            self.catalog.uncollapse_group(id);
         }
         self.rebuild_catalog_tree(cx);
         self.changed(cx);

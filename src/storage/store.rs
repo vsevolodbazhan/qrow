@@ -642,6 +642,68 @@ impl DataStore {
         }
     }
 
+    /// Registers a newly imported [`Workspace`] under a unique name derived
+    /// from `preferred_name`, saving it atomically under a fresh workspace ID.
+    pub fn import_workspace(
+        &mut self,
+        preferred_name: &str,
+        mut workspace: Workspace,
+    ) -> Result<WorkspaceEntry> {
+        let base = if preferred_name.trim().is_empty() {
+            "Imported workspace"
+        } else {
+            preferred_name.trim()
+        };
+        let name = crate::model::unique_workspace_name(base, |candidate| {
+            self.registry.name_taken(candidate, None)
+        });
+        workspace.normalize();
+        let now = now_unix_seconds();
+        let entry = WorkspaceEntry {
+            id: Uuid::new_v4(),
+            name,
+            created_at: now,
+            last_opened_at: now,
+        };
+        let file = WorkspaceFile::acquire_managed_create(
+            self.workspace_path(entry.id),
+            self.backups_dir(),
+            entry.id,
+        )?;
+        file.save(&workspace)?;
+        drop(file);
+
+        let mut candidate = self.registry.clone();
+        candidate.workspaces.push(entry.clone());
+        match self.commit_registry(candidate) {
+            Ok(None) => Ok(entry),
+            Ok(Some(sync_error)) => Err(sync_error),
+            Err(error) => {
+                let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+                Err(error)
+            }
+        }
+    }
+
+    /// Writes a full JSON backup of workspace `id` (using `live_snapshot` when
+    /// backing up the currently open workspace) atomically to `destination`.
+    pub fn backup_workspace(
+        &self,
+        id: Uuid,
+        live_snapshot: Option<&Workspace>,
+        destination: &Path,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.workspace_entry(id).is_some(),
+            "Workspace {id} does not exist"
+        );
+        let workspace = match live_snapshot {
+            Some(live) => live.clone(),
+            None => super::load_existing(&self.workspace_path(id))?,
+        };
+        write_workspace_backup(&workspace, destination)
+    }
+
     /// Deletes workspace `id`, verifying no live saver holds its lock,
     /// committing the updated registry first, and then removing its
     /// directories and Keychain secrets.
@@ -789,6 +851,19 @@ impl DataStore {
             &serde_json::to_vec_pretty(&value)?,
         )
     }
+}
+
+/// Writes a full v9 JSON backup of `workspace` atomically to `destination`.
+pub fn write_workspace_backup(workspace: &Workspace, destination: &Path) -> Result<()> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut value = serde_json::to_value(workspace)?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("settings");
+    }
+    migrations::stamp_envelope(&mut value, &WORKSPACE_SPEC, None);
+    write_atomically(destination, &serde_json::to_vec_pretty(&value)?)
 }
 
 fn has_existing_managed_workspaces(data_dir: &Path) -> bool {
@@ -983,8 +1058,9 @@ fn migrate_legacy_layout(data_dir: &Path, legacy_path: &Path) -> Result<()> {
         return Err(error);
     }
 
-    // 5. Remove legacy root `workspace.json` (original is safely in `backups/`).
-    let _ = fs::remove_file(legacy_path);
+    // Legacy root `workspace.json` is removed by `DataStore::open` only after
+    // the migrated workspace opens cleanly, keeping local data intact if
+    // opening the replacement fails.
     Ok(())
 }
 

@@ -468,8 +468,18 @@ impl Service {
                     Failure::SignInRequired => {
                         // The provider rejected the refresh token. Keep it out
                         // of later attempts. The identity stays for display.
+                        // Serialize with `token_lock` and re-check removal so a
+                        // stale worker cannot delete tokens for a newly
+                        // re-registered sign-in with the same ID.
                         work.tokens = None;
-                        let _ = self.store.delete_tokens(id);
+                        {
+                            let _guard = self.token_lock.lock_unpoisoned();
+                            if !record.removed.load(Ordering::SeqCst)
+                                && record.generation.load(Ordering::SeqCst) == generation
+                            {
+                                let _ = self.store.delete_tokens(id);
+                            }
+                        }
                         let message = expired_message();
                         self.set_problem(record, Some((failure, message.clone())));
                         return Err(required(message));

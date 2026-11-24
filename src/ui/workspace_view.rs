@@ -166,6 +166,18 @@ impl Qrow {
                                 )
                                 .separator()
                                 .item(
+                                    PopupMenuItem::new("Import workspace…")
+                                        .action(Box::new(ImportWorkspace)),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Export workspace…")
+                                        .action(Box::new(ExportWorkspace)),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Back up workspace…")
+                                        .action(Box::new(BackupWorkspace)),
+                                )
+                                .item(
                                     PopupMenuItem::new("Reveal workspace folder")
                                         .action(Box::new(RevealWorkspaceFolder)),
                                 )
@@ -1035,7 +1047,7 @@ impl Qrow {
                         if horizontal {
                             this.shown_sidebar_width(window.viewport_size().width)
                         } else {
-                            this.editor_height
+                            this.resolved_editor_height(window.viewport_size().height)
                         },
                     ));
                     cx.stop_propagation();
@@ -1143,6 +1155,21 @@ const MIN_WORK_AREA_WIDTH: f32 = 560.;
 const SIDEBAR_YIELDS_TO_WIDTH: f32 = 560.;
 
 impl Qrow {
+    /// Effective editor height in `viewport_height`, honoring a persisted
+    /// `editor_height_ratio` whenever the user is not actively dragging the
+    /// vertical splitter.
+    fn resolved_editor_height(&self, viewport_height: Pixels) -> Pixels {
+        let base = if self.resize.is_some_and(|(horizontal, _, _)| !horizontal) {
+            self.editor_height
+        } else if let Some(ratio) = self.editor_height_ratio {
+            editor_height_for_ratio(ratio, viewport_height, self.settings.ui_scale)
+        } else {
+            self.editor_height
+        };
+        base.min(viewport_height - self.ui_px(294.))
+            .max(self.ui_px(100.))
+    }
+
     /// The width of the sidebar in a window that is `viewport` wide. A
     /// narrow window narrows the sidebar, down to its least width, before
     /// the work area gets narrower than [`SIDEBAR_YIELDS_TO_WIDTH`].
@@ -1324,6 +1351,9 @@ impl Qrow {
             .on_action(cx.listener(Self::switch_to_workspace_action))
             .on_action(cx.listener(Self::new_workspace_action))
             .on_action(cx.listener(Self::manage_workspaces_action))
+            .on_action(cx.listener(Self::import_workspace_action))
+            .on_action(cx.listener(Self::export_workspace_action))
+            .on_action(cx.listener(Self::backup_workspace_action))
             .on_action(cx.listener(Self::reveal_workspace_folder_action))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 if let Some((start, initial)) = this.assistant_state.resizing {
@@ -1532,10 +1562,7 @@ impl Render for Qrow {
     /// results. The window shell around it has the assistant pane.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Split positions are measured window geometry. Clamp without mutating retained state during render.
-        let editor_height = self
-            .editor_height
-            .min(window.viewport_size().height - self.ui_px(294.))
-            .max(self.ui_px(100.));
+        let editor_height = self.resolved_editor_height(window.viewport_size().height);
         let results_expansion = motion::panel_fraction(
             "query-results",
             !self.settings.results_minimized,

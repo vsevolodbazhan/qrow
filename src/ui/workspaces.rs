@@ -111,6 +111,400 @@ impl Qrow {
         }
     }
 
+    pub(super) fn import_workspace_action(
+        &mut self,
+        _: &ImportWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.store.is_none() || self.dialog_open() || window.has_active_dialog(cx) {
+            return;
+        }
+        self.prompt_import_workspace(false, window, cx);
+    }
+
+    pub(super) fn export_workspace_action(
+        &mut self,
+        _: &ExportWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_open() || window.has_active_dialog(cx) {
+            return;
+        }
+        let Some(id) = self
+            .store
+            .as_ref()
+            .map(storage::DataStore::active_workspace_id)
+        else {
+            return;
+        };
+        self.prompt_export_workspace(id, window, cx);
+    }
+
+    pub(super) fn backup_workspace_action(
+        &mut self,
+        _: &BackupWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_open() || window.has_active_dialog(cx) {
+            return;
+        }
+        let Some(id) = self
+            .store
+            .as_ref()
+            .map(storage::DataStore::active_workspace_id)
+        else {
+            return;
+        };
+        self.prompt_backup_workspace(id, window, cx);
+    }
+
+    fn safe_workspace_filename(name: &str, suffix: &str) -> String {
+        let cleaned: String = name
+            .trim()
+            .chars()
+            .map(|ch| {
+                if ch.is_control()
+                    || matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+                {
+                    '_'
+                } else {
+                    ch
+                }
+            })
+            .collect();
+        let base = cleaned.trim();
+        let base = if base.is_empty() { "workspace" } else { base };
+        format!("{base}{suffix}")
+    }
+
+    fn prompt_export_workspace(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Some(entry) = store.workspace_entry(id) else {
+            return;
+        };
+        let name = entry.name.clone();
+        let filename = Self::safe_workspace_filename(&name, ".qrow-workspace.json");
+        let directory = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+        let prompt = cx.prompt_for_new_path(&directory, Some(&filename));
+        cx.spawn_in(window, async move |this, cx| {
+            let path = match prompt.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) => return,
+                error => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.report_failure(
+                            toast::Failure {
+                                id: "workspace-export-error",
+                                title: "Could not open the save panel",
+                                file: None,
+                                log: crate::activity::APPLICATION,
+                                source: WORKSPACES_SOURCE,
+                                error: format!("{error:?}"),
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                    return;
+                }
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.export_workspace_to_path(id, path, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Exports workspace `id` as a portable `.qrow-workspace.json` bundle to `path`.
+    pub fn export_workspace_to_path(
+        &mut self,
+        id: Uuid,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Some(entry) = store.workspace_entry(id) else {
+            return;
+        };
+        let name = entry.name.clone();
+        let live_snapshot = (store.active_workspace_id() == id).then(|| self.snapshot(cx));
+        let source_path = store.workspace_path(id);
+        let write_path = path.clone();
+        let export_name = name.clone();
+        let result = cx.background_spawn(async move {
+            let workspace = match live_snapshot {
+                Some(ws) => ws,
+                None => storage::load_existing(&source_path)?,
+            };
+            let json = crate::model::workspace_export::export_workspace(&export_name, &workspace);
+            if let Some(parent) = write_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            storage::write_atomically(&write_path, json.as_bytes())
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let outcome = result.await;
+            let _ = this.update_in(cx, |this, window, cx| match outcome {
+                Ok(()) => {
+                    window.push_notification(
+                        toast::saved_file(
+                            toast::SavedFileIds {
+                                notice: "workspace-exported-toast",
+                                title: "workspace-exported-title",
+                                filename: "workspace-exported-filename",
+                                reveal: "workspace-exported-reveal",
+                            },
+                            format!("Exported workspace \"{name}\""),
+                            path,
+                        ),
+                        cx,
+                    );
+                }
+                Err(error) => {
+                    this.report_failure(
+                        toast::Failure {
+                            id: "workspace-export-error",
+                            title: "Could not export workspace",
+                            file: Some(toast::file_name(&path)),
+                            log: crate::activity::APPLICATION,
+                            source: WORKSPACES_SOURCE,
+                            error: format!("{error:#}"),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn prompt_backup_workspace(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Some(entry) = store.workspace_entry(id) else {
+            return;
+        };
+        let name = entry.name.clone();
+        let filename = Self::safe_workspace_filename(&name, "-backup.json");
+        let directory = store.backups_dir();
+        let _ = std::fs::create_dir_all(&directory);
+        let prompt = cx.prompt_for_new_path(&directory, Some(&filename));
+        cx.spawn_in(window, async move |this, cx| {
+            let path = match prompt.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) => return,
+                error => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.report_failure(
+                            toast::Failure {
+                                id: "workspace-backup-error",
+                                title: "Could not open the save panel",
+                                file: None,
+                                log: crate::activity::APPLICATION,
+                                source: WORKSPACES_SOURCE,
+                                error: format!("{error:?}"),
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                    return;
+                }
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.backup_workspace_to_path(id, path, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Writes a full JSON backup of workspace `id` to `path`.
+    pub fn backup_workspace_to_path(
+        &mut self,
+        id: Uuid,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Some(entry) = store.workspace_entry(id) else {
+            return;
+        };
+        let name = entry.name.clone();
+        let live_snapshot = (store.active_workspace_id() == id).then(|| self.snapshot(cx));
+        let source_path = store.workspace_path(id);
+        let write_path = path.clone();
+        let result = cx.background_spawn(async move {
+            let workspace = match live_snapshot {
+                Some(ws) => ws,
+                None => storage::load_existing(&source_path)?,
+            };
+            storage::store::write_workspace_backup(&workspace, &write_path)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let outcome = result.await;
+            let _ = this.update_in(cx, |this, window, cx| match outcome {
+                Ok(()) => {
+                    window.push_notification(
+                        toast::saved_file(
+                            toast::SavedFileIds {
+                                notice: "workspace-backup-toast",
+                                title: "workspace-backup-title",
+                                filename: "workspace-backup-filename",
+                                reveal: "workspace-backup-reveal",
+                            },
+                            format!("Backed up workspace \"{name}\""),
+                            path,
+                        ),
+                        cx,
+                    );
+                }
+                Err(error) => {
+                    this.report_failure(
+                        toast::Failure {
+                            id: "workspace-backup-error",
+                            title: "Could not back up workspace",
+                            file: Some(toast::file_name(&path)),
+                            log: crate::activity::APPLICATION,
+                            source: WORKSPACES_SOURCE,
+                            error: format!("{error:#}"),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn prompt_import_workspace(
+        &mut self,
+        keep_manager_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let paths = match prompt.await {
+                Ok(Ok(Some(paths))) => paths,
+                Ok(Ok(None)) => return,
+                error => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.report_failure(
+                            toast::Failure {
+                                id: "workspace-import-error",
+                                title: "Could not open the file panel",
+                                file: None,
+                                log: crate::activity::APPLICATION,
+                                source: WORKSPACES_SOURCE,
+                                error: format!("{error:?}"),
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                    return;
+                }
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.import_workspace_from_path(path, keep_manager_open, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Reads a portable `.qrow-workspace.json` file from `path`, registers it
+    /// as a new workspace, and either switches into it or refreshes the open
+    /// Manage Workspaces dialog.
+    pub fn import_workspace_from_path(
+        &mut self,
+        path: std::path::PathBuf,
+        keep_manager_open: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let read_path = path.clone();
+        let parsed = cx.background_spawn(async move {
+            let text = std::fs::read_to_string(&read_path)?;
+            crate::model::workspace_export::import_workspace(&text)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = parsed.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let imported = match result {
+                    Ok(imported) => imported,
+                    Err(error) => {
+                        this.report_failure(
+                            toast::Failure {
+                                id: "workspace-import-error",
+                                title: "Could not import workspace",
+                                file: Some(toast::file_name(&path)),
+                                log: crate::activity::APPLICATION,
+                                source: WORKSPACES_SOURCE,
+                                error: format!("{error:#}"),
+                            },
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                };
+                let entry = match this
+                    .store
+                    .as_mut()
+                    .map(|store| store.import_workspace(&imported.name, imported.workspace))
+                {
+                    Some(Ok(entry)) => entry,
+                    Some(Err(error)) => {
+                        this.report_failure(
+                            toast::Failure {
+                                id: "workspace-import-error",
+                                title: "Could not import workspace",
+                                file: Some(toast::file_name(&path)),
+                                log: crate::activity::APPLICATION,
+                                source: WORKSPACES_SOURCE,
+                                error: format!("{error:#}"),
+                            },
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                    None => return,
+                };
+                this.refresh_workspace_summaries();
+                this.sync_workspace_menus(cx);
+                if keep_manager_open && this.workspace_manager_open {
+                    cx.notify();
+                } else {
+                    this.request_workspace_switch(SwitchAction::Switch(entry.id), window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     fn refresh_workspace_summaries(&mut self) {
         self.workspace_summaries.clear();
         let Some(store) = &self.store else {
@@ -1023,6 +1417,21 @@ impl Qrow {
                                     )
                                     .child(
                                         Button::new(SharedString::from(format!(
+                                            "workspace-export-{id}"
+                                        )))
+                                        .ghost()
+                                        .small()
+                                        .icon(Icon::new(AssetIconName::Download).small())
+                                        .accessibility_label(format!("Export {reveal_name}"))
+                                        .tooltip("Export workspace…")
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.prompt_export_workspace(id, window, cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!(
                                             "workspace-reveal-{id}"
                                         )))
                                         .ghost()
@@ -1080,6 +1489,13 @@ impl Qrow {
                         cx.defer_in(window, |this, window, cx| {
                             this.open_workspace_name_dialog(None, true, window, cx);
                         });
+                    })),
+            )
+            .child(
+                Button::new("manage-workspaces-import")
+                    .label("Import…")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.prompt_import_workspace(true, window, cx);
                     })),
             )
             .child(div().flex_1())

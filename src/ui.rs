@@ -137,6 +137,9 @@ actions!(
         CheckForUpdates,
         NewWorkspace,
         ManageWorkspaces,
+        ImportWorkspace,
+        ExportWorkspace,
+        BackupWorkspace,
         RevealWorkspaceFolder,
         SubmitWorkspaceName,
         SubmitGroupName
@@ -258,6 +261,9 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         items.push(MenuItem::action("New workspace…", NewWorkspace));
         items.push(MenuItem::action("Manage workspaces…", ManageWorkspaces));
         items.push(MenuItem::separator());
+        items.push(MenuItem::action("Import workspace…", ImportWorkspace));
+        items.push(MenuItem::action("Export workspace…", ExportWorkspace));
+        items.push(MenuItem::action("Back up workspace…", BackupWorkspace));
         items.push(MenuItem::action(
             "Reveal workspace folder",
             RevealWorkspaceFolder,
@@ -1202,8 +1208,8 @@ impl Qrow {
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
         });
-        let window_bounds_sub = cx.observe_window_bounds(window, |this, window, _cx| {
-            this.record_window_bounds(window);
+        let window_bounds_sub = cx.observe_window_bounds(window, |this, window, cx| {
+            this.record_window_bounds(window, cx);
         });
         let initial_layout = workspace.layout.clone().unwrap_or_default();
         let initial_editor_height = initial_layout
@@ -1510,7 +1516,7 @@ impl Qrow {
             .unwrap_or_else(|| px(285. * scale));
     }
 
-    fn record_window_bounds(&mut self, window: &Window) {
+    fn record_window_bounds(&mut self, window: &Window, cx: &App) {
         if self.window_state_path.is_none() {
             return;
         }
@@ -1520,12 +1526,14 @@ impl Qrow {
             return;
         }
         let rect = wb.get_bounds();
+        let display_uuid = window.display(cx).and_then(|display| display.uuid().ok());
         let bounds = storage::SavedWindowBounds {
             x: f32::from(rect.origin.x),
             y: f32::from(rect.origin.y),
             width: f32::from(rect.size.width),
             height: f32::from(rect.size.height),
             maximized,
+            display_uuid,
         };
         if bounds.is_finite_and_sized() {
             self.window_bounds_dirty = Some((Instant::now(), bounds));
@@ -2378,6 +2386,7 @@ impl Qrow {
                     && let Some(group) = self.groups.iter_mut().find(|g| g.id == group_id)
                 {
                     group.collapsed = false;
+                    self.catalog.uncollapse_group(group_id);
                 }
                 if let Some(mut sign_in) = sign_in
                     && !self.sign_ins.iter().any(|other| other.id == sign_in.id)

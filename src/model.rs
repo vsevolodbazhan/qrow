@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 pub mod sharing;
 pub mod transfer;
+pub mod workspace_export;
 
 pub const PREVIEW_ROWS: usize = 1_000;
 pub const WORKSPACE_VERSION: u32 = 9;
@@ -1574,7 +1575,7 @@ const MAX_SHARED_SIGN_IN_BYTES: usize = 64 * 1024;
 /// The settings of a sign-in that one user gives to another as text. It has
 /// no identifier, account, or tokens.
 #[derive(Deserialize, Serialize)]
-struct SharedSignIn {
+pub(super) struct SharedSignIn {
     /// Marks the text as sign-in settings and gives the format version.
     qrow_sign_in: u32,
     name: String,
@@ -1594,7 +1595,7 @@ struct SharedSignIn {
 
 impl SharedSignIn {
     /// The shared settings of `sign_in`.
-    fn of(sign_in: &SignIn) -> Self {
+    pub(super) fn of(sign_in: &SignIn) -> Self {
         Self {
             qrow_sign_in: if sign_in.provider == SignInProvider::Oidc {
                 1
@@ -1615,7 +1616,7 @@ impl SharedSignIn {
     }
 
     /// A new sign-in with no account from the shared settings in `value`.
-    fn read(value: serde_json::Value) -> anyhow::Result<SignIn> {
+    pub(super) fn read(value: serde_json::Value) -> anyhow::Result<SignIn> {
         let version = value
             .get("qrow_sign_in")
             .and_then(serde_json::Value::as_u64)

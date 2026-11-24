@@ -399,6 +399,12 @@ impl CatalogTree {
     pub(super) fn node(&self, id: &SharedString) -> Option<&Node> {
         self.nodes.get(id)
     }
+
+    /// Clears any search-time collapse override for `group` so newly added or
+    /// moved connections remain visible.
+    pub(super) fn uncollapse_group(&mut self, group: Uuid) {
+        self.collapsed.remove(&group_id(group));
+    }
 }
 
 fn group_id(group: Uuid) -> SharedString {

@@ -454,3 +454,74 @@ fn workspace_layout_persists_per_workspace_across_switches(cx: &mut TestAppConte
         storage::load(&storage::workspace_file_path(app.data_dir(), default_id)).unwrap();
     assert!(default_ws.layout.is_some_and(|l| !l.sidebar_open));
 }
+
+#[gpui_kit::test]
+fn export_import_and_backup_workspace_workflow(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let export_dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+    let default_id =
+        uuid::Uuid::parse_str(registry_json(&app)["active_workspace"].as_str().unwrap()).unwrap();
+
+    // Put distinct SQL into Default workspace so we can verify export/import/backup contents.
+    app.click(cx, "sql-editor");
+    app.update(cx, |window, cx| {
+        window
+            .within("sql-editor")
+            .input("SELECT 'portable_bundle'", cx);
+    });
+
+    // Export Default workspace to a portable `.qrow-workspace.json` bundle.
+    let bundle_path = export_dir.path().join("Default.qrow-workspace.json");
+    let bundle_for_export = bundle_path.clone();
+    app.update(cx, |window, cx| {
+        app.qrow
+            .update(cx, |qrow, cx| {
+                qrow.export_workspace_to_path(default_id, bundle_for_export, window, cx);
+            })
+            .unwrap();
+    });
+    app.wait_for(cx, "workspace-exported-toast");
+    let exported_text = std::fs::read_to_string(&bundle_path).unwrap();
+    assert!(exported_text.contains("\"qrow_workspace\": 1"));
+    assert!(exported_text.contains("SELECT 'portable_bundle'"));
+    assert!(!exported_text.contains("\"settings\""));
+
+    // Import that bundle back: creates "Default copy" and switches into it.
+    app.update(cx, |window, cx| {
+        app.qrow
+            .update(cx, |qrow, cx| {
+                qrow.import_workspace_from_path(bundle_path, false, window, cx);
+            })
+            .unwrap();
+    });
+    app.wait_until(
+        cx,
+        "imported workspace active",
+        Duration::from_secs(10),
+        |_, _| {
+            let reg = registry_json(&app);
+            reg["workspaces"].as_array().unwrap().len() == 2
+                && reg["active_workspace"] != default_id.to_string()
+        },
+    );
+    let reg = registry_json(&app);
+    let imported_id = uuid::Uuid::parse_str(reg["active_workspace"].as_str().unwrap()).unwrap();
+    let imported_ws =
+        storage::load(&storage::workspace_file_path(app.data_dir(), imported_id)).unwrap();
+    assert_eq!(imported_ws.tabs[0].sql, "SELECT 'portable_bundle'");
+
+    // Back up the active workspace to an explicit destination file.
+    let backup_path = export_dir.path().join("backup.json");
+    let backup_for_save = backup_path.clone();
+    app.update(cx, |window, cx| {
+        app.qrow
+            .update(cx, |qrow, cx| {
+                qrow.backup_workspace_to_path(imported_id, backup_for_save, window, cx);
+            })
+            .unwrap();
+    });
+    app.wait_for(cx, "workspace-backup-toast");
+    let backup_ws = storage::load(&backup_path).unwrap();
+    assert_eq!(backup_ws.tabs[0].sql, "SELECT 'portable_bundle'");
+}
