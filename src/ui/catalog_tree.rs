@@ -115,11 +115,6 @@ fn connection_drop_target(id: Uuid, after: bool, weak: WeakEntity<Qrow>) -> impl
 /// What a tree row shows. The tree item ID is the key of its node.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Node {
-    Group {
-        id: Uuid,
-        name: String,
-        connections: usize,
-    },
     Connection(Uuid),
     Schema {
         profile: Uuid,
@@ -173,7 +168,7 @@ impl Node {
                 Some((qualified.clone(), qualified))
             }
             Node::Column { name, .. } => Some((name.clone(), sql(name))),
-            Node::Group { .. } | Node::Connection(_) | Node::Notice { .. } => None,
+            Node::Connection(_) | Node::Notice { .. } => None,
         }
     }
 }
@@ -399,16 +394,6 @@ impl CatalogTree {
     pub(super) fn node(&self, id: &SharedString) -> Option<&Node> {
         self.nodes.get(id)
     }
-
-    /// Clears any search-time collapse override for `group` so newly added or
-    /// moved connections remain visible.
-    pub(super) fn uncollapse_group(&mut self, group: Uuid) {
-        self.collapsed.remove(&group_id(group));
-    }
-}
-
-fn group_id(group: Uuid) -> SharedString {
-    format!("g{SEPARATOR}{group}").into()
 }
 
 fn connection_id(profile: Uuid) -> SharedString {
@@ -706,67 +691,6 @@ impl Builder<'_> {
         schema_matches(&self.names, dialect, name)
     }
 
-    /// The row of a connection group, or `None` when a search hides every
-    /// member connection and the group name itself does not match.
-    fn group(
-        &mut self,
-        group: &crate::model::ConnectionGroup,
-        profiles: &[Profile],
-    ) -> Option<TreeItem> {
-        let id = group_id(group.id);
-        let searching = !self.search.is_empty();
-        let group_matches = searching && self.matches(&group.name);
-        let member_profiles: Vec<&Profile> = profiles
-            .iter()
-            .filter(|profile| profile.group_id == Some(group.id))
-            .collect();
-        let member_count = member_profiles.len();
-        let children: Vec<TreeItem> = if group_matches {
-            // Matching the group name shows all of its connections within the
-            // active search scope (never bypassing `SearchScope`).
-            let saved_search = std::mem::take(&mut self.search);
-            let mut items = Vec::new();
-            for profile in member_profiles {
-                if self.tree.scope.includes(profile.id, self.current)
-                    && let Some(item) = self.connection(profile)
-                {
-                    items.push(item);
-                }
-            }
-            self.search = saved_search;
-            items
-        } else {
-            member_profiles
-                .iter()
-                .filter_map(|profile| self.connection(profile))
-                .collect()
-        };
-        if searching && children.is_empty() && (!group_matches || !self.tree.scope.is_all()) {
-            return None;
-        }
-        let item = self.add(
-            id.clone(),
-            group.name.clone(),
-            Node::Group {
-                id: group.id,
-                name: group.name.clone(),
-                connections: member_count,
-            },
-        );
-        let expanded = if searching {
-            self.search_expands(&id)
-        } else {
-            !group.collapsed
-        };
-        Some(self.folder(item, expanded, Uuid::nil(), |builder| {
-            if children.is_empty() {
-                vec![builder.notice(&id, Uuid::nil(), "No connections", Tone::Muted, None)]
-            } else {
-                children
-            }
-        }))
-    }
-
     /// The row of a connection, or `None` when a search hides it: the
     /// connection is outside the search scope or has no matches.
     fn connection(&mut self, profile: &Profile) -> Option<TreeItem> {
@@ -1038,7 +962,6 @@ impl Builder<'_> {
 struct ConnectionRow {
     database_type: crate::model::DatabaseType,
     name: String,
-    environment: Option<crate::model::ConnectionEnvironment>,
     tooltip: StatusTooltip,
     running: bool,
     connecting: bool,
@@ -1075,42 +998,28 @@ impl Qrow {
             return;
         };
         let destination_ix = target_ix + usize::from(after) - usize::from(source_ix < target_ix);
-        let target_group = self.profiles[target_ix].group_id;
-        let same_group = self.profiles[source_ix].group_id == target_group;
-        if source_ix == destination_ix && same_group {
+        if source_ix == destination_ix {
             return;
         }
-        let mut profile = self.profiles.remove(source_ix);
-        profile.group_id = target_group;
+        let profile = self.profiles.remove(source_ix);
         self.profiles.insert(destination_ix, profile);
         self.rebuild_catalog_tree(cx);
         self.changed(cx);
     }
 
     pub(super) fn move_connection(&mut self, id: Uuid, down: bool, cx: &mut Context<Self>) {
-        let Some(profile_group) = self
-            .profiles
-            .iter()
-            .find(|profile| profile.id == id)
-            .map(|profile| profile.group_id)
-        else {
-            return;
-        };
-        let siblings: Vec<Uuid> = self
-            .profiles
-            .iter()
-            .filter(|profile| profile.group_id == profile_group)
-            .map(|profile| profile.id)
-            .collect();
-        let Some(sibling_ix) = siblings.iter().position(|candidate| *candidate == id) else {
+        let Some(ix) = self.profiles.iter().position(|profile| profile.id == id) else {
             return;
         };
         let target_ix = if down {
-            sibling_ix.checked_add(1)
+            ix.checked_add(1)
         } else {
-            sibling_ix.checked_sub(1)
+            ix.checked_sub(1)
         };
-        if let Some(target) = target_ix.and_then(|ix| siblings.get(ix).copied()) {
+        if let Some(target) = target_ix
+            .and_then(|ix| self.profiles.get(ix))
+            .map(|profile| profile.id)
+        {
             self.reorder_connection(id, target, down, cx);
             if let Some(ix) = self.catalog.state.read(cx).index_of(&connection_id(id)) {
                 self.catalog
@@ -1179,25 +1088,11 @@ impl Qrow {
             nodes: HashMap::new(),
             matches: 0,
         };
-        let mut items: Vec<TreeItem> = if self.groups.is_empty() {
-            self.profiles
-                .iter()
-                .filter_map(|profile| builder.connection(profile))
-                .collect()
-        } else {
-            let mut grouped: Vec<TreeItem> = self
-                .groups
-                .iter()
-                .filter_map(|group| builder.group(group, &self.profiles))
-                .collect();
-            grouped.extend(
-                self.profiles
-                    .iter()
-                    .filter(|profile| profile.group_id.is_none())
-                    .filter_map(|profile| builder.connection(profile)),
-            );
-            grouped
-        };
+        let mut items: Vec<TreeItem> = self
+            .profiles
+            .iter()
+            .filter_map(|profile| builder.connection(profile))
+            .collect();
         if searching && items.is_empty() {
             let text = "No matches".to_owned();
             let notice = builder.add(
@@ -1460,18 +1355,6 @@ impl Qrow {
             if searching {
                 self.catalog.collapsed.insert(id.clone());
             }
-        }
-        if let Some(Node::Group { id: group_id, .. }) = self.catalog.node(&id).cloned() {
-            if !searching
-                && let Some(group) = self.groups.iter_mut().find(|g| g.id == group_id)
-                && group.collapsed == expanded
-            {
-                group.collapsed = !expanded;
-                self.changed(cx);
-            }
-            self.rebuild_catalog_tree(cx);
-            cx.notify();
-            return;
         }
         if expanded && let Some(node) = self.catalog.node(&id).cloned() {
             match node {
@@ -1876,7 +1759,7 @@ impl Qrow {
                 Some(Scope::Relation(schema.clone(), name.clone())),
             ),
             Node::Column { profile, .. } => (*profile, None),
-            Node::Group { .. } | Node::Connection(_) | Node::Notice { .. } => return,
+            Node::Connection(_) | Node::Notice { .. } => return,
         };
         let refreshing = scope.as_ref().is_some_and(|scope| {
             self.catalog
@@ -2116,7 +1999,7 @@ impl Qrow {
                                 .flatten()
                         })
                         .collect();
-                    let mut tooltip = StatusTooltip::new(
+                    let tooltip = StatusTooltip::new(
                         profile.name.clone(),
                         match status {
                             Some(DotStatus::Connected) => "Idle",
@@ -2131,15 +2014,11 @@ impl Qrow {
                     )
                     .metadata("Host", profile.host.clone())
                     .metadata("User", profile.username.clone());
-                    if let Some(env) = profile.environment {
-                        tooltip = tooltip.metadata("Environment", env.label());
-                    }
                     (
                         id,
                         ConnectionRow {
                             database_type: profile.database_type,
                             name: profile.name.clone(),
-                            environment: profile.environment,
                             tooltip,
                             connected,
                             unread_success,
@@ -2188,19 +2067,6 @@ impl Qrow {
                 // Sign-ins header actions.
                 self.sidebar_header("Connections", cx).child(
                     self.sidebar_header_actions()
-                        .child(
-                            Button::new("add-group")
-                                .ghost()
-                                .small()
-                                .w(action_size)
-                                .h(action_size)
-                                .icon(AssetIconName::FolderPlus)
-                                .accessibility_label("New group")
-                                .tooltip("New group")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_group_name_dialog(None, None, window, cx)
-                                })),
-                        )
                         .child(
                             Button::new("paste-connection")
                                 .ghost()
@@ -2591,107 +2457,6 @@ fn render_entry(
             tree.update(cx, |tree, cx| tree.focus(window, cx));
         }
     };
-    if let Node::Group {
-        id: group_uuid,
-        name,
-        connections,
-    } = node
-    {
-        let group_uuid = *group_uuid;
-        let weak_drop = weak.clone();
-        let weak_menu = weak.clone();
-        let menu_position = context.menu_position(child_id(&id, "bottom"));
-        let label_key = child_id(&id, "label");
-        context.record_tip(
-            &id,
-            name.clone(),
-            Some(Truncation {
-                labels: vec![(label_key.clone(), name.clone(), 0.875)],
-            }),
-        );
-        let row = h_flex()
-            .id(SharedString::from(format!("group-{group_uuid}")))
-            .test_support()
-            .size_full()
-            .pl(indent)
-            .pr_2()
-            .gap(ui_px(ROW_GAP))
-            .items_center()
-            .text_sm()
-            .rounded(cx.theme().radius)
-            .relative()
-            .when(right_clicked, |el| el.bg(cx.theme().accent))
-            .when(!right_clicked, |el| {
-                el.hover(|el| el.bg(cx.theme().tokens.list_hover))
-            })
-            .drag_over::<DragConnection>(|style, _, _, cx| {
-                style.bg(cx.theme().primary.opacity(0.16))
-            })
-            .on_drop(move |drag: &DragConnection, _, cx| {
-                let _ = weak_drop.update(cx, |this, cx| {
-                    this.set_connection_group(drag.id, Some(group_uuid), cx);
-                });
-            })
-            .text_color(cx.theme().sidebar_foreground)
-            .child(disclosure)
-            .child(
-                div()
-                    .w(ui_px(16.))
-                    .flex_shrink_0()
-                    .flex()
-                    .justify_center()
-                    .child(
-                        Icon::new(if entry.is_expanded() {
-                            AssetIconName::FolderOpen
-                        } else {
-                            AssetIconName::Folder
-                        })
-                        .xsmall()
-                        .text_color(cx.theme().muted_foreground),
-                    ),
-            )
-            .child(
-                div()
-                    .id(label_key.clone())
-                    .test_support()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(name.clone())
-                    .on_prepaint(context.record_width(label_key)),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .min_w(ui_px(STATUS_SLOT_WIDTH))
-                    .flex()
-                    .justify_center()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(connections.to_string()),
-            )
-            .when(selected, |el| el.child(focus_outline(cx)))
-            .when(!*menu_open, |el| el.tooltip(context.live_tooltip(&id)))
-            .on_mouse_down(MouseButton::Left, focus)
-            .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                let position = menu_position(event.position);
-                let _ = weak_menu.update(cx, |_, cx| {
-                    cx.defer_in(window, move |this, window, cx| {
-                        this.open_group_menu(group_uuid, position, window, cx)
-                    })
-                });
-            });
-        return div()
-            .relative()
-            .w_full()
-            .h(ui_px(ROW_HEIGHT))
-            .py_0p5()
-            .child(row)
-            .child(context.bottom_probe(child_id(&id, "bottom")))
-            .into_any_element();
-    }
     if let Node::Connection(profile) = node {
         let Some(row) = rows.get(profile) else {
             return div().into_any_element();
@@ -2702,7 +2467,7 @@ fn render_entry(
             .py_0p5()
             .child(
                 connection_row(&id, *profile, row, selected, disclosure, context, cx)
-                    .pl(indent)
+                    .pl(ui_px(8.))
                     .h_full()
                     .on_mouse_down(MouseButton::Left, focus),
             )
@@ -2813,7 +2578,7 @@ fn render_entry(
                 .pl(indent)
                 .into_any_element();
         }
-        Node::Group { .. } | Node::Connection(_) => unreachable!(),
+        Node::Connection(_) => unreachable!(),
     };
     let error_status = error.as_ref().and_then(|_| match node {
         Node::Schema {
@@ -3430,14 +3195,7 @@ fn connection_row(
                         .min_w_0()
                         .truncate()
                         .child(row.name.clone()),
-                )
-                .when_some(row.environment, |el, env| {
-                    el.child(groups::environment_badge(
-                        SharedString::from(format!("connection-env-{id}")),
-                        env,
-                        true,
-                    ))
-                }),
+                ),
         )
         .on_click({
             let weak = weak.clone();

@@ -2,9 +2,9 @@
 //! text has no identifiers, passwords, tokens, or accounts.
 
 use super::{
-    Authentication, CatalogColumnReads, CatalogSettings, ConnectionEnvironment,
-    ConnectionLifecycle, DatabaseType, PostgresSslMode, Profile, SharedSignIn, SignIn,
-    SignInProvider, shared_object, transfer::Transfer, unique_sign_in_name,
+    Authentication, CatalogColumnReads, CatalogSettings, ConnectionLifecycle, DatabaseType,
+    PostgresSslMode, Profile, SharedSignIn, SignIn, SignInProvider, shared_object,
+    transfer::Transfer, unique_sign_in_name,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -63,8 +63,6 @@ struct SharedConnection<S = SharedSignIn> {
     catalog_column_reads: CatalogColumnReads,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     assistant_notes: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    environment: Option<ConnectionEnvironment>,
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -128,7 +126,6 @@ impl SharedConnection {
             catalog: catalog.clone(),
             catalog_column_reads: profile.catalog_column_reads,
             assistant_notes: profile.assistant_notes.clone(),
-            environment: profile.environment,
         }
     }
 }
@@ -189,8 +186,6 @@ impl SharedConnection<serde_json::Value> {
             authentication,
             assistant_notes: shared.assistant_notes.trim().to_owned(),
             dbt: None,
-            group_id: None,
-            environment: shared.environment,
             ..Profile::default()
         };
         let mut profile = profile;

@@ -943,11 +943,6 @@ impl Qrow {
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let connection_name = connection_name(&self.profiles, tab.saved.profile);
-        let connection_env = tab
-            .saved
-            .profile
-            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
-            .and_then(|profile| profile.environment);
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
@@ -976,14 +971,7 @@ impl Qrow {
                             .gap_1p5()
                             .aria_label(format!("Current connection: {connection_name}"))
                             .when_some(connected, |el, status| el.child(status.dot(cx)))
-                            .child(div().min_w_0().truncate().child(connection_name.to_owned()))
-                            .when_some(connection_env, |el, env| {
-                                el.child(groups::environment_badge(
-                                    "status-bar-connection-env",
-                                    env,
-                                    true,
-                                ))
-                            }),
+                            .child(div().min_w_0().truncate().child(connection_name.to_owned())),
                     ),
             )
             .child(

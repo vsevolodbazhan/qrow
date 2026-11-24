@@ -10,10 +10,9 @@
 //! items or local caches.
 
 use super::{
-    Authentication, CatalogColumnReads, CatalogSettings, ConnectionEnvironment, ConnectionGroup,
-    ConnectionLifecycle, DatabaseType, MAX_WORKSPACE_NAME, PostgresSslMode, Profile, SavedTab,
-    SharedCatalog, SharedSignIn, SignIn, SignInProvider, Workspace, WorkspaceLayout,
-    transfer::Transfer, validate_group_name,
+    Authentication, CatalogColumnReads, CatalogSettings, ConnectionLifecycle, DatabaseType,
+    MAX_WORKSPACE_NAME, PostgresSslMode, Profile, SavedTab, SharedCatalog, SharedSignIn, SignIn,
+    SignInProvider, Workspace, WorkspaceLayout, transfer::Transfer,
 };
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -50,8 +49,6 @@ struct ExportedWorkspace<S = SharedSignIn> {
     #[serde(default)]
     name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    groups: Vec<ExportedGroup>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sign_ins: Vec<S>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     shared_catalogs: Vec<ExportedSharedCatalog>,
@@ -63,13 +60,6 @@ struct ExportedWorkspace<S = SharedSignIn> {
     active_tab: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     layout: Option<WorkspaceLayout>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct ExportedGroup {
-    name: String,
-    #[serde(default, skip_serializing_if = "is_false")]
-    collapsed: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -133,10 +123,6 @@ struct ExportedProfile {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     assistant_notes: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    environment: Option<ConnectionEnvironment>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    group: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     shared_catalog: Option<usize>,
 }
 
@@ -152,10 +138,6 @@ struct ExportedTab {
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 fn sanitized_portable_lifecycle(lifecycle: &ConnectionLifecycle) -> ConnectionLifecycle {
@@ -182,12 +164,6 @@ pub fn export_workspace_with_options(
     workspace: &Workspace,
     options: ExportOptions,
 ) -> Result<String> {
-    let group_index: HashMap<Uuid, usize> = workspace
-        .groups
-        .iter()
-        .enumerate()
-        .map(|(ix, group)| (group.id, ix))
-        .collect();
     let sign_in_index: HashMap<Uuid, usize> = workspace
         .sign_ins
         .iter()
@@ -207,14 +183,6 @@ pub fn export_workspace_with_options(
         .map(|(ix, profile)| (profile.id, ix))
         .collect();
 
-    let groups = workspace
-        .groups
-        .iter()
-        .map(|group| ExportedGroup {
-            name: group.name.clone(),
-            collapsed: group.collapsed,
-        })
-        .collect();
     let sign_ins = workspace.sign_ins.iter().map(SharedSignIn::of).collect();
     let shared_catalogs = workspace
         .shared_catalogs
@@ -265,10 +233,6 @@ pub fn export_workspace_with_options(
                 } else {
                     String::new()
                 },
-                environment: profile.environment,
-                group: profile
-                    .group_id
-                    .and_then(|id| group_index.get(&id).copied()),
                 shared_catalog: profile
                     .shared_catalog
                     .and_then(|id| catalog_index.get(&id).copied()),
@@ -292,7 +256,6 @@ pub fn export_workspace_with_options(
     let bundle = ExportedWorkspace {
         qrow_workspace: EXPORTED_WORKSPACE_VERSION,
         name: name.trim().to_owned(),
-        groups,
         sign_ins,
         shared_catalogs,
         profiles,
@@ -332,23 +295,6 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
     );
     let exported: ExportedWorkspace<serde_json::Value> = serde_json::from_value(value)
         .map_err(|error| anyhow::Error::new(error).context("The workspace file is not valid."))?;
-
-    let mut groups: Vec<ConnectionGroup> = Vec::with_capacity(exported.groups.len());
-    let mut seen_groups: HashSet<String> = HashSet::new();
-    for raw_group in exported.groups {
-        let name = validate_group_name(&raw_group.name)
-            .context("A connection group in the workspace file is not valid.")?;
-        let key = name.to_lowercase();
-        anyhow::ensure!(
-            seen_groups.insert(key),
-            "The workspace file contains duplicate connection group \"{name}\"."
-        );
-        groups.push(ConnectionGroup {
-            id: Uuid::new_v4(),
-            name,
-            collapsed: raw_group.collapsed,
-        });
-    }
 
     let mut sign_ins: Vec<SignIn> = Vec::with_capacity(exported.sign_ins.len());
     let mut seen_sign_ins: HashSet<String> = HashSet::new();
@@ -426,18 +372,6 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
             }
             None => None,
         };
-        let group_id = match raw_profile.group {
-            Some(ix) => {
-                let group = groups.get(ix).with_context(|| {
-                    format!(
-                        "Connection \"{}\" references missing group index {ix}.",
-                        raw_profile.name
-                    )
-                })?;
-                Some(group.id)
-            }
-            None => None,
-        };
         let mut profile = Profile {
             database_type: raw_profile.database_type,
             name: raw_profile.name.trim().to_owned(),
@@ -460,8 +394,6 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
             authentication,
             assistant_notes: raw_profile.assistant_notes.trim().to_owned(),
             dbt: None,
-            group_id,
-            environment: raw_profile.environment,
             ..Profile::default()
         };
         if profile.database_type == DatabaseType::Postgres {
@@ -541,7 +473,6 @@ pub fn import_workspace(text: &str) -> Result<ImportedWorkspace> {
     }
 
     let mut workspace = Workspace {
-        groups,
         profiles,
         tabs: if tabs.is_empty() {
             Workspace::default().tabs
@@ -570,8 +501,7 @@ mod tests {
     use super::*;
     use crate::model::{AssistantConversation, AssistantExecutionMode, DbtProject, Identity};
 
-    fn sample_workspace() -> (Workspace, Uuid, Uuid, Uuid) {
-        let group = ConnectionGroup::new("Production");
+    fn sample_workspace() -> (Workspace, Uuid, Uuid) {
         let sign_in = SignIn {
             name: "Corp SSO".into(),
             issuer: "https://auth.example.com/realms/corp".into(),
@@ -600,8 +530,6 @@ mod tests {
                 keep_alive_sql: "CALL dangerous_proc()".into(),
                 response_timeout_seconds: 300,
             },
-            group_id: Some(group.id),
-            environment: Some(ConnectionEnvironment::Production),
             dbt: Some(DbtProject {
                 manifest: "/Users/secret/repo/target/manifest.json".into(),
                 refresh: Default::default(),
@@ -611,7 +539,6 @@ mod tests {
         };
         profile.catalog.refresh = crate::model::CatalogRefresh::Manual;
         let orig_profile_id = profile.id;
-        let orig_group_id = group.id;
         let orig_sign_in_id = sign_in.id;
 
         let mut tab = SavedTab::new(1, Some(profile.id));
@@ -619,7 +546,6 @@ mod tests {
         tab.sql = "SELECT sum(amount) FROM sales".into();
 
         let mut workspace = Workspace {
-            groups: vec![group],
             profiles: vec![profile],
             tabs: vec![tab],
             sign_ins: vec![sign_in],
@@ -637,12 +563,12 @@ mod tests {
                 "thread-private",
                 AssistantExecutionMode::AskBeforeRunning,
             ));
-        (workspace, orig_profile_id, orig_group_id, orig_sign_in_id)
+        (workspace, orig_profile_id, orig_sign_in_id)
     }
 
     #[test]
     fn export_safe_defaults_omit_secrets_parameters_notes_keep_alive_and_remaps_ids() {
-        let (workspace, orig_profile_id, orig_group_id, orig_sign_in_id) = sample_workspace();
+        let (workspace, orig_profile_id, orig_sign_in_id) = sample_workspace();
 
         let exported_json = export_workspace("Analytics", &workspace).unwrap();
         // Safe defaults must omit secrets, saved SQL, parameters, assistant notes, custom keep-alive SQL,
@@ -657,14 +583,10 @@ mod tests {
         assert!(!exported_json.contains("thread-private"));
         assert!(!exported_json.contains("\"settings\""));
         assert!(!exported_json.contains(&orig_profile_id.to_string()));
-        assert!(!exported_json.contains(&orig_group_id.to_string()));
         assert!(!exported_json.contains(&orig_sign_in_id.to_string()));
 
         let imported = import_workspace(&exported_json).unwrap();
         assert_eq!(imported.name, "Analytics");
-        assert_eq!(imported.workspace.groups.len(), 1);
-        assert_eq!(imported.workspace.groups[0].name, "Production");
-        assert_ne!(imported.workspace.groups[0].id, orig_group_id);
 
         assert_eq!(imported.workspace.sign_ins.len(), 1);
         assert_ne!(imported.workspace.sign_ins[0].id, orig_sign_in_id);
@@ -673,8 +595,6 @@ mod tests {
         assert_eq!(imported.workspace.profiles.len(), 1);
         let p = &imported.workspace.profiles[0];
         assert_ne!(p.id, orig_profile_id);
-        assert_eq!(p.group_id, Some(imported.workspace.groups[0].id));
-        assert_eq!(p.environment, Some(ConnectionEnvironment::Production));
         assert!(p.parameters.is_empty());
         assert!(p.assistant_notes.is_empty());
         assert_eq!(p.lifecycle.keep_alive_seconds, 0);

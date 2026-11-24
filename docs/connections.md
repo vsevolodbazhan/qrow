@@ -9,43 +9,14 @@ bar, press **⌘B**, or select **View → Connections**.
 The connection icon identifies the connection type. Kyuubi connections use the
 Spark icon. Postgres connections use the elephant icon. Trino connections use the rabbit icon.
 
-Drag a connection name to change the order of the connections or to move a
-connection between groups. Drop above or below the center of another connection
-row to place the connection beside it and assign the target connection's group.
-Drop onto a group row to move the connection into that group. A line or
-highlight shows the new position. Qrow saves the order and group membership and
-restores them at the next start. Reordering keeps the current connection, query
-tabs, sessions, and expanded schemas.
+Drag a connection name to change the order of the connections. Drop above or
+below the center of another connection row. A line shows the new position.
+Qrow saves the order and restores it at the next start. Reordering keeps the
+current connection, query tabs, sessions, and expanded schemas.
 
 You can also select **Move up** or **Move down** in the connection context
 menu. With a connection row selected in the tree, press **⌥↑** or **⌥↓**.
-These commands move a connection among its siblings in the same group, or among
-ungrouped connections. Schema, table, and column rows cannot be reordered.
-
-## Organize connections in groups
-
-You can organize connections into collapsible groups in the Connections
-sidebar.
-
-- Click the **New group** button beside **+** in the Connections sidebar header
-  to create a group.
-- Right-click a connection and select **Move to group → New group…** to create
-  a group and move that connection into it.
-- Click a group row to expand or collapse it. Qrow saves the collapsed state in
-  the workspace.
-- Right-click a connection and select **Move to group** to move it to another
-  group or to **No group**. You can also drag a connection onto a group row.
-- Right-click a group and select **Rename group…** to rename it.
-- Right-click a group and select **Delete group** to delete it. Deleting a
-  group removes the group and keeps its connections as ungrouped connections.
-
-## Environment badges
-
-In **Connection Settings → General → Organization**, you can select an
-**Environment** for each connection: **None**, **Production**, **Staging**,
-**Development**, or **Local**. **None** hides the badge. When an environment is
-selected, Qrow shows a compact semantic badge beside the connection name in the
-Connections sidebar and beside the active connection in the status bar.
+Schema, table, and column rows cannot be reordered.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
@@ -92,17 +63,15 @@ search field above the pages to find a field.
    For Postgres, enter the role name and password. For Trino, see [Use Trino](#use-trino).
 6. Enter the initial database. For Trino, enter the initial catalog and optional schema.
 7. Enter session parameters as a JSON object with string values.
-8. Optional: Under **Organization**, select an **Environment** badge. If the
-   workspace has groups, you can also select a **Group**.
-9. Optional: To [browse the schemas](#browse-schemas) of the connection, go
+8. Optional: To [browse the schemas](#browse-schemas) of the connection, go
    to the **Metadata** page and set **Refresh** to **Manual** or **While
    connected**. Then you can enter [schema patterns](#show-or-hide-schemas).
-10. Optional: On the **dbt** page, attach a
-    [dbt project](#attach-a-dbt-project).
-11. Optional: On the **Assistant** page, enter **Assistant Notes**. See
+9. Optional: On the **dbt** page, attach a
+   [dbt project](#attach-a-dbt-project).
+10. Optional: On the **Assistant** page, enter **Assistant Notes**. See
     [Give the assistant facts about a
     connection](#give-the-assistant-facts-about-a-connection).
-12. Click **Save**.
+11. Click **Save**.
 
 Connection names must be unique. **Save** checks **Name**, **Host**, **Port**,
 **Username**, and **Initial Database** together. If a field has an error, Qrow
@@ -856,8 +825,7 @@ the sign-in that Qrow adds. Make sure that you trust the issuer.
 
 ## Browse schemas
 
-The Connections sidebar is a tree. Each connection group and each ungrouped
-connection is a root row. Grouped connections appear inside their group. Under a
+The Connections sidebar is a tree. Each connection is a root row. Under a
 connection that browses schemas, the tree shows its schemas, then the tables
 and views of each schema, then the columns of each table or view. A column
 row shows a minus icon under the icon of its table or view, the column name,

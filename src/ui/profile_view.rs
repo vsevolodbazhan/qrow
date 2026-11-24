@@ -501,40 +501,6 @@ impl Qrow {
             } else {
                 vec![]
             });
-        let organization = SettingGroup::new()
-            .title("Organization")
-            .item(connection_row(
-                qrow,
-                "Environment",
-                "Optional badge shown in the sidebar and status bar.",
-                &["badge", "production", "staging", "development", "local"],
-                false,
-                |_, form, _, _| {
-                    Select::new(&form.environment)
-                        .id("connection-environment")
-                        .w_full()
-                        .disabled(form.saving.is_some())
-                        .accessibility_label("Environment")
-                        .into_any_element()
-                },
-            ))
-            .items((!self.groups.is_empty()).then(|| {
-                connection_row(
-                    qrow,
-                    "Group",
-                    "Optional group in the connections sidebar.",
-                    &["folder", "group"],
-                    false,
-                    |_, form, _, _| {
-                        Select::new(&form.group)
-                            .id("connection-group")
-                            .w_full()
-                            .disabled(form.saving.is_some())
-                            .accessibility_label("Group")
-                            .into_any_element()
-                    },
-                )
-            }));
         SettingPage::new("General")
             .description(database_type.label())
             // Space the engine name like the help text under a field.
@@ -542,7 +508,6 @@ impl Qrow {
             .default_open(true)
             .resettable(false)
             .group(fields)
-            .group(organization)
     }
 
     /// The sign-in list, with a button that adds a sign-in.

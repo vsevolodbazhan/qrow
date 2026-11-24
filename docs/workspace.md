@@ -5,9 +5,9 @@ connect to a database until you run SQL.
 
 ## Workspaces
 
-A workspace holds one set of connections, connection groups, sign-ins, shared
-metadata, query tabs, pane layout, and assistant conversations. Use separate
-workspaces for different teams, projects, or environments.
+A workspace holds one set of connections, sign-ins, shared metadata, query
+tabs, pane layout, and assistant conversations. Use separate workspaces for
+different teams, projects, or environments.
 
 On macOS, use the **Workspace** menu in the menu bar. On Linux and Windows,
 open the application menu and select **Workspace**.
@@ -38,10 +38,10 @@ count. For each workspace, you can:
 - **Switch** to open it in the current window.
 - **Rename** to change its name. Workspace names must be unique and are not
   case-sensitive.
-- **Duplicate** to copy its groups, connections, sign-in definitions, shared
-  metadata, tabs, layout, and SQL into a new workspace with new identifiers.
-  Passwords, sign-in tokens, account identities, and assistant transcripts are
-  not copied. You must enter passwords or sign in again in the new workspace.
+- **Duplicate** to copy its connections, sign-in definitions, shared metadata,
+  tabs, layout, and SQL into a new workspace with new identifiers. Passwords,
+  sign-in tokens, account identities, and assistant transcripts are not copied.
+  You must enter passwords or sign in again in the new workspace.
 - **Export** to review export options and save a portable
   `.qrow-workspace.json` file.
 - **Reveal** to open its folder in your file manager.
@@ -56,9 +56,8 @@ count. For each workspace, you can:
 Use **Export workspace…** to share a workspace with a colleague. The **Export
 Workspace** dialog lets you review what to include before saving a portable
 `.qrow-workspace.json` file (up to 16 MiB). The bundle always includes
-connection groups, connection settings, sign-in definitions, shared metadata,
-tabs, and pane layout. It always omits passwords, sign-in tokens, account
-identities, local dbt manifest paths, custom keep-alive SQL, app-wide settings,
+connection settings, sign-in definitions, shared metadata, tabs, and pane
+layout. It always omits passwords, sign-in tokens, account identities, local dbt manifest paths, custom keep-alive SQL, app-wide settings,
 and assistant transcripts. **Include saved SQL**, **Include session
 parameters**, and **Include assistant notes** are unchecked by default because
 they can contain secrets or local paths. Check any included SQL, session
@@ -297,12 +296,11 @@ The data directory contains:
   options, assistant preferences, and update channel).
 - `workspaces.json`: the list of workspaces and the active workspace
   identifier.
-- `workspaces/<id>/workspace.json`: one workspace's connection groups,
-  connection profiles, shared metadata, sign-ins, connection-owned tabs, tab
-  names, SQL, selected connection, last active tab for each connection, pane
-  layout, and assistant conversation metadata. It does not contain assistant
-  messages, tool arguments, tool results, result rows, Logs history, or harness
-  credentials.
+- `workspaces/<id>/workspace.json`: one workspace's connection profiles, shared
+  metadata, sign-ins, connection-owned tabs, tab names, SQL, selected
+  connection, last active tab for each connection, pane layout, and assistant
+  conversation metadata. It does not contain assistant messages, tool
+  arguments, tool results, result rows, Logs history, or harness credentials.
 - `backups/`: automatic pre-migration backups and the default folder for manual
   workspace backups.
 
@@ -399,8 +397,7 @@ version of Qrow cannot open a version 6 workspace.
 
 Workspace version 9 separates application settings into `settings.json`, moves
 workspace files into `workspaces/<id>/workspace.json`, adds `workspaces.json`,
-and adds connection groups, environment badges, and saved pane layout. On the
-first launch with a legacy `workspace.json` (version 8 or earlier), Qrow saves
+and adds saved pane layout. On the first launch with a legacy `workspace.json` (version 8 or earlier), Qrow saves
 a verbatim copy as `backups/workspace.v<version>.backup.json` before it creates
 `settings.json`, `workspaces.json`, and the default workspace, and moves local
 cache folders into the workspace's local directory. Once the migrated workspace

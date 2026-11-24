@@ -608,7 +608,6 @@ fn base_commands() -> Vec<Command> {
                 (SaveSignIn, Some("SignInSettings")),
                 (SubmitRename, Some("RenameDialog")),
                 (SubmitWorkspaceName, Some("WorkspaceNameDialog")),
-                (SubmitGroupName, Some("GroupNameDialog")),
             ]
         ),
         command!(

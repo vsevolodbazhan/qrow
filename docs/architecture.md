@@ -15,7 +15,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [UI environment](../src/ui/environment.rs) | Select the data directory, workspace store, password and token stores, and trusted certificate authorities of a window. |
 | [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, workspace switching, worker events, Logs history, and commands. |
 | [Export](../src/export.rs) | Keep shared preview snapshots, write CSV, and publish complete files. |
-| [UI modules](../src/ui/) | Present workspace layout, workspace management, connection groups, forms, settings, results, and Logs history. |
+| [UI modules](../src/ui/) | Present workspace layout, workspace management, forms, settings, results, and Logs history. |
 | [Logs model](../src/logs.rs) | Group Logs entries, apply retention, and define panel transitions. |
 | [Activity model](../src/activity.rs) | Keep the Activity log of each connection, choose what goes to tab Logs, and count unseen errors. |
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |

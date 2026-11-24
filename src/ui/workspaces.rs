@@ -1170,7 +1170,6 @@ impl Qrow {
         self.saver = Some(new_saver);
         self.dirty = None;
         self.apply_workspace_layout(workspace.layout, window);
-        self.groups = workspace.groups;
         self.profiles = workspace.profiles;
         self.shared_catalogs = workspace.shared_catalogs;
         self.sign_ins = workspace.sign_ins;
@@ -1182,7 +1181,6 @@ impl Qrow {
         self.completion_reads.clear();
         self.completion_statements = None;
         self.form = None;
-        self.group_name_form = None;
         self.tab_form = None;
         self.result_form = None;
 
