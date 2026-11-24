@@ -853,3 +853,43 @@ fn second_machine_relocates_local_transcripts_and_missing_files_refuse_overwrite
         "{reg_err}"
     );
 }
+
+#[test]
+fn retired_v9_group_and_environment_fields_are_stripped_on_open_and_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let profile = Profile {
+        name: "Warehouse".into(),
+        ..Default::default()
+    };
+    let workspace = Workspace {
+        profiles: vec![profile],
+        ..Default::default()
+    };
+    let mut value = serde_json::to_value(&workspace).unwrap();
+    let root = value.as_object_mut().unwrap();
+    root.insert("version".into(), serde_json::json!(WORKSPACE_VERSION));
+    root.insert(
+        "groups".into(),
+        serde_json::json!([{ "id": uuid::Uuid::new_v4(), "name": "Prod" }]),
+    );
+    let profile_obj = root["profiles"][0].as_object_mut().unwrap();
+    profile_obj.insert("group_id".into(), serde_json::json!(uuid::Uuid::new_v4()));
+    profile_obj.insert("environment".into(), serde_json::json!("production"));
+    fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+    let (loaded, mut saver) = Saver::open(path.clone(), || {}).unwrap();
+    assert!(
+        saver.newer.is_none(),
+        "retired v9 fields must not trigger newer-data warning"
+    );
+    assert!(!path.with_extension("backup.json").exists());
+    assert_eq!(loaded.profiles.len(), 1);
+    assert_eq!(loaded.profiles[0].name, "Warehouse");
+
+    saver.finish(loaded).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert!(saved.get("groups").is_none());
+    assert!(saved["profiles"][0].get("group_id").is_none());
+    assert!(saved["profiles"][0].get("environment").is_none());
+}

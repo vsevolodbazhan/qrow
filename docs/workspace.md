@@ -33,19 +33,20 @@ sign-in, a metadata refresh, or an assistant turn is running, Qrow asks you to
 confirm before it switches.
 
 **Manage Workspaces** lists each workspace with its connection count and tab
-count. For each workspace, you can:
+count. Select a workspace and click **Switch** (or double-click an inactive
+workspace) to open it in the current window. Open the actions menu (**⋯**) on a
+workspace to:
 
-- **Switch** to open it in the current window.
-- **Rename** to change its name. Workspace names must be unique and are not
+- **Rename…** to change its name. Workspace names must be unique and are not
   case-sensitive.
 - **Duplicate** to copy its connections, sign-in definitions, shared metadata,
   tabs, layout, and SQL into a new workspace with new identifiers. Passwords,
   sign-in tokens, account identities, and assistant transcripts are not copied.
   You must enter passwords or sign in again in the new workspace.
-- **Export** to review export options and save a portable
+- **Export…** to review export options and save a portable
   `.qrow-workspace.json` file.
-- **Reveal** to open its folder in your file manager.
-- **Delete** to remove the workspace after confirmation. You cannot delete the
+- **Reveal folder** to open its folder in your file manager.
+- **Delete…** to remove the workspace after confirmation. You cannot delete the
   only workspace. After removing the workspace from the list, Qrow attempts to
   delete its workspace folder, its local cache folder, and its saved passwords
   and sign-in tokens from the system secret store. If any cleanup step fails,

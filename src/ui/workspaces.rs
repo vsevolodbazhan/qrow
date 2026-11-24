@@ -7,6 +7,7 @@ use crate::model::{
     MAX_WORKSPACE_NAME, validate_workspace_name,
     workspace_export::{ExportOptions, MAX_EXPORTED_WORKSPACE_BYTES},
 };
+use gpui_kit::Anchor;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
@@ -15,6 +16,7 @@ use gpui_kit::component::{
     checkbox::Checkbox,
     form::{field, v_form},
     h_flex,
+    menu::DropdownMenu as _,
     scroll::ScrollableElement as _,
     tag::Tag,
     v_flex,
@@ -775,6 +777,7 @@ impl Qrow {
                 this.workspace_summaries.insert(entry.id, counts);
                 this.sync_workspace_menus(cx);
                 if keep_manager_open && this.workspace_manager_open {
+                    this.workspace_manager_selected = Some(entry.id);
                     cx.notify();
                 } else {
                     this.request_workspace_switch(SwitchAction::Switch(entry.id), window, cx);
@@ -1491,9 +1494,11 @@ impl Qrow {
                     if !reopen_manager {
                         self.request_workspace_switch(SwitchAction::Switch(id), window, cx);
                     } else {
+                        self.workspace_manager_selected = Some(id);
                         self.reopen_manage_workspaces_deferred(window, cx);
                     }
                 } else if reopen_manager {
+                    self.workspace_manager_selected = target;
                     self.reopen_manage_workspaces_deferred(window, cx);
                 }
                 cx.notify();
@@ -1513,6 +1518,30 @@ impl Qrow {
         });
     }
 
+    fn manage_workspaces_selected_id(&self) -> Option<Uuid> {
+        let store = self.store.as_ref()?;
+        self.workspace_manager_selected
+            .filter(|id| store.workspace_entry(*id).is_some())
+            .or_else(|| Some(store.active_workspace_id()))
+    }
+
+    fn switch_from_manager(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(active_id) = self
+            .store
+            .as_ref()
+            .map(storage::DataStore::active_workspace_id)
+        else {
+            return;
+        };
+        if id == active_id {
+            return;
+        }
+        self.workspace_manager_open = false;
+        self.workspace_manager_selected = None;
+        window.close_dialog(cx);
+        self.request_workspace_switch(SwitchAction::Switch(id), window, cx);
+    }
+
     /// Opens the Manage Workspaces dialog.
     pub(super) fn open_manage_workspaces_dialog(
         &mut self,
@@ -1523,9 +1552,11 @@ impl Qrow {
             return;
         }
         self.refresh_workspace_summaries();
+        self.workspace_manager_selected = self.manage_workspaces_selected_id();
         self.workspace_manager_open = true;
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {
+            let confirm = weak.clone();
             let close = weak.clone();
             let content = weak
                 .update(cx, |this, cx| this.manage_workspaces_content(window, cx))
@@ -1537,6 +1568,24 @@ impl Qrow {
                 .title("Manage Workspaces")
                 .w(Rows::dialog_width(window, MANAGER_DIALOG_REMS))
                 .overlay_closable(true)
+                .on_ok(move |_, window, cx| {
+                    confirm
+                        .update(cx, |this, cx| {
+                            let Some(selected) = this.manage_workspaces_selected_id() else {
+                                return false;
+                            };
+                            let active_id = this
+                                .store
+                                .as_ref()
+                                .map(storage::DataStore::active_workspace_id);
+                            if Some(selected) == active_id {
+                                return false;
+                            }
+                            this.switch_from_manager(selected, window, cx);
+                            false
+                        })
+                        .unwrap_or(false)
+                })
                 .children(content)
                 .when_some(footer, |dialog, footer| dialog.footer(footer))
                 .on_close(move |_, _, cx| {
@@ -1544,6 +1593,9 @@ impl Qrow {
                     cx.defer(move |cx| {
                         let _ = close.update(cx, |this, cx| {
                             this.workspace_manager_open = false;
+                            if this.workspace_name_form.is_none() {
+                                this.workspace_manager_selected = None;
+                            }
                             cx.notify();
                         });
                     });
@@ -1557,26 +1609,30 @@ impl Qrow {
             return div().into_any_element();
         };
         let active_id = store.active_workspace_id();
+        let selected_id = self.manage_workspaces_selected_id();
         let can_delete = store.workspaces().len() > 1;
         let max_height = (window.rem_size() * MANAGER_MAX_HEIGHT_REMS)
             .min(window.viewport_size().height - window.rem_size() * 12.)
             .max(px(160.));
         let entries: Vec<_> = store.workspaces().to_vec();
+        let weak = cx.weak_entity();
 
         div()
             .id("manage-workspaces-list")
             .test_support()
             .w_full()
+            .pt(px(5.))
             .child(
                 v_flex()
                     .w_full()
                     .max_h(max_height)
                     .overflow_y_scrollbar()
-                    .gap_1()
+                    .gap_1p5()
                     .children(entries.into_iter().map(|entry| {
                         let id = entry.id;
                         let name = entry.name;
                         let is_active = id == active_id;
+                        let is_selected = selected_id == Some(id);
                         let (connections, tabs) =
                             self.workspace_summaries.get(&id).copied().unwrap_or((0, 0));
                         let summary = format!(
@@ -1589,11 +1645,9 @@ impl Qrow {
                             if tabs == 1 { "tab" } else { "tabs" }
                         );
                         let row_id = SharedString::from(format!("workspace-row-{id}"));
-                        let rename_name = name.clone();
+                        let actions_name = name.clone();
                         let delete_name = name.clone();
-                        let dup_name = name.clone();
-                        let reveal_name = name.clone();
-                        let switch_name = name.clone();
+                        let menu_weak = weak.clone();
 
                         h_flex()
                             .id(row_id)
@@ -1606,16 +1660,28 @@ impl Qrow {
                             .py_2()
                             .rounded(cx.theme().radius)
                             .border_1()
-                            .border_color(if is_active {
-                                cx.theme().primary.opacity(0.45)
+                            .cursor_pointer()
+                            .border_color(if is_selected {
+                                cx.theme().primary.opacity(0.65)
                             } else {
                                 cx.theme().border
                             })
-                            .bg(if is_active {
-                                cx.theme().secondary.opacity(0.6)
+                            .bg(if is_selected {
+                                cx.theme().primary.opacity(0.10)
                             } else {
                                 cx.theme().background
                             })
+                            .when(!is_selected, |row| {
+                                row.hover(|style| style.bg(cx.theme().secondary.opacity(0.45)))
+                            })
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if event.click_count() >= 2 && !is_active {
+                                    this.switch_from_manager(id, window, cx);
+                                } else {
+                                    this.workspace_manager_selected = Some(id);
+                                    cx.notify();
+                                }
+                            }))
                             .child(
                                 v_flex()
                                     .flex_1()
@@ -1646,7 +1712,15 @@ impl Qrow {
                                                     .child(name),
                                             )
                                             .when(is_active, |row| {
-                                                row.child(Tag::secondary().small().child("Active"))
+                                                row.child(
+                                                    Tag::custom(
+                                                        cx.theme().primary.opacity(0.14),
+                                                        cx.theme().primary,
+                                                        cx.theme().primary.opacity(0.32),
+                                                    )
+                                                    .small()
+                                                    .child("Active"),
+                                                )
                                             }),
                                     )
                                     .child(
@@ -1657,123 +1731,131 @@ impl Qrow {
                                     ),
                             )
                             .child(
-                                h_flex()
+                                div()
+                                    .id(SharedString::from(format!("workspace-actions-wrap-{id}")))
                                     .flex_shrink_0()
-                                    .items_center()
-                                    .gap_1()
-                                    .when(!is_active, |actions| {
-                                        actions.child(
-                                            Button::new(SharedString::from(format!(
-                                                "workspace-switch-{id}"
-                                            )))
-                                            .small()
-                                            .label("Switch")
-                                            .accessibility_label(format!("Switch to {switch_name}"))
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.workspace_manager_open = false;
-                                                window.close_dialog(cx);
-                                                this.request_workspace_switch(
-                                                    SwitchAction::Switch(id),
-                                                    window,
-                                                    cx,
-                                                );
-                                            })),
-                                        )
-                                    })
+                                    .on_click(|_, _, cx| cx.stop_propagation())
                                     .child(
                                         Button::new(SharedString::from(format!(
-                                            "workspace-rename-{id}"
+                                            "workspace-actions-{id}"
                                         )))
                                         .ghost()
                                         .small()
-                                        .icon(Icon::new(AssetIconName::Pencil).small())
-                                        .accessibility_label(format!("Rename {rename_name}"))
-                                        .tooltip("Rename workspace")
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                this.workspace_manager_open = false;
-                                                window.close_dialog(cx);
-                                                cx.defer_in(window, move |this, window, cx| {
-                                                    this.open_workspace_name_dialog(
-                                                        Some(id),
-                                                        true,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "workspace-duplicate-{id}"
-                                        )))
-                                        .ghost()
-                                        .small()
-                                        .icon(Icon::new(AssetIconName::Copy).small())
-                                        .accessibility_label(format!("Duplicate {dup_name}"))
-                                        .tooltip("Duplicate workspace")
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                this.duplicate_workspace_entry(id, window, cx);
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "workspace-export-{id}"
-                                        )))
-                                        .ghost()
-                                        .small()
-                                        .icon(Icon::new(AssetIconName::Download).small())
-                                        .accessibility_label(format!("Export {reveal_name}"))
-                                        .tooltip("Export workspace…")
-                                            .on_click(
-                                                cx.listener(move |this, _, window, cx| {
-                                                    this.open_export_workspace_dialog(
-                                                        id, window, cx,
-                                                    );
-                                                }),
-                                            ),
-                                    )
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "workspace-reveal-{id}"
-                                        )))
-                                        .ghost()
-                                        .small()
-                                        .icon(Icon::new(AssetIconName::FolderOpen).small())
+                                        .icon(IconName::Ellipsis)
                                         .accessibility_label(format!(
-                                            "Reveal folder for {reveal_name}"
+                                            "Actions for {actions_name}"
                                         ))
-                                        .tooltip("Reveal workspace folder")
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                if let Some(store) = &this.store {
-                                                    cx.reveal_path(&store.workspace_dir(id));
-                                                }
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "workspace-delete-{id}"
-                                        )))
-                                        .ghost()
-                                        .small()
-                                        .disabled(!can_delete)
-                                        .icon(Icon::new(AssetIconName::Trash).small())
-                                        .accessibility_label(format!("Delete {delete_name}"))
-                                        .tooltip(if can_delete {
-                                            "Delete workspace"
-                                        } else {
-                                            "Cannot delete the only workspace"
-                                        })
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                let name = delete_name.clone();
-                                                this.confirm_delete_workspace(id, name, window, cx);
-                                            }),
+                                        .tooltip("Workspace actions")
+                                        .dropdown_menu_with_anchor(
+                                            Anchor::TopRight,
+                                            move |menu, _, _| {
+                                                let rename_weak = menu_weak.clone();
+                                                let duplicate_weak = menu_weak.clone();
+                                                let export_weak = menu_weak.clone();
+                                                let reveal_weak = menu_weak.clone();
+                                                let delete_weak = menu_weak.clone();
+                                                let delete_name = delete_name.clone();
+                                                menu.item(
+                                                    PopupMenuItem::new("Rename…")
+                                                        .icon(Icon::new(AssetIconName::Pencil).small())
+                                                        .on_click(move |_, window, cx| {
+                                                            let _ = rename_weak.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    this.workspace_manager_open =
+                                                                        false;
+                                                                    window.close_dialog(cx);
+                                                                    cx.defer_in(
+                                                                        window,
+                                                                        move |this, window, cx| {
+                                                                            this.open_workspace_name_dialog(
+                                                                                Some(id),
+                                                                                true,
+                                                                                window,
+                                                                                cx,
+                                                                            );
+                                                                        },
+                                                                    );
+                                                                },
+                                                            );
+                                                        }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("Duplicate")
+                                                        .icon(Icon::new(AssetIconName::Copy).small())
+                                                        .on_click(move |_, window, cx| {
+                                                            let _ = duplicate_weak.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    this.duplicate_workspace_entry(
+                                                                        id, window, cx,
+                                                                    );
+                                                                },
+                                                            );
+                                                        }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("Export…")
+                                                        .icon(
+                                                            Icon::new(AssetIconName::Download)
+                                                                .small(),
+                                                        )
+                                                        .on_click(move |_, window, cx| {
+                                                            let _ = export_weak.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    this.open_export_workspace_dialog(
+                                                                        id, window, cx,
+                                                                    );
+                                                                },
+                                                            );
+                                                        }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new("Reveal folder")
+                                                        .icon(
+                                                            Icon::new(AssetIconName::FolderOpen)
+                                                                .small(),
+                                                        )
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = reveal_weak.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    if let Some(store) = &this.store
+                                                                    {
+                                                                        cx.reveal_path(
+                                                                            &store.workspace_dir(id),
+                                                                        );
+                                                                    }
+                                                                },
+                                                            );
+                                                        }),
+                                                )
+                                                .separator()
+                                                .item(
+                                                    PopupMenuItem::new("Delete…")
+                                                        .icon(
+                                                            Icon::new(AssetIconName::Trash).small(),
+                                                        )
+                                                        .disabled(!can_delete)
+                                                        .when(!can_delete, |item| {
+                                                            item.tooltip(
+                                                                "Cannot delete the only workspace",
+                                                            )
+                                                        })
+                                                        .on_click(move |_, window, cx| {
+                                                            let name = delete_name.clone();
+                                                            let _ = delete_weak.update(
+                                                                cx,
+                                                                |this, cx| {
+                                                                    this.confirm_delete_workspace(
+                                                                        id, name, window, cx,
+                                                                    );
+                                                                },
+                                                            );
+                                                        }),
+                                                )
+                                            },
                                         ),
                                     ),
                             )
@@ -1783,6 +1865,12 @@ impl Qrow {
     }
 
     fn manage_workspaces_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let active_id = self
+            .store
+            .as_ref()
+            .map(storage::DataStore::active_workspace_id);
+        let selected_id = self.manage_workspaces_selected_id();
+        let switch_target = selected_id.filter(|id| Some(*id) != active_id);
         h_flex()
             .w_full()
             .gap_2()
@@ -1807,12 +1895,23 @@ impl Qrow {
             .child(div().flex_1())
             .child(
                 Button::new("manage-workspaces-close")
-                    .primary()
                     .label("Close")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.workspace_manager_open = false;
+                        this.workspace_manager_selected = None;
                         window.close_dialog(cx);
                         cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("manage-workspaces-switch")
+                    .primary()
+                    .label("Switch")
+                    .disabled(switch_target.is_none())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(target) = switch_target {
+                            this.switch_from_manager(target, window, cx);
+                        }
                     })),
             )
             .into_any_element()
@@ -1829,7 +1928,8 @@ impl Qrow {
             .as_mut()
             .map(|store| store.duplicate_workspace(id, live_snapshot.as_ref(), None));
         match result {
-            Some(Ok(_)) => {
+            Some(Ok(entry)) => {
+                self.workspace_manager_selected = Some(entry.id);
                 self.refresh_workspace_summaries();
                 self.sync_workspace_menus(cx);
                 cx.notify();

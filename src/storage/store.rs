@@ -401,7 +401,7 @@ impl DataStore {
             )?;
         }
 
-        let (settings, settings_saver) = SettingsSaver::open(
+        let (settings, mut settings_saver) = SettingsSaver::open(
             settings_path(&data_dir),
             backups_directory(&data_dir),
             Arc::clone(&app_lock),
@@ -419,12 +419,19 @@ impl DataStore {
             registry_unknown,
             registry_preserved_version: reg_migrated.preserved_version,
         };
-        if registry_dirty {
-            store.write_registry(&store.registry)?;
+        if registry_dirty && let Err(error) = store.write_registry(&store.registry) {
+            let _ = settings_saver.stop();
+            return Err(error);
         }
 
         let (workspace, workspace_saver) =
-            store.open_workspace_saver(store.registry.active_workspace, wake)?;
+            match store.open_workspace_saver(store.registry.active_workspace, wake) {
+                Ok(opened) => opened,
+                Err(error) => {
+                    let _ = settings_saver.stop();
+                    return Err(error);
+                }
+            };
         if let Some(newer) = &workspace_saver.newer {
             notices.push(newer.notice());
         }

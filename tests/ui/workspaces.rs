@@ -66,8 +66,15 @@ fn create_switch_rename_duplicate_and_delete_workspaces_in_single_window(cx: &mu
     // Open Manage Workspaces, duplicate Analytics, rename the duplicate, and delete it.
     app.dispatch(cx, qrow::ui::ManageWorkspaces);
     app.wait_for(cx, "manage-workspaces-list");
-    let dup_button = format!("workspace-duplicate-{analytics_id}");
-    app.click(cx, dup_button);
+    // Pressing Escape on an open actions menu dismisses only the menu.
+    app.click(cx, format!("workspace-actions-{analytics_id}"));
+    app.wait_for(cx, "popup-menu");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "popup-menu");
+    app.wait_for(cx, "manage-workspaces-list");
+
+    app.click(cx, format!("workspace-actions-{analytics_id}"));
+    app.choose(cx, "popup-menu", "Duplicate");
 
     app.wait_until(
         cx,
@@ -89,8 +96,8 @@ fn create_switch_rename_duplicate_and_delete_workspaces_in_single_window(cx: &mu
     assert_eq!(copy_saved.tabs[0].sql, "SELECT 'in_analytics'");
 
     // Rename the duplicate to "Staging".
-    let rename_button = format!("workspace-rename-{copy_id}");
-    app.click(cx, rename_button);
+    app.click(cx, format!("workspace-actions-{copy_id}"));
+    app.choose(cx, "popup-menu", "Rename…");
     app.wait_for(cx, "workspace-name-input");
     app.fill(cx, "workspace-name-input", "Staging");
     app.click(cx, "submit-workspace-name");
@@ -104,8 +111,8 @@ fn create_switch_rename_duplicate_and_delete_workspaces_in_single_window(cx: &mu
 
     // Manage Workspaces reopens automatically after rename; delete inactive Staging.
     app.wait_for(cx, "manage-workspaces-list");
-    let delete_button = format!("workspace-delete-{copy_id}");
-    app.click(cx, delete_button);
+    app.click(cx, format!("workspace-actions-{copy_id}"));
+    app.choose(cx, "popup-menu", "Delete…");
     app.wait_for(cx, "confirm-delete-workspace");
     app.click(cx, "confirm-delete-workspace");
     app.wait_until(cx, "Staging deleted", Duration::from_secs(10), |_, _| {
@@ -113,10 +120,10 @@ fn create_switch_rename_duplicate_and_delete_workspaces_in_single_window(cx: &mu
     });
     assert!(!storage::workspace_directory(app.data_dir(), copy_id).exists());
 
-    // Close Manage Workspaces, then switch back to Default via SwitchToWorkspace action.
-    app.wait_for(cx, "manage-workspaces-close");
-    app.click(cx, "manage-workspaces-close");
-    app.dispatch(cx, qrow::ui::SwitchToWorkspace(default_id));
+    // Select Default card and click the footer Switch button to switch workspaces.
+    app.wait_for(cx, "manage-workspaces-switch");
+    app.click(cx, format!("workspace-row-{default_id}"));
+    app.click(cx, "manage-workspaces-switch");
     app.wait_until(
         cx,
         "switched back to Default",
@@ -130,7 +137,8 @@ fn create_switch_rename_duplicate_and_delete_workspaces_in_single_window(cx: &mu
     // Delete the active workspace (Default): switches to Analytics and removes Default.
     app.dispatch(cx, qrow::ui::ManageWorkspaces);
     app.wait_for(cx, "manage-workspaces-list");
-    app.click(cx, format!("workspace-delete-{default_id}"));
+    app.click(cx, format!("workspace-actions-{default_id}"));
+    app.choose(cx, "popup-menu", "Delete…");
     app.wait_for(cx, "confirm-delete-workspace");
     app.click(cx, "confirm-delete-workspace");
     app.wait_until(
@@ -313,7 +321,8 @@ fn dismissing_delete_confirmation_with_escape_reopens_manager(cx: &mut TestAppCo
 
     app.dispatch(cx, qrow::ui::ManageWorkspaces);
     app.wait_for(cx, "manage-workspaces-list");
-    app.click(cx, format!("workspace-delete-{extra_id}"));
+    app.click(cx, format!("workspace-actions-{extra_id}"));
+    app.choose(cx, "popup-menu", "Delete…");
     app.wait_for(cx, "confirm-delete-workspace");
 
     // Pressing Escape dismisses the confirmation and reopens Manage Workspaces.

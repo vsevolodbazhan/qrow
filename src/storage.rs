@@ -220,7 +220,10 @@ fn read(path: &Path, allow_missing: bool) -> Result<Read> {
         }
         Err(error) => return Err(error).context("Could not read saved workspace"),
     };
-    let migrated = migrations::migrate_bytes(&data, &WORKSPACE_SPEC)?;
+    let mut migrated = migrations::migrate_bytes(&data, &WORKSPACE_SPEC)?;
+    if migrated.preserved_version.is_none() {
+        strip_retired_v9_fields(&mut migrated.value);
+    }
     let (mut workspace, unknown): (Workspace, Unknown) =
         Unknown::read_value(&migrated.value, &ENVELOPE_KEYS)
             .context("Saved workspace is invalid; the original file has been left untouched")?;
@@ -238,6 +241,24 @@ fn read(path: &Path, allow_missing: bool) -> Result<Read> {
         preserved_version: migrated.preserved_version,
         data,
     })
+}
+
+/// Drops retired pre-release v9 connection-group and environment-badge fields
+/// so workspaces written during development open cleanly without triggering a
+/// newer-data backup warning.
+fn strip_retired_v9_fields(value: &mut serde_json::Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+    root.remove("groups");
+    if let Some(profiles) = root.get_mut("profiles").and_then(|v| v.as_array_mut()) {
+        for profile in profiles {
+            if let Some(obj) = profile.as_object_mut() {
+                obj.remove("group_id");
+                obj.remove("environment");
+            }
+        }
+    }
 }
 
 /// Exclusive write access. The OS releases the lock even if the process crashes.
