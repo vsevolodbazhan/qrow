@@ -24,6 +24,7 @@ impl Fixture {
             rx,
             tx,
             wake: Arc::new(|| {}),
+            write_active: Arc::new(std::sync::Mutex::new(true)),
         };
         let fixture = Self {
             _folder: folder,

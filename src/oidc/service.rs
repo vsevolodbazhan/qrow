@@ -51,6 +51,9 @@ pub struct Service {
     records: Mutex<HashMap<Uuid, Arc<Record>>>,
     profiles: Mutex<Vec<Profile>>,
     on_change: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Serializes token store writes against `generation` checks so a removed
+    /// or reconfigured sign-in cannot write a rotated token back after deletion.
+    token_lock: Mutex<()>,
 }
 
 struct Record {
@@ -129,7 +132,15 @@ impl Service {
             records: Mutex::default(),
             profiles: Mutex::default(),
             on_change: Mutex::default(),
+            token_lock: Mutex::default(),
         })
+    }
+
+    /// Waits for any in-flight Keychain token write to finish. Call after
+    /// [`Self::configure`] removes outgoing sign-ins and before deleting their
+    /// stored tokens so an in-flight refresh cannot recreate them.
+    pub fn sync_token_writes(&self) {
+        let _guard = self.token_lock.lock_unpoisoned();
     }
 
     pub fn trust(&self) -> &Trust {
@@ -424,7 +435,14 @@ impl Service {
             self.set_problem(record, Some((Failure::SignInRequired, message.clone())));
             return Err(required(message));
         };
-        let result = self.refresh(&mut work, config, &refresh_token, subject);
+        let result = self.refresh(
+            record,
+            generation,
+            &mut work,
+            config,
+            &refresh_token,
+            subject,
+        );
         let tokens = match result {
             Ok(tokens) => tokens,
             Err(error) => {
@@ -475,8 +493,7 @@ impl Service {
         };
         // Keychain first: a rotated refresh token replaces the old one at
         // the provider, so an unsaved one would be lost.
-        self.save(id, &stored)
-            .context("Could not save the refreshed sign-in")?;
+        self.save_if_current(record, generation, config, &stored)?;
         let token = Zeroizing::new(stored.access_token.clone());
         work.tokens = Some(stored);
         drop(work);
@@ -484,8 +501,28 @@ impl Service {
         Ok(token)
     }
 
+    fn save_if_current(
+        &self,
+        record: &Record,
+        generation: u64,
+        config: &SignIn,
+        stored: &Stored,
+    ) -> Result<()> {
+        let _guard = self.token_lock.lock_unpoisoned();
+        if record.generation.load(Ordering::SeqCst) != generation {
+            return Err(required(format!(
+                "The sign-in \"{}\" was signed out",
+                config.name
+            )));
+        }
+        self.save(config.id, stored)
+            .context("Could not save the refreshed sign-in")
+    }
+
     fn refresh(
         &self,
+        record: &Record,
+        generation: u64,
         work: &mut Work,
         config: &SignIn,
         refresh_token: &str,
@@ -522,8 +559,7 @@ impl Service {
                 expires_at: 0,
                 refresh_token: Some(rotated.to_string()),
             };
-            self.save(config.id, &pending)
-                .context("Could not save the refreshed sign-in")?;
+            self.save_if_current(record, generation, config, &pending)?;
             work.tokens = Some(pending);
         }
         if let Some(id_token) = &tokens.id_token {

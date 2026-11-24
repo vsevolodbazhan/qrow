@@ -342,14 +342,17 @@ impl DataStore {
         let mut notices = Vec::new();
 
         if !reg_path.exists() {
-            anyhow::ensure!(
-                !has_existing_managed_workspaces(&data_dir),
-                "Workspace registry is missing, but existing workspace folders were found in {}; refusing to overwrite them",
-                data_dir.join("workspaces").display()
-            );
             if legacy_path.exists() {
+                // Legacy `workspace.json` is still present, so any existing
+                // workspace subfolder without `workspaces.json` came from an
+                // interrupted migration before the commit point.
                 migrate_legacy_layout(&data_dir, &legacy_path)?;
             } else {
+                anyhow::ensure!(
+                    !has_existing_managed_workspaces(&data_dir),
+                    "Workspace registry is missing, but existing workspace folders were found in {}; refusing to overwrite them",
+                    data_dir.join("workspaces").display()
+                );
                 initialize_fresh_store(&data_dir)?;
             }
         }
@@ -511,7 +514,10 @@ impl DataStore {
             .context("Workspace does not exist")?;
         entry.last_opened_at = now;
         candidate.active_workspace = id;
-        self.commit_registry(candidate)
+        match self.commit_registry(candidate)? {
+            None => Ok(()),
+            Some(sync_error) => Err(sync_error),
+        }
     }
 
     /// Creates a new empty workspace with a validated unique name.
@@ -535,13 +541,14 @@ impl DataStore {
 
         let mut candidate = self.registry.clone();
         candidate.workspaces.push(entry.clone());
-        if let Err(error) = self.commit_registry(candidate) {
-            if self.workspace_entry(entry.id).is_none() {
+        match self.commit_registry(candidate) {
+            Ok(None) => Ok(entry),
+            Ok(Some(sync_error)) => Err(sync_error),
+            Err(error) => {
                 let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+                Err(error)
             }
-            return Err(error);
         }
-        Ok(entry)
     }
 
     /// Renames workspace `id`.
@@ -559,8 +566,10 @@ impl DataStore {
             .context("Workspace does not exist")?;
         entry.name = name;
         let updated = entry.clone();
-        self.commit_registry(candidate)?;
-        Ok(updated)
+        match self.commit_registry(candidate)? {
+            None => Ok(updated),
+            Some(sync_error) => Err(sync_error),
+        }
     }
 
     /// Duplicates workspace `id` into a new workspace with freshly generated
@@ -615,13 +624,14 @@ impl DataStore {
 
         let mut candidate = self.registry.clone();
         candidate.workspaces.push(entry.clone());
-        if let Err(error) = self.commit_registry(candidate) {
-            if self.workspace_entry(entry.id).is_none() {
+        match self.commit_registry(candidate) {
+            Ok(None) => Ok(entry),
+            Ok(Some(sync_error)) => Err(sync_error),
+            Err(error) => {
                 let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+                Err(error)
             }
-            return Err(error);
         }
-        Ok(entry)
     }
 
     /// Deletes workspace `id`, verifying no live saver holds its lock,
@@ -657,23 +667,21 @@ impl DataStore {
         };
 
         let mut warnings = Vec::new();
-        // Read credential IDs before modifying anything.
-        let (profile_ids, sign_in_ids) = if ws_path.exists() {
-            match super::load_existing(&ws_path) {
-                Ok(workspace) => (
-                    workspace.profiles.iter().map(|p| p.id).collect::<Vec<_>>(),
-                    workspace.sign_ins.iter().map(|s| s.id).collect::<Vec<_>>(),
-                ),
-                Err(error) => {
-                    warnings.push(format!(
-                        "Could not read workspace {} for credential cleanup; saved passwords or sign-ins may remain in the system secret store: {error:#}",
-                        ws_path.display()
-                    ));
-                    (Vec::new(), Vec::new())
-                }
+        // Read credential IDs before modifying anything. Always attempt a
+        // strict read so missing snapshots, metadata errors, and parse errors
+        // all surface a credential-cleanup warning.
+        let (profile_ids, sign_in_ids) = match super::load_existing(&ws_path) {
+            Ok(workspace) => (
+                workspace.profiles.iter().map(|p| p.id).collect::<Vec<_>>(),
+                workspace.sign_ins.iter().map(|s| s.id).collect::<Vec<_>>(),
+            ),
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not read workspace {} for credential cleanup; saved passwords or sign-ins may remain in the system secret store: {error:#}",
+                    ws_path.display()
+                ));
+                (Vec::new(), Vec::new())
             }
-        } else {
-            (Vec::new(), Vec::new())
         };
 
         // Commit the registry change first so a failed write never leaves a
@@ -687,7 +695,11 @@ impl DataStore {
         if candidate.migrated_workspace == Some(id) {
             candidate.migrated_workspace = None;
         }
-        self.commit_registry(candidate)?;
+        if let Some(sync_error) = self.commit_registry(candidate)? {
+            warnings.push(format!(
+                "Workspace registry was updated on disk, but syncing its parent directory failed: {sync_error:#}"
+            ));
+        }
 
         // Release the workspace lock before deleting its directory (required on
         // Windows where open file handles block directory removal).
@@ -728,33 +740,40 @@ impl DataStore {
         Ok(warnings)
     }
 
-    /// Writes `candidate` to `workspaces.json` and reconciles `self.registry`
-    /// with disk even if parent-directory sync fails after rename.
-    fn commit_registry(&mut self, candidate: WorkspaceRegistry) -> Result<()> {
-        match self.write_registry(&candidate) {
-            Ok(()) => {
+    /// Writes `candidate` to `workspaces.json`.
+    ///
+    /// Returns `Ok(None)` when the rename and directory sync both succeeded,
+    /// `Ok(Some(err))` when the rename published `candidate` on disk (and
+    /// updated `self.registry`) but parent-directory sync failed afterward, or
+    /// `Err(err)` when the rename did not occur and `self.registry` is intact.
+    fn commit_registry(&mut self, candidate: WorkspaceRegistry) -> Result<Option<anyhow::Error>> {
+        match self.write_registry_tracked(&candidate)? {
+            super::AtomicWriteOutcome::Published => {
                 self.registry = candidate;
-                Ok(())
+                Ok(None)
             }
-            Err(error) => {
-                if let Ok(data) = fs::read(registry_path(&self.data_dir))
-                    && let Ok(migrated) = migrations::migrate_bytes(&data, &REGISTRY_SPEC)
-                    && let Ok((mut on_disk, _)) =
-                        Unknown::read_value::<WorkspaceRegistry>(&migrated.value, &ENVELOPE_KEYS)
-                {
-                    on_disk.sanitize(now_unix_seconds());
-                    self.registry = on_disk;
-                }
-                Err(error)
+            super::AtomicWriteOutcome::PublishedDirSyncFailed(error) => {
+                self.registry = candidate;
+                Ok(Some(error))
             }
         }
     }
 
     fn write_registry(&self, candidate: &WorkspaceRegistry) -> Result<()> {
+        match self.write_registry_tracked(candidate)? {
+            super::AtomicWriteOutcome::Published => Ok(()),
+            super::AtomicWriteOutcome::PublishedDirSyncFailed(error) => Err(error),
+        }
+    }
+
+    fn write_registry_tracked(
+        &self,
+        candidate: &WorkspaceRegistry,
+    ) -> Result<super::AtomicWriteOutcome> {
         let mut value = serde_json::to_value(candidate)?;
         self.registry_unknown.restore(&mut value);
         migrations::stamp_envelope(&mut value, &REGISTRY_SPEC, self.registry_preserved_version);
-        write_atomically(
+        super::write_atomically_tracked(
             &registry_path(&self.data_dir),
             &serde_json::to_vec_pretty(&value)?,
         )
@@ -766,9 +785,14 @@ fn has_existing_managed_workspaces(data_dir: &Path) -> bool {
     let Ok(entries) = fs::read_dir(&workspaces_dir) else {
         return false;
     };
-    entries
-        .flatten()
-        .any(|entry| entry.path().is_dir() && entry.path().join("workspace.json").exists())
+    entries.flatten().any(|entry| {
+        !entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with('.'))
+            && entry.path().is_dir()
+            && entry.path().join("workspace.json").exists()
+    })
 }
 
 fn acquire_lock(lock_path: &Path, label: &str) -> Result<fs::File> {
@@ -809,23 +833,30 @@ fn initialize_fresh_store(data_dir: &Path) -> Result<()> {
         settings_file.save(&Settings::default())?;
     }
     let ws_id = entry.id;
-    let ws_file = WorkspaceFile::acquire_managed_create(
-        workspace_file_path(data_dir, ws_id),
-        backups_directory(data_dir),
-        ws_id,
-    )?;
-    ws_file.save(&Workspace::default())?;
-    drop(ws_file);
+    let ws_dir = workspace_directory(data_dir, ws_id);
+    let init_result = (|| -> Result<()> {
+        let ws_file = WorkspaceFile::acquire_managed_create(
+            workspace_file_path(data_dir, ws_id),
+            backups_directory(data_dir),
+            ws_id,
+        )?;
+        ws_file.save(&Workspace::default())?;
+        drop(ws_file);
 
-    let registry = WorkspaceRegistry::single(entry);
-    let mut value = serde_json::to_value(&registry)?;
-    migrations::stamp_envelope(&mut value, &REGISTRY_SPEC, None);
-    if let Err(error) = write_atomically(
-        &registry_path(data_dir),
-        &serde_json::to_vec_pretty(&value)?,
-    ) {
+        let registry = WorkspaceRegistry::single(entry);
+        let mut value = serde_json::to_value(&registry)?;
+        migrations::stamp_envelope(&mut value, &REGISTRY_SPEC, None);
+        match super::write_atomically_tracked(
+            &registry_path(data_dir),
+            &serde_json::to_vec_pretty(&value)?,
+        )? {
+            super::AtomicWriteOutcome::Published => Ok(()),
+            super::AtomicWriteOutcome::PublishedDirSyncFailed(error) => Err(error),
+        }
+    })();
+    if let Err(error) = init_result {
         if !registry_path(data_dir).exists() {
-            let _ = fs::remove_dir_all(workspace_directory(data_dir, ws_id));
+            let _ = fs::remove_dir_all(&ws_dir);
         }
         return Err(error);
     }
@@ -909,28 +940,37 @@ fn migrate_legacy_layout(data_dir: &Path, legacy_path: &Path) -> Result<()> {
         created_at: now,
         last_opened_at: now,
     };
-    let ws_path = workspace_file_path(data_dir, entry.id);
-    fs::create_dir_all(ws_path.parent().context("Invalid workspace path")?)
-        .context("Could not create workspace directory")?;
+    let ws_id = entry.id;
+    let ws_dir = workspace_directory(data_dir, ws_id);
+    let ws_path = workspace_file_path(data_dir, ws_id);
+    let publish_result = (|| -> Result<()> {
+        fs::create_dir_all(&ws_dir).context("Could not create workspace directory")?;
 
-    let mut ws_value = serde_json::to_value(&workspace)?;
-    workspace_unknown.restore(&mut ws_value);
-    if let Some(object) = ws_value.as_object_mut() {
-        object.remove("settings");
+        let mut ws_value = serde_json::to_value(&workspace)?;
+        workspace_unknown.restore(&mut ws_value);
+        if let Some(object) = ws_value.as_object_mut() {
+            object.remove("settings");
+        }
+        migrations::stamp_envelope(&mut ws_value, &WORKSPACE_SPEC, preserved_version);
+        write_atomically(&ws_path, &serde_json::to_vec_pretty(&ws_value)?)?;
+
+        // 4. Commit point: write `workspaces.json` recording `migrated_workspace`
+        //    so local folder relocation always targets this exact workspace ID.
+        let mut registry = WorkspaceRegistry::single(entry);
+        registry.migrated_workspace = Some(registry.active_workspace);
+        let mut reg_value = serde_json::to_value(&registry)?;
+        migrations::stamp_envelope(&mut reg_value, &REGISTRY_SPEC, None);
+        write_atomically(
+            &registry_path(data_dir),
+            &serde_json::to_vec_pretty(&reg_value)?,
+        )
+    })();
+    if let Err(error) = publish_result {
+        if !registry_path(data_dir).exists() {
+            let _ = fs::remove_dir_all(&ws_dir);
+        }
+        return Err(error);
     }
-    migrations::stamp_envelope(&mut ws_value, &WORKSPACE_SPEC, preserved_version);
-    write_atomically(&ws_path, &serde_json::to_vec_pretty(&ws_value)?)?;
-
-    // 4. Commit point: write `workspaces.json` recording `migrated_workspace`
-    //    so local folder relocation always targets this exact workspace ID.
-    let mut registry = WorkspaceRegistry::single(entry);
-    registry.migrated_workspace = Some(registry.active_workspace);
-    let mut reg_value = serde_json::to_value(&registry)?;
-    migrations::stamp_envelope(&mut reg_value, &REGISTRY_SPEC, None);
-    write_atomically(
-        &registry_path(data_dir),
-        &serde_json::to_vec_pretty(&reg_value)?,
-    )?;
 
     // 5. Remove legacy root `workspace.json` (original is safely in `backups/`).
     let _ = fs::remove_file(legacy_path);
@@ -960,20 +1000,27 @@ fn relocate_local_subdirs(local_dir: &Path, target_local: &Path) -> Result<()> {
                 continue;
             }
         }
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        let Some(parent) = dst.parent() else {
+            continue;
+        };
+        fs::create_dir_all(parent)?;
         if fs::rename(&src, &dst).is_err() {
-            // Stage into a sibling temporary directory and rename atomically
-            // so an interrupted copy never leaves a partial destination.
+            // Stage into a sibling temporary directory, sync copied files and
+            // directories, and rename atomically before removing the source so
+            // power loss or an interrupted copy never loses transcripts.
             let staging = dst.with_extension(format!("relocating.{}.tmp", Uuid::new_v4()));
-            let copy_result = copy_dir_recursive(&src, &staging)
-                .and_then(|()| fs::rename(&staging, &dst).map_err(anyhow::Error::from));
+            let copy_result = copy_dir_recursive(&src, &staging).and_then(|()| {
+                fs::rename(&staging, &dst)?;
+                sync_dir(parent)?;
+                Ok(())
+            });
             if let Err(error) = copy_result {
                 let _ = fs::remove_dir_all(&staging);
                 return Err(error);
             }
             let _ = fs::remove_dir_all(&src);
+        } else {
+            sync_dir(parent)?;
         }
     }
     // Remove empty legacy `assistant` wrapper directory if transcripts moved out.
@@ -988,6 +1035,16 @@ fn relocate_local_subdirs(local_dir: &Path, target_local: &Path) -> Result<()> {
     Ok(())
 }
 
+fn sync_dir(dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
@@ -999,7 +1056,27 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
             copy_dir_recursive(&from, &to)?;
         } else if file_type.is_file() {
             fs::copy(&from, &to)?;
+            fs::File::open(&to)?.sync_all()?;
+        } else if file_type.is_symlink() {
+            #[cfg(unix)]
+            {
+                let target = fs::read_link(&from)?;
+                std::os::unix::fs::symlink(target, &to)?;
+            }
+            #[cfg(not(unix))]
+            {
+                anyhow::bail!(
+                    "Cannot relocate symbolic link {} across filesystems",
+                    from.display()
+                );
+            }
+        } else {
+            anyhow::bail!(
+                "Cannot relocate unsupported filesystem entry {}",
+                from.display()
+            );
         }
     }
+    sync_dir(dst)?;
     Ok(())
 }

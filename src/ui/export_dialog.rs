@@ -1421,6 +1421,12 @@ impl CopyRequest {
     }
 }
 
+/// Invalidates any in-flight clipboard copy from the outgoing workspace so it
+/// cannot overwrite the clipboard or open a dialog after a workspace switch.
+pub(super) fn invalidate_copies(cx: &mut App) {
+    let _ = next_copy(cx);
+}
+
 fn next_copy(cx: &mut App) -> u64 {
     if !cx.has_global::<ClipboardCopies>() {
         cx.set_global(ClipboardCopies::default());

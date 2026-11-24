@@ -243,8 +243,10 @@ impl ActivityView {
     }
 
     /// Resets per-connection logs when switching workspaces, keeping the
-    /// application (`Qrow`) log intact.
+    /// application (`Qrow`) log intact and closing the Activity overlay so the
+    /// target workspace opens on its editor.
     pub(super) fn reset_for_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open = false;
         self.activity.clear_connections();
         self.connections.clear();
         self.closed_tabs.clear();

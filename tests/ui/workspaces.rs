@@ -239,3 +239,88 @@ fn switching_workspace_while_export_runs_asks_for_confirmation(cx: &mut TestAppC
         |_, _| registry_json(&app)["active_workspace"] == default_id.to_string(),
     );
 }
+
+#[gpui_kit::test]
+fn failed_target_open_keeps_current_workspace_active_and_writable(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+    let default_id =
+        uuid::Uuid::parse_str(registry_json(&app)["active_workspace"].as_str().unwrap()).unwrap();
+
+    // Create a second workspace and switch back to Default.
+    app.dispatch(cx, qrow::ui::NewWorkspace);
+    app.wait_for(cx, "workspace-name-input");
+    app.fill(cx, "workspace-name-input", "Broken");
+    app.click(cx, "submit-workspace-name");
+    app.wait_until(cx, "Broken active", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["active_workspace"] != default_id.to_string()
+    });
+    let broken_id =
+        uuid::Uuid::parse_str(registry_json(&app)["active_workspace"].as_str().unwrap()).unwrap();
+    app.dispatch(cx, qrow::ui::SwitchToWorkspace(default_id));
+    app.wait_until(cx, "back in Default", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["active_workspace"] == default_id.to_string()
+    });
+
+    // Corrupt the target workspace on disk and attempt to switch to it.
+    std::fs::write(
+        storage::workspace_file_path(app.data_dir(), broken_id),
+        "{not valid json",
+    )
+    .unwrap();
+    app.dispatch(cx, qrow::ui::SwitchToWorkspace(broken_id));
+    app.settle(cx);
+
+    // Default remains active and edits still persist cleanly to disk.
+    assert_eq!(
+        registry_json(&app)["active_workspace"],
+        default_id.to_string()
+    );
+    app.click(cx, "sql-editor");
+    app.update(cx, |window, cx| {
+        window
+            .within("sql-editor")
+            .input("SELECT 'still_writable'", cx);
+    });
+    app.wait_until(
+        cx,
+        "Default still persists after failed switch",
+        Duration::from_secs(10),
+        |_, _| {
+            storage::load(&storage::workspace_file_path(app.data_dir(), default_id))
+                .ok()
+                .and_then(|ws| ws.tabs.first().map(|t| t.sql.clone()))
+                .as_deref()
+                == Some("SELECT 'still_writable'")
+        },
+    );
+}
+
+#[gpui_kit::test]
+fn dismissing_delete_confirmation_with_escape_reopens_manager(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+
+    app.dispatch(cx, qrow::ui::NewWorkspace);
+    app.wait_for(cx, "workspace-name-input");
+    app.fill(cx, "workspace-name-input", "Extra");
+    app.click(cx, "submit-workspace-name");
+    app.wait_until(cx, "Extra created", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["workspaces"].as_array().unwrap().len() == 2
+    });
+    let extra_id =
+        uuid::Uuid::parse_str(registry_json(&app)["active_workspace"].as_str().unwrap()).unwrap();
+
+    app.dispatch(cx, qrow::ui::ManageWorkspaces);
+    app.wait_for(cx, "manage-workspaces-list");
+    app.click(cx, format!("workspace-delete-{extra_id}"));
+    app.wait_for(cx, "confirm-delete-workspace");
+
+    // Pressing Escape dismisses the confirmation and reopens Manage Workspaces.
+    app.press(cx, "escape");
+    app.wait_for(cx, "manage-workspaces-list");
+    assert_eq!(
+        registry_json(&app)["workspaces"].as_array().unwrap().len(),
+        2
+    );
+}

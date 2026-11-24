@@ -319,61 +319,19 @@ impl Qrow {
             self.last_saved_settings = Some(settings);
         }
 
-        // 2. Stop live work in the outgoing workspace.
-        let previous_id = self
-            .store
-            .as_ref()
-            .map(storage::DataStore::active_workspace_id);
-        cx.global::<crate::export::Jobs>()
-            .cancel_current_and_wait(Duration::from_secs(2));
-        self.sign_in_ui.cancel_all();
-        self.assistant_state.save_transcripts = None;
-        self.save_transcripts(None);
-        if let Some(store) = &self.assistant_state.store {
-            let _ = store.flush(Duration::from_secs(2));
-        }
-        self.assistant_state.shutdown();
-        for tab in &self.tabs {
-            if let Some(worker) = &tab.worker {
-                worker.shutdown();
-            }
-        }
-        self.catalog.shutdown();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        for tab in &self.tabs {
-            if let Some(worker) = &tab.worker {
-                worker.wait_for_shutdown(deadline.saturating_duration_since(Instant::now()));
-            }
-        }
-        self.catalog.wait_for_shutdown(deadline);
-
-        // Release the outgoing workspace's lock.
-        if let Some(mut saver) = self.saver.take() {
-            let _ = saver.stop();
-        }
-
-        // 3. Open the target workspace. If opening fails, reopen the previous
-        //    workspace so the user stays in a valid writable state.
+        // 2. Open and validate the target workspace BEFORE shutting down any
+        //    outgoing workers or releasing the outgoing lock. If the target
+        //    cannot be opened (missing, corrupt, locked, or newer version),
+        //    the current workspace stays completely intact and usable.
         let wake = self.wake.clone();
         let open_result = self.store.as_ref().map(|store| {
             store.open_workspace_saver(target_id, move || {
                 let _ = wake.try_send(());
             })
         });
-        let (mut workspace, new_saver) = match open_result {
+        let (mut workspace, mut new_saver) = match open_result {
             Some(Ok(opened)) => opened,
             Some(Err(error)) => {
-                // Attempt to reclaim the previous workspace lock.
-                if let (Some(store), Some(prev_id)) = (&self.store, previous_id) {
-                    let wake = self.wake.clone();
-                    if let Ok((_, restored_saver)) =
-                        store.open_workspace_saver(prev_id, move || {
-                            let _ = wake.try_send(());
-                        })
-                    {
-                        self.saver = Some(restored_saver);
-                    }
-                }
                 self.report_failure(
                     toast::Failure {
                         id: "workspace-switch-error",
@@ -392,35 +350,122 @@ impl Qrow {
             None => return,
         };
 
-        if let Some(store) = &mut self.store
-            && let Err(error) = store.set_active_workspace(target_id)
+        // 3. Cancel active exports and wait for writers to finish before
+        //    committing the switch. Invalidate any in-flight clipboard copy so
+        //    it cannot write to the clipboard or open a dialog after switching.
+        export_dialog::invalidate_copies(cx);
+        if !cx
+            .global::<crate::export::Jobs>()
+            .cancel_current_and_wait(Duration::from_secs(2))
         {
+            let _ = new_saver.stop();
             self.report_failure(
                 toast::Failure {
                     id: "workspace-switch-error",
-                    title: "Could not update active workspace",
+                    title: "Could not switch workspace",
                     file: None,
                     log: crate::activity::APPLICATION,
                     source: WORKSPACES_SOURCE,
-                    error: format!("{error:#}"),
+                    error: "An export did not stop in time. Wait for it to finish, then try again."
+                        .into(),
                 },
                 window,
                 cx,
             );
+            cx.notify();
+            return;
         }
 
-        // 4. Optional post-switch deletion (when deleting the active workspace).
+        // 4. Commit the active workspace in `workspaces.json` before tearing
+        //    down the outgoing workspace or deleting anything. If the registry
+        //    was not updated on disk, abort cleanly with the current workspace
+        //    still intact.
+        if let Some(store) = &mut self.store
+            && let Err(error) = store.set_active_workspace(target_id)
+        {
+            if store.active_workspace_id() != target_id {
+                let _ = new_saver.stop();
+                self.report_failure(
+                    toast::Failure {
+                        id: "workspace-switch-error",
+                        title: "Could not update active workspace",
+                        file: None,
+                        log: crate::activity::APPLICATION,
+                        source: WORKSPACES_SOURCE,
+                        error: format!("{error:#}"),
+                    },
+                    window,
+                    cx,
+                );
+                cx.notify();
+                return;
+            }
+            let entry = crate::activity::ActivityEntry::new(
+                Severity::Error,
+                format!(
+                    "Active workspace updated, but syncing registry directory failed: {error:#}"
+                ),
+            )
+            .with_source(WORKSPACES_SOURCE);
+            self.record_activity(crate::activity::APPLICATION, entry, cx);
+        }
+
+        // 5. Stop and quiesce ALL outgoing workers and background writers
+        //    (exports, sign-ins, OIDC token writes, dbt index writes,
+        //    transcripts, query sessions, catalog workers, and workspace lock)
+        //    BEFORE deleting any workspace credentials or directories.
+        workspace.normalize();
+        self.sign_in_ui.cancel_all();
+        self.assistant_state.save_transcripts = None;
+        self.save_transcripts(None);
+        if let Some(store) = self.assistant_state.store.take() {
+            let _ = store.flush(Duration::from_secs(2));
+        }
+        self.assistant_state.shutdown();
+        for tab in &self.tabs {
+            if let Some(worker) = &tab.worker {
+                worker.shutdown();
+            }
+        }
+        self.catalog.shutdown();
+        self.dbt.shutdown();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        for tab in &self.tabs {
+            if let Some(worker) = &tab.worker {
+                worker.wait_for_shutdown(deadline.saturating_duration_since(Instant::now()));
+            }
+        }
+        self.catalog.wait_for_shutdown(deadline);
+        self.oidc
+            .configure(&workspace.sign_ins, &workspace.profiles);
+        self.oidc.sync_token_writes();
+        self.external_auth.configure(&workspace.profiles);
+
+        // Release the outgoing workspace's lock.
+        if let Some(mut saver) = self.saver.take() {
+            let _ = saver.stop();
+        }
+
+        // 6. Optional post-switch deletion (when deleting the active workspace).
+        //    All outgoing writers are now quiesced so deleted credentials and
+        //    local directories cannot be recreated.
         if let Some(delete_id) = delete_after {
             self.finish_workspace_deletion(delete_id, window, cx);
         }
 
-        // 5. Load the target workspace into the window while keeping global
-        //    settings, updates, and SettingsWindow intact.
+        // 7. Load the target workspace into the window while keeping global
+        //    settings, updates, and SettingsWindow intact, and clear any
+        //    workspace-specific overlays (dbt details sheet, Assistant draft,
+        //    Activity panel).
         let local_dir = self
             .store
             .as_ref()
             .map(storage::DataStore::active_local_directory);
-        workspace.normalize();
+        if self.dbt_details.is_some() {
+            window.close_sheet(cx);
+            self.dbt_details = None;
+            self.dbt_details_origin = None;
+        }
         self.message = new_saver.newer.as_ref().map(storage::NewerData::notice);
         self.saver = Some(new_saver);
         self.dirty = None;
@@ -437,11 +482,7 @@ impl Qrow {
         self.form = None;
         self.tab_form = None;
         self.result_form = None;
-        self.dbt_details = None;
-        self.dbt_details_origin = None;
 
-        self.oidc.configure(&self.sign_ins, &self.profiles);
-        self.external_auth.configure(&self.profiles);
         self.sign_in_ui = sign_in_view::SignInState::new(self.browser.clone());
 
         self.tabs.clear();
@@ -485,6 +526,8 @@ impl Qrow {
 
         self.activity
             .update(cx, |view, cx| view.reset_for_workspace(window, cx));
+        self.assistant_pane
+            .update(cx, |pane, cx| pane.reset_for_workspace(window, cx));
 
         let mut assistant_state = assistant_view::AssistantState::new(cx);
         assistant_state.store = assistant_view::transcript_store(local_dir.as_deref());
@@ -884,9 +927,21 @@ impl Qrow {
                                             .gap_2()
                                             .child(
                                                 div()
+                                                    .id(SharedString::from(format!(
+                                                        "workspace-name-{id}"
+                                                    )))
                                                     .min_w_0()
                                                     .truncate()
                                                     .font_weight(FontWeight::MEDIUM)
+                                                    .tooltip({
+                                                        let full_name = name.clone();
+                                                        move |window, cx| {
+                                                            gpui_kit::component::tooltip::Tooltip::new(
+                                                                full_name.clone(),
+                                                            )
+                                                            .build(window, cx)
+                                                        }
+                                                    })
                                                     .child(name),
                                             )
                                             .when(is_active, |row| {
@@ -998,14 +1053,8 @@ impl Qrow {
                                         })
                                         .on_click(
                                             cx.listener(move |this, _, window, cx| {
-                                                this.workspace_manager_open = false;
-                                                window.close_dialog(cx);
                                                 let name = delete_name.clone();
-                                                cx.defer_in(window, move |this, window, cx| {
-                                                    this.confirm_delete_workspace(
-                                                        id, name, window, cx,
-                                                    );
-                                                });
+                                                this.confirm_delete_workspace(id, name, window, cx);
                                             }),
                                         ),
                                     ),
@@ -1085,9 +1134,11 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Stack the confirmation alert on top of Manage Workspaces so Cancel,
+        // Escape, and Close Dialog return directly to the manager with its
+        // scroll position and focus intact.
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
-            let cancel = weak.clone();
             let confirm = weak.clone();
             alert
                 .title(format!("Delete \"{name}\"?"))
@@ -1103,9 +1154,6 @@ impl Qrow {
                                 .label("Cancel")
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
-                                    let _ = cancel.update(cx, |this, cx| {
-                                        this.reopen_manage_workspaces_deferred(window, cx);
-                                    });
                                 }),
                         )
                         .child(
@@ -1145,6 +1193,10 @@ impl Qrow {
             else {
                 return;
             };
+            if self.workspace_manager_open {
+                self.workspace_manager_open = false;
+                window.close_dialog(cx);
+            }
             self.request_workspace_switch(
                 SwitchAction::SwitchAndDelete {
                     target: next,
@@ -1155,7 +1207,8 @@ impl Qrow {
             );
         } else {
             self.finish_workspace_deletion(id, window, cx);
-            self.reopen_manage_workspaces_deferred(window, cx);
+            self.refresh_workspace_summaries();
+            cx.notify();
         }
     }
 }

@@ -402,9 +402,29 @@ impl WorkspaceFile {
     }
 }
 
+/// Outcome of an atomic file replacement, distinguishing pre-rename failures
+/// from post-rename parent-directory sync failures.
+pub(crate) enum AtomicWriteOutcome {
+    /// The new file is published on disk and its parent directory was synced.
+    Published,
+    /// The rename published the new file on disk, but syncing the parent
+    /// directory afterward failed.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    PublishedDirSyncFailed(anyhow::Error),
+}
+
 /// Replace `path` with `data` so that a crash leaves the old or the new file,
 /// never a partial one. Only the owner can read the file.
 pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
+    match write_atomically_tracked(path, data)? {
+        AtomicWriteOutcome::Published => Ok(()),
+        AtomicWriteOutcome::PublishedDirSyncFailed(error) => Err(error),
+    }
+}
+
+/// Like [`write_atomically`], but reports whether the rename already published
+/// `data` on disk if syncing the parent directory fails afterward.
+pub(crate) fn write_atomically_tracked(path: &Path, data: &[u8]) -> Result<AtomicWriteOutcome> {
     let parent = path.parent().context("Invalid file path")?;
     let temporary = TemporaryFile(path.with_extension(format!("{}.tmp", Uuid::new_v4())));
     let mut options = fs::OpenOptions::new();
@@ -421,10 +441,12 @@ pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
     // Unix records the rename durably only after a sync of the folder.
     // Windows cannot open a folder as a file, and NTFS journals the rename.
     #[cfg(unix)]
-    fs::File::open(parent)?.sync_all()?;
+    if let Err(error) = fs::File::open(parent).and_then(|dir| dir.sync_all()) {
+        return Ok(AtomicWriteOutcome::PublishedDirSyncFailed(error.into()));
+    }
     #[cfg(not(unix))]
     let _ = parent;
-    Ok(())
+    Ok(AtomicWriteOutcome::Published)
 }
 
 struct TemporaryFile(PathBuf);
