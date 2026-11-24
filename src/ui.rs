@@ -804,7 +804,7 @@ pub struct Qrow {
     completion_statements: Option<(Uuid, crate::completion::Statements)>,
     _store: Option<storage::DataStore>,
     settings_saver: Option<storage::SettingsSaver>,
-    last_saved_settings: Settings,
+    last_saved_settings: Option<Settings>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
     message: Option<String>,
@@ -1116,7 +1116,7 @@ impl Qrow {
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
         });
-        let last_saved_settings = workspace.settings.clone();
+        let last_saved_settings = Some(workspace.settings.clone());
         let mut this = Self {
             settings: workspace.settings,
             assistant: workspace.assistant,
@@ -2141,12 +2141,13 @@ impl Qrow {
         {
             if self.pending_quit.is_none() {
                 if let Some(settings_saver) = &self.settings_saver
-                    && self.settings != self.last_saved_settings
+                    && self.last_saved_settings.as_ref() != Some(&self.settings)
                 {
                     if let Err(error) = settings_saver.save(self.settings.clone()) {
+                        self.last_saved_settings = None;
                         self.message = Some(format!("{error:#}"));
                     } else {
-                        self.last_saved_settings = self.settings.clone();
+                        self.last_saved_settings = Some(self.settings.clone());
                     }
                 }
                 if let Some(saver) = &self.saver
@@ -2166,6 +2167,7 @@ impl Qrow {
         }
         if let Some(settings_saver) = &self.settings_saver {
             for error in settings_saver.errors.try_iter() {
+                self.last_saved_settings = None;
                 self.message = Some(error);
                 changed = true;
             }
@@ -2341,17 +2343,24 @@ impl Qrow {
             return false;
         }
         let pending = self.pending_quit.take().unwrap();
-        let result = pending
-            .workspace_done
-            .unwrap()
-            .and_then(|()| pending.settings_done.unwrap());
+        let workspace_done = pending.workspace_done.unwrap();
+        let settings_done = pending.settings_done.unwrap();
+        match &settings_done {
+            Ok(()) if pending.settings_receipt.is_some() => {
+                self.last_saved_settings = Some(pending.settings.clone());
+            }
+            Err(_) => {
+                self.last_saved_settings = None;
+            }
+            Ok(()) => {}
+        }
+        let result = workspace_done.and(settings_done);
         match result {
             Ok(())
                 if pending.workspace == self.snapshot(cx)
                     && pending.settings == self.settings
                     && !self.form.as_ref().is_some_and(|f| f.saving.is_some()) =>
             {
-                self.last_saved_settings = pending.settings;
                 self.quit_confirmed = true;
                 self.exit(cx);
             }

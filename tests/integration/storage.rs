@@ -655,7 +655,10 @@ fn data_store_workspace_crud_remaps_ids_and_cleans_up_secrets() {
 
     // Duplicate remaps every UUID and clears identity + assistant threads.
     let source_id = opened.store.active_workspace_id();
-    let dup = opened.store.duplicate_workspace(source_id, None).unwrap();
+    let dup = opened
+        .store
+        .duplicate_workspace(source_id, None, None)
+        .unwrap();
     assert_eq!(dup.name, "Default copy");
     let dup_ws = storage::load(&opened.store.workspace_path(dup.id)).unwrap();
     assert_eq!(dup_ws.profiles.len(), 1);
@@ -682,11 +685,25 @@ fn data_store_workspace_crud_remaps_ids_and_cleans_up_secrets() {
     assert_eq!(dup_ws.tabs[0].sql, "SELECT * FROM orders");
     assert!(dup_ws.assistant.conversations.is_empty());
 
+    // Delete refuses while a workspace lock is held, then succeeds after release.
+    let (_locked_ws, mut locked_saver) =
+        opened.store.open_workspace_saver(source_id, || {}).unwrap();
+    assert!(
+        opened
+            .store
+            .delete_workspace(source_id, &creds, &tokens)
+            .is_err()
+    );
+    assert!(creds.password(profile.id).is_ok());
+    assert!(tokens.load_tokens(sign_in.id).unwrap().is_some());
+    locked_saver.stop().unwrap();
+
     // Delete source workspace cleans up Keychain secrets and directories.
-    opened
+    let warnings = opened
         .store
         .delete_workspace(source_id, &creds, &tokens)
         .unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
     assert!(creds.password(profile.id).is_err());
     assert!(tokens.load_tokens(sign_in.id).unwrap().is_none());
     assert!(!opened.store.workspace_dir(source_id).exists());
@@ -702,5 +719,128 @@ fn data_store_workspace_crud_remaps_ids_and_cleans_up_secrets() {
             .store
             .delete_workspace(dup.id, &creds, &tokens)
             .is_err()
+    );
+}
+
+#[test]
+fn assistant_settings_unknown_fields_survive_legacy_split_and_save() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let local_dir = tempfile::tempdir().unwrap();
+    let legacy_path = data_dir.path().join("workspace.json");
+
+    let mut legacy_json = serde_json::to_value(Workspace {
+        version: 8,
+        ..Workspace::default()
+    })
+    .unwrap();
+    legacy_json["settings"]["assistant"]["future_assistant_flag"] = "kept".into();
+    fs::write(
+        &legacy_path,
+        serde_json::to_vec_pretty(&legacy_json).unwrap(),
+    )
+    .unwrap();
+
+    let mut opened = storage::DataStore::open(
+        data_dir.path().to_path_buf(),
+        local_dir.path().to_path_buf(),
+        || {},
+    )
+    .unwrap();
+    let mut updated = opened.settings.clone();
+    updated.editor_font_size = 16.;
+    opened.settings_saver.finish(updated).unwrap();
+
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(storage::settings_path(data_dir.path())).unwrap())
+            .unwrap();
+    assert_eq!(
+        saved["settings"]["assistant"]["future_assistant_flag"],
+        "kept"
+    );
+    assert_eq!(saved["settings"]["editor_font_size"], 16.0);
+}
+
+#[test]
+fn second_machine_relocates_local_transcripts_and_missing_files_refuse_overwrite() {
+    let roaming_dir = tempfile::tempdir().unwrap();
+    let local_machine_1 = tempfile::tempdir().unwrap();
+    let local_machine_2 = tempfile::tempdir().unwrap();
+
+    // Machine 1 migrates legacy workspace.json (v3 with empty tabs + selected_thread).
+    let legacy_path = roaming_dir.path().join("workspace.json");
+    let mut v3 = serde_json::to_value(Workspace::default()).unwrap();
+    v3["version"] = 3.into();
+    v3["tabs"] = serde_json::json!([]);
+    v3["assistant"]["selected_thread"] = "thread-v3".into();
+    v3["assistant"]["conversations"] = serde_json::json!([{
+        "thread_id": "thread-v3",
+        "title": "Legacy",
+        "title_source": "user",
+        "last_activity": 1,
+        "execution_mode": "ask_before_running"
+    }]);
+    fs::write(&legacy_path, serde_json::to_vec_pretty(&v3).unwrap()).unwrap();
+
+    let opened_1 = storage::DataStore::open(
+        roaming_dir.path().to_path_buf(),
+        local_machine_1.path().to_path_buf(),
+        || {},
+    )
+    .unwrap();
+    let migrated_id = opened_1.store.active_workspace_id();
+    assert_eq!(
+        opened_1.workspace.assistant.conversations[0].tab_id,
+        Some(opened_1.workspace.tabs[0].id)
+    );
+    drop(opened_1);
+
+    // Machine 2 has legacy local transcripts and receives the roaming dir.
+    fs::create_dir_all(local_machine_2.path().join("assistant/transcripts")).unwrap();
+    fs::write(
+        local_machine_2
+            .path()
+            .join("assistant/transcripts/thread-v3.json"),
+        b"machine-2-transcript",
+    )
+    .unwrap();
+    let opened_2 = storage::DataStore::open(
+        roaming_dir.path().to_path_buf(),
+        local_machine_2.path().to_path_buf(),
+        || {},
+    )
+    .unwrap();
+    assert!(
+        opened_2
+            .store
+            .workspace_local_dir(migrated_id)
+            .join("assistant/transcripts/thread-v3.json")
+            .is_file()
+    );
+    drop(opened_2);
+
+    // Removing the registered workspace.json fails loudly instead of overwriting with blank.
+    let ws_path = storage::workspace_file_path(roaming_dir.path(), migrated_id);
+    let saved_bytes = fs::read(&ws_path).unwrap();
+    fs::remove_file(&ws_path).unwrap();
+    assert!(
+        storage::DataStore::open(
+            roaming_dir.path().to_path_buf(),
+            local_machine_2.path().to_path_buf(),
+            || {},
+        )
+        .is_err()
+    );
+    assert!(!ws_path.exists());
+
+    // Restoring workspace.json and removing workspaces.json refuses to overwrite existing dirs.
+    fs::write(&ws_path, &saved_bytes).unwrap();
+    fs::remove_file(storage::registry_path(roaming_dir.path())).unwrap();
+    assert!(
+        storage::DataStore::open(
+            roaming_dir.path().to_path_buf(),
+            local_machine_2.path().to_path_buf(),
+            || {},
+        )
+        .is_err()
     );
 }

@@ -19,7 +19,7 @@ use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -150,7 +150,13 @@ impl SettingsFile {
         };
         let migrated = migrations::migrate_bytes(&data, &SETTINGS_SPEC)?;
         if let Some(from_version) = migrated.migrated_from {
-            let _ = migrations::back_up_version(&self.path, &self.backup_dir, from_version, &data)?;
+            let _ = migrations::back_up_version(
+                &self.path,
+                &self.backup_dir,
+                None,
+                from_version,
+                &data,
+            )?;
         }
         let (mut saved, unknown): (SavedSettings, Unknown) =
             Unknown::read_value(&migrated.value, &ENVELOPE_KEYS)
@@ -190,6 +196,9 @@ enum SettingsSaveCommand {
 }
 
 /// Background atomic saver for global `settings.json`.
+///
+/// Shares the app directory lock with [`DataStore`] so queued writes cannot
+/// outlive exclusive ownership of the data directory.
 pub struct SettingsSaver {
     tx: mpsc::Sender<SettingsSaveCommand>,
     pub errors: mpsc::Receiver<String>,
@@ -201,12 +210,14 @@ impl SettingsSaver {
     pub fn open(
         path: PathBuf,
         backup_dir: PathBuf,
+        app_lock: Arc<fs::File>,
         wake: impl Fn() + Send + 'static,
     ) -> Result<(Settings, Self)> {
         let (settings, newer, file) = SettingsFile::open(path, backup_dir)?;
         let (tx, rx) = mpsc::channel();
         let (errors_tx, errors) = mpsc::channel();
         let handle = thread::spawn(move || {
+            let _lock = app_lock;
             let mut pending = None;
             while let Some(command) = pending.take().or_else(|| rx.recv().ok()) {
                 let (mut state, receipt) = match command {
@@ -302,7 +313,7 @@ pub struct OpenedStore {
 pub struct DataStore {
     data_dir: PathBuf,
     local_dir: PathBuf,
-    _app_lock: fs::File,
+    _app_lock: Arc<fs::File>,
     registry: WorkspaceRegistry,
     registry_unknown: Unknown,
     registry_preserved_version: Option<PreservedVersion>,
@@ -310,7 +321,9 @@ pub struct DataStore {
 
 impl DataStore {
     /// Acquires `app.lock`, migrates a legacy v1..v8 flat layout if present,
-    /// loads `workspaces.json`, `settings.json`, and opens the active
+    /// finishes relocating machine-local folders when needed (including on
+    /// crash recovery or a second Windows computer syncing a roaming profile),
+    /// loads `workspaces.json` and `settings.json`, and opens the active
     /// workspace's background saver.
     pub fn open(
         data_dir: PathBuf,
@@ -322,7 +335,7 @@ impl DataStore {
         let data_dir = data_dir.canonicalize()?;
         let local_dir = local_dir.canonicalize()?;
 
-        let app_lock = acquire_lock(&data_dir.join("app.lock"), "data directory")?;
+        let app_lock = Arc::new(acquire_lock(&data_dir.join("app.lock"), "data directory")?);
 
         let reg_path = registry_path(&data_dir);
         let legacy_path = data_dir.join("workspace.json");
@@ -330,8 +343,13 @@ impl DataStore {
 
         if !reg_path.exists() {
             if legacy_path.exists() {
-                migrate_legacy_layout(&data_dir, &local_dir, &legacy_path)?;
+                migrate_legacy_layout(&data_dir, &legacy_path)?;
             } else {
+                anyhow::ensure!(
+                    !has_existing_managed_workspaces(&data_dir),
+                    "Workspace registry is missing, but existing workspace folders were found in {}; refusing to overwrite them",
+                    data_dir.join("workspaces").display()
+                );
                 initialize_fresh_store(&data_dir)?;
             }
         }
@@ -342,6 +360,7 @@ impl DataStore {
             let _ = migrations::back_up_version(
                 &reg_path,
                 &backups_directory(&data_dir),
+                None,
                 from_version,
                 &reg_data,
             )?;
@@ -362,9 +381,24 @@ impl DataStore {
         }
         let registry_dirty = registry.sanitize(now_unix_seconds());
 
+        // Finish relocating any legacy local folders (`catalog`, `dbt`,
+        // `assistant/transcripts`) into the migrated workspace's local folder.
+        // Running this after `workspaces.json` is committed guarantees crash
+        // recovery and handles a second Windows machine receiving a roaming
+        // `workspaces.json`.
+        let local_target = registry
+            .migrated_workspace
+            .filter(|id| registry.workspaces.iter().any(|entry| entry.id == *id))
+            .unwrap_or(registry.active_workspace);
+        relocate_local_subdirs(
+            &local_dir,
+            &workspace_local_directory(&local_dir, local_target),
+        )?;
+
         let (settings, settings_saver) = SettingsSaver::open(
             settings_path(&data_dir),
             backups_directory(&data_dir),
+            Arc::clone(&app_lock),
             wake.clone(),
         )?;
         if let Some(newer) = &settings_saver.newer {
@@ -380,7 +414,7 @@ impl DataStore {
             registry_preserved_version: reg_migrated.preserved_version,
         };
         if registry_dirty {
-            store.save_registry()?;
+            store.write_registry(&store.registry)?;
         }
 
         let (workspace, workspace_saver) =
@@ -451,8 +485,9 @@ impl DataStore {
         self.workspace_local_dir(self.registry.active_workspace)
     }
 
-    /// Opens a background workspace saver for `id` in managed mode (settings
-    /// live in `settings.json`, pre-migration backups go to `backups/`).
+    /// Opens a background workspace saver for existing registered workspace
+    /// `id` in managed mode (settings live in `settings.json`, pre-migration
+    /// backups are scoped by workspace ID under `backups/`).
     pub fn open_workspace_saver(
         &self,
         id: Uuid,
@@ -462,21 +497,23 @@ impl DataStore {
             self.workspace_entry(id).is_some(),
             "Workspace {id} does not exist"
         );
-        Saver::open_managed(self.workspace_path(id), self.backups_dir(), wake)
+        Saver::open_managed(self.workspace_path(id), self.backups_dir(), id, wake)
     }
 
     /// Marks `id` as the active workspace and persists `workspaces.json`.
     pub fn set_active_workspace(&mut self, id: Uuid) -> Result<()> {
         let now = now_unix_seconds();
-        let entry = self
-            .registry
+        let mut candidate = self.registry.clone();
+        let entry = candidate
             .workspaces
             .iter_mut()
             .find(|entry| entry.id == id)
             .context("Workspace does not exist")?;
         entry.last_opened_at = now;
-        self.registry.active_workspace = id;
-        self.save_registry()
+        candidate.active_workspace = id;
+        self.write_registry(&candidate)?;
+        self.registry = candidate;
+        Ok(())
     }
 
     /// Creates a new empty workspace with a validated unique name.
@@ -494,11 +531,17 @@ impl DataStore {
             last_opened_at: now,
         };
         let path = self.workspace_path(entry.id);
-        let file = WorkspaceFile::acquire_managed(path, self.backups_dir())?;
+        let file = WorkspaceFile::acquire_managed_create(path, self.backups_dir(), entry.id)?;
         file.save(&Workspace::default())?;
         drop(file);
-        self.registry.workspaces.push(entry.clone());
-        self.save_registry()?;
+
+        let mut candidate = self.registry.clone();
+        candidate.workspaces.push(entry.clone());
+        if let Err(error) = self.write_registry(&candidate) {
+            let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+            return Err(error);
+        }
+        self.registry = candidate;
         Ok(entry)
     }
 
@@ -509,21 +552,30 @@ impl DataStore {
             !self.registry.name_taken(&name, Some(id)),
             "A workspace named \"{name}\" already exists."
         );
-        let entry = self
-            .registry
+        let mut candidate = self.registry.clone();
+        let entry = candidate
             .workspaces
             .iter_mut()
             .find(|entry| entry.id == id)
             .context("Workspace does not exist")?;
         entry.name = name;
         let updated = entry.clone();
-        self.save_registry()?;
+        self.write_registry(&candidate)?;
+        self.registry = candidate;
         Ok(updated)
     }
 
     /// Duplicates workspace `id` into a new workspace with freshly generated
     /// UUIDs so it never shares Keychain secrets or caches with the source.
-    pub fn duplicate_workspace(&mut self, id: Uuid, name: Option<&str>) -> Result<WorkspaceEntry> {
+    ///
+    /// Pass `snapshot` when duplicating the currently active workspace so
+    /// unsaved edits are included.
+    pub fn duplicate_workspace(
+        &mut self,
+        id: Uuid,
+        snapshot: Option<&Workspace>,
+        name: Option<&str>,
+    ) -> Result<WorkspaceEntry> {
         let source = self
             .workspace_entry(id)
             .context("Workspace does not exist")?
@@ -542,7 +594,10 @@ impl DataStore {
             }),
         };
 
-        let mut workspace = super::load(&self.workspace_path(id))?;
+        let mut workspace = match snapshot {
+            Some(live) => live.clone(),
+            None => super::load(&self.workspace_path(id))?,
+        };
         workspace.remap_ids_for_copy();
 
         let now = now_unix_seconds();
@@ -552,26 +607,38 @@ impl DataStore {
             created_at: now,
             last_opened_at: now,
         };
-        let file =
-            WorkspaceFile::acquire_managed(self.workspace_path(entry.id), self.backups_dir())?;
+        let file = WorkspaceFile::acquire_managed_create(
+            self.workspace_path(entry.id),
+            self.backups_dir(),
+            entry.id,
+        )?;
         file.save(&workspace)?;
         drop(file);
-        self.registry.workspaces.push(entry.clone());
-        self.save_registry()?;
+
+        let mut candidate = self.registry.clone();
+        candidate.workspaces.push(entry.clone());
+        if let Err(error) = self.write_registry(&candidate) {
+            let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+            return Err(error);
+        }
+        self.registry = candidate;
         Ok(entry)
     }
 
-    /// Deletes workspace `id`, removing its Keychain passwords and sign-in
-    /// tokens, its data directory, and its local caches/transcripts.
+    /// Deletes workspace `id`, verifying no live saver holds its lock,
+    /// committing the updated registry first, and then removing its
+    /// directories and Keychain secrets.
     ///
-    /// Refuses to delete the last remaining workspace. The caller must release
-    /// any active `Saver` holding `id`'s lock before deleting it.
+    /// Returns any non-fatal cleanup warnings (such as a failed Keychain or
+    /// folder removal after the workspace was unregistered). Fails without
+    /// deleting anything if `id` is the only workspace, is locked, or if the
+    /// registry write fails.
     pub fn delete_workspace(
         &mut self,
         id: Uuid,
         credentials: &dyn Credentials,
         tokens: &dyn TokenStore,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         anyhow::ensure!(
             self.registry.workspaces.len() > 1,
             "Cannot delete the only workspace."
@@ -583,36 +650,82 @@ impl DataStore {
             .position(|entry| entry.id == id)
             .context("Workspace does not exist")?;
 
-        // Best-effort read of the workspace to clean up its Keychain secrets.
-        if let Ok(workspace) = super::load(&self.workspace_path(id)) {
-            for profile in &workspace.profiles {
-                let _ = credentials.delete_password(profile.id);
+        let ws_path = self.workspace_path(id);
+        let ws_lock = if ws_path.parent().is_some_and(Path::exists) {
+            Some(acquire_lock(&ws_path.with_extension("lock"), "workspace")?)
+        } else {
+            None
+        };
+
+        // Read credential IDs before modifying anything.
+        let (profile_ids, sign_in_ids) = if ws_path.exists() {
+            match super::load(&ws_path) {
+                Ok(workspace) => (
+                    workspace.profiles.iter().map(|p| p.id).collect::<Vec<_>>(),
+                    workspace.sign_ins.iter().map(|s| s.id).collect::<Vec<_>>(),
+                ),
+                Err(_) => (Vec::new(), Vec::new()),
             }
-            for sign_in in &workspace.sign_ins {
-                let _ = tokens.delete_tokens(sign_in.id);
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        // Commit the registry change first so a failed write never leaves a
+        // registered workspace with erased credentials or files.
+        let mut candidate = self.registry.clone();
+        candidate.workspaces.remove(position);
+        if candidate.active_workspace == id {
+            let next = position.min(candidate.workspaces.len() - 1);
+            candidate.active_workspace = candidate.workspaces[next].id;
+        }
+        if candidate.migrated_workspace == Some(id) {
+            candidate.migrated_workspace = None;
+        }
+        self.write_registry(&candidate)?;
+        self.registry = candidate;
+
+        // Release the workspace lock before deleting its directory (required on
+        // Windows where open file handles block directory removal).
+        drop(ws_lock);
+
+        let mut warnings = Vec::new();
+        for profile_id in profile_ids {
+            if let Err(error) = credentials.delete_password(profile_id) {
+                warnings.push(format!(
+                    "Could not delete password for connection {profile_id}: {error:#}"
+                ));
             }
         }
-
-        self.registry.workspaces.remove(position);
-        if self.registry.active_workspace == id {
-            let next = position.min(self.registry.workspaces.len() - 1);
-            self.registry.active_workspace = self.registry.workspaces[next].id;
+        for sign_in_id in sign_in_ids {
+            if let Err(error) = tokens.delete_tokens(sign_in_id) {
+                warnings.push(format!(
+                    "Could not delete tokens for sign-in {sign_in_id}: {error:#}"
+                ));
+            }
         }
-        self.save_registry()?;
-
         let data_ws = self.workspace_dir(id);
-        if data_ws.exists() {
-            let _ = fs::remove_dir_all(&data_ws);
+        if data_ws.exists()
+            && let Err(error) = fs::remove_dir_all(&data_ws)
+        {
+            warnings.push(format!(
+                "Could not remove workspace folder {}: {error}",
+                data_ws.display()
+            ));
         }
         let local_ws = self.workspace_local_dir(id);
-        if local_ws.exists() {
-            let _ = fs::remove_dir_all(&local_ws);
+        if local_ws.exists()
+            && let Err(error) = fs::remove_dir_all(&local_ws)
+        {
+            warnings.push(format!(
+                "Could not remove local workspace folder {}: {error}",
+                local_ws.display()
+            ));
         }
-        Ok(())
+        Ok(warnings)
     }
 
-    fn save_registry(&self) -> Result<()> {
-        let mut value = serde_json::to_value(&self.registry)?;
+    fn write_registry(&self, candidate: &WorkspaceRegistry) -> Result<()> {
+        let mut value = serde_json::to_value(candidate)?;
         self.registry_unknown.restore(&mut value);
         migrations::stamp_envelope(&mut value, &REGISTRY_SPEC, self.registry_preserved_version);
         write_atomically(
@@ -620,6 +733,16 @@ impl DataStore {
             &serde_json::to_vec_pretty(&value)?,
         )
     }
+}
+
+fn has_existing_managed_workspaces(data_dir: &Path) -> bool {
+    let workspaces_dir = data_dir.join("workspaces");
+    let Ok(entries) = fs::read_dir(&workspaces_dir) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| entry.path().is_dir() && entry.path().join("workspace.json").exists())
 }
 
 fn acquire_lock(lock_path: &Path, label: &str) -> Result<fs::File> {
@@ -659,9 +782,10 @@ fn initialize_fresh_store(data_dir: &Path) -> Result<()> {
     if !settings_path(data_dir).exists() {
         settings_file.save(&Settings::default())?;
     }
-    let ws_file = WorkspaceFile::acquire_managed(
+    let ws_file = WorkspaceFile::acquire_managed_create(
         workspace_file_path(data_dir, entry.id),
         backups_directory(data_dir),
+        entry.id,
     )?;
     ws_file.save(&Workspace::default())?;
     drop(ws_file);
@@ -678,7 +802,11 @@ fn initialize_fresh_store(data_dir: &Path) -> Result<()> {
 /// One-time atomic layout upgrade from legacy `<data_dir>/workspace.json`
 /// (`v1..=v8`) to `settings.json` + `workspaces.json` +
 /// `workspaces/<default-id>/workspace.json` (`v9`).
-fn migrate_legacy_layout(data_dir: &Path, local_dir: &Path, legacy_path: &Path) -> Result<()> {
+///
+/// Local folders (`catalog`, `dbt`, `assistant/transcripts`) are relocated
+/// *after* `workspaces.json` is committed in [`DataStore::open`], so an
+/// interrupted migration never strands transcripts under an abandoned UUID.
+fn migrate_legacy_layout(data_dir: &Path, legacy_path: &Path) -> Result<()> {
     // Claim the legacy workspace lock too so a competing older Qrow process
     // cannot be writing while we migrate.
     let _legacy_lock = acquire_lock(&legacy_path.with_extension("lock"), "workspace")?;
@@ -692,16 +820,20 @@ fn migrate_legacy_layout(data_dir: &Path, local_dir: &Path, legacy_path: &Path) 
         ..
     } = migrations::migrate_bytes(&raw, &WORKSPACE_SPEC)?;
 
-    // Validate by deserializing before making any mutations on disk.
+    // Validate and normalize exactly like standalone `storage::read`.
     let (mut workspace, workspace_unknown): (Workspace, Unknown) =
         Unknown::read_value(&value, &ENVELOPE_KEYS)
             .context("Saved workspace is invalid; the original file has been left untouched")?;
+    if workspace.tabs.is_empty() {
+        workspace.tabs = Workspace::default().tabs;
+    }
+    workspace.active_tab = workspace.active_tab.min(workspace.tabs.len() - 1);
     workspace.normalize();
     workspace.settings.sanitize();
 
     // 1. Back up the original legacy file verbatim.
     let backups = backups_directory(data_dir);
-    let _ = migrations::back_up_version(legacy_path, &backups, original_version, &raw)?;
+    let _ = migrations::back_up_version(legacy_path, &backups, None, original_version, &raw)?;
 
     // 2. Write `settings.json`, preserving any unknown fields from the legacy
     //    `settings` object verbatim.
@@ -711,20 +843,21 @@ fn migrate_legacy_layout(data_dir: &Path, local_dir: &Path, legacy_path: &Path) 
             version: SETTINGS_SPEC.current,
             settings: workspace.settings.clone(),
         })?;
-        // Preserve any unknown fields that existed inside legacy `settings`.
-        if let Some(legacy_settings) = value.get("settings")
-            && let Ok((_, settings_unknown)) = Unknown::read_value::<Settings>(legacy_settings, &[])
+        let legacy_settings_unknown = value
+            .get("settings")
+            .and_then(|s| Unknown::read_value::<Settings>(s, &[]).ok())
+            .map(|(_, u)| u);
+        if let Some(unknown) = &legacy_settings_unknown
             && let Some(target_settings) = settings_doc.get_mut("settings")
         {
-            settings_unknown.restore(target_settings);
+            unknown.restore(target_settings);
         }
         migrations::stamp_envelope(&mut settings_doc, &SETTINGS_SPEC, None);
         if let Some(writer) = &written_by
+            && legacy_settings_unknown
+                .as_ref()
+                .is_some_and(|u| !u.is_empty())
             && let Some(obj) = settings_doc.as_object_mut()
-            && value
-                .get("settings")
-                .and_then(|s| Unknown::read_value::<Settings>(s, &[]).ok())
-                .is_some_and(|(_, u)| !u.is_empty())
         {
             obj.insert(migrations::WRITTEN_BY.into(), Value::from(writer.clone()));
         }
@@ -755,12 +888,10 @@ fn migrate_legacy_layout(data_dir: &Path, local_dir: &Path, legacy_path: &Path) 
     migrations::stamp_envelope(&mut ws_value, &WORKSPACE_SPEC, preserved_version);
     write_atomically(&ws_path, &serde_json::to_vec_pretty(&ws_value)?)?;
 
-    // 4. Relocate machine-local workspace folders (catalog, dbt, transcripts).
-    let target_local = workspace_local_directory(local_dir, entry.id);
-    relocate_local_subdirs(local_dir, &target_local)?;
-
-    // 5. Commit point: write `workspaces.json`.
-    let registry = WorkspaceRegistry::single(entry);
+    // 4. Commit point: write `workspaces.json` recording `migrated_workspace`
+    //    so local folder relocation always targets this exact workspace ID.
+    let mut registry = WorkspaceRegistry::single(entry);
+    registry.migrated_workspace = Some(registry.active_workspace);
     let mut reg_value = serde_json::to_value(&registry)?;
     migrations::stamp_envelope(&mut reg_value, &REGISTRY_SPEC, None);
     write_atomically(
@@ -768,7 +899,7 @@ fn migrate_legacy_layout(data_dir: &Path, local_dir: &Path, legacy_path: &Path) 
         &serde_json::to_vec_pretty(&reg_value)?,
     )?;
 
-    // 6. Remove legacy root `workspace.json` (original is safely in `backups/`).
+    // 5. Remove legacy root `workspace.json` (original is safely in `backups/`).
     let _ = fs::remove_file(legacy_path);
     Ok(())
 }

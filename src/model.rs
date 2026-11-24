@@ -466,7 +466,7 @@ impl AssistantModelChoice {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[non_exhaustive]
-#[serde(default)]
+#[serde(from = "AssistantSettingsRepr")]
 pub struct AssistantSettings {
     pub enabled: bool,
     pub data_sharing_notice_version: u32,
@@ -484,6 +484,70 @@ pub struct AssistantSettings {
     /// Lets the harness search the web. Codex uses its cached index, and
     /// Claude Code uses its search tool. Neither can open other URLs.
     pub web_search: bool,
+}
+
+/// Flat deserialization shape for [`AssistantSettings`] so `serde_ignored`
+/// sees unknown fields inside `settings.assistant` instead of `#[serde(flatten)]`
+/// buffering them away.
+#[derive(Deserialize)]
+#[serde(default)]
+struct AssistantSettingsRepr {
+    enabled: bool,
+    data_sharing_notice_version: u32,
+    default_execution_mode: AssistantExecutionMode,
+    harness: AssistantHarness,
+    codex_executable: Option<String>,
+    claude_executable: Option<String>,
+    panel_width: f32,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    service_tier: Option<String>,
+    claude: AssistantModelChoice,
+    sql_keyword_case: KeywordCase,
+    web_search: bool,
+}
+
+impl Default for AssistantSettingsRepr {
+    fn default() -> Self {
+        let d = AssistantSettings::default();
+        Self {
+            enabled: d.enabled,
+            data_sharing_notice_version: d.data_sharing_notice_version,
+            default_execution_mode: d.default_execution_mode,
+            harness: d.harness,
+            codex_executable: d.codex_executable,
+            claude_executable: d.claude_executable,
+            panel_width: d.panel_width,
+            model: d.codex.model,
+            reasoning_effort: d.codex.reasoning_effort,
+            service_tier: d.codex.service_tier,
+            claude: d.claude,
+            sql_keyword_case: d.sql_keyword_case,
+            web_search: d.web_search,
+        }
+    }
+}
+
+impl From<AssistantSettingsRepr> for AssistantSettings {
+    fn from(r: AssistantSettingsRepr) -> Self {
+        Self {
+            enabled: r.enabled,
+            data_sharing_notice_version: r.data_sharing_notice_version,
+            default_execution_mode: r.default_execution_mode,
+            harness: r.harness,
+            codex_executable: r.codex_executable,
+            claude_executable: r.claude_executable,
+            panel_width: r.panel_width,
+            codex: AssistantModelChoice {
+                model: r.model,
+                reasoning_effort: r.reasoning_effort,
+                service_tier: r.service_tier,
+            },
+            claude: r.claude,
+            sql_keyword_case: r.sql_keyword_case,
+            web_search: r.web_search,
+        }
+    }
 }
 
 impl Default for AssistantSettings {
@@ -1889,6 +1953,11 @@ pub struct WorkspaceRegistry {
     pub active_workspace: Uuid,
     #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
+    /// The workspace created by migrating a legacy flat layout. Used to finish
+    /// relocating machine-local caches and transcripts on crash recovery or on
+    /// another Windows computer syncing a roaming profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated_workspace: Option<Uuid>,
 }
 
 impl WorkspaceRegistry {
@@ -1899,6 +1968,7 @@ impl WorkspaceRegistry {
             version: REGISTRY_VERSION,
             active_workspace,
             workspaces: vec![entry],
+            migrated_workspace: None,
         }
     }
 

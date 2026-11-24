@@ -36,6 +36,21 @@ def isolated_run(artifacts, target):
             and re.fullmatch(r"\d{8}-\d{6}-\d+(?:-[a-f0-9]{8})?", run.name) is not None)
 
 
+def workspace_files(data_dir):
+    files = []
+    registry = data_dir / "workspaces.json"
+    if registry.exists():
+        entries = json.loads(registry.read_text()).get("workspaces", [])
+        for entry in entries:
+            ws = data_dir / "workspaces" / str(uuid.UUID(entry["id"])) / "workspace.json"
+            if ws.exists():
+                files.append(ws)
+    legacy = data_dir / "workspace.json"
+    if legacy.exists():
+        files.append(legacy)
+    return files
+
+
 def main():
     if shutil.which("security") is None:
         raise RuntimeError("Missing required command: security")
@@ -43,18 +58,19 @@ def main():
     target = target_dir().resolve()
     if not isolated_run(artifacts, target):
         raise ValueError("Refusing to clean credentials outside an isolated E2E run")
-    workspace = artifacts / "workspace/workspace.json"
-    if workspace.exists():
-        profiles = json.loads(workspace.read_text())["profiles"]
-        # Validate every profile before deleting any credential.
-        for identifier in fixture_profile_ids(profiles):
-            result = subprocess.run(
-                ["security", "delete-generic-password", "-s", "io.qrow.connection", "-a", identifier],
-                check=False,
-                capture_output=True,
-            )
-            if result.returncode not in (0, 44):
-                raise RuntimeError(result.stderr.decode())
+    data_dir = artifacts / "workspace"
+    profiles = []
+    for workspace in workspace_files(data_dir):
+        profiles.extend(json.loads(workspace.read_text()).get("profiles", []))
+    # Validate every profile before deleting any credential.
+    for identifier in fixture_profile_ids(profiles):
+        result = subprocess.run(
+            ["security", "delete-generic-password", "-s", "io.qrow.connection", "-a", identifier],
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode not in (0, 44):
+            raise RuntimeError(result.stderr.decode())
 
 
 if __name__ == "__main__":

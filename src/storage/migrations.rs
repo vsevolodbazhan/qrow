@@ -139,13 +139,17 @@ pub fn migrate_value(mut value: Value, spec: &VersionSpec) -> Result<MigratedDoc
         None => original_version,
     };
 
+    // Reject any document whose declared minimum reader exceeds this build,
+    // regardless of whether `version` is greater than, equal to, or less than
+    // `spec.current`.
+    anyhow::ensure!(
+        min_reader_version <= spec.current,
+        "Unsupported {} version {original_version}; the file has been left untouched",
+        spec.label
+    );
+
     // Forward-compatible newer document.
     if original_version > spec.current {
-        anyhow::ensure!(
-            min_reader_version <= spec.current,
-            "Unsupported {} version {original_version}; the file has been left untouched",
-            spec.label
-        );
         return Ok(MigratedDocument {
             value,
             written_by,
@@ -231,10 +235,12 @@ pub fn stamp_envelope(value: &mut Value, spec: &VersionSpec, preserved: Option<P
 }
 
 /// Writes a pre-migration backup of `data` into `backup_dir` as
-/// `<stem>.v<from_version>.backup.json`, readable only by the owner.
+/// `<stem>.v<from_version>.backup.json` (or `<prefix>-<stem>.v<from_version>.backup.json`
+/// when `prefix` is given), readable only by the owner.
 pub fn back_up_version(
     source_path: &Path,
     backup_dir: &Path,
+    prefix: Option<&str>,
     from_version: u32,
     data: &[u8],
 ) -> Result<PathBuf> {
@@ -243,7 +249,11 @@ pub fn back_up_version(
         .file_stem()
         .context("Invalid file path")?
         .to_string_lossy();
-    let backup = backup_dir.join(format!("{stem}.v{from_version}.backup.json"));
+    let filename = match prefix {
+        Some(prefix) => format!("{prefix}-{stem}.v{from_version}.backup.json"),
+        None => format!("{stem}.v{from_version}.backup.json"),
+    };
+    let backup = backup_dir.join(filename);
     super::write_atomically(&backup, data).context("Could not write pre-migration backup")?;
     Ok(backup)
 }
@@ -402,8 +412,22 @@ mod tests {
         let source = dir.path().join("workspace.json");
         let backups = dir.path().join("backups");
         let raw = br#"{"version": 8}"#;
-        let backup = back_up_version(&source, &backups, 8, raw).unwrap();
+        let backup = back_up_version(&source, &backups, None, 8, raw).unwrap();
         assert_eq!(backup, backups.join("workspace.v8.backup.json"));
         assert_eq!(std::fs::read(&backup).unwrap(), raw);
+
+        let scoped = back_up_version(&source, &backups, Some("ws-1"), 8, raw).unwrap();
+        assert_eq!(scoped, backups.join("ws-1-workspace.v8.backup.json"));
+        assert_eq!(std::fs::read(&scoped).unwrap(), raw);
+    }
+
+    #[test]
+    fn rejects_min_reader_version_above_current_on_same_or_older_version() {
+        let raw = br#"{"version": 3, "min_reader_version": 4}"#;
+        let error = migrate_bytes(raw, &TEST_SPEC).unwrap_err().to_string();
+        assert!(
+            error.contains("Unsupported test document version 3"),
+            "{error}"
+        );
     }
 }

@@ -172,7 +172,7 @@ fn linux_workspace_uses_absolute_xdg_data_home() {
 
 /// Read a snapshot without claiming write access, for the read-only probe.
 pub fn load(path: &Path) -> Result<Workspace> {
-    Ok(read(path)?.workspace)
+    Ok(read(path, true)?.workspace)
 }
 
 /// A workspace file as read, with what this build does not know.
@@ -188,10 +188,10 @@ struct Read {
     data: Vec<u8>,
 }
 
-fn read(path: &Path) -> Result<Read> {
+fn read(path: &Path, allow_missing: bool) -> Result<Read> {
     let data = match fs::read(path) {
         Ok(data) => data,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && allow_missing => {
             return Ok(Read {
                 workspace: Workspace::default(),
                 unknown: Unknown::default(),
@@ -200,6 +200,12 @@ fn read(path: &Path) -> Result<Read> {
                 preserved_version: None,
                 data: Vec::new(),
             });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!(
+                "Saved workspace file is missing at {}; refusing to overwrite it with an empty workspace",
+                path.display()
+            );
         }
         Err(error) => return Err(error).context("Could not read saved workspace"),
     };
@@ -233,8 +239,15 @@ pub struct WorkspaceFile {
     /// When true, `settings` live in `settings.json` and are omitted from
     /// `workspace.json`.
     omit_settings: bool,
-    /// Optional backup folder for pre-migration backups.
+    /// When false, a missing workspace file is an error rather than a blank
+    /// default workspace (protects registered workspaces from sync/restore loss).
+    allow_missing: bool,
+    /// Optional backup folder for pre-migration backups. When `None`, pre-migration
+    /// backups are written next to `path`.
     backup_dir: Option<PathBuf>,
+    /// Optional filename prefix (e.g. workspace UUID) so backups from different
+    /// workspaces never overwrite each other.
+    backup_prefix: Option<String>,
     _lock: fs::File,
 }
 
@@ -264,20 +277,44 @@ impl NewerData {
 
 impl WorkspaceFile {
     pub fn acquire(path: PathBuf) -> Result<Self> {
-        Self::acquire_with(path, false, None)
+        Self::acquire_with(path, false, true, None, None)
     }
 
-    /// Acquires a workspace file managed inside a multi-workspace [`DataStore`],
-    /// where app-wide settings live in `settings.json` and pre-migration backups
-    /// are stored under `backup_dir`.
-    pub fn acquire_managed(path: PathBuf, backup_dir: PathBuf) -> Result<Self> {
-        Self::acquire_with(path, true, Some(backup_dir))
+    /// Acquires an existing workspace file managed inside a multi-workspace
+    /// [`DataStore`]. Fails if `workspace.json` is missing so a broken sync or
+    /// restore cannot overwrite it with a blank workspace.
+    pub fn acquire_managed(path: PathBuf, backup_dir: PathBuf, workspace_id: Uuid) -> Result<Self> {
+        Self::acquire_with(
+            path,
+            true,
+            false,
+            Some(backup_dir),
+            Some(workspace_id.to_string()),
+        )
+    }
+
+    /// Acquires a new workspace file inside a [`DataStore`] when creating or
+    /// duplicating a workspace.
+    pub fn acquire_managed_create(
+        path: PathBuf,
+        backup_dir: PathBuf,
+        workspace_id: Uuid,
+    ) -> Result<Self> {
+        Self::acquire_with(
+            path,
+            true,
+            true,
+            Some(backup_dir),
+            Some(workspace_id.to_string()),
+        )
     }
 
     fn acquire_with(
         path: PathBuf,
         omit_settings: bool,
+        allow_missing: bool,
         backup_dir: Option<PathBuf>,
+        backup_prefix: Option<String>,
     ) -> Result<Self> {
         let parent = path.parent().context("Invalid workspace path")?;
         fs::create_dir_all(parent).context("Could not create workspace directory")?;
@@ -307,7 +344,9 @@ impl WorkspaceFile {
             unknown: Unknown::default(),
             preserved_version: None,
             omit_settings,
+            allow_missing,
             backup_dir,
+            backup_prefix,
             _lock: lock,
         })
     }
@@ -315,9 +354,20 @@ impl WorkspaceFile {
     /// Reads the workspace. When it has fields that this build does not
     /// know, saves a backup of the file and reports it.
     pub fn load(&mut self) -> Result<(Workspace, Option<NewerData>)> {
-        let read = read(&self.path)?;
-        if let (Some(from_version), Some(backup_dir)) = (read.migrated_from, &self.backup_dir) {
-            let _ = migrations::back_up_version(&self.path, backup_dir, from_version, &read.data)?;
+        let read = read(&self.path, self.allow_missing)?;
+        if let Some(from_version) = read.migrated_from {
+            let backup_dir = self
+                .backup_dir
+                .as_deref()
+                .or_else(|| self.path.parent())
+                .context("Invalid workspace path")?;
+            let _ = migrations::back_up_version(
+                &self.path,
+                backup_dir,
+                self.backup_prefix.as_deref(),
+                from_version,
+                &read.data,
+            )?;
         }
         let newer = if read.unknown.is_empty() && read.preserved_version.is_none() {
             None
@@ -438,13 +488,14 @@ impl Saver {
         Self::open_file(file, wake)
     }
 
-    /// Lock and open a workspace managed inside a multi-workspace [`DataStore`].
+    /// Lock and open an existing workspace managed inside a multi-workspace [`DataStore`].
     pub fn open_managed(
         path: PathBuf,
         backup_dir: PathBuf,
+        workspace_id: Uuid,
         wake: impl Fn() + Send + 'static,
     ) -> Result<(Workspace, Self)> {
-        let file = WorkspaceFile::acquire_managed(path, backup_dir)?;
+        let file = WorkspaceFile::acquire_managed(path, backup_dir, workspace_id)?;
         Self::open_file(file, wake)
     }
 
@@ -694,8 +745,14 @@ impl Credentials for Keychain {
     }
 
     fn delete_password(&self, id: Uuid) -> Result<()> {
-        security_framework::passwords::delete_generic_password(PASSWORD_SERVICE, &id.to_string())
-            .context("Could not delete the password from macOS Keychain")
+        match security_framework::passwords::delete_generic_password(
+            PASSWORD_SERVICE,
+            &id.to_string(),
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == ITEM_NOT_FOUND => Ok(()),
+            Err(error) => Err(error).context("Could not delete the password from macOS Keychain"),
+        }
     }
 }
 
