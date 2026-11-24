@@ -716,12 +716,17 @@ impl Builder<'_> {
             .collect();
         let member_count = member_profiles.len();
         let children: Vec<TreeItem> = if group_matches {
-            // Matching the group name shows all of its connections.
+            // Matching the group name shows all of its connections within the
+            // active search scope (never bypassing `SearchScope`).
             let saved_search = std::mem::take(&mut self.search);
-            let items = member_profiles
-                .iter()
-                .filter_map(|profile| self.connection(profile))
-                .collect();
+            let mut items = Vec::new();
+            for profile in member_profiles {
+                if self.tree.scope.includes(profile.id, self.current)
+                    && let Some(item) = self.connection(profile)
+                {
+                    items.push(item);
+                }
+            }
             self.search = saved_search;
             items
         } else {
@@ -730,7 +735,7 @@ impl Builder<'_> {
                 .filter_map(|profile| self.connection(profile))
                 .collect()
         };
-        if searching && !group_matches && children.is_empty() {
+        if searching && children.is_empty() && (!group_matches || !self.tree.scope.is_all()) {
             return None;
         }
         let item = self.add(
@@ -1077,18 +1082,29 @@ impl Qrow {
     }
 
     pub(super) fn move_connection(&mut self, id: Uuid, down: bool, cx: &mut Context<Self>) {
-        let Some(ix) = self.profiles.iter().position(|profile| profile.id == id) else {
+        let Some(profile_group) = self
+            .profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .map(|profile| profile.group_id)
+        else {
+            return;
+        };
+        let siblings: Vec<Uuid> = self
+            .profiles
+            .iter()
+            .filter(|profile| profile.group_id == profile_group)
+            .map(|profile| profile.id)
+            .collect();
+        let Some(sibling_ix) = siblings.iter().position(|candidate| *candidate == id) else {
             return;
         };
         let target_ix = if down {
-            ix.checked_add(1)
+            sibling_ix.checked_add(1)
         } else {
-            ix.checked_sub(1)
+            sibling_ix.checked_sub(1)
         };
-        if let Some(target) = target_ix
-            .and_then(|ix| self.profiles.get(ix))
-            .map(|profile| profile.id)
-        {
+        if let Some(target) = target_ix.and_then(|ix| siblings.get(ix).copied()) {
             self.reorder_connection(id, target, down, cx);
             if let Some(ix) = self.catalog.state.read(cx).index_of(&connection_id(id)) {
                 self.catalog
@@ -2579,6 +2595,14 @@ fn render_entry(
         let weak_drop = weak.clone();
         let weak_menu = weak.clone();
         let menu_position = context.menu_position(child_id(&id, "bottom"));
+        let label_key = child_id(&id, "label");
+        context.record_tip(
+            &id,
+            name.clone(),
+            Some(Truncation {
+                labels: vec![(label_key.clone(), name.clone(), 0.875)],
+            }),
+        );
         let row = h_flex()
             .id(SharedString::from(format!("group-{group_uuid}")))
             .test_support()
@@ -2622,13 +2646,15 @@ fn render_entry(
             )
             .child(
                 div()
-                    .id(child_id(&id, "label"))
+                    .id(label_key.clone())
                     .test_support()
+                    .relative()
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::MEDIUM)
-                    .child(name.clone()),
+                    .child(name.clone())
+                    .on_prepaint(context.record_width(label_key)),
             )
             .child(
                 div()
@@ -2641,6 +2667,7 @@ fn render_entry(
                     .child(connections.to_string()),
             )
             .when(selected, |el| el.child(focus_outline(cx)))
+            .when(!*menu_open, |el| el.tooltip(context.live_tooltip(&id)))
             .on_mouse_down(MouseButton::Left, focus)
             .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                 let position = menu_position(event.position);

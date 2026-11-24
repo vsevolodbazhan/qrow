@@ -17,6 +17,7 @@ use zeroize::Zeroizing;
 pub mod migrations;
 pub mod store;
 mod unknown;
+pub mod window;
 use migrations::{ENVELOPE_KEYS, PreservedVersion, WORKSPACE_SPEC};
 use unknown::Unknown;
 
@@ -24,6 +25,10 @@ pub use store::{
     DataStore, OpenedStore, SettingsFile, SettingsSaver, backups_directory, data_directory,
     load_settings, registry_path, resolve_active_workspace_path, resolve_workspace_path_by_name,
     settings_path, workspace_directory, workspace_file_path, workspace_local_directory,
+};
+pub use window::{
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+    SavedWindowBounds, load_window_bounds, save_window_bounds, window_state_path,
 };
 
 pub fn workspace_path() -> PathBuf {

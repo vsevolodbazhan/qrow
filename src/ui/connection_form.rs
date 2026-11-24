@@ -232,9 +232,9 @@ pub(super) fn environment_choices() -> Vec<(Option<ConnectionEnvironment>, Strin
         .collect()
 }
 
-/// The choices of the Group dropdown: None (ungrouped), then each workspace group.
+/// The choices of the Group dropdown: No group (ungrouped), then each workspace group.
 pub(super) fn group_choices(groups: &[ConnectionGroup]) -> Vec<(Option<Uuid>, String)> {
-    std::iter::once((None, "None".to_owned()))
+    std::iter::once((None, "No group".to_owned()))
         .chain(
             groups
                 .iter()

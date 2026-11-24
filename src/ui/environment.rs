@@ -140,6 +140,11 @@ impl Environment {
     }
 
     /// The folder of the caches and transcripts, or `None` for the demo.
+    pub fn local_directory_path(&self) -> Option<&std::path::Path> {
+        self.local.as_deref()
+    }
+
+    /// The folder of the caches and transcripts, or `None` for the demo.
     pub(crate) fn local_directory(&self) -> Option<&PathBuf> {
         self.local.as_ref()
     }

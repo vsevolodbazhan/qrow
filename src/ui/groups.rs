@@ -327,8 +327,10 @@ impl Qrow {
             };
             this.edit_profile(profile, true, window, cx);
         });
-        let rename = cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.open_group_name_dialog(Some(id), None, window, cx);
+        let rename = cx.listener(move |_, _: &ClickEvent, window, cx| {
+            cx.defer_in(window, move |this, window, cx| {
+                this.open_group_name_dialog(Some(id), None, window, cx);
+            });
         });
         let delete = cx.listener(move |this, _: &ClickEvent, _, cx| {
             this.delete_group(id, cx);

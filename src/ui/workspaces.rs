@@ -469,6 +469,7 @@ impl Qrow {
         self.message = new_saver.newer.as_ref().map(storage::NewerData::notice);
         self.saver = Some(new_saver);
         self.dirty = None;
+        self.apply_workspace_layout(workspace.layout, window);
         self.groups = workspace.groups;
         self.profiles = workspace.profiles;
         self.shared_catalogs = workspace.shared_catalogs;

@@ -455,6 +455,13 @@ impl Service {
         let tokens = match result {
             Ok(tokens) => tokens,
             Err(error) => {
+                // Do not delete tokens or update status if this sign-in was
+                // removed or reconfigured while the refresh ran.
+                if record.removed.load(Ordering::SeqCst)
+                    || record.generation.load(Ordering::SeqCst) != generation
+                {
+                    return Err(error);
+                }
                 let failure = super::failure(&error);
                 let message = format!("{error:#}");
                 match failure {

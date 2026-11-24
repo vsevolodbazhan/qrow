@@ -410,3 +410,47 @@ fn connection_groups_and_environment_badges_workflow(cx: &mut TestAppContext) {
         },
     );
 }
+
+#[gpui_kit::test]
+fn workspace_layout_persists_per_workspace_across_switches(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+    let default_id =
+        uuid::Uuid::parse_str(registry_json(&app)["active_workspace"].as_str().unwrap()).unwrap();
+
+    // Hide the sidebar in Default workspace.
+    app.dispatch(cx, qrow::ui::ToggleSidebar);
+    app.wait_until(
+        cx,
+        "Default sidebar_open=false saved",
+        Duration::from_secs(10),
+        |_, _| {
+            storage::load(&storage::workspace_file_path(app.data_dir(), default_id))
+                .ok()
+                .and_then(|ws| ws.layout)
+                .is_some_and(|layout| !layout.sidebar_open)
+        },
+    );
+
+    // Create a second workspace: its layout starts with sidebar open.
+    app.dispatch(cx, qrow::ui::NewWorkspace);
+    app.wait_for(cx, "workspace-name-input");
+    app.fill(cx, "workspace-name-input", "LayoutB");
+    app.click(cx, "submit-workspace-name");
+    app.wait_until(cx, "LayoutB active", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["active_workspace"] != default_id.to_string()
+    });
+    app.wait_for(cx, "connections-list");
+
+    // Switch back to Default: its saved layout restores (sidebar remains closed).
+    app.dispatch(cx, qrow::ui::SwitchToWorkspace(default_id));
+    app.wait_until(
+        cx,
+        "Default active again",
+        Duration::from_secs(10),
+        |_, _| registry_json(&app)["active_workspace"] == default_id.to_string(),
+    );
+    let default_ws =
+        storage::load(&storage::workspace_file_path(app.data_dir(), default_id)).unwrap();
+    assert!(default_ws.layout.is_some_and(|l| !l.sidebar_open));
+}

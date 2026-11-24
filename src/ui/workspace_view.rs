@@ -818,13 +818,17 @@ impl Qrow {
         let shown =
             !(self.sidebar && self.sidebar_panel == panel) || self.assistant_covers_workspace(cx);
         self.uncover_workspace(window, cx);
-        if self.sidebar_panel != panel {
+        let panel_changed = self.sidebar_panel != panel;
+        if panel_changed {
             self.catalog
                 .state
                 .update(cx, |tree, cx| tree.set_selected_index(None, cx));
         }
         self.sidebar_panel = panel;
         self.set_sidebar(shown, window, cx);
+        if panel_changed {
+            self.changed(cx);
+        }
     }
 
     /// Shows or hides the sidebar. A hidden sidebar gives its focus to the
@@ -832,6 +836,7 @@ impl Qrow {
     /// handler. A focus outside the sidebar, like in Activity, stays.
     pub(super) fn set_sidebar(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
         let had_focus = self.sidebar && self.sidebar_focus.contains_focused(window, cx);
+        let changed = self.sidebar != shown;
         self.sidebar = shown;
         if !shown {
             self.catalog
@@ -842,7 +847,11 @@ impl Qrow {
             let editor = self.tabs[self.active].input.clone();
             editor.update(cx, |editor, cx| editor.focus(window, cx));
         }
-        cx.notify();
+        if changed {
+            self.changed(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     /// Activity keeps its icon, with a dot for unread errors or current work.
@@ -1359,8 +1368,17 @@ impl Qrow {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.resize = None;
+                cx.listener(|this, _, window, cx| {
+                    if let Some((horizontal, _, _)) = this.resize.take() {
+                        if !horizontal {
+                            this.editor_height_ratio = Some(ratio_for_editor_height(
+                                this.editor_height,
+                                window.viewport_size().height,
+                                this.settings.ui_scale,
+                            ));
+                        }
+                        this.changed(cx);
+                    }
                     this.assistant_state.resizing = None;
                 }),
             )

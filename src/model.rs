@@ -1894,6 +1894,61 @@ impl AssistantWorkspace {
     }
 }
 
+/// Which sidebar panel is active when the sidebar is open.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedSidebarPanel {
+    #[default]
+    Connections,
+    SignIns,
+}
+
+pub const MIN_SIDEBAR_WIDTH: f32 = 180.;
+pub const DEFAULT_SIDEBAR_WIDTH: f32 = 240.;
+pub const MAX_SIDEBAR_WIDTH: f32 = 360.;
+pub const MIN_EDITOR_HEIGHT_RATIO: f32 = 0.15;
+pub const MAX_EDITOR_HEIGHT_RATIO: f32 = 0.85;
+
+/// Per-workspace pane visibility and split sizes persisted in `workspace.json`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct WorkspaceLayout {
+    pub sidebar_open: bool,
+    pub sidebar_panel: SavedSidebarPanel,
+    /// Unscaled sidebar width in logical points (`180..=360`).
+    pub sidebar_width: f32,
+    /// Editor height as a fraction of the editor + results vertical space (`0.15..=0.85`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_height_ratio: Option<f32>,
+}
+
+impl Default for WorkspaceLayout {
+    fn default() -> Self {
+        Self {
+            sidebar_open: true,
+            sidebar_panel: SavedSidebarPanel::Connections,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            editor_height_ratio: None,
+        }
+    }
+}
+
+impl WorkspaceLayout {
+    pub fn sanitize(&mut self) {
+        if !self.sidebar_width.is_finite() {
+            self.sidebar_width = DEFAULT_SIDEBAR_WIDTH;
+        } else {
+            self.sidebar_width = self
+                .sidebar_width
+                .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+        }
+        self.editor_height_ratio = self
+            .editor_height_ratio
+            .filter(|ratio| ratio.is_finite())
+            .map(|ratio| ratio.clamp(MIN_EDITOR_HEIGHT_RATIO, MAX_EDITOR_HEIGHT_RATIO));
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Workspace {
     pub version: u32,
@@ -1915,6 +1970,9 @@ pub struct Workspace {
     /// The connections that the Connections search looks in.
     #[serde(default, skip_serializing_if = "SearchScope::is_all")]
     pub search_scope: SearchScope,
+    /// Saved pane visibility and splitter proportions for this workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<WorkspaceLayout>,
 }
 
 /// The connections that the Connections search looks in.
@@ -2342,6 +2400,9 @@ impl Workspace {
         }
         prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
         self.search_scope.sanitize(&self.profiles);
+        if let Some(layout) = &mut self.layout {
+            layout.sanitize();
+        }
         self.version = WORKSPACE_VERSION;
     }
 }
@@ -2360,6 +2421,7 @@ impl Default for Workspace {
             shared_catalogs: Vec::new(),
             sign_ins: vec![],
             search_scope: SearchScope::All,
+            layout: None,
         }
     }
 }

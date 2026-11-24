@@ -277,6 +277,45 @@ enum SidebarPanel {
     SignIns,
 }
 
+impl From<crate::model::SavedSidebarPanel> for SidebarPanel {
+    fn from(panel: crate::model::SavedSidebarPanel) -> Self {
+        match panel {
+            crate::model::SavedSidebarPanel::Connections => Self::Connections,
+            crate::model::SavedSidebarPanel::SignIns => Self::SignIns,
+        }
+    }
+}
+
+impl From<SidebarPanel> for crate::model::SavedSidebarPanel {
+    fn from(panel: SidebarPanel) -> Self {
+        match panel {
+            SidebarPanel::Connections => Self::Connections,
+            SidebarPanel::SignIns => Self::SignIns,
+        }
+    }
+}
+
+/// Computes the vertical space available to the editor + results split.
+fn split_vertical_space(viewport_height: Pixels, scale: f32) -> f32 {
+    (f32::from(viewport_height) - 194. * scale).max(200. * scale)
+}
+
+/// Converts a saved `editor_height_ratio` into pixel height for `viewport_height`.
+fn editor_height_for_ratio(ratio: f32, viewport_height: Pixels, scale: f32) -> Pixels {
+    let available = split_vertical_space(viewport_height, scale);
+    let max_editor = (f32::from(viewport_height) - 294. * scale).max(100. * scale);
+    px((available * ratio).clamp(100. * scale, max_editor))
+}
+
+/// Converts a pixel `editor_height` back to a clamped `editor_height_ratio`.
+fn ratio_for_editor_height(editor_height: Pixels, viewport_height: Pixels, scale: f32) -> f32 {
+    let available = split_vertical_space(viewport_height, scale);
+    (f32::from(editor_height) / available).clamp(
+        crate::model::MIN_EDITOR_HEIGHT_RATIO,
+        crate::model::MAX_EDITOR_HEIGHT_RATIO,
+    )
+}
+
 struct Tab {
     saved: SavedTab,
     revision: u64,
@@ -866,10 +905,14 @@ pub struct Qrow {
     /// The focus inside the sidebar, which a hidden sidebar gives back.
     sidebar_focus: FocusHandle,
     editor_height: Pixels,
+    editor_height_ratio: Option<f32>,
     resize: Option<(bool, Point<Pixels>, Pixels)>,
+    window_state_path: Option<std::path::PathBuf>,
+    window_bounds_dirty: Option<(Instant, storage::SavedWindowBounds)>,
     focus: FocusHandle,
     _quit: Subscription,
     _appearance: Subscription,
+    _window_bounds: Subscription,
     /// Gives the focus back when the focused element leaves the window.
     _focus_lost: Subscription,
     _assistant_submit: Subscription,
@@ -1159,6 +1202,18 @@ impl Qrow {
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
         });
+        let window_bounds_sub = cx.observe_window_bounds(window, |this, window, _cx| {
+            this.record_window_bounds(window);
+        });
+        let initial_layout = workspace.layout.clone().unwrap_or_default();
+        let initial_editor_height = initial_layout
+            .editor_height_ratio
+            .map(|ratio| editor_height_for_ratio(ratio, window.viewport_size().height, scale))
+            .unwrap_or_else(|| px(285. * scale));
+        let window_state_path = environment
+            .local_directory()
+            .filter(|_| !demo && saver.is_some())
+            .map(|local| storage::window_state_path(local));
         let last_saved_settings = Some(workspace.settings.clone());
         let mut this = Self {
             settings: workspace.settings,
@@ -1210,15 +1265,19 @@ impl Qrow {
             external_auth,
             sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
             connector: Arc::new(DatabaseConnector::new(environment.trust())),
-            sidebar: true,
-            sidebar_panel: SidebarPanel::Connections,
-            sidebar_width: px(240. * scale),
+            sidebar: initial_layout.sidebar_open,
+            sidebar_panel: initial_layout.sidebar_panel.into(),
+            sidebar_width: px(initial_layout.sidebar_width * scale),
             sidebar_focus: cx.focus_handle(),
-            editor_height: px(285. * scale),
+            editor_height: initial_editor_height,
+            editor_height_ratio: initial_layout.editor_height_ratio,
             resize: None,
+            window_state_path,
+            window_bounds_dirty: None,
             focus: cx.focus_handle(),
             _quit: quit,
             _appearance: appearance,
+            _window_bounds: window_bounds_sub,
             _focus_lost: focus_lost,
             _assistant_submit: assistant_submit,
             pending_quit: None,
@@ -1422,6 +1481,72 @@ impl Qrow {
                 .row_selectable(false)
         })
     }
+    pub(super) fn current_layout(&self) -> crate::model::WorkspaceLayout {
+        let mut layout = crate::model::WorkspaceLayout {
+            sidebar_open: self.sidebar,
+            sidebar_panel: self.sidebar_panel.into(),
+            sidebar_width: f32::from(self.sidebar_width) / self.settings.ui_scale,
+            editor_height_ratio: self.editor_height_ratio,
+        };
+        layout.sanitize();
+        layout
+    }
+
+    pub(super) fn apply_workspace_layout(
+        &mut self,
+        layout: Option<crate::model::WorkspaceLayout>,
+        window: &Window,
+    ) {
+        let mut layout = layout.unwrap_or_default();
+        layout.sanitize();
+        let scale = self.settings.ui_scale;
+        self.sidebar = layout.sidebar_open;
+        self.sidebar_panel = layout.sidebar_panel.into();
+        self.sidebar_width = px(layout.sidebar_width * scale);
+        self.editor_height_ratio = layout.editor_height_ratio;
+        self.editor_height = layout
+            .editor_height_ratio
+            .map(|ratio| editor_height_for_ratio(ratio, window.viewport_size().height, scale))
+            .unwrap_or_else(|| px(285. * scale));
+    }
+
+    fn record_window_bounds(&mut self, window: &Window) {
+        if self.window_state_path.is_none() {
+            return;
+        }
+        let wb = window.window_bounds();
+        let maximized = matches!(wb, WindowBounds::Maximized(_));
+        if matches!(wb, WindowBounds::Fullscreen(_)) {
+            return;
+        }
+        let rect = wb.get_bounds();
+        let bounds = storage::SavedWindowBounds {
+            x: f32::from(rect.origin.x),
+            y: f32::from(rect.origin.y),
+            width: f32::from(rect.size.width),
+            height: f32::from(rect.size.height),
+            maximized,
+        };
+        if bounds.is_finite_and_sized() {
+            self.window_bounds_dirty = Some((Instant::now(), bounds));
+            let _ = self.wake.try_send(());
+        }
+    }
+
+    fn flush_window_bounds(&mut self, force: bool) -> bool {
+        let Some((since, bounds)) = self.window_bounds_dirty else {
+            return false;
+        };
+        if !force && since.elapsed() < Duration::from_millis(500) {
+            return true;
+        }
+        self.window_bounds_dirty = None;
+        if let Some(path) = &self.window_state_path {
+            let _ = storage::save_window_bounds(path, bounds);
+        }
+        false
+    }
+
     fn snapshot(&self, cx: &App) -> Workspace {
         Workspace {
             version: WORKSPACE_VERSION,
@@ -1447,6 +1572,7 @@ impl Qrow {
             active_tabs: self.active_tabs.clone(),
             sign_ins: self.sign_ins.clone(),
             search_scope: self.catalog.scope.clone(),
+            layout: Some(self.current_layout()),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -1454,6 +1580,7 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        self.flush_window_bounds(true);
         cx.global::<crate::export::Jobs>().cancel();
         self.sign_in_ui.cancel_all();
         self.assistant_state.save_transcripts = None;
@@ -1804,6 +1931,7 @@ impl Qrow {
         changed |= self.autosave(cx);
         changed |= self.finish_profile_save(window, cx);
         changed |= self.finish_quit(window, cx);
+        let window_bounds_pending = self.flush_window_bounds(false);
         self.sync_catalog_warmth();
         if changed {
             cx.notify();
@@ -1812,6 +1940,7 @@ impl Qrow {
             || catalog_calls
             || self.pending_quit.is_some()
             || self.form.as_ref().is_some_and(|f| f.saving.is_some())
+            || window_bounds_pending
     }
     /// Applies the Logs entries and the events that the tab workers sent.
     /// Each entry also goes to the Activity of the connection of the tab.
@@ -2245,6 +2374,11 @@ impl Qrow {
                     password_changed,
                     sign_in,
                 } = saved;
+                if let Some(group_id) = profile.group_id
+                    && let Some(group) = self.groups.iter_mut().find(|g| g.id == group_id)
+                {
+                    group.collapsed = false;
+                }
                 if let Some(mut sign_in) = sign_in
                     && !self.sign_ins.iter().any(|other| other.id == sign_in.id)
                 {
@@ -3364,13 +3498,18 @@ impl Qrow {
                 .any(|tab| tab.saved.profile == Some(id) && tab.can_disconnect());
         let disconnect =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.disconnect_profile(id, cx));
-        let ix = self
+        let siblings: Vec<Uuid> = self
             .profiles
             .iter()
-            .position(|profile| profile.id == id)
-            .unwrap();
-        let first = ix == 0;
-        let last = ix + 1 == self.profiles.len();
+            .filter(|candidate| candidate.group_id == profile.group_id)
+            .map(|candidate| candidate.id)
+            .collect();
+        let sibling_ix = siblings
+            .iter()
+            .position(|candidate| *candidate == id)
+            .unwrap_or(0);
+        let first = sibling_ix == 0;
+        let last = sibling_ix + 1 >= siblings.len();
         let move_up =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.move_connection(id, false, cx));
         let move_down =
@@ -3447,7 +3586,7 @@ impl Qrow {
                         move |mut sub, _, _| {
                             let none_weak = weak.clone();
                             sub = sub.item(
-                                PopupMenuItem::new("None")
+                                PopupMenuItem::new("No group")
                                     .checked(current_group.is_none())
                                     .on_click(move |_, _, cx| {
                                         let _ = none_weak.update(cx, |this, cx| {
@@ -3479,8 +3618,16 @@ impl Qrow {
                             sub.separator()
                                 .item(PopupMenuItem::new("New group…").on_click(
                                     move |_, window, cx| {
-                                        let _ = new_weak.update(cx, |this, cx| {
-                                            this.open_group_name_dialog(None, Some(id), window, cx);
+                                        let new_weak = new_weak.clone();
+                                        window.defer(cx, move |window, cx| {
+                                            let _ = new_weak.update(cx, |this, cx| {
+                                                this.open_group_name_dialog(
+                                                    None,
+                                                    Some(id),
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
                                         });
                                     },
                                 ))
@@ -4678,6 +4825,7 @@ fn demo_workspace(manifest: Option<&tempfile::NamedTempFile>) -> Workspace {
         shared_catalogs,
         sign_ins: vec![],
         search_scope: Default::default(),
+        layout: None,
     }
 }
 

@@ -384,12 +384,6 @@ impl DataStore {
         }
         let registry_dirty = registry.sanitize(now_unix_seconds());
 
-        // Finish cleaning up an interrupted legacy migration whose registry was
-        // published just before the legacy `workspace.json` could be removed.
-        if registry.migrated_workspace.is_some() && legacy_path.exists() {
-            let _ = fs::remove_file(&legacy_path);
-        }
-
         // Finish relocating any legacy local folders (`catalog`, `dbt`,
         // `assistant/transcripts`) into the migrated workspace's local folder.
         // Only relocate when `migrated_workspace` still exists so legacy data
@@ -430,6 +424,14 @@ impl DataStore {
             store.open_workspace_saver(store.registry.active_workspace, wake)?;
         if let Some(newer) = &workspace_saver.newer {
             notices.push(newer.notice());
+        }
+        // Only remove a leftover legacy `workspace.json` once the migrated
+        // workspace snapshot is present and the active workspace opened cleanly.
+        if let Some(migrated_id) = store.registry.migrated_workspace
+            && store.workspace_path(migrated_id).exists()
+            && legacy_path.exists()
+        {
+            let _ = fs::remove_file(&legacy_path);
         }
 
         Ok(OpenedStore {
@@ -1064,28 +1066,25 @@ fn relocate_local_subdirs(local_dir: &Path, target_local: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Creates `dir` and any missing ancestors below `existing_root`, syncing each
-/// directory that gained a new entry so a power loss cannot lose newly created
-/// ancestor directories.
+/// Creates `dir` and syncs every ancestor directory from `existing_root` down
+/// to `dir` so retries after an earlier directory sync failure still make the
+/// whole destination path durable before deleting the source.
 fn create_dir_all_synced(existing_root: &Path, dir: &Path) -> Result<()> {
-    let mut missing = Vec::new();
+    fs::create_dir_all(dir)?;
+    let mut chain = Vec::new();
     let mut cursor = dir;
-    while !cursor.exists() {
-        missing.push(cursor.to_path_buf());
+    loop {
+        chain.push(cursor.to_path_buf());
+        if cursor == existing_root {
+            break;
+        }
         let Some(parent) = cursor.parent() else {
             break;
         };
         cursor = parent;
-        if cursor == existing_root {
-            break;
-        }
     }
-    fs::create_dir_all(dir)?;
-    for created in missing.iter().rev() {
-        if let Some(parent) = created.parent() {
-            sync_dir(parent)?;
-        }
-        sync_dir(created)?;
+    for path in chain.iter().rev() {
+        sync_dir(path)?;
     }
     Ok(())
 }
