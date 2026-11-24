@@ -384,6 +384,12 @@ impl DataStore {
         }
         let registry_dirty = registry.sanitize(now_unix_seconds());
 
+        // Finish cleaning up an interrupted legacy migration whose registry was
+        // published just before the legacy `workspace.json` could be removed.
+        if registry.migrated_workspace.is_some() && legacy_path.exists() {
+            let _ = fs::remove_file(&legacy_path);
+        }
+
         // Finish relocating any legacy local folders (`catalog`, `dbt`,
         // `assistant/transcripts`) into the migrated workspace's local folder.
         // Only relocate when `migrated_workspace` still exists so legacy data
@@ -685,7 +691,10 @@ impl DataStore {
         };
 
         // Commit the registry change first so a failed write never leaves a
-        // registered workspace with erased credentials or files.
+        // registered workspace with erased credentials or files. If syncing
+        // the registry parent directory fails after rename, abort destructive
+        // cleanup so a power loss cannot restore a registry entry whose data
+        // was already removed.
         let mut candidate = self.registry.clone();
         candidate.workspaces.remove(position);
         if candidate.active_workspace == id {
@@ -696,8 +705,8 @@ impl DataStore {
             candidate.migrated_workspace = None;
         }
         if let Some(sync_error) = self.commit_registry(candidate)? {
-            warnings.push(format!(
-                "Workspace registry was updated on disk, but syncing its parent directory failed: {sync_error:#}"
+            return Err(sync_error.context(
+                "Workspace registry update could not be synced durably; keeping workspace files and credentials intact",
             ));
         }
 
@@ -985,12 +994,15 @@ fn relocate_local_subdirs(local_dir: &Path, target_local: &Path) -> Result<()> {
         transcripts.as_path(),
     ] {
         let src = local_dir.join(rel);
-        if !src.exists() {
-            continue;
-        }
+        let src_meta = match fs::symlink_metadata(&src) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
         let dst = target_local.join(rel);
-        if dst.exists() {
+        if fs::symlink_metadata(&dst).is_ok() {
             let empty_dst = dst.is_dir()
+                && !dst.is_symlink()
                 && fs::read_dir(&dst)
                     .map(|mut entries| entries.next().is_none())
                     .unwrap_or(false);
@@ -1003,22 +1015,39 @@ fn relocate_local_subdirs(local_dir: &Path, target_local: &Path) -> Result<()> {
         let Some(parent) = dst.parent() else {
             continue;
         };
-        fs::create_dir_all(parent)?;
+        create_dir_all_synced(local_dir, parent)?;
         if fs::rename(&src, &dst).is_err() {
-            // Stage into a sibling temporary directory, sync copied files and
-            // directories, and rename atomically before removing the source so
-            // power loss or an interrupted copy never loses transcripts.
-            let staging = dst.with_extension(format!("relocating.{}.tmp", Uuid::new_v4()));
-            let copy_result = copy_dir_recursive(&src, &staging).and_then(|()| {
-                fs::rename(&staging, &dst)?;
-                sync_dir(parent)?;
-                Ok(())
-            });
-            if let Err(error) = copy_result {
-                let _ = fs::remove_dir_all(&staging);
-                return Err(error);
+            if src_meta.file_type().is_symlink() {
+                #[cfg(unix)]
+                {
+                    let target = fs::read_link(&src)?;
+                    std::os::unix::fs::symlink(target, &dst)?;
+                    sync_dir(parent)?;
+                    let _ = fs::remove_file(&src);
+                }
+                #[cfg(not(unix))]
+                {
+                    anyhow::bail!(
+                        "Cannot relocate symbolic link {} across filesystems",
+                        src.display()
+                    );
+                }
+            } else {
+                // Stage into a sibling temporary directory, sync copied files and
+                // directories, and rename atomically before removing the source so
+                // power loss or an interrupted copy never loses transcripts.
+                let staging = dst.with_extension(format!("relocating.{}.tmp", Uuid::new_v4()));
+                let copy_result = copy_dir_recursive(&src, &staging).and_then(|()| {
+                    fs::rename(&staging, &dst)?;
+                    sync_dir(parent)?;
+                    Ok(())
+                });
+                if let Err(error) = copy_result {
+                    let _ = fs::remove_dir_all(&staging);
+                    return Err(error);
+                }
+                let _ = fs::remove_dir_all(&src);
             }
-            let _ = fs::remove_dir_all(&src);
         } else {
             sync_dir(parent)?;
         }
@@ -1031,6 +1060,32 @@ fn relocate_local_subdirs(local_dir: &Path, target_local: &Path) -> Result<()> {
             .unwrap_or(false)
     {
         let _ = fs::remove_dir(&legacy_assistant);
+    }
+    Ok(())
+}
+
+/// Creates `dir` and any missing ancestors below `existing_root`, syncing each
+/// directory that gained a new entry so a power loss cannot lose newly created
+/// ancestor directories.
+fn create_dir_all_synced(existing_root: &Path, dir: &Path) -> Result<()> {
+    let mut missing = Vec::new();
+    let mut cursor = dir;
+    while !cursor.exists() {
+        missing.push(cursor.to_path_buf());
+        let Some(parent) = cursor.parent() else {
+            break;
+        };
+        cursor = parent;
+        if cursor == existing_root {
+            break;
+        }
+    }
+    fs::create_dir_all(dir)?;
+    for created in missing.iter().rev() {
+        if let Some(parent) = created.parent() {
+            sync_dir(parent)?;
+        }
+        sync_dir(created)?;
     }
     Ok(())
 }

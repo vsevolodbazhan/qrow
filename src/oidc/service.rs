@@ -61,6 +61,9 @@ struct Record {
     /// Sign-out, removal, and requirement changes increment it. Work that
     /// started before discards its result.
     generation: AtomicU64,
+    /// Set to `true` when this sign-in is removed from the service (for
+    /// example on workspace switch or sign-in deletion).
+    removed: AtomicBool,
     /// Held during token work, so that one refresh runs at a time.
     work: Mutex<Work>,
     problem: Mutex<Option<(Failure, String)>>,
@@ -175,6 +178,7 @@ impl Service {
                 sign_in.id == *id && sign_in.provider == crate::model::SignInProvider::Oidc
             });
             if !keep {
+                record.removed.store(true, Ordering::SeqCst);
                 record.generation.fetch_add(1, Ordering::SeqCst);
             }
             keep
@@ -201,6 +205,7 @@ impl Service {
                         Arc::new(Record {
                             config: Mutex::new(sign_in.clone()),
                             generation: AtomicU64::new(0),
+                            removed: AtomicBool::new(false),
                             work: Mutex::default(),
                             problem: Mutex::default(),
                         }),
@@ -309,12 +314,16 @@ impl Service {
         if cancel.load(Ordering::SeqCst) {
             return Err(SignInError::new(Failure::Cancelled, "Sign-in was cancelled").into());
         }
-        anyhow::ensure!(
-            record.generation.load(Ordering::SeqCst) == generation
-                && self.records.lock_unpoisoned().contains_key(&id),
-            "The sign-in changed while the browser was open. Sign in again"
-        );
-        self.save(id, &stored)?;
+        {
+            let _guard = self.token_lock.lock_unpoisoned();
+            anyhow::ensure!(
+                !record.removed.load(Ordering::SeqCst)
+                    && record.generation.load(Ordering::SeqCst) == generation
+                    && self.records.lock_unpoisoned().contains_key(&id),
+                "The sign-in changed while the browser was open. Sign in again"
+            );
+            self.save(id, &stored)?;
+        }
         *work = Work {
             loaded: true,
             tokens: Some(stored),
@@ -509,7 +518,9 @@ impl Service {
         stored: &Stored,
     ) -> Result<()> {
         let _guard = self.token_lock.lock_unpoisoned();
-        if record.generation.load(Ordering::SeqCst) != generation {
+        if record.removed.load(Ordering::SeqCst)
+            || record.generation.load(Ordering::SeqCst) != generation
+        {
             return Err(required(format!(
                 "The sign-in \"{}\" was signed out",
                 config.name

@@ -166,6 +166,9 @@ pub struct CatalogWorker {
     pub logs: mpsc::Receiver<(Uuid, LogEvent)>,
     cancelled: Arc<AtomicU64>,
     stopped: Arc<AtomicBool>,
+    /// Held while saving the catalog cache file; set to `false` on shutdown so
+    /// a background refresh cannot recreate a deleted workspace's cache folder.
+    write_active: Arc<Mutex<bool>>,
     target: Target,
     running: Running,
     config: Mutex<CatalogConfig>,
@@ -200,6 +203,7 @@ impl CatalogWorker {
         let (done_tx, done) = mpsc::channel();
         let cancelled = Arc::new(AtomicU64::new(0));
         let stopped = Arc::new(AtomicBool::new(false));
+        let write_active = Arc::new(Mutex::new(true));
         let target: Target = Arc::new(Mutex::new(None));
         let running: Running = Arc::new(Mutex::new(None));
         let runner = Runner {
@@ -216,6 +220,7 @@ impl CatalogWorker {
             connector,
             credentials,
             cancelled: cancelled.clone(),
+            write_active: Arc::clone(&write_active),
             target: target.clone(),
             running: running.clone(),
             rx,
@@ -242,6 +247,7 @@ impl CatalogWorker {
             logs,
             cancelled,
             stopped,
+            write_active,
             target,
             running,
             config: Mutex::new(config),
@@ -346,6 +352,7 @@ impl CatalogWorker {
     }
 
     pub fn shutdown(&self) {
+        *self.write_active.lock_unpoisoned() = false;
         if !self.stopped.swap(true, Ordering::SeqCst) {
             self.cancel();
             let _ = self.tx.send(Command::Shutdown);
@@ -397,6 +404,7 @@ struct Runner {
     connector: Arc<dyn Connector>,
     credentials: CredentialProvider,
     cancelled: Arc<AtomicU64>,
+    write_active: Arc<Mutex<bool>>,
     target: Target,
     running: Running,
     rx: mpsc::Receiver<Command>,
@@ -1366,6 +1374,10 @@ impl Runner {
             return;
         }
         self.dirty = false;
+        let active = self.write_active.lock_unpoisoned();
+        if !*active {
+            return;
+        }
         if let Some(path) = &self.cache
             && let Err(error) = storage::save_catalog(path, &self.catalog)
         {
