@@ -745,6 +745,15 @@ fn panel_empty_state(message: impl Into<SharedString>, cx: &App) -> Div {
         .child(message.into())
 }
 
+struct PendingQuit {
+    workspace: Workspace,
+    workspace_receipt: storage::SaveReceipt,
+    workspace_done: Option<storage::SaveResult>,
+    settings: Settings,
+    settings_receipt: Option<storage::SaveReceipt>,
+    settings_done: Option<storage::SaveResult>,
+}
+
 pub struct Qrow {
     settings: Settings,
     assistant: AssistantWorkspace,
@@ -793,6 +802,9 @@ pub struct Qrow {
     /// for suggestions, so that a cursor move or an edit does not read the
     /// whole SQL again.
     completion_statements: Option<(Uuid, crate::completion::Statements)>,
+    _store: Option<storage::DataStore>,
+    settings_saver: Option<storage::SettingsSaver>,
+    last_saved_settings: Settings,
     saver: Option<Saver>,
     dirty: Option<Instant>,
     message: Option<String>,
@@ -818,7 +830,7 @@ pub struct Qrow {
     /// Gives the focus back when the focused element leaves the window.
     _focus_lost: Subscription,
     _assistant_submit: Subscription,
-    pending_quit: Option<(Workspace, storage::SaveReceipt)>,
+    pending_quit: Option<PendingQuit>,
     quit_warning_open: bool,
     quit_work_confirmed: bool,
     quit_confirmed: bool,
@@ -868,26 +880,78 @@ impl Qrow {
         } else {
             (None, None)
         };
-        let (mut workspace, mut message, saver) = if let Some(path) = environment.workspace() {
-            let path = path.clone();
-            match Saver::open(path, move || {
-                let _ = save_wake.try_send(());
-            }) {
-                Ok((workspace, saver)) => {
-                    let notice = saver.newer.as_ref().map(storage::NewerData::notice);
-                    (workspace, notice, Some(saver))
+        let (mut workspace, mut message, store, settings_saver, saver, workspace_local) =
+            if let Some(data_dir) = environment.data_directory() {
+                let data_dir = data_dir.clone();
+                let local_dir = environment
+                    .local_directory()
+                    .cloned()
+                    .unwrap_or_else(|| data_dir.clone());
+                match storage::DataStore::open(data_dir, local_dir, move || {
+                    let _ = save_wake.try_send(());
+                }) {
+                    Ok(opened) => {
+                        let mut workspace = opened.workspace;
+                        workspace.settings = opened.settings;
+                        let notice = (!opened.notices.is_empty()).then(|| opened.notices.join(" "));
+                        let local = Some(opened.store.active_local_directory());
+                        (
+                            workspace,
+                            notice,
+                            Some(opened.store),
+                            Some(opened.settings_saver),
+                            Some(opened.workspace_saver),
+                            local,
+                        )
+                    }
+                    Err(e) => (
+                        Workspace::default(),
+                        Some(format!(
+                            "Cannot open workspace: {e}. Saving disabled to protect the existing file."
+                        )),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
                 }
-                Err(e) => (
-                    Workspace::default(),
-                    Some(format!(
-                        "Cannot open workspace: {e}. Saving disabled to protect the existing file."
-                    )),
+            } else if let Some(path) = environment.workspace() {
+                let path = path.clone();
+                match Saver::open(path, move || {
+                    let _ = save_wake.try_send(());
+                }) {
+                    Ok((workspace, saver)) => {
+                        let notice = saver.newer.as_ref().map(storage::NewerData::notice);
+                        (
+                            workspace,
+                            notice,
+                            None,
+                            None,
+                            Some(saver),
+                            environment.local_directory().cloned(),
+                        )
+                    }
+                    Err(e) => (
+                        Workspace::default(),
+                        Some(format!(
+                            "Cannot open workspace: {e}. Saving disabled to protect the existing file."
+                        )),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                }
+            } else {
+                (
+                    demo_workspace(demo_manifest.as_ref()),
+                    demo_error,
                     None,
-                ),
-            }
-        } else {
-            (demo_workspace(demo_manifest.as_ref()), demo_error, None)
-        };
+                    None,
+                    None,
+                    None,
+                )
+            };
         let fonts = installed_fonts(cx);
         workspace.normalize();
         workspace.settings.sanitize();
@@ -1018,8 +1082,7 @@ impl Qrow {
                 editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
         });
-        let mut catalog =
-            catalog_tree::CatalogTree::new(environment.local_directory().cloned(), window, cx);
+        let mut catalog = catalog_tree::CatalogTree::new(workspace_local.clone(), window, cx);
         catalog.scope = workspace.search_scope.clone();
         let catalog_subscriptions = [
             cx.subscribe(
@@ -1039,21 +1102,21 @@ impl Qrow {
         // The saved dbt indexes are in the local data directory, which the
         // workspace lock protects. Without a saved workspace, they stay in
         // memory.
-        let dbt_directory = environment
-            .local_directory()
+        let dbt_directory = workspace_local
+            .as_ref()
             .filter(|_| saver.is_some() && !demo)
             .map(|local| storage::dbt_index_directory(local));
         let dbt = dbt::DbtProjects::new(dbt_directory, wake.clone());
         // Assistant transcripts follow the same rule as the dbt indexes.
         assistant_state.store = assistant_view::transcript_store(
-            environment
-                .local_directory()
-                .filter(|_| saver.is_some() && !demo)
-                .map(|local| local.as_path()),
+            workspace_local
+                .as_deref()
+                .filter(|_| saver.is_some() && !demo),
         );
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
         });
+        let last_saved_settings = workspace.settings.clone();
         let mut this = Self {
             settings: workspace.settings,
             assistant: workspace.assistant,
@@ -1083,6 +1146,9 @@ impl Qrow {
             completion: None,
             completion_reads: std::collections::HashMap::new(),
             completion_statements: None,
+            _store: store,
+            settings_saver,
+            last_saved_settings,
             saver,
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
             message,
@@ -1355,6 +1421,16 @@ impl Qrow {
         } else {
             self.assistant_state.shutdown();
         }
+        if let Some(mut settings_saver) = self.settings_saver.take() {
+            let result = if self.quit_confirmed {
+                settings_saver.stop()
+            } else {
+                settings_saver.finish(self.settings.clone())
+            };
+            if let Err(error) = result {
+                eprintln!("Could not save settings during native termination: {error:#}");
+            }
+        }
         if let Some(mut saver) = self.saver.take() {
             let result = if self.quit_confirmed {
                 saver.stop()
@@ -1492,20 +1568,33 @@ impl Qrow {
             return;
         }
         let snapshot = self.snapshot(cx);
-        let result = self
+        let settings = self.settings.clone();
+        let workspace_result = self
             .saver
             .as_ref()
             .ok_or_else(|| {
                 anyhow::anyhow!("Workspace saving is disabled. Your edits have not been saved.")
             })
             .and_then(|saver| saver.flush(snapshot.clone()));
-        match result {
-            Ok(receipt) => {
-                self.pending_quit = Some((snapshot, receipt));
+        let settings_result = match &self.settings_saver {
+            Some(saver) => saver.flush(settings.clone()).map(Some),
+            None => Ok(None),
+        };
+        match (workspace_result, settings_result) {
+            (Ok(workspace_receipt), Ok(settings_receipt)) => {
+                let settings_done = settings_receipt.is_none().then_some(Ok(()));
+                self.pending_quit = Some(PendingQuit {
+                    workspace: snapshot,
+                    workspace_receipt,
+                    workspace_done: None,
+                    settings,
+                    settings_receipt,
+                    settings_done,
+                });
                 self.message = Some("Saving workspace before quitting…".into());
                 let _ = self.wake.try_send(());
             }
-            Err(error) => self.quit_failed(format!("{error:#}"), window, cx),
+            (Err(error), _) | (_, Err(error)) => self.quit_failed(format!("{error:#}"), window, cx),
         }
         cx.notify();
     }
@@ -2050,17 +2139,33 @@ impl Qrow {
             .dirty
             .is_some_and(|t| t.elapsed() >= Duration::from_millis(400))
         {
-            if self.pending_quit.is_none()
-                && let Some(saver) = &self.saver
-                && let Err(error) = saver.save(self.snapshot(cx))
-            {
-                self.message = Some(format!("{error:#}"));
+            if self.pending_quit.is_none() {
+                if let Some(settings_saver) = &self.settings_saver
+                    && self.settings != self.last_saved_settings
+                {
+                    if let Err(error) = settings_saver.save(self.settings.clone()) {
+                        self.message = Some(format!("{error:#}"));
+                    } else {
+                        self.last_saved_settings = self.settings.clone();
+                    }
+                }
+                if let Some(saver) = &self.saver
+                    && let Err(error) = saver.save(self.snapshot(cx))
+                {
+                    self.message = Some(format!("{error:#}"));
+                }
             }
             self.dirty = None;
             changed = true;
         }
         if let Some(saver) = &self.saver {
             for error in saver.errors.try_iter() {
+                self.message = Some(error);
+                changed = true;
+            }
+        }
+        if let Some(settings_saver) = &self.settings_saver {
+            for error in settings_saver.errors.try_iter() {
                 self.message = Some(error);
                 changed = true;
             }
@@ -2205,25 +2310,48 @@ impl Qrow {
     }
     /// Quits after the final save, or reports a failed save.
     fn finish_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let quit_result =
-            self.pending_quit
-                .as_ref()
-                .and_then(|(_, receipt)| match receipt.try_recv() {
-                    Ok(result) => Some(result),
-                    Err(mpsc::TryRecvError::Empty) => None,
-                    Err(mpsc::TryRecvError::Disconnected) => Some(Err(
-                        "Workspace saver stopped before confirming the save".into(),
-                    )),
-                });
-        let Some(result) = quit_result else {
+        let Some(pending) = &mut self.pending_quit else {
             return false;
         };
-        let (saved, _) = self.pending_quit.take().unwrap();
+        if pending.workspace_done.is_none() {
+            match pending.workspace_receipt.try_recv() {
+                Ok(result) => pending.workspace_done = Some(result),
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    pending.workspace_done = Some(Err(
+                        "Workspace saver stopped before confirming the save".into(),
+                    ));
+                }
+            }
+        }
+        if pending.settings_done.is_none()
+            && let Some(receipt) = &pending.settings_receipt
+        {
+            match receipt.try_recv() {
+                Ok(result) => pending.settings_done = Some(result),
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    pending.settings_done = Some(Err(
+                        "Settings saver stopped before confirming the save".into(),
+                    ));
+                }
+            }
+        }
+        if pending.workspace_done.is_none() || pending.settings_done.is_none() {
+            return false;
+        }
+        let pending = self.pending_quit.take().unwrap();
+        let result = pending
+            .workspace_done
+            .unwrap()
+            .and_then(|()| pending.settings_done.unwrap());
         match result {
             Ok(())
-                if saved == self.snapshot(cx)
+                if pending.workspace == self.snapshot(cx)
+                    && pending.settings == self.settings
                     && !self.form.as_ref().is_some_and(|f| f.saving.is_some()) =>
             {
+                self.last_saved_settings = pending.settings;
                 self.quit_confirmed = true;
                 self.exit(cx);
             }

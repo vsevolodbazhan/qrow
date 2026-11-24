@@ -12,9 +12,13 @@ pub type Browser = Arc<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync>;
 /// sign-in tokens, and which certificate authorities it trusts.
 #[derive(Clone)]
 pub struct Environment {
-    /// `None` shows the built-in demo data and saves nothing.
+    /// Managed multi-workspace root directory (`settings.json`, `workspaces.json`,
+    /// `workspaces/<id>/`). When `Some`, takes precedence over `workspace`.
+    data_dir: Option<PathBuf>,
+    /// Standalone single workspace file path (for isolated tests). `None` with
+    /// `data_dir == None` shows the built-in demo data and saves nothing.
     workspace: Option<PathBuf>,
-    /// The folder of the caches and transcripts of the workspace. See
+    /// The folder of the caches and transcripts. See
     /// [`storage::local_data_directory`].
     local: Option<PathBuf>,
     credentials: Arc<dyn Credentials>,
@@ -27,10 +31,12 @@ pub struct Environment {
 }
 
 impl Environment {
-    /// The user's workspace, system secret store, and system trust store.
+    /// The user's multi-workspace data directory, system secret store, and
+    /// system trust store.
     pub fn user() -> Self {
         Self {
-            workspace: Some(storage::workspace_path()),
+            data_dir: Some(storage::data_directory()),
+            workspace: None,
             local: Some(storage::local_data_directory()),
             credentials: Arc::new(Keychain),
             tokens: Arc::new(Keychain),
@@ -48,6 +54,7 @@ impl Environment {
     /// or tokens.
     pub fn demo() -> Self {
         Self {
+            data_dir: None,
             workspace: None,
             local: None,
             credentials: Arc::new(Keychain),
@@ -58,12 +65,13 @@ impl Environment {
         }
     }
 
-    /// A workspace file and a password store chosen by the caller, for
+    /// A single workspace file and a password store chosen by the caller, for
     /// example a temporary directory and synthetic passwords in tests.
     /// Caches and transcripts are next to the workspace file. Sign-in tokens
     /// stay in memory.
     pub fn isolated(workspace: PathBuf, credentials: Arc<dyn Credentials>) -> Self {
         Self {
+            data_dir: None,
             local: Some(
                 workspace
                     .parent()
@@ -71,6 +79,25 @@ impl Environment {
                     .unwrap_or_else(|| PathBuf::from(".")),
             ),
             workspace: Some(workspace),
+            credentials,
+            tokens: Arc::new(MemoryTokenStore::default()),
+            trust: Trust::system(),
+            browser: None,
+            updates: None,
+        }
+    }
+
+    /// A multi-workspace data directory and a password store chosen by the
+    /// caller, for workspace-management tests.
+    pub fn isolated_store(
+        data_dir: PathBuf,
+        local: PathBuf,
+        credentials: Arc<dyn Credentials>,
+    ) -> Self {
+        Self {
+            data_dir: Some(data_dir),
+            workspace: None,
+            local: Some(local),
             credentials,
             tokens: Arc::new(MemoryTokenStore::default()),
             trust: Trust::system(),
@@ -101,7 +128,11 @@ impl Environment {
     }
 
     pub fn is_demo(&self) -> bool {
-        self.workspace.is_none()
+        self.data_dir.is_none() && self.workspace.is_none()
+    }
+
+    pub(crate) fn data_directory(&self) -> Option<&PathBuf> {
+        self.data_dir.as_ref()
     }
 
     pub(crate) fn workspace(&self) -> Option<&PathBuf> {

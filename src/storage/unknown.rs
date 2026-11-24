@@ -35,11 +35,18 @@ impl Unknown {
 
     /// Reads `data` as `T` and records the fields that `T` does not have.
     /// Top-level keys in `own` belong to the file format, not to `T`.
+    #[cfg(test)]
     pub fn read<T: DeserializeOwned>(data: &[u8], own: &[&str]) -> Result<(T, Self)> {
         let original: Value = serde_json::from_slice(data)?;
+        Self::read_value(&original, own)
+    }
+
+    /// Reads an already-parsed JSON `original` as `T` and records the fields
+    /// that `T` does not have. Top-level keys in `own` belong to the file
+    /// format, not to `T`.
+    pub fn read_value<T: DeserializeOwned>(original: &Value, own: &[&str]) -> Result<(T, Self)> {
         let mut paths = Vec::new();
-        let mut deserializer = serde_json::Deserializer::from_slice(data);
-        let value: T = serde_ignored::deserialize(&mut deserializer, |path| {
+        let value: T = serde_ignored::deserialize(original, |path| {
             let mut steps = Vec::new();
             raw_steps(&path, &mut steps);
             paths.push(steps);
@@ -51,7 +58,7 @@ impl Unknown {
             {
                 continue;
             }
-            if let Some(field) = locate(&original, &path) {
+            if let Some(field) = locate(original, &path) {
                 fields.push(field);
             }
         }

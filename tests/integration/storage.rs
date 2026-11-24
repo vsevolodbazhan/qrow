@@ -426,3 +426,281 @@ fn the_saver_reports_the_data_of_a_newer_version() {
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["settings"]["future_option"], 7);
 }
+
+#[test]
+fn forward_compatible_newer_version_preserves_version_and_unknown_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let mut value = serde_json::to_value(Workspace::default()).unwrap();
+    value["version"] = (WORKSPACE_VERSION + 2).into();
+    value["min_reader_version"] = WORKSPACE_VERSION.into();
+    value["written_by"] = "9.9.9".into();
+    value["future_flag"] = true.into();
+    fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+    let (mut workspace, mut saver) = Saver::open(path.clone(), || {}).unwrap();
+    assert!(saver.newer.is_some());
+    workspace.tabs[0].sql = "SELECT 42".into();
+    saver.finish(workspace).unwrap();
+
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["version"], WORKSPACE_VERSION + 2);
+    assert_eq!(saved["min_reader_version"], WORKSPACE_VERSION);
+    assert_eq!(saved["future_flag"], true);
+    assert_eq!(saved["tabs"][0]["sql"], "SELECT 42");
+}
+
+#[test]
+fn legacy_v8_directory_migrates_to_v9_multi_workspace_layout() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let local_dir = tempfile::tempdir().unwrap();
+    let legacy_path = data_dir.path().join("workspace.json");
+
+    let profile = Profile {
+        name: "Analytics".into(),
+        ..Profile::default()
+    };
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 1".into();
+    let mut workspace = Workspace {
+        version: 8,
+        profiles: vec![profile.clone()],
+        tabs: vec![tab],
+        active_tab: 0,
+        ..Workspace::default()
+    };
+    workspace.settings.theme = "One Dark".into();
+    workspace.settings.editor_font_size = 15.;
+
+    let mut legacy_json = serde_json::to_value(&workspace).unwrap();
+    legacy_json["written_by"] = "0.6.0".into();
+    legacy_json["settings"]["future_setting"] = "keep-me".into();
+    legacy_json["future_workspace_field"] = 99.into();
+    let legacy_bytes = serde_json::to_vec_pretty(&legacy_json).unwrap();
+    fs::write(&legacy_path, &legacy_bytes).unwrap();
+
+    // Seed machine-local caches and transcripts in a separate local dir (Windows style).
+    fs::create_dir_all(local_dir.path().join("catalog")).unwrap();
+    fs::write(
+        local_dir
+            .path()
+            .join("catalog")
+            .join(format!("{}.json", profile.id)),
+        b"{}",
+    )
+    .unwrap();
+    fs::create_dir_all(local_dir.path().join("dbt")).unwrap();
+    fs::write(local_dir.path().join("dbt/index.bin"), b"dbt").unwrap();
+    fs::create_dir_all(local_dir.path().join("assistant/transcripts")).unwrap();
+    fs::write(
+        local_dir.path().join("assistant/transcripts/thread-1.json"),
+        b"transcript",
+    )
+    .unwrap();
+
+    let opened = storage::DataStore::open(
+        data_dir.path().to_path_buf(),
+        local_dir.path().to_path_buf(),
+        || {},
+    )
+    .unwrap();
+    assert_eq!(opened.store.workspaces().len(), 1);
+    assert_eq!(opened.store.active_workspace_entry().name, "Default");
+    assert_eq!(opened.settings.theme, "One Dark");
+    assert_eq!(opened.settings.editor_font_size, 15.);
+    assert_eq!(opened.workspace.profiles[0].id, profile.id);
+    assert_eq!(opened.workspace.tabs[0].sql, "SELECT 1");
+
+    // Pre-migration backup holds exact original bytes, and legacy file is gone.
+    let backup = data_dir.path().join("backups/workspace.v8.backup.json");
+    assert_eq!(fs::read(&backup).unwrap(), legacy_bytes);
+    assert!(!legacy_path.exists());
+
+    // Split workspace.json omits `settings` and preserves workspace unknown fields.
+    let ws_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(opened.store.active_workspace_path()).unwrap()).unwrap();
+    assert!(ws_json.get("settings").is_none());
+    assert_eq!(ws_json["version"], WORKSPACE_VERSION);
+    assert_eq!(ws_json["future_workspace_field"], 99);
+
+    // Split settings.json preserves unknown settings fields.
+    let settings_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(storage::settings_path(data_dir.path())).unwrap())
+            .unwrap();
+    assert_eq!(settings_json["settings"]["theme"], "One Dark");
+    assert_eq!(settings_json["settings"]["future_setting"], "keep-me");
+
+    // Local caches and transcripts moved under workspaces/<active-id>/.
+    let ws_local = opened.store.active_local_directory();
+    assert!(
+        ws_local
+            .join("catalog")
+            .join(format!("{}.json", profile.id))
+            .is_file()
+    );
+    assert!(ws_local.join("dbt/index.bin").is_file());
+    assert!(
+        ws_local
+            .join("assistant/transcripts/thread-1.json")
+            .is_file()
+    );
+    assert!(!local_dir.path().join("catalog").exists());
+    assert!(!local_dir.path().join("dbt").exists());
+    assert!(!local_dir.path().join("assistant").exists());
+
+    // Probe helpers resolve both active and named workspace paths.
+    assert_eq!(
+        storage::resolve_active_workspace_path(data_dir.path()).unwrap(),
+        opened.store.active_workspace_path()
+    );
+    assert_eq!(
+        storage::resolve_workspace_path_by_name(data_dir.path(), "default").unwrap(),
+        opened.store.active_workspace_path()
+    );
+}
+
+#[test]
+fn data_store_workspace_crud_remaps_ids_and_cleans_up_secrets() {
+    use qrow::model::{Authentication, Identity, SharedCatalog, SignIn};
+    use qrow::storage::{Credentials, MemoryTokenStore, TokenStore};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use uuid::Uuid;
+    use zeroize::Zeroizing;
+
+    #[derive(Default)]
+    struct TestCreds(Mutex<HashMap<Uuid, String>>);
+    impl Credentials for TestCreds {
+        fn password(&self, id: Uuid) -> anyhow::Result<Zeroizing<String>> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(&id)
+                .cloned()
+                .map(Zeroizing::new)
+                .ok_or_else(|| anyhow::anyhow!("missing"))
+        }
+        fn set_password(&self, id: Uuid, password: &str) -> anyhow::Result<()> {
+            self.0.lock().unwrap().insert(id, password.into());
+            Ok(())
+        }
+        fn delete_password(&self, id: Uuid) -> anyhow::Result<()> {
+            self.0.lock().unwrap().remove(&id);
+            Ok(())
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut opened =
+        storage::DataStore::open(dir.path().to_path_buf(), dir.path().to_path_buf(), || {})
+            .unwrap();
+
+    // Populate active workspace with profile, shared catalog, sign-in, tab, conversation.
+    let sign_in = SignIn {
+        name: "Corp SSO".into(),
+        identity: Some(Identity {
+            issuer: "https://sso.example".into(),
+            subject: "sub-1".into(),
+            name: Some("Alice".into()),
+            email: Some("alice@example".into()),
+        }),
+        ..SignIn::default()
+    };
+    let mut shared = SharedCatalog {
+        id: Uuid::new_v4(),
+        name: "Warehouse".into(),
+        settings: Default::default(),
+        preferred: None,
+    };
+    let profile = Profile {
+        name: "Prod".into(),
+        shared_catalog: Some(shared.id),
+        authentication: Authentication::Oidc {
+            sign_in: sign_in.id,
+        },
+        ..Profile::default()
+    };
+    shared.preferred = Some(profile.id);
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT * FROM orders".into();
+    let mut ws = opened.workspace.clone();
+    ws.sign_ins.push(sign_in.clone());
+    ws.shared_catalogs.push(shared.clone());
+    ws.profiles.push(profile.clone());
+    ws.tabs = vec![tab.clone()];
+    ws.active_tab = 0;
+    ws.assistant.conversations.push(AssistantConversation::new(
+        "thread-src",
+        AssistantExecutionMode::AskBeforeRunning,
+    ));
+    ws.normalize();
+    opened.workspace_saver.finish(ws).unwrap();
+
+    let creds = TestCreds::default();
+    let tokens = MemoryTokenStore::default();
+    creds.set_password(profile.id, "secret").unwrap();
+    tokens
+        .save_tokens(sign_in.id, "{\"access\":\"tok\"}")
+        .unwrap();
+
+    // Create + rename.
+    let created = opened.store.create_workspace("Analytics").unwrap();
+    assert_eq!(created.name, "Analytics");
+    assert!(opened.store.create_workspace("analytics").is_err());
+    let renamed = opened
+        .store
+        .rename_workspace(created.id, "Staging")
+        .unwrap();
+    assert_eq!(renamed.name, "Staging");
+
+    // Duplicate remaps every UUID and clears identity + assistant threads.
+    let source_id = opened.store.active_workspace_id();
+    let dup = opened.store.duplicate_workspace(source_id, None).unwrap();
+    assert_eq!(dup.name, "Default copy");
+    let dup_ws = storage::load(&opened.store.workspace_path(dup.id)).unwrap();
+    assert_eq!(dup_ws.profiles.len(), 1);
+    assert_ne!(dup_ws.profiles[0].id, profile.id);
+    assert_ne!(dup_ws.sign_ins[0].id, sign_in.id);
+    assert!(dup_ws.sign_ins[0].identity.is_none());
+    assert_ne!(dup_ws.shared_catalogs[0].id, shared.id);
+    assert_eq!(
+        dup_ws.profiles[0].shared_catalog,
+        Some(dup_ws.shared_catalogs[0].id)
+    );
+    assert_eq!(
+        dup_ws.shared_catalogs[0].preferred,
+        Some(dup_ws.profiles[0].id)
+    );
+    assert_eq!(
+        dup_ws.profiles[0].authentication,
+        Authentication::Oidc {
+            sign_in: dup_ws.sign_ins[0].id,
+        }
+    );
+    assert_ne!(dup_ws.tabs[0].id, tab.id);
+    assert_eq!(dup_ws.tabs[0].profile, Some(dup_ws.profiles[0].id));
+    assert_eq!(dup_ws.tabs[0].sql, "SELECT * FROM orders");
+    assert!(dup_ws.assistant.conversations.is_empty());
+
+    // Delete source workspace cleans up Keychain secrets and directories.
+    opened
+        .store
+        .delete_workspace(source_id, &creds, &tokens)
+        .unwrap();
+    assert!(creds.password(profile.id).is_err());
+    assert!(tokens.load_tokens(sign_in.id).unwrap().is_none());
+    assert!(!opened.store.workspace_dir(source_id).exists());
+    assert!(!opened.store.workspace_local_dir(source_id).exists());
+
+    // Cannot delete the last remaining workspace.
+    opened
+        .store
+        .delete_workspace(renamed.id, &creds, &tokens)
+        .unwrap();
+    assert!(
+        opened
+            .store
+            .delete_workspace(dup.id, &creds, &tokens)
+            .is_err()
+    );
+}

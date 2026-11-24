@@ -639,8 +639,21 @@ final class Driver {
               let tabs = workspace["tabs"] as? [[String: Any]] else { return false }
         return tabs.contains { $0["sql"] as? String == sql }
     }
+    func activeWorkspaceURL() -> URL {
+        let root = URL(fileURLWithPath: env["QROW_DATA_DIR"]!)
+        let registry = root.appendingPathComponent("workspaces.json")
+        if let data = try? Data(contentsOf: registry),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let active = json["active_workspace"] as? String {
+            return root
+                .appendingPathComponent("workspaces")
+                .appendingPathComponent(active)
+                .appendingPathComponent("workspace.json")
+        }
+        return root.appendingPathComponent("workspace.json")
+    }
     func testFailedSaveExit(closeWindow: Bool) throws {
-        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let workspace = activeWorkspaceURL()
         let backup = workspace.deletingLastPathComponent().appendingPathComponent("workspace-before-quit.json")
         let baseline = "SELECT 'saved-before-quit' -- " + UUID().uuidString
         try fill("SQL Editor", baseline)
