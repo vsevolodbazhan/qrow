@@ -175,6 +175,12 @@ pub fn load(path: &Path) -> Result<Workspace> {
     Ok(read(path, true)?.workspace)
 }
 
+/// Read an existing workspace snapshot without claiming write access. Fails if
+/// the file does not exist.
+pub fn load_existing(path: &Path) -> Result<Workspace> {
+    Ok(read(path, false)?.workspace)
+}
+
 /// A workspace file as read, with what this build does not know.
 struct Read {
     workspace: Workspace,

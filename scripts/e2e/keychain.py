@@ -37,17 +37,26 @@ def isolated_run(artifacts, target):
 
 
 def workspace_files(data_dir):
+    seen = set()
     files = []
+
+    def add(path):
+        if path.exists():
+            resolved = path.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                files.append(path)
+
     registry = data_dir / "workspaces.json"
     if registry.exists():
         entries = json.loads(registry.read_text()).get("workspaces", [])
         for entry in entries:
-            ws = data_dir / "workspaces" / str(uuid.UUID(entry["id"])) / "workspace.json"
-            if ws.exists():
-                files.append(ws)
-    legacy = data_dir / "workspace.json"
-    if legacy.exists():
-        files.append(legacy)
+            add(data_dir / "workspaces" / str(uuid.UUID(entry["id"])) / "workspace.json")
+    workspaces_dir = data_dir / "workspaces"
+    if workspaces_dir.is_dir():
+        for ws in sorted(workspaces_dir.glob("*/workspace.json")):
+            add(ws)
+    add(data_dir / "workspace.json")
     return files
 
 

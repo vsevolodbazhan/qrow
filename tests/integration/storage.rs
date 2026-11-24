@@ -781,7 +781,7 @@ fn second_machine_relocates_local_transcripts_and_missing_files_refuse_overwrite
     }]);
     fs::write(&legacy_path, serde_json::to_vec_pretty(&v3).unwrap()).unwrap();
 
-    let opened_1 = storage::DataStore::open(
+    let mut opened_1 = storage::DataStore::open(
         roaming_dir.path().to_path_buf(),
         local_machine_1.path().to_path_buf(),
         || {},
@@ -792,6 +792,8 @@ fn second_machine_relocates_local_transcripts_and_missing_files_refuse_overwrite
         opened_1.workspace.assistant.conversations[0].tab_id,
         Some(opened_1.workspace.tabs[0].id)
     );
+    opened_1.workspace_saver.stop().unwrap();
+    opened_1.settings_saver.stop().unwrap();
     drop(opened_1);
 
     // Machine 2 has legacy local transcripts and receives the roaming dir.
@@ -803,7 +805,7 @@ fn second_machine_relocates_local_transcripts_and_missing_files_refuse_overwrite
         b"machine-2-transcript",
     )
     .unwrap();
-    let opened_2 = storage::DataStore::open(
+    let mut opened_2 = storage::DataStore::open(
         roaming_dir.path().to_path_buf(),
         local_machine_2.path().to_path_buf(),
         || {},
@@ -816,31 +818,38 @@ fn second_machine_relocates_local_transcripts_and_missing_files_refuse_overwrite
             .join("assistant/transcripts/thread-v3.json")
             .is_file()
     );
+    opened_2.workspace_saver.stop().unwrap();
+    opened_2.settings_saver.stop().unwrap();
     drop(opened_2);
 
     // Removing the registered workspace.json fails loudly instead of overwriting with blank.
     let ws_path = storage::workspace_file_path(roaming_dir.path(), migrated_id);
     let saved_bytes = fs::read(&ws_path).unwrap();
     fs::remove_file(&ws_path).unwrap();
-    assert!(
-        storage::DataStore::open(
-            roaming_dir.path().to_path_buf(),
-            local_machine_2.path().to_path_buf(),
-            || {},
-        )
-        .is_err()
-    );
+    let missing_err = storage::DataStore::open(
+        roaming_dir.path().to_path_buf(),
+        local_machine_2.path().to_path_buf(),
+        || {},
+    )
+    .err()
+    .expect("missing registered workspace must fail")
+    .to_string();
+    assert!(missing_err.contains("missing"), "{missing_err}");
     assert!(!ws_path.exists());
 
     // Restoring workspace.json and removing workspaces.json refuses to overwrite existing dirs.
     fs::write(&ws_path, &saved_bytes).unwrap();
     fs::remove_file(storage::registry_path(roaming_dir.path())).unwrap();
+    let reg_err = storage::DataStore::open(
+        roaming_dir.path().to_path_buf(),
+        local_machine_2.path().to_path_buf(),
+        || {},
+    )
+    .err()
+    .expect("missing registry with existing workspace folders must fail")
+    .to_string();
     assert!(
-        storage::DataStore::open(
-            roaming_dir.path().to_path_buf(),
-            local_machine_2.path().to_path_buf(),
-            || {},
-        )
-        .is_err()
+        reg_err.contains("Workspace registry is missing"),
+        "{reg_err}"
     );
 }

@@ -342,14 +342,14 @@ impl DataStore {
         let mut notices = Vec::new();
 
         if !reg_path.exists() {
+            anyhow::ensure!(
+                !has_existing_managed_workspaces(&data_dir),
+                "Workspace registry is missing, but existing workspace folders were found in {}; refusing to overwrite them",
+                data_dir.join("workspaces").display()
+            );
             if legacy_path.exists() {
                 migrate_legacy_layout(&data_dir, &legacy_path)?;
             } else {
-                anyhow::ensure!(
-                    !has_existing_managed_workspaces(&data_dir),
-                    "Workspace registry is missing, but existing workspace folders were found in {}; refusing to overwrite them",
-                    data_dir.join("workspaces").display()
-                );
                 initialize_fresh_store(&data_dir)?;
             }
         }
@@ -383,17 +383,17 @@ impl DataStore {
 
         // Finish relocating any legacy local folders (`catalog`, `dbt`,
         // `assistant/transcripts`) into the migrated workspace's local folder.
-        // Running this after `workspaces.json` is committed guarantees crash
-        // recovery and handles a second Windows machine receiving a roaming
-        // `workspaces.json`.
-        let local_target = registry
+        // Only relocate when `migrated_workspace` still exists so legacy data
+        // is never moved into an unrelated workspace after deletion.
+        if let Some(local_target) = registry
             .migrated_workspace
             .filter(|id| registry.workspaces.iter().any(|entry| entry.id == *id))
-            .unwrap_or(registry.active_workspace);
-        relocate_local_subdirs(
-            &local_dir,
-            &workspace_local_directory(&local_dir, local_target),
-        )?;
+        {
+            relocate_local_subdirs(
+                &local_dir,
+                &workspace_local_directory(&local_dir, local_target),
+            )?;
+        }
 
         let (settings, settings_saver) = SettingsSaver::open(
             settings_path(&data_dir),
@@ -511,9 +511,7 @@ impl DataStore {
             .context("Workspace does not exist")?;
         entry.last_opened_at = now;
         candidate.active_workspace = id;
-        self.write_registry(&candidate)?;
-        self.registry = candidate;
-        Ok(())
+        self.commit_registry(candidate)
     }
 
     /// Creates a new empty workspace with a validated unique name.
@@ -537,11 +535,12 @@ impl DataStore {
 
         let mut candidate = self.registry.clone();
         candidate.workspaces.push(entry.clone());
-        if let Err(error) = self.write_registry(&candidate) {
-            let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+        if let Err(error) = self.commit_registry(candidate) {
+            if self.workspace_entry(entry.id).is_none() {
+                let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+            }
             return Err(error);
         }
-        self.registry = candidate;
         Ok(entry)
     }
 
@@ -560,8 +559,7 @@ impl DataStore {
             .context("Workspace does not exist")?;
         entry.name = name;
         let updated = entry.clone();
-        self.write_registry(&candidate)?;
-        self.registry = candidate;
+        self.commit_registry(candidate)?;
         Ok(updated)
     }
 
@@ -596,7 +594,7 @@ impl DataStore {
 
         let mut workspace = match snapshot {
             Some(live) => live.clone(),
-            None => super::load(&self.workspace_path(id))?,
+            None => super::load_existing(&self.workspace_path(id))?,
         };
         workspace.remap_ids_for_copy();
 
@@ -617,11 +615,12 @@ impl DataStore {
 
         let mut candidate = self.registry.clone();
         candidate.workspaces.push(entry.clone());
-        if let Err(error) = self.write_registry(&candidate) {
-            let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+        if let Err(error) = self.commit_registry(candidate) {
+            if self.workspace_entry(entry.id).is_none() {
+                let _ = fs::remove_dir_all(self.workspace_dir(entry.id));
+            }
             return Err(error);
         }
-        self.registry = candidate;
         Ok(entry)
     }
 
@@ -657,14 +656,21 @@ impl DataStore {
             None
         };
 
+        let mut warnings = Vec::new();
         // Read credential IDs before modifying anything.
         let (profile_ids, sign_in_ids) = if ws_path.exists() {
-            match super::load(&ws_path) {
+            match super::load_existing(&ws_path) {
                 Ok(workspace) => (
                     workspace.profiles.iter().map(|p| p.id).collect::<Vec<_>>(),
                     workspace.sign_ins.iter().map(|s| s.id).collect::<Vec<_>>(),
                 ),
-                Err(_) => (Vec::new(), Vec::new()),
+                Err(error) => {
+                    warnings.push(format!(
+                        "Could not read workspace {} for credential cleanup; saved passwords or sign-ins may remain in the system secret store: {error:#}",
+                        ws_path.display()
+                    ));
+                    (Vec::new(), Vec::new())
+                }
             }
         } else {
             (Vec::new(), Vec::new())
@@ -681,14 +687,12 @@ impl DataStore {
         if candidate.migrated_workspace == Some(id) {
             candidate.migrated_workspace = None;
         }
-        self.write_registry(&candidate)?;
-        self.registry = candidate;
+        self.commit_registry(candidate)?;
 
         // Release the workspace lock before deleting its directory (required on
         // Windows where open file handles block directory removal).
         drop(ws_lock);
 
-        let mut warnings = Vec::new();
         for profile_id in profile_ids {
             if let Err(error) = credentials.delete_password(profile_id) {
                 warnings.push(format!(
@@ -722,6 +726,28 @@ impl DataStore {
             ));
         }
         Ok(warnings)
+    }
+
+    /// Writes `candidate` to `workspaces.json` and reconciles `self.registry`
+    /// with disk even if parent-directory sync fails after rename.
+    fn commit_registry(&mut self, candidate: WorkspaceRegistry) -> Result<()> {
+        match self.write_registry(&candidate) {
+            Ok(()) => {
+                self.registry = candidate;
+                Ok(())
+            }
+            Err(error) => {
+                if let Ok(data) = fs::read(registry_path(&self.data_dir))
+                    && let Ok(migrated) = migrations::migrate_bytes(&data, &REGISTRY_SPEC)
+                    && let Ok((mut on_disk, _)) =
+                        Unknown::read_value::<WorkspaceRegistry>(&migrated.value, &ENVELOPE_KEYS)
+                {
+                    on_disk.sanitize(now_unix_seconds());
+                    self.registry = on_disk;
+                }
+                Err(error)
+            }
+        }
     }
 
     fn write_registry(&self, candidate: &WorkspaceRegistry) -> Result<()> {
@@ -782,10 +808,11 @@ fn initialize_fresh_store(data_dir: &Path) -> Result<()> {
     if !settings_path(data_dir).exists() {
         settings_file.save(&Settings::default())?;
     }
+    let ws_id = entry.id;
     let ws_file = WorkspaceFile::acquire_managed_create(
-        workspace_file_path(data_dir, entry.id),
+        workspace_file_path(data_dir, ws_id),
         backups_directory(data_dir),
-        entry.id,
+        ws_id,
     )?;
     ws_file.save(&Workspace::default())?;
     drop(ws_file);
@@ -793,10 +820,16 @@ fn initialize_fresh_store(data_dir: &Path) -> Result<()> {
     let registry = WorkspaceRegistry::single(entry);
     let mut value = serde_json::to_value(&registry)?;
     migrations::stamp_envelope(&mut value, &REGISTRY_SPEC, None);
-    write_atomically(
+    if let Err(error) = write_atomically(
         &registry_path(data_dir),
         &serde_json::to_vec_pretty(&value)?,
-    )
+    ) {
+        if !registry_path(data_dir).exists() {
+            let _ = fs::remove_dir_all(workspace_directory(data_dir, ws_id));
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// One-time atomic layout upgrade from legacy `<data_dir>/workspace.json`
@@ -917,13 +950,29 @@ fn relocate_local_subdirs(local_dir: &Path, target_local: &Path) -> Result<()> {
         }
         let dst = target_local.join(rel);
         if dst.exists() {
-            continue;
+            let empty_dst = dst.is_dir()
+                && fs::read_dir(&dst)
+                    .map(|mut entries| entries.next().is_none())
+                    .unwrap_or(false);
+            if empty_dst {
+                let _ = fs::remove_dir(&dst);
+            } else {
+                continue;
+            }
         }
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent)?;
         }
         if fs::rename(&src, &dst).is_err() {
-            copy_dir_recursive(&src, &dst)?;
+            // Stage into a sibling temporary directory and rename atomically
+            // so an interrupted copy never leaves a partial destination.
+            let staging = dst.with_extension(format!("relocating.{}.tmp", Uuid::new_v4()));
+            let copy_result = copy_dir_recursive(&src, &staging)
+                .and_then(|()| fs::rename(&staging, &dst).map_err(anyhow::Error::from));
+            if let Err(error) = copy_result {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
             let _ = fs::remove_dir_all(&src);
         }
     }
