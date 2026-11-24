@@ -211,6 +211,7 @@ impl Qrow {
             options: ExportOptions::default(),
         });
         if self.workspace_manager_open {
+            self.select_workspace_in_manager(id);
             self.workspace_manager_focus.focus(window, cx);
         }
         let weak = cx.weak_entity();
@@ -1972,7 +1973,18 @@ impl Qrow {
                                                         }),
                                                 )
                                             },
-                                        ),
+                                        )
+                                        .on_open_change({
+                                            let open_weak = weak.clone();
+                                            move |open, _, cx| {
+                                                if *open {
+                                                    let _ = open_weak.update(cx, |this, cx| {
+                                                        this.select_workspace_in_manager(id);
+                                                        cx.notify();
+                                                    });
+                                                }
+                                            }
+                                        }),
                                     ),
                             )
                     })),
@@ -2075,6 +2087,7 @@ impl Qrow {
         // Escape, and Close Dialog return directly to the manager with its
         // scroll position and focus intact.
         if self.workspace_manager_open {
+            self.select_workspace_in_manager(id);
             self.workspace_manager_focus.focus(window, cx);
         }
         let weak = cx.weak_entity();
