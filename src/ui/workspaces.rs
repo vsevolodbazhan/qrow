@@ -212,6 +212,9 @@ impl Qrow {
             name: entry.name.clone(),
             options: ExportOptions::default(),
         });
+        if self.workspace_manager_open {
+            self.workspace_manager_focus.focus(window, cx);
+        }
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {
             let close = weak.clone();
@@ -350,6 +353,9 @@ impl Qrow {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.export_workspace_form = None;
                         window.close_dialog(cx);
+                        if this.workspace_manager_open {
+                            this.workspace_manager_focus.focus(window, cx);
+                        }
                         cx.notify();
                     })),
             )
@@ -1769,6 +1775,7 @@ impl Qrow {
                             .test_support()
                             .role(Role::ListItem)
                             .aria_selected(is_selected)
+                            .when(is_selected, |row| row.aria_active_descendant())
                             .aria_label(row_a11y)
                             .w_full()
                             .min_w_0()
@@ -2081,9 +2088,13 @@ impl Qrow {
         // Stack the confirmation alert on top of Manage Workspaces so Cancel,
         // Escape, and Close Dialog return directly to the manager with its
         // scroll position and focus intact.
+        if self.workspace_manager_open {
+            self.workspace_manager_focus.focus(window, cx);
+        }
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
+            let cancel = weak.clone();
             let close = weak.clone();
             alert
                 .title(format!("Delete \"{name}\"?"))
@@ -2109,6 +2120,11 @@ impl Qrow {
                                 .label("Cancel")
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
+                                    let _ = cancel.update(cx, |this, cx| {
+                                        if this.workspace_manager_open {
+                                            this.workspace_manager_focus.focus(window, cx);
+                                        }
+                                    });
                                 }),
                         )
                         .child(
@@ -2164,6 +2180,12 @@ impl Qrow {
         } else {
             self.finish_workspace_deletion(id, window, cx);
             self.refresh_workspace_summaries();
+            if let Some(selected) = self.manage_workspaces_selected_id() {
+                self.select_workspace_in_manager(selected);
+            }
+            if self.workspace_manager_open {
+                self.workspace_manager_focus.focus(window, cx);
+            }
             cx.notify();
         }
     }

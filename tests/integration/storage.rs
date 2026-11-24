@@ -550,11 +550,17 @@ fn legacy_v8_directory_migrates_to_v9_multi_workspace_layout() {
 
     // Probe helpers resolve both active and named workspace paths.
     assert_eq!(
-        storage::resolve_active_workspace_path(data_dir.path()).unwrap(),
+        storage::resolve_active_workspace_path(data_dir.path())
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
         opened.store.active_workspace_path()
     );
     assert_eq!(
-        storage::resolve_workspace_path_by_name(data_dir.path(), "default").unwrap(),
+        storage::resolve_workspace_path_by_name(data_dir.path(), "default")
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
         opened.store.active_workspace_path()
     );
 }

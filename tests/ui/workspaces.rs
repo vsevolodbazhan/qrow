@@ -335,11 +335,23 @@ fn dismissing_delete_confirmation_with_escape_reopens_manager(cx: &mut TestAppCo
         2
     );
 
-    // Same focus-return behavior after dismissing Export Workspace from the actions menu.
+    // Clicking Cancel on Delete also returns keyboard focus to Manage Workspaces.
+    app.click(cx, format!("workspace-actions-{extra_id}"));
+    app.choose(cx, "popup-menu", "Delete…");
+    app.wait_for(cx, "cancel-delete-workspace");
+    app.click(cx, "cancel-delete-workspace");
+    app.wait_gone(cx, "cancel-delete-workspace");
+    app.wait_for(cx, "manage-workspaces-list");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "manage-workspaces-list");
+
+    // Reopen and verify Export dialog Cancel + Escape both return focus to Manage Workspaces.
+    app.dispatch(cx, qrow::ui::ManageWorkspaces);
+    app.wait_for(cx, "manage-workspaces-list");
     app.click(cx, format!("workspace-actions-{extra_id}"));
     app.choose(cx, "popup-menu", "Export…");
     app.wait_for(cx, "export-workspace-dialog");
-    app.press(cx, "escape");
+    app.click(cx, "export-workspace-cancel");
     app.wait_gone(cx, "export-workspace-dialog");
     app.wait_for(cx, "manage-workspaces-list");
 

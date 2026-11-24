@@ -1260,7 +1260,7 @@ impl Qrow {
             browser: environment.browser(),
             workspace_manager_open: false,
             workspace_manager_selected: None,
-            workspace_manager_focus: cx.focus_handle(),
+            workspace_manager_focus: cx.focus_handle().tab_stop(true),
             workspace_manager_scroll: ScrollHandle::new(),
             workspace_name_form: None,
             export_workspace_form: None,
