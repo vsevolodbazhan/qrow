@@ -345,9 +345,16 @@ fn dismissing_delete_confirmation_with_escape_reopens_manager(cx: &mut TestAppCo
     app.press(cx, "escape");
     app.wait_gone(cx, "manage-workspaces-list");
 
-    // Reopen and verify Export dialog Cancel + Escape both return focus to Manage Workspaces.
+    // Reopen and verify Export dialog Escape and Cancel both return focus to Manage Workspaces.
     app.dispatch(cx, qrow::ui::ManageWorkspaces);
     app.wait_for(cx, "manage-workspaces-list");
+    app.click(cx, format!("workspace-actions-{extra_id}"));
+    app.choose(cx, "popup-menu", "Export…");
+    app.wait_for(cx, "export-workspace-dialog");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "export-workspace-dialog");
+    app.wait_for(cx, "manage-workspaces-list");
+
     app.click(cx, format!("workspace-actions-{extra_id}"));
     app.choose(cx, "popup-menu", "Export…");
     app.wait_for(cx, "export-workspace-dialog");

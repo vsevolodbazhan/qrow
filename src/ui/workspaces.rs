@@ -41,7 +41,6 @@ pub(super) struct WorkspaceNameForm {
 
 pub(super) struct ExportWorkspaceForm {
     pub(super) target: Uuid,
-    pub(super) name: String,
     pub(super) options: ExportOptions,
 }
 
@@ -204,12 +203,11 @@ impl Qrow {
         let Some(store) = &self.store else {
             return;
         };
-        let Some(entry) = store.workspace_entry(id) else {
+        if store.workspace_entry(id).is_none() {
             return;
-        };
+        }
         self.export_workspace_form = Some(ExportWorkspaceForm {
             target: id,
-            name: entry.name.clone(),
             options: ExportOptions::default(),
         });
         if self.workspace_manager_open {
@@ -251,10 +249,7 @@ impl Qrow {
             return div().into_any_element();
         };
         let options = form.options;
-        let summary = format!(
-            "Export \"{}\" as a portable .qrow-workspace.json file. Passwords, sign-in tokens, account identities, dbt manifest paths, custom keep-alive SQL, settings, and assistant transcripts are never exported.",
-            form.name
-        );
+        let summary = "Export this workspace as a portable .qrow-workspace.json file. Passwords, sign-in tokens, account identities, dbt manifest paths, custom keep-alive SQL, settings, and assistant transcripts are never exported.";
         v_flex()
             .id("export-workspace-dialog")
             .test_support()
@@ -1762,7 +1757,6 @@ impl Qrow {
                         );
                         let row_id = SharedString::from(format!("workspace-row-{id}"));
                         let actions_name = name.clone();
-                        let delete_name = name.clone();
                         let row_a11y = if is_active {
                             format!("{name}, active, {summary}")
                         } else {
@@ -1872,7 +1866,6 @@ impl Qrow {
                                                 let export_weak = menu_weak.clone();
                                                 let reveal_weak = menu_weak.clone();
                                                 let delete_weak = menu_weak.clone();
-                                                let delete_name = delete_name.clone();
                                                 menu.item(
                                                     PopupMenuItem::new("Rename…")
                                                         .icon(Icon::new(AssetIconName::Pencil).small())
@@ -1966,13 +1959,12 @@ impl Qrow {
                                                         })
                                                         .on_click(move |_, window, cx| {
                                                             let delete_weak = delete_weak.clone();
-                                                            let name = delete_name.clone();
                                                             window.defer(cx, move |window, cx| {
                                                                 let _ = delete_weak.update(
                                                                     cx,
                                                                     |this, cx| {
                                                                         this.confirm_delete_workspace(
-                                                                            id, name, window, cx,
+                                                                            id, window, cx,
                                                                         );
                                                                     },
                                                                 );
@@ -2078,13 +2070,7 @@ impl Qrow {
         }
     }
 
-    fn confirm_delete_workspace(
-        &mut self,
-        id: Uuid,
-        name: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn confirm_delete_workspace(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         // Stack the confirmation alert on top of Manage Workspaces so Cancel,
         // Escape, and Close Dialog return directly to the manager with its
         // scroll position and focus intact.
@@ -2097,7 +2083,7 @@ impl Qrow {
             let cancel = weak.clone();
             let close = weak.clone();
             alert
-                .title(format!("Delete \"{name}\"?"))
+                .title("Delete workspace?")
                 .description(
                     "All connections, query tabs, saved passwords, and sign-ins in this workspace will be permanently deleted.",
                 )
