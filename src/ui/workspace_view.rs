@@ -52,6 +52,22 @@ impl Qrow {
         let file_focus = focus.clone();
         let edit_focus = focus.clone();
         let view_focus = focus.clone();
+        let workspace_focus = focus.clone();
+        let workspaces: Vec<(Uuid, String)> = self
+            .store
+            .as_ref()
+            .map(|store| {
+                store
+                    .workspaces()
+                    .iter()
+                    .map(|entry| (entry.id, entry.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let active_workspace = self
+            .store
+            .as_ref()
+            .map(storage::DataStore::active_workspace_id);
         self.open_context_menu_from(
             // Under the menu button, below the 34 px title bar.
             point(window.rem_size() * APPLICATION_MENU_INSET_REMS, px(34.)),
@@ -126,6 +142,34 @@ impl Qrow {
                             menu
                         };
                         menu.item(PopupMenuItem::new("Activity").action(Box::new(ToggleActivity)))
+                    })
+                    .when(!workspaces.is_empty(), |menu| {
+                        let workspaces = workspaces.clone();
+                        let workspace_focus = workspace_focus.clone();
+                        menu.submenu("Workspace", window, cx, move |mut menu, _, _| {
+                            menu = menu.action_context(workspace_focus.clone());
+                            for (id, name) in &workspaces {
+                                menu = menu.item(
+                                    PopupMenuItem::new(name.clone())
+                                        .checked(active_workspace == Some(*id))
+                                        .action(Box::new(SwitchToWorkspace(*id))),
+                                );
+                            }
+                            menu.separator()
+                                .item(
+                                    PopupMenuItem::new("New workspace…")
+                                        .action(Box::new(NewWorkspace)),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Manage workspaces…")
+                                        .action(Box::new(ManageWorkspaces)),
+                                )
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("Reveal workspace folder")
+                                        .action(Box::new(RevealWorkspaceFolder)),
+                                )
+                        })
                     })
                     .separator()
                     .item(PopupMenuItem::new("Quit Qrow").action(Box::new(Quit)))
@@ -1255,6 +1299,10 @@ impl Qrow {
             .on_action(cx.listener(Self::focus_results))
             .on_action(cx.listener(Self::focus_catalog))
             .on_action(cx.listener(Self::check_for_updates_now))
+            .on_action(cx.listener(Self::switch_to_workspace_action))
+            .on_action(cx.listener(Self::new_workspace_action))
+            .on_action(cx.listener(Self::manage_workspaces_action))
+            .on_action(cx.listener(Self::reveal_workspace_folder_action))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 if let Some((start, initial)) = this.assistant_state.resizing {
                     if e.pressed_button != Some(MouseButton::Left) {

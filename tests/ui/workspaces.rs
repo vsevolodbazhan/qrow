@@ -1,0 +1,241 @@
+use crate::support::{MemoryCredentials, TestApp};
+use gpui_kit::{TestAppContext, test::TestWindowExt as _};
+use qrow::storage;
+use std::time::Duration;
+
+fn registry_json(app: &TestApp) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(storage::registry_path(app.data_dir())).unwrap()).unwrap()
+}
+
+#[gpui_kit::test]
+fn create_switch_rename_duplicate_and_delete_workspaces_in_single_window(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+
+    // Initial Default workspace exists and global settings work.
+    let initial_reg = registry_json(&app);
+    assert_eq!(initial_reg["workspaces"].as_array().unwrap().len(), 1);
+    assert_eq!(initial_reg["workspaces"][0]["name"], "Default");
+    let default_id =
+        uuid::Uuid::parse_str(initial_reg["active_workspace"].as_str().unwrap()).unwrap();
+
+    // Type SQL in Default workspace and change a global setting (toggle results minimized).
+    app.click(cx, "sql-editor");
+    app.update(cx, |window, cx| {
+        window.within("sql-editor").input("SELECT 'in_default'", cx);
+    });
+    app.press(cx, "secondary-j");
+
+    // Create a second workspace via NewWorkspace action.
+    app.dispatch(cx, qrow::ui::NewWorkspace);
+    app.wait_for(cx, "workspace-name-input");
+    app.fill(cx, "workspace-name-input", "Analytics");
+    app.click(cx, "submit-workspace-name");
+
+    // Qrow switched into Analytics automatically; global setting stayed minimized,
+    // while SQL editor is isolated and blank.
+    app.wait_until(
+        cx,
+        "switch to Analytics",
+        Duration::from_secs(10),
+        |_, _| {
+            let reg = registry_json(&app);
+            reg["workspaces"].as_array().unwrap().len() == 2
+                && reg["active_workspace"] != default_id.to_string()
+        },
+    );
+    let reg = registry_json(&app);
+    let analytics_id = uuid::Uuid::parse_str(reg["active_workspace"].as_str().unwrap()).unwrap();
+
+    // Default workspace kept its SQL on disk when switching out.
+    let default_saved =
+        storage::load(&storage::workspace_file_path(app.data_dir(), default_id)).unwrap();
+    assert_eq!(default_saved.tabs[0].sql, "SELECT 'in_default'");
+    // Global setting persisted in settings.json.
+    let settings = storage::load_settings(&storage::settings_path(app.data_dir())).unwrap();
+    assert!(settings.results_minimized);
+
+    // Type distinct SQL in Analytics.
+    app.click(cx, "sql-editor");
+    app.update(cx, |window, cx| {
+        window
+            .within("sql-editor")
+            .input("SELECT 'in_analytics'", cx);
+    });
+
+    // Open Manage Workspaces, duplicate Analytics, rename the duplicate, and delete it.
+    app.dispatch(cx, qrow::ui::ManageWorkspaces);
+    app.wait_for(cx, "manage-workspaces-list");
+    let dup_button = format!("workspace-duplicate-{analytics_id}");
+    app.click(cx, dup_button);
+
+    app.wait_until(
+        cx,
+        "Analytics copy created",
+        Duration::from_secs(10),
+        |_, _| registry_json(&app)["workspaces"].as_array().unwrap().len() == 3,
+    );
+    let reg = registry_json(&app);
+    let copy_entry = reg["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Analytics copy")
+        .expect("duplicated workspace entry");
+    let copy_id = uuid::Uuid::parse_str(copy_entry["id"].as_str().unwrap()).unwrap();
+
+    // Duplicated workspace includes unsaved live SQL from active Analytics workspace.
+    let copy_saved = storage::load(&storage::workspace_file_path(app.data_dir(), copy_id)).unwrap();
+    assert_eq!(copy_saved.tabs[0].sql, "SELECT 'in_analytics'");
+
+    // Rename the duplicate to "Staging".
+    let rename_button = format!("workspace-rename-{copy_id}");
+    app.click(cx, rename_button);
+    app.wait_for(cx, "workspace-name-input");
+    app.fill(cx, "workspace-name-input", "Staging");
+    app.click(cx, "submit-workspace-name");
+    app.wait_until(cx, "renamed to Staging", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["id"] == copy_id.to_string() && e["name"] == "Staging")
+    });
+
+    // Manage Workspaces reopens automatically after rename; delete inactive Staging.
+    app.wait_for(cx, "manage-workspaces-list");
+    let delete_button = format!("workspace-delete-{copy_id}");
+    app.click(cx, delete_button);
+    app.wait_for(cx, "confirm-delete-workspace");
+    app.click(cx, "confirm-delete-workspace");
+    app.wait_until(cx, "Staging deleted", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["workspaces"].as_array().unwrap().len() == 2
+    });
+    assert!(!storage::workspace_directory(app.data_dir(), copy_id).exists());
+
+    // Close Manage Workspaces, then switch back to Default via SwitchToWorkspace action.
+    app.wait_for(cx, "manage-workspaces-close");
+    app.click(cx, "manage-workspaces-close");
+    app.dispatch(cx, qrow::ui::SwitchToWorkspace(default_id));
+    app.wait_until(
+        cx,
+        "switched back to Default",
+        Duration::from_secs(10),
+        |_, _| registry_json(&app)["active_workspace"] == default_id.to_string(),
+    );
+    let analytics_saved =
+        storage::load(&storage::workspace_file_path(app.data_dir(), analytics_id)).unwrap();
+    assert_eq!(analytics_saved.tabs[0].sql, "SELECT 'in_analytics'");
+
+    // Delete the active workspace (Default): switches to Analytics and removes Default.
+    app.dispatch(cx, qrow::ui::ManageWorkspaces);
+    app.wait_for(cx, "manage-workspaces-list");
+    app.click(cx, format!("workspace-delete-{default_id}"));
+    app.wait_for(cx, "confirm-delete-workspace");
+    app.click(cx, "confirm-delete-workspace");
+    app.wait_until(
+        cx,
+        "active workspace deleted and switched",
+        Duration::from_secs(10),
+        |_, _| {
+            let reg = registry_json(&app);
+            reg["workspaces"].as_array().unwrap().len() == 1
+                && reg["active_workspace"] == analytics_id.to_string()
+        },
+    );
+    assert!(!storage::workspace_directory(app.data_dir(), default_id).exists());
+}
+
+#[gpui_kit::test]
+fn workspace_name_dialog_validates_empty_and_duplicate_names(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+
+    app.dispatch(cx, qrow::ui::NewWorkspace);
+    app.wait_for(cx, "workspace-name-input");
+
+    // Empty name is rejected inline.
+    app.click(cx, "submit-workspace-name");
+    app.wait_for(cx, "workspace-name-error");
+    assert_eq!(
+        registry_json(&app)["workspaces"].as_array().unwrap().len(),
+        1
+    );
+
+    // Duplicate name (case-insensitive) is rejected inline.
+    app.fill(cx, "workspace-name-input", "default");
+    app.click(cx, "submit-workspace-name");
+    app.wait_for(cx, "workspace-name-error");
+    assert_eq!(
+        registry_json(&app)["workspaces"].as_array().unwrap().len(),
+        1
+    );
+
+    // Valid name succeeds and closes the dialog.
+    app.fill(cx, "workspace-name-input", "Reporting");
+    app.click(cx, "submit-workspace-name");
+    app.wait_until(cx, "Reporting created", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["workspaces"].as_array().unwrap().len() == 2
+    });
+}
+
+#[gpui_kit::test]
+fn switching_workspace_while_export_runs_asks_for_confirmation(cx: &mut TestAppContext) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+    let default_id =
+        uuid::Uuid::parse_str(registry_json(&app)["active_workspace"].as_str().unwrap()).unwrap();
+
+    // Create and switch into a second workspace.
+    app.dispatch(cx, qrow::ui::NewWorkspace);
+    app.wait_for(cx, "workspace-name-input");
+    app.fill(cx, "workspace-name-input", "Analytics");
+    app.click(cx, "submit-workspace-name");
+    app.wait_until(cx, "Analytics active", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["active_workspace"] != default_id.to_string()
+    });
+    let analytics_id =
+        uuid::Uuid::parse_str(registry_json(&app)["active_workspace"].as_str().unwrap()).unwrap();
+
+    // Register a running export job and attempt to switch back to Default.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let guard = cx.update(|cx| cx.global::<qrow::export::Jobs>().register(cancel.clone()));
+    app.dispatch(cx, qrow::ui::SwitchToWorkspace(default_id));
+    app.wait_for(cx, "keep-working-switch");
+    app.click(cx, "keep-working-switch");
+    app.wait_gone(cx, "keep-working-switch");
+    assert!(!cancel.load(Ordering::Relaxed));
+    assert_eq!(
+        registry_json(&app)["active_workspace"],
+        analytics_id.to_string()
+    );
+
+    // Confirming "Switch anyway" cancels the export and switches to Default.
+    let worker_cancel = cancel.clone();
+    let worker = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !worker_cancel.load(Ordering::Relaxed) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Workspace switch did not cancel the export"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drop(guard);
+    });
+    app.dispatch(cx, qrow::ui::SwitchToWorkspace(default_id));
+    app.wait_for(cx, "switch-anyway");
+    app.click(cx, "switch-anyway");
+    worker.join().unwrap();
+    assert!(cancel.load(Ordering::Relaxed));
+    app.wait_until(
+        cx,
+        "switched to Default",
+        Duration::from_secs(10),
+        |_, _| registry_json(&app)["active_workspace"] == default_id.to_string(),
+    );
+}

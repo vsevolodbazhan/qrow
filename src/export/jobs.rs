@@ -153,6 +153,26 @@ impl Jobs {
         }
     }
 
+    /// Cancel all currently registered writers and wait within one deadline,
+    /// leaving the registry open for new exports afterward (for example after
+    /// switching workspaces).
+    pub fn cancel_current_and_wait(&self, timeout: Duration) -> bool {
+        let jobs = {
+            let mut registry = self.inner.lock_unpoisoned();
+            registry
+                .jobs
+                .retain(|job| *job.remaining.lock_unpoisoned() > 0);
+            for job in &registry.jobs {
+                job.cancel.store(true, Ordering::Relaxed);
+            }
+            registry.jobs.clone()
+        };
+        for job in &jobs {
+            job.request_cancel();
+        }
+        Self::wait_for_jobs(jobs, timeout)
+    }
+
     /// Stop accepting new work, cancel all writers, then wait within one deadline.
     /// Returns false when a destination remains blocked after the deadline.
     pub fn cancel_and_wait(&self, timeout: Duration) -> bool {
@@ -167,6 +187,10 @@ impl Jobs {
         for job in &jobs {
             job.request_cancel();
         }
+        Self::wait_for_jobs(jobs, timeout)
+    }
+
+    fn wait_for_jobs(jobs: Vec<Arc<State>>, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         for job in jobs {
             let mut remaining_tasks = job.remaining.lock_unpoisoned();

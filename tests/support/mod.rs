@@ -796,6 +796,46 @@ impl TestApp {
         Self::open(cx, directory, Some(workspace), credentials, None, None)
     }
 
+    /// Opens Qrow on a managed multi-workspace store in `directory`.
+    pub fn launch_store(
+        cx: &mut TestAppContext,
+        directory: TempDir,
+        credentials: MemoryCredentials,
+    ) -> Self {
+        cx.executor().allow_parking();
+        cx.update(|cx| {
+            ui::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let data_dir = directory.path().to_path_buf();
+        let credentials = Arc::new(credentials);
+        let environment =
+            Environment::isolated_store(data_dir.clone(), data_dir.clone(), credentials.clone());
+        let mut qrow = None;
+        let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
+            let view = cx.new(|cx| Qrow::new(environment, Instant::now(), window, cx));
+            qrow = Some(view.downgrade());
+            ui::root(view, window, cx)
+        });
+        let workspace = storage::resolve_active_workspace_path(&data_dir)
+            .unwrap_or_else(|_| data_dir.join("workspace.json"));
+        let app = Self {
+            window: window.into(),
+            qrow: qrow.expect("The window has a Qrow view"),
+            credentials,
+            sign_ins: None,
+            workspace,
+            actions: Mutex::new(Vec::new()),
+            _directory: directory,
+        };
+        app.update(cx, |window, cx| window.render_frame(cx));
+        app
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        self._directory.path()
+    }
+
     /// Opens Qrow on `workspace` in `directory`, or on the demo data.
     fn open(
         cx: &mut TestAppContext,

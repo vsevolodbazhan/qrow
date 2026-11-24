@@ -35,3 +35,4 @@ mod smooth_scrolling;
 mod tabs;
 mod timing;
 mod updates;
+mod workspaces;

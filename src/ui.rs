@@ -37,6 +37,7 @@ mod toast;
 mod unit_input;
 mod updates;
 mod workspace_view;
+mod workspaces;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
 pub use environment::{Browser, Environment};
@@ -132,12 +133,19 @@ actions!(
         FocusEditor,
         FocusResults,
         FocusCatalog,
-        CheckForUpdates
+        CheckForUpdates,
+        NewWorkspace,
+        ManageWorkspaces,
+        RevealWorkspaceFolder,
+        SubmitWorkspaceName
     ]
 );
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = qrow, no_json)]
 struct SelectTab(usize);
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = qrow, no_json)]
+pub struct SwitchToWorkspace(pub Uuid);
 
 /// Initializes GPUI Kit, themes, the SQL language, key bindings, and menus.
 /// Call once before opening a Qrow window.
@@ -236,6 +244,28 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         name: "View".into(),
         items: view,
     });
+    let (workspaces, active_workspace) = shortcuts::workspace_menu(cx);
+    if !workspaces.is_empty() {
+        let mut items: Vec<MenuItem> = workspaces
+            .into_iter()
+            .map(|(id, name)| {
+                MenuItem::action(name, SwitchToWorkspace(id)).checked(active_workspace == Some(id))
+            })
+            .collect();
+        items.push(MenuItem::separator());
+        items.push(MenuItem::action("New workspace…", NewWorkspace));
+        items.push(MenuItem::action("Manage workspaces…", ManageWorkspaces));
+        items.push(MenuItem::separator());
+        items.push(MenuItem::action(
+            "Reveal workspace folder",
+            RevealWorkspaceFolder,
+        ));
+        menus.push(Menu {
+            disabled: false,
+            name: "Workspace".into(),
+            items,
+        });
+    }
     cx.set_menus(menus);
 }
 /// The panel of the left sidebar.
@@ -802,7 +832,7 @@ pub struct Qrow {
     /// for suggestions, so that a cursor move or an edit does not read the
     /// whole SQL again.
     completion_statements: Option<(Uuid, crate::completion::Statements)>,
-    _store: Option<storage::DataStore>,
+    store: Option<storage::DataStore>,
     settings_saver: Option<storage::SettingsSaver>,
     last_saved_settings: Option<Settings>,
     saver: Option<Saver>,
@@ -810,6 +840,12 @@ pub struct Qrow {
     message: Option<String>,
     demo: bool,
     credentials: Arc<dyn storage::Credentials>,
+    tokens: Arc<dyn storage::TokenStore>,
+    browser: Option<environment::Browser>,
+    workspace_manager_open: bool,
+    workspace_name_form: Option<workspaces::WorkspaceNameForm>,
+    workspace_switch_warning_open: bool,
+    workspace_summaries: std::collections::HashMap<Uuid, (usize, usize)>,
     /// Reusable sign-ins. The service owns their tokens and identities.
     sign_ins: Vec<crate::model::SignIn>,
     oidc: Arc<oidc::Service>,
@@ -1146,7 +1182,7 @@ impl Qrow {
             completion: None,
             completion_reads: std::collections::HashMap::new(),
             completion_statements: None,
-            _store: store,
+            store,
             settings_saver,
             last_saved_settings,
             saver,
@@ -1154,6 +1190,12 @@ impl Qrow {
             message,
             demo,
             credentials: environment.credentials(),
+            tokens: environment.tokens(),
+            browser: environment.browser(),
+            workspace_manager_open: false,
+            workspace_name_form: None,
+            workspace_switch_warning_open: false,
+            workspace_summaries: std::collections::HashMap::new(),
             sign_ins: workspace.sign_ins,
             oidc,
             external_auth,
@@ -1215,6 +1257,7 @@ impl Qrow {
             this.expand_demo_catalog();
         }
         this.rebuild_catalog_tree(cx);
+        this.sync_workspace_menus(cx);
         this.tabs[this.active]
             .input
             .update(cx, |s, cx| s.focus(window, cx));
@@ -2445,6 +2488,9 @@ impl Qrow {
             || self.result_form.is_some()
             || self.assistant_state.rename_form.is_some()
             || self.sign_in_ui.editor.is_some()
+            || self.workspace_manager_open
+            || self.workspace_name_form.is_some()
+            || self.workspace_switch_warning_open
     }
     fn select_tab(&mut self, action: &SelectTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
