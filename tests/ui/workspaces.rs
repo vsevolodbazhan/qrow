@@ -325,13 +325,58 @@ fn dismissing_delete_confirmation_with_escape_reopens_manager(cx: &mut TestAppCo
     app.choose(cx, "popup-menu", "Delete…");
     app.wait_for(cx, "confirm-delete-workspace");
 
-    // Pressing Escape dismisses the confirmation and reopens Manage Workspaces.
+    // Pressing Escape dismisses the confirmation and returns keyboard focus to
+    // Manage Workspaces so a second Escape closes Manage Workspaces.
     app.press(cx, "escape");
+    app.wait_gone(cx, "confirm-delete-workspace");
     app.wait_for(cx, "manage-workspaces-list");
     assert_eq!(
         registry_json(&app)["workspaces"].as_array().unwrap().len(),
         2
     );
+
+    // Same focus-return behavior after dismissing Export Workspace from the actions menu.
+    app.click(cx, format!("workspace-actions-{extra_id}"));
+    app.choose(cx, "popup-menu", "Export…");
+    app.wait_for(cx, "export-workspace-dialog");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "export-workspace-dialog");
+    app.wait_for(cx, "manage-workspaces-list");
+
+    // Second Escape closes Manage Workspaces cleanly.
+    app.press(cx, "escape");
+    app.wait_gone(cx, "manage-workspaces-list");
+}
+
+#[gpui_kit::test]
+fn manage_workspaces_supports_keyboard_selection_and_enter_to_switch(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+    let default_id =
+        uuid::Uuid::parse_str(registry_json(&app)["active_workspace"].as_str().unwrap()).unwrap();
+
+    // Create a second workspace ("Analytics"); it becomes active.
+    app.dispatch(cx, qrow::ui::NewWorkspace);
+    app.wait_for(cx, "workspace-name-input");
+    app.fill(cx, "workspace-name-input", "Analytics");
+    app.click(cx, "submit-workspace-name");
+    app.wait_until(cx, "Analytics active", Duration::from_secs(10), |_, _| {
+        registry_json(&app)["active_workspace"] != default_id.to_string()
+    });
+
+    // Open Manage Workspaces (Analytics is selected at index 1). Pressing Up
+    // selects Default (index 0) and Enter switches back to Default.
+    app.dispatch(cx, qrow::ui::ManageWorkspaces);
+    app.wait_for(cx, "manage-workspaces-list");
+    app.press(cx, "up");
+    app.press(cx, "enter");
+    app.wait_until(
+        cx,
+        "keyboard switch back to Default",
+        Duration::from_secs(10),
+        |_, _| registry_json(&app)["active_workspace"] == default_id.to_string(),
+    );
+    app.wait_gone(cx, "manage-workspaces-list");
 }
 
 #[gpui_kit::test]

@@ -33,7 +33,8 @@ sign-in, a metadata refresh, or an assistant turn is running, Qrow asks you to
 confirm before it switches.
 
 **Manage Workspaces** lists each workspace with its connection count and tab
-count. Select a workspace and click **Switch** (or double-click an inactive
+count. Select a workspace by clicking it or using the **Up** and **Down** arrow
+keys, then click **Switch** or press **Enter** (or double-click an inactive
 workspace) to open it in the current window. Open the actions menu (**⋯**) on a
 workspace to:
 

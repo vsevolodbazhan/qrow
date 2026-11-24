@@ -221,7 +221,7 @@ fn read(path: &Path, allow_missing: bool) -> Result<Read> {
         Err(error) => return Err(error).context("Could not read saved workspace"),
     };
     let mut migrated = migrations::migrate_bytes(&data, &WORKSPACE_SPEC)?;
-    if migrated.preserved_version.is_none() {
+    if migrated.original_version == 9 && migrated.preserved_version.is_none() {
         strip_retired_v9_fields(&mut migrated.value);
     }
     let (mut workspace, unknown): (Workspace, Unknown) =

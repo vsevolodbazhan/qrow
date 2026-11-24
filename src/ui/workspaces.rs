@@ -227,11 +227,14 @@ impl Qrow {
                 .overlay_closable(true)
                 .children(content)
                 .when_some(footer, |dialog, footer| dialog.footer(footer))
-                .on_close(move |_, _, cx| {
+                .on_close(move |_, window, cx| {
                     let close = close.clone();
-                    cx.defer(move |cx| {
+                    window.defer(cx, move |window, cx| {
                         let _ = close.update(cx, |this, cx| {
                             this.export_workspace_form = None;
+                            if this.workspace_manager_open {
+                                this.workspace_manager_focus.focus(window, cx);
+                            }
                             cx.notify();
                         });
                     });
@@ -777,7 +780,7 @@ impl Qrow {
                 this.workspace_summaries.insert(entry.id, counts);
                 this.sync_workspace_menus(cx);
                 if keep_manager_open && this.workspace_manager_open {
-                    this.workspace_manager_selected = Some(entry.id);
+                    this.select_workspace_in_manager(entry.id);
                     cx.notify();
                 } else {
                     this.request_workspace_switch(SwitchAction::Switch(entry.id), window, cx);
@@ -1186,6 +1189,7 @@ impl Qrow {
         self.form = None;
         self.tab_form = None;
         self.result_form = None;
+        self.workspace_manager_selected = None;
 
         self.sign_in_ui = sign_in_view::SignInState::new(self.browser.clone());
 
@@ -1525,6 +1529,39 @@ impl Qrow {
             .or_else(|| Some(store.active_workspace_id()))
     }
 
+    fn select_workspace_in_manager(&mut self, id: Uuid) {
+        self.workspace_manager_selected = Some(id);
+        if let Some(index) = self
+            .store
+            .as_ref()
+            .and_then(|store| store.workspaces().iter().position(|entry| entry.id == id))
+        {
+            self.workspace_manager_scroll.scroll_to_item(index);
+        }
+    }
+
+    fn step_workspace_manager_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let entries = store.workspaces();
+        if entries.is_empty() {
+            return;
+        }
+        let current = self
+            .manage_workspaces_selected_id()
+            .and_then(|id| entries.iter().position(|entry| entry.id == id))
+            .unwrap_or(0);
+        let next = if delta < 0 {
+            current.saturating_sub(delta.unsigned_abs())
+        } else {
+            (current + delta as usize).min(entries.len() - 1)
+        };
+        let next_id = entries[next].id;
+        self.select_workspace_in_manager(next_id);
+        cx.notify();
+    }
+
     fn switch_from_manager(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         let Some(active_id) = self
             .store
@@ -1552,7 +1589,9 @@ impl Qrow {
             return;
         }
         self.refresh_workspace_summaries();
-        self.workspace_manager_selected = self.manage_workspaces_selected_id();
+        if let Some(selected) = self.manage_workspaces_selected_id() {
+            self.select_workspace_in_manager(selected);
+        }
         self.workspace_manager_open = true;
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {
@@ -1601,6 +1640,11 @@ impl Qrow {
                     });
                 })
         });
+        cx.defer_in(window, |this, window, cx| {
+            if this.workspace_manager_open {
+                this.workspace_manager_focus.focus(window, cx);
+            }
+        });
         cx.notify();
     }
 
@@ -1616,19 +1660,85 @@ impl Qrow {
             .max(px(160.));
         let entries: Vec<_> = store.workspaces().to_vec();
         let weak = cx.weak_entity();
+        let selected_bg = if cx.theme().is_dark() {
+            cx.theme().primary.opacity(0.10)
+        } else {
+            cx.theme().primary.opacity(0.06)
+        };
 
         div()
             .id("manage-workspaces-list")
             .test_support()
+            .track_focus(&self.workspace_manager_focus)
+            .role(Role::List)
+            .aria_label("Workspaces")
             .w_full()
-            .pt(px(5.))
+            .pt(px(5.5))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let m = &event.keystroke.modifiers;
+                if m.control || m.alt || m.platform || m.function || m.shift {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "up" => {
+                        this.step_workspace_manager_selection(-1, cx);
+                        cx.stop_propagation();
+                    }
+                    "down" => {
+                        this.step_workspace_manager_selection(1, cx);
+                        cx.stop_propagation();
+                    }
+                    "home" => {
+                        if let Some(first) = this
+                            .store
+                            .as_ref()
+                            .and_then(|store| store.workspaces().first())
+                            .map(|entry| entry.id)
+                        {
+                            this.select_workspace_in_manager(first);
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }
+                    "end" => {
+                        if let Some(last) = this
+                            .store
+                            .as_ref()
+                            .and_then(|store| store.workspaces().last())
+                            .map(|entry| entry.id)
+                        {
+                            this.select_workspace_in_manager(last);
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }
+                    "enter" => {
+                        if let Some(selected) = this.manage_workspaces_selected_id()
+                            && this
+                                .store
+                                .as_ref()
+                                .is_some_and(|store| store.active_workspace_id() != selected)
+                        {
+                            this.switch_from_manager(selected, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }
+                    _ => {}
+                }
+            }))
             .child(
-                v_flex()
+                div()
+                    .relative()
                     .w_full()
-                    .max_h(max_height)
-                    .overflow_y_scrollbar()
-                    .gap_1p5()
-                    .children(entries.into_iter().map(|entry| {
+                    .child(
+                        v_flex()
+                            .id("manage-workspaces-scroll")
+                            .w_full()
+                            .max_h(max_height)
+                            .overflow_y_scroll()
+                            .track_scroll(&self.workspace_manager_scroll)
+                            .gap_1p5()
+                            .children(entries.into_iter().map(|entry| {
                         let id = entry.id;
                         let name = entry.name;
                         let is_active = id == active_id;
@@ -1647,11 +1757,19 @@ impl Qrow {
                         let row_id = SharedString::from(format!("workspace-row-{id}"));
                         let actions_name = name.clone();
                         let delete_name = name.clone();
+                        let row_a11y = if is_active {
+                            format!("{name}, active, {summary}")
+                        } else {
+                            format!("{name}, {summary}")
+                        };
                         let menu_weak = weak.clone();
 
                         h_flex()
                             .id(row_id)
                             .test_support()
+                            .role(Role::ListItem)
+                            .aria_selected(is_selected)
+                            .aria_label(row_a11y)
                             .w_full()
                             .min_w_0()
                             .items_center()
@@ -1667,7 +1785,7 @@ impl Qrow {
                                 cx.theme().border
                             })
                             .bg(if is_selected {
-                                cx.theme().primary.opacity(0.10)
+                                selected_bg
                             } else {
                                 cx.theme().background
                             })
@@ -1678,7 +1796,8 @@ impl Qrow {
                                 if event.click_count() >= 2 && !is_active {
                                     this.switch_from_manager(id, window, cx);
                                 } else {
-                                    this.workspace_manager_selected = Some(id);
+                                    this.select_workspace_in_manager(id);
+                                    this.workspace_manager_focus.focus(window, cx);
                                     cx.notify();
                                 }
                             }))
@@ -1712,15 +1831,7 @@ impl Qrow {
                                                     .child(name),
                                             )
                                             .when(is_active, |row| {
-                                                row.child(
-                                                    Tag::custom(
-                                                        cx.theme().primary.opacity(0.14),
-                                                        cx.theme().primary,
-                                                        cx.theme().primary.opacity(0.32),
-                                                    )
-                                                    .small()
-                                                    .child("Active"),
-                                                )
+                                                row.child(Tag::secondary().small().child("Active"))
                                             }),
                                     )
                                     .child(
@@ -1801,14 +1912,17 @@ impl Qrow {
                                                                 .small(),
                                                         )
                                                         .on_click(move |_, window, cx| {
-                                                            let _ = export_weak.update(
-                                                                cx,
-                                                                |this, cx| {
-                                                                    this.open_export_workspace_dialog(
-                                                                        id, window, cx,
-                                                                    );
-                                                                },
-                                                            );
+                                                            let export_weak = export_weak.clone();
+                                                            window.defer(cx, move |window, cx| {
+                                                                let _ = export_weak.update(
+                                                                    cx,
+                                                                    |this, cx| {
+                                                                        this.open_export_workspace_dialog(
+                                                                            id, window, cx,
+                                                                        );
+                                                                    },
+                                                                );
+                                                            });
                                                         }),
                                                 )
                                                 .item(
@@ -1844,15 +1958,18 @@ impl Qrow {
                                                             )
                                                         })
                                                         .on_click(move |_, window, cx| {
+                                                            let delete_weak = delete_weak.clone();
                                                             let name = delete_name.clone();
-                                                            let _ = delete_weak.update(
-                                                                cx,
-                                                                |this, cx| {
-                                                                    this.confirm_delete_workspace(
-                                                                        id, name, window, cx,
-                                                                    );
-                                                                },
-                                                            );
+                                                            window.defer(cx, move |window, cx| {
+                                                                let _ = delete_weak.update(
+                                                                    cx,
+                                                                    |this, cx| {
+                                                                        this.confirm_delete_workspace(
+                                                                            id, name, window, cx,
+                                                                        );
+                                                                    },
+                                                                );
+                                                            });
                                                         }),
                                                 )
                                             },
@@ -1860,6 +1977,8 @@ impl Qrow {
                                     ),
                             )
                     })),
+                    )
+                    .vertical_scrollbar(&self.workspace_manager_scroll),
             )
             .into_any_element()
     }
@@ -1929,7 +2048,7 @@ impl Qrow {
             .map(|store| store.duplicate_workspace(id, live_snapshot.as_ref(), None));
         match result {
             Some(Ok(entry)) => {
-                self.workspace_manager_selected = Some(entry.id);
+                self.select_workspace_in_manager(entry.id);
                 self.refresh_workspace_summaries();
                 self.sync_workspace_menus(cx);
                 cx.notify();
@@ -1965,12 +2084,23 @@ impl Qrow {
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
+            let close = weak.clone();
             alert
                 .title(format!("Delete \"{name}\"?"))
                 .description(
                     "All connections, query tabs, saved passwords, and sign-ins in this workspace will be permanently deleted.",
                 )
                 .width(px(480.))
+                .on_close(move |_, window, cx| {
+                    let close = close.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = close.update(cx, |this, cx| {
+                            if this.workspace_manager_open {
+                                this.workspace_manager_focus.focus(window, cx);
+                            }
+                        });
+                    });
+                })
                 .footer(
                     DialogFooter::new()
                         .justify_end()
@@ -2020,6 +2150,7 @@ impl Qrow {
             };
             if self.workspace_manager_open {
                 self.workspace_manager_open = false;
+                self.workspace_manager_selected = None;
                 window.close_dialog(cx);
             }
             self.request_workspace_switch(
