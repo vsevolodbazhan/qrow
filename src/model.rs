@@ -4,13 +4,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 pub mod sharing;
 pub mod transfer;
+pub mod workspace_export;
 
 pub const PREVIEW_ROWS: usize = 1_000;
-pub const WORKSPACE_VERSION: u32 = 8;
+pub const WORKSPACE_VERSION: u32 = 9;
+pub const WORKSPACE_MIN_READER_VERSION: u32 = 9;
+pub const SETTINGS_VERSION: u32 = 1;
+pub const SETTINGS_MIN_READER_VERSION: u32 = 1;
+pub const REGISTRY_VERSION: u32 = 1;
+pub const REGISTRY_MIN_READER_VERSION: u32 = 1;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
 pub const MAX_SIGN_IN_NAME: usize = 60;
+pub const MAX_WORKSPACE_NAME: usize = 60;
+pub const DEFAULT_WORKSPACE_NAME: &str = "Default";
 /// The scopes that each sign-in requests: the account, and its name and
 /// email for display.
 pub const BASE_SCOPES: [&str; 3] = ["openid", "profile", "email"];
@@ -78,6 +86,37 @@ where
         name.to_owned()
     } else {
         copied_name(name, MAX_SIGN_IN_NAME, is_taken)
+    }
+}
+
+/// Validate a workspace name, returning its trimmed form.
+pub fn validate_workspace_name(name: &str) -> anyhow::Result<String> {
+    let trimmed = name.trim();
+    anyhow::ensure!(!trimmed.is_empty(), "Give the workspace a name.");
+    anyhow::ensure!(
+        trimmed.chars().count() <= MAX_WORKSPACE_NAME,
+        "Workspace name must be {MAX_WORKSPACE_NAME} characters or fewer."
+    );
+    Ok(trimmed.to_owned())
+}
+
+/// Return a unique workspace name for a duplicated workspace.
+pub fn copied_workspace_name<F>(name: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    copied_name(name, MAX_WORKSPACE_NAME, is_taken)
+}
+
+/// Keep a workspace name when it is available, otherwise append a copy suffix.
+pub fn unique_workspace_name<F>(name: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    if !is_taken(name) {
+        name.to_owned()
+    } else {
+        copied_name(name, MAX_WORKSPACE_NAME, is_taken)
     }
 }
 
@@ -428,7 +467,7 @@ impl AssistantModelChoice {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[non_exhaustive]
-#[serde(default)]
+#[serde(from = "AssistantSettingsRepr")]
 pub struct AssistantSettings {
     pub enabled: bool,
     pub data_sharing_notice_version: u32,
@@ -446,6 +485,70 @@ pub struct AssistantSettings {
     /// Lets the harness search the web. Codex uses its cached index, and
     /// Claude Code uses its search tool. Neither can open other URLs.
     pub web_search: bool,
+}
+
+/// Flat deserialization shape for [`AssistantSettings`] so `serde_ignored`
+/// sees unknown fields inside `settings.assistant` instead of `#[serde(flatten)]`
+/// buffering them away.
+#[derive(Deserialize)]
+#[serde(default)]
+struct AssistantSettingsRepr {
+    enabled: bool,
+    data_sharing_notice_version: u32,
+    default_execution_mode: AssistantExecutionMode,
+    harness: AssistantHarness,
+    codex_executable: Option<String>,
+    claude_executable: Option<String>,
+    panel_width: f32,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    service_tier: Option<String>,
+    claude: AssistantModelChoice,
+    sql_keyword_case: KeywordCase,
+    web_search: bool,
+}
+
+impl Default for AssistantSettingsRepr {
+    fn default() -> Self {
+        let d = AssistantSettings::default();
+        Self {
+            enabled: d.enabled,
+            data_sharing_notice_version: d.data_sharing_notice_version,
+            default_execution_mode: d.default_execution_mode,
+            harness: d.harness,
+            codex_executable: d.codex_executable,
+            claude_executable: d.claude_executable,
+            panel_width: d.panel_width,
+            model: d.codex.model,
+            reasoning_effort: d.codex.reasoning_effort,
+            service_tier: d.codex.service_tier,
+            claude: d.claude,
+            sql_keyword_case: d.sql_keyword_case,
+            web_search: d.web_search,
+        }
+    }
+}
+
+impl From<AssistantSettingsRepr> for AssistantSettings {
+    fn from(r: AssistantSettingsRepr) -> Self {
+        Self {
+            enabled: r.enabled,
+            data_sharing_notice_version: r.data_sharing_notice_version,
+            default_execution_mode: r.default_execution_mode,
+            harness: r.harness,
+            codex_executable: r.codex_executable,
+            claude_executable: r.claude_executable,
+            panel_width: r.panel_width,
+            codex: AssistantModelChoice {
+                model: r.model,
+                reasoning_effort: r.reasoning_effort,
+                service_tier: r.service_tier,
+            },
+            claude: r.claude,
+            sql_keyword_case: r.sql_keyword_case,
+            web_search: r.web_search,
+        }
+    }
 }
 
 impl Default for AssistantSettings {
@@ -1384,7 +1487,7 @@ const MAX_SHARED_SIGN_IN_BYTES: usize = 64 * 1024;
 /// The settings of a sign-in that one user gives to another as text. It has
 /// no identifier, account, or tokens.
 #[derive(Deserialize, Serialize)]
-struct SharedSignIn {
+pub(super) struct SharedSignIn {
     /// Marks the text as sign-in settings and gives the format version.
     qrow_sign_in: u32,
     name: String,
@@ -1404,7 +1507,7 @@ struct SharedSignIn {
 
 impl SharedSignIn {
     /// The shared settings of `sign_in`.
-    fn of(sign_in: &SignIn) -> Self {
+    pub(super) fn of(sign_in: &SignIn) -> Self {
         Self {
             qrow_sign_in: if sign_in.provider == SignInProvider::Oidc {
                 1
@@ -1425,7 +1528,7 @@ impl SharedSignIn {
     }
 
     /// A new sign-in with no account from the shared settings in `value`.
-    fn read(value: serde_json::Value) -> anyhow::Result<SignIn> {
+    pub(super) fn read(value: serde_json::Value) -> anyhow::Result<SignIn> {
         let version = value
             .get("qrow_sign_in")
             .and_then(serde_json::Value::as_u64)
@@ -1704,6 +1807,61 @@ impl AssistantWorkspace {
     }
 }
 
+/// Which sidebar panel is active when the sidebar is open.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedSidebarPanel {
+    #[default]
+    Connections,
+    SignIns,
+}
+
+pub const MIN_SIDEBAR_WIDTH: f32 = 180.;
+pub const DEFAULT_SIDEBAR_WIDTH: f32 = 240.;
+pub const MAX_SIDEBAR_WIDTH: f32 = 360.;
+pub const MIN_EDITOR_HEIGHT_RATIO: f32 = 0.15;
+pub const MAX_EDITOR_HEIGHT_RATIO: f32 = 0.85;
+
+/// Per-workspace pane visibility and split sizes persisted in `workspace.json`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct WorkspaceLayout {
+    pub sidebar_open: bool,
+    pub sidebar_panel: SavedSidebarPanel,
+    /// Unscaled sidebar width in logical points (`180..=360`).
+    pub sidebar_width: f32,
+    /// Editor height as a fraction of the editor + results vertical space (`0.15..=0.85`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_height_ratio: Option<f32>,
+}
+
+impl Default for WorkspaceLayout {
+    fn default() -> Self {
+        Self {
+            sidebar_open: true,
+            sidebar_panel: SavedSidebarPanel::Connections,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            editor_height_ratio: None,
+        }
+    }
+}
+
+impl WorkspaceLayout {
+    pub fn sanitize(&mut self) {
+        if !self.sidebar_width.is_finite() {
+            self.sidebar_width = DEFAULT_SIDEBAR_WIDTH;
+        } else {
+            self.sidebar_width = self
+                .sidebar_width
+                .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+        }
+        self.editor_height_ratio = self
+            .editor_height_ratio
+            .filter(|ratio| ratio.is_finite())
+            .map(|ratio| ratio.clamp(MIN_EDITOR_HEIGHT_RATIO, MAX_EDITOR_HEIGHT_RATIO));
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Workspace {
     pub version: u32,
@@ -1723,6 +1881,9 @@ pub struct Workspace {
     /// The connections that the Connections search looks in.
     #[serde(default, skip_serializing_if = "SearchScope::is_all")]
     pub search_scope: SearchScope,
+    /// Saved pane visibility and splitter proportions for this workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<WorkspaceLayout>,
 }
 
 /// The connections that the Connections search looks in.
@@ -1816,7 +1977,193 @@ pub fn prune_shared_catalogs(
     removed
 }
 
+/// Versioned wrapper for app-wide settings stored in `settings.json`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SavedSettings {
+    pub version: u32,
+    #[serde(default)]
+    pub settings: Settings,
+}
+
+impl Default for SavedSettings {
+    fn default() -> Self {
+        Self {
+            version: SETTINGS_VERSION,
+            settings: Settings::default(),
+        }
+    }
+}
+
+/// One named workspace entry stored in `workspaces.json`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceEntry {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub created_at: u64,
+    #[serde(default)]
+    pub last_opened_at: u64,
+}
+
+/// The registry of named workspaces stored in `workspaces.json`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceRegistry {
+    pub version: u32,
+    pub active_workspace: Uuid,
+    #[serde(default)]
+    pub workspaces: Vec<WorkspaceEntry>,
+    /// The workspace created by migrating a legacy flat layout. Used to finish
+    /// relocating machine-local caches and transcripts on crash recovery or on
+    /// another Windows computer syncing a roaming profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated_workspace: Option<Uuid>,
+}
+
+impl WorkspaceRegistry {
+    /// Creates a new registry containing a single workspace.
+    pub fn single(entry: WorkspaceEntry) -> Self {
+        let active_workspace = entry.id;
+        Self {
+            version: REGISTRY_VERSION,
+            active_workspace,
+            workspaces: vec![entry],
+            migrated_workspace: None,
+        }
+    }
+
+    /// Returns whether `name` is already used by any workspace other than
+    /// `exclude`, ignoring ASCII/Unicode letter case.
+    pub fn name_taken(&self, name: &str, exclude: Option<Uuid>) -> bool {
+        let candidate = name.trim().to_lowercase();
+        self.workspaces
+            .iter()
+            .any(|entry| exclude != Some(entry.id) && entry.name.trim().to_lowercase() == candidate)
+    }
+
+    /// Repairs duplicate IDs, blank names, and dangling active selection.
+    pub fn sanitize(&mut self, now: u64) -> bool {
+        let mut changed = false;
+        let mut seen_ids = BTreeSet::new();
+        let before = self.workspaces.len();
+        self.workspaces.retain(|entry| seen_ids.insert(entry.id));
+        if self.workspaces.len() != before {
+            changed = true;
+        }
+        if self.workspaces.is_empty() {
+            let entry = WorkspaceEntry {
+                id: Uuid::new_v4(),
+                name: DEFAULT_WORKSPACE_NAME.into(),
+                created_at: now,
+                last_opened_at: now,
+            };
+            self.active_workspace = entry.id;
+            self.workspaces.push(entry);
+            changed = true;
+        }
+        let mut seen_names = BTreeSet::new();
+        for entry in &mut self.workspaces {
+            let base = if entry.name.trim().is_empty() {
+                DEFAULT_WORKSPACE_NAME.to_owned()
+            } else {
+                entry.name.trim().chars().take(MAX_WORKSPACE_NAME).collect()
+            };
+            let unique = unique_workspace_name(&base, |candidate| {
+                seen_names.contains(&candidate.to_lowercase())
+            });
+            if unique != entry.name {
+                entry.name = unique;
+                changed = true;
+            }
+            seen_names.insert(entry.name.to_lowercase());
+        }
+        if !self
+            .workspaces
+            .iter()
+            .any(|entry| entry.id == self.active_workspace)
+        {
+            self.active_workspace = self.workspaces[0].id;
+            changed = true;
+        }
+        if self.version != REGISTRY_VERSION {
+            self.version = REGISTRY_VERSION;
+            changed = true;
+        }
+        changed
+    }
+}
+
 impl Workspace {
+    /// Replaces every persistent identifier in this workspace so a duplicated
+    /// or imported workspace never collides with Keychain entries or caches of
+    /// the source workspace. Clears external assistant thread references and
+    /// signed-in account identities whose tokens live in Keychain.
+    pub fn remap_ids_for_copy(&mut self) {
+        let mut sign_in_map: BTreeMap<Uuid, Uuid> = BTreeMap::new();
+        for sign_in in &mut self.sign_ins {
+            let new_id = Uuid::new_v4();
+            sign_in_map.insert(sign_in.id, new_id);
+            sign_in.id = new_id;
+            sign_in.identity = None;
+        }
+
+        let mut catalog_map: BTreeMap<Uuid, Uuid> = BTreeMap::new();
+        for catalog in &mut self.shared_catalogs {
+            let new_id = Uuid::new_v4();
+            catalog_map.insert(catalog.id, new_id);
+            catalog.id = new_id;
+        }
+
+        let mut profile_map: BTreeMap<Uuid, Uuid> = BTreeMap::new();
+        for profile in &mut self.profiles {
+            let new_id = Uuid::new_v4();
+            profile_map.insert(profile.id, new_id);
+            profile.id = new_id;
+            profile.shared_catalog = profile
+                .shared_catalog
+                .and_then(|old| catalog_map.get(&old).copied());
+            if let Authentication::Oidc { sign_in } = profile.authentication {
+                profile.authentication = match sign_in_map.get(&sign_in).copied() {
+                    Some(mapped) => Authentication::Oidc { sign_in: mapped },
+                    None => Authentication::Password,
+                };
+            }
+        }
+
+        for catalog in &mut self.shared_catalogs {
+            catalog.preferred = catalog
+                .preferred
+                .and_then(|old| profile_map.get(&old).copied());
+        }
+
+        let mut tab_map: BTreeMap<Uuid, Uuid> = BTreeMap::new();
+        for tab in &mut self.tabs {
+            let new_id = Uuid::new_v4();
+            tab_map.insert(tab.id, new_id);
+            tab.id = new_id;
+            tab.profile = tab.profile.and_then(|old| profile_map.get(&old).copied());
+        }
+
+        let mut remapped_active = BTreeMap::new();
+        for (old_profile, old_tab) in std::mem::take(&mut self.active_tabs) {
+            if let (Some(&new_profile), Some(&new_tab)) =
+                (profile_map.get(&old_profile), tab_map.get(&old_tab))
+            {
+                remapped_active.insert(new_profile, new_tab);
+            }
+        }
+        self.active_tabs = remapped_active;
+
+        if let SearchScope::Connections(ids) = &mut self.search_scope {
+            *ids = ids
+                .iter()
+                .filter_map(|old| profile_map.get(old).copied())
+                .collect();
+        }
+
+        self.assistant.conversations.clear();
+        self.normalize();
+    }
+
     /// Upgrade the flat tab list used by version 1 workspaces. New workspaces
     /// still use one list in storage, but every tab is normalized to an owned
     /// connection and each connection gets an active tab.
@@ -1934,6 +2281,9 @@ impl Workspace {
         }
         prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
         self.search_scope.sanitize(&self.profiles);
+        if let Some(layout) = &mut self.layout {
+            layout.sanitize();
+        }
         self.version = WORKSPACE_VERSION;
     }
 }
@@ -1951,6 +2301,7 @@ impl Default for Workspace {
             shared_catalogs: Vec::new(),
             sign_ins: vec![],
             search_scope: SearchScope::All,
+            layout: None,
         }
     }
 }

@@ -161,6 +161,9 @@ enum Command {
 pub struct DbtWorker {
     tx: mpsc::Sender<Command>,
     pub events: mpsc::Receiver<Event>,
+    /// Held while writing saved indexes to disk; set to `false` on shutdown so
+    /// an in-flight parse cannot recreate a deleted workspace directory.
+    write_active: Arc<std::sync::Mutex<bool>>,
 }
 
 impl DbtWorker {
@@ -179,6 +182,7 @@ impl DbtWorker {
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (events_tx, events) = mpsc::channel();
+        let write_active = Arc::new(std::sync::Mutex::new(true));
         let changes = tx.clone();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             if let Ok(event) = event {
@@ -196,9 +200,21 @@ impl DbtWorker {
             rx,
             tx: events_tx,
             wake,
+            write_active: Arc::clone(&write_active),
         };
         thread::spawn(move || runner.run());
-        Self { tx, events }
+        Self {
+            tx,
+            events,
+            write_active,
+        }
+    }
+
+    /// Prevents any further writes to the saved index directory (waiting for
+    /// any write currently in progress) and asks the worker thread to exit.
+    pub fn shutdown(&self) {
+        *crate::sync::LockExt::lock_unpoisoned(&*self.write_active) = false;
+        let _ = self.tx.send(Command::Shutdown);
     }
 
     /// Keep the indexes of `uses` and forget the others. A saved index that
@@ -231,7 +247,7 @@ impl Refresher {
 
 impl Drop for DbtWorker {
     fn drop(&mut self) {
-        let _ = self.tx.send(Command::Shutdown);
+        self.shutdown();
     }
 }
 
@@ -262,6 +278,7 @@ struct Runner {
     rx: mpsc::Receiver<Command>,
     tx: mpsc::Sender<Event>,
     wake: Arc<dyn Fn() + Send + Sync>,
+    write_active: Arc<std::sync::Mutex<bool>>,
 }
 
 impl Runner {
@@ -590,6 +607,10 @@ impl Runner {
         let Some(directory) = &self.directory else {
             return Ok(());
         };
+        let active = crate::sync::LockExt::lock_unpoisoned(&*self.write_active);
+        if !*active {
+            return Ok(());
+        }
         fs::create_dir_all(directory)?;
         crate::storage::write_atomically(
             &saved_path(directory, &saved.manifest),

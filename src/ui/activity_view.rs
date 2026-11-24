@@ -242,6 +242,26 @@ impl ActivityView {
         cx.notify();
     }
 
+    /// Resets per-connection logs when switching workspaces, keeping the
+    /// application (`Qrow`) log intact and closing the Activity overlay so the
+    /// target workspace opens on its editor.
+    pub(super) fn reset_for_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open = false;
+        self.activity.clear_connections();
+        self.connections.clear();
+        self.closed_tabs.clear();
+        self.labels_stale = false;
+        if self
+            .shown
+            .is_some_and(|id| id != crate::activity::APPLICATION)
+        {
+            self.shown = Some(crate::activity::APPLICATION);
+        }
+        self.sync_connections(window, cx);
+        self.rebuild_rows(cx);
+        cx.notify();
+    }
+
     /// Remove the Show Tab button of the rows of a closed tab.
     pub(super) fn tab_closed(&mut self, tab: Uuid, cx: &mut Context<Self>) {
         if self.closed_tabs.insert(tab) {

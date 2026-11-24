@@ -83,6 +83,11 @@ impl DbtProjects {
         }
     }
 
+    /// Stops the dbt worker and blocks any further writes to its index folder.
+    pub(super) fn shutdown(&self) {
+        self.worker.shutdown();
+    }
+
     /// Read the manifest with the key `path` again.
     pub(super) fn refresh_path(&self, path: &Path) {
         self.worker.refresh(path);

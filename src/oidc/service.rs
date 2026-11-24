@@ -51,6 +51,17 @@ pub struct Service {
     records: Mutex<HashMap<Uuid, Arc<Record>>>,
     profiles: Mutex<Vec<Profile>>,
     on_change: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Serializes token store writes against `generation` checks so a removed
+    /// or reconfigured sign-in cannot write a rotated token back after deletion.
+    token_lock: Mutex<()>,
+}
+
+/// A captured OIDC record handle prepared on the caller thread before
+/// dispatching a background sign-out.
+pub struct SignOutHandle {
+    id: Uuid,
+    record: Arc<Record>,
+    generation: u64,
 }
 
 struct Record {
@@ -58,6 +69,9 @@ struct Record {
     /// Sign-out, removal, and requirement changes increment it. Work that
     /// started before discards its result.
     generation: AtomicU64,
+    /// Set to `true` when this sign-in is removed from the service (for
+    /// example on workspace switch or sign-in deletion).
+    removed: AtomicBool,
     /// Held during token work, so that one refresh runs at a time.
     work: Mutex<Work>,
     problem: Mutex<Option<(Failure, String)>>,
@@ -129,7 +143,15 @@ impl Service {
             records: Mutex::default(),
             profiles: Mutex::default(),
             on_change: Mutex::default(),
+            token_lock: Mutex::default(),
         })
+    }
+
+    /// Waits for any in-flight Keychain token write to finish. Call after
+    /// [`Self::configure`] removes outgoing sign-ins and before deleting their
+    /// stored tokens so an in-flight refresh cannot recreate them.
+    pub fn sync_token_writes(&self) {
+        let _guard = self.token_lock.lock_unpoisoned();
     }
 
     pub fn trust(&self) -> &Trust {
@@ -164,6 +186,7 @@ impl Service {
                 sign_in.id == *id && sign_in.provider == crate::model::SignInProvider::Oidc
             });
             if !keep {
+                record.removed.store(true, Ordering::SeqCst);
                 record.generation.fetch_add(1, Ordering::SeqCst);
             }
             keep
@@ -190,6 +213,7 @@ impl Service {
                         Arc::new(Record {
                             config: Mutex::new(sign_in.clone()),
                             generation: AtomicU64::new(0),
+                            removed: AtomicBool::new(false),
                             work: Mutex::default(),
                             problem: Mutex::default(),
                         }),
@@ -298,12 +322,16 @@ impl Service {
         if cancel.load(Ordering::SeqCst) {
             return Err(SignInError::new(Failure::Cancelled, "Sign-in was cancelled").into());
         }
-        anyhow::ensure!(
-            record.generation.load(Ordering::SeqCst) == generation
-                && self.records.lock_unpoisoned().contains_key(&id),
-            "The sign-in changed while the browser was open. Sign in again"
-        );
-        self.save(id, &stored)?;
+        {
+            let _guard = self.token_lock.lock_unpoisoned();
+            anyhow::ensure!(
+                !record.removed.load(Ordering::SeqCst)
+                    && record.generation.load(Ordering::SeqCst) == generation
+                    && self.records.lock_unpoisoned().contains_key(&id),
+                "The sign-in changed while the browser was open. Sign in again"
+            );
+            self.save(id, &stored)?;
+        }
         *work = Work {
             loaded: true,
             tokens: Some(stored),
@@ -322,15 +350,40 @@ impl Service {
         self.store.save_tokens(id, &record)
     }
 
-    /// Removes the tokens from Keychain. On failure, the sign-in stays
-    /// signed in, because its tokens remain available.
-    pub fn sign_out(&self, id: Uuid) -> Result<()> {
+    /// Captures the currently registered record for `id` so a background
+    /// sign-out task cannot bind to a replacement record created after a
+    /// workspace switch.
+    pub fn prepare_sign_out(&self, id: Uuid) -> Result<SignOutHandle> {
         let record = self.record(id)?;
-        record.generation.fetch_add(1, Ordering::SeqCst);
+        let generation = record.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(SignOutHandle {
+            id,
+            record,
+            generation,
+        })
+    }
+
+    /// Executes a previously prepared sign-out against its captured record.
+    pub fn finish_sign_out(&self, handle: SignOutHandle) -> Result<()> {
+        let SignOutHandle {
+            id,
+            record,
+            generation,
+        } = handle;
         // Wait for a running refresh. It sees the new generation and does
         // not save its result.
         let mut work = record.work.lock_unpoisoned();
-        self.store.delete_tokens(id)?;
+        {
+            let _token_guard = self.token_lock.lock_unpoisoned();
+            // If this sign-in record was removed or superseded by a workspace
+            // switch while we waited on `record.work`, do not touch Keychain.
+            if record.removed.load(Ordering::SeqCst)
+                || record.generation.load(Ordering::SeqCst) != generation
+            {
+                return Ok(());
+            }
+            self.store.delete_tokens(id)?;
+        }
         *work = Work {
             loaded: true,
             ..Work::default()
@@ -340,6 +393,13 @@ impl Service {
         *record.problem.lock_unpoisoned() = None;
         self.changed();
         Ok(())
+    }
+
+    /// Removes the tokens from Keychain. On failure, the sign-in stays
+    /// signed in, because its tokens remain available.
+    pub fn sign_out(&self, id: Uuid) -> Result<()> {
+        let handle = self.prepare_sign_out(id)?;
+        self.finish_sign_out(handle)
     }
 
     /// Returns an access token of sign-in `id` for `host`, for the identity
@@ -424,18 +484,42 @@ impl Service {
             self.set_problem(record, Some((Failure::SignInRequired, message.clone())));
             return Err(required(message));
         };
-        let result = self.refresh(&mut work, config, &refresh_token, subject);
+        let result = self.refresh(
+            record,
+            generation,
+            &mut work,
+            config,
+            &refresh_token,
+            subject,
+        );
         let tokens = match result {
             Ok(tokens) => tokens,
             Err(error) => {
+                // Do not delete tokens or update status if this sign-in was
+                // removed or reconfigured while the refresh ran.
+                if record.removed.load(Ordering::SeqCst)
+                    || record.generation.load(Ordering::SeqCst) != generation
+                {
+                    return Err(error);
+                }
                 let failure = super::failure(&error);
                 let message = format!("{error:#}");
                 match failure {
                     Failure::SignInRequired => {
                         // The provider rejected the refresh token. Keep it out
                         // of later attempts. The identity stays for display.
+                        // Serialize with `token_lock` and re-check removal so a
+                        // stale worker cannot delete tokens for a newly
+                        // re-registered sign-in with the same ID.
                         work.tokens = None;
-                        let _ = self.store.delete_tokens(id);
+                        {
+                            let _guard = self.token_lock.lock_unpoisoned();
+                            if !record.removed.load(Ordering::SeqCst)
+                                && record.generation.load(Ordering::SeqCst) == generation
+                            {
+                                let _ = self.store.delete_tokens(id);
+                            }
+                        }
                         let message = expired_message();
                         self.set_problem(record, Some((failure, message.clone())));
                         return Err(required(message));
@@ -475,8 +559,7 @@ impl Service {
         };
         // Keychain first: a rotated refresh token replaces the old one at
         // the provider, so an unsaved one would be lost.
-        self.save(id, &stored)
-            .context("Could not save the refreshed sign-in")?;
+        self.save_if_current(record, generation, config, &stored)?;
         let token = Zeroizing::new(stored.access_token.clone());
         work.tokens = Some(stored);
         drop(work);
@@ -484,8 +567,30 @@ impl Service {
         Ok(token)
     }
 
+    fn save_if_current(
+        &self,
+        record: &Record,
+        generation: u64,
+        config: &SignIn,
+        stored: &Stored,
+    ) -> Result<()> {
+        let _guard = self.token_lock.lock_unpoisoned();
+        if record.removed.load(Ordering::SeqCst)
+            || record.generation.load(Ordering::SeqCst) != generation
+        {
+            return Err(required(format!(
+                "The sign-in \"{}\" was signed out",
+                config.name
+            )));
+        }
+        self.save(config.id, stored)
+            .context("Could not save the refreshed sign-in")
+    }
+
     fn refresh(
         &self,
+        record: &Record,
+        generation: u64,
         work: &mut Work,
         config: &SignIn,
         refresh_token: &str,
@@ -522,8 +627,7 @@ impl Service {
                 expires_at: 0,
                 refresh_token: Some(rotated.to_string()),
             };
-            self.save(config.id, &pending)
-                .context("Could not save the refreshed sign-in")?;
+            self.save_if_current(record, generation, config, &pending)?;
             work.tokens = Some(pending);
         }
         if let Some(id_token) = &tokens.id_token {

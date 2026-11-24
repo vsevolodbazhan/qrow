@@ -52,6 +52,22 @@ impl Qrow {
         let file_focus = focus.clone();
         let edit_focus = focus.clone();
         let view_focus = focus.clone();
+        let workspace_focus = focus.clone();
+        let workspaces: Vec<(Uuid, String)> = self
+            .store
+            .as_ref()
+            .map(|store| {
+                store
+                    .workspaces()
+                    .iter()
+                    .map(|entry| (entry.id, entry.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let active_workspace = self
+            .store
+            .as_ref()
+            .map(storage::DataStore::active_workspace_id);
         self.open_context_menu_from(
             // Under the menu button, below the 34 px title bar.
             point(window.rem_size() * APPLICATION_MENU_INSET_REMS, px(34.)),
@@ -126,6 +142,46 @@ impl Qrow {
                             menu
                         };
                         menu.item(PopupMenuItem::new("Activity").action(Box::new(ToggleActivity)))
+                    })
+                    .when(!workspaces.is_empty(), |menu| {
+                        let workspaces = workspaces.clone();
+                        let workspace_focus = workspace_focus.clone();
+                        menu.submenu("Workspace", window, cx, move |mut menu, _, _| {
+                            menu = menu.action_context(workspace_focus.clone());
+                            for (id, name) in &workspaces {
+                                menu = menu.item(
+                                    PopupMenuItem::new(name.clone())
+                                        .checked(active_workspace == Some(*id))
+                                        .action(Box::new(SwitchToWorkspace(*id))),
+                                );
+                            }
+                            menu.separator()
+                                .item(
+                                    PopupMenuItem::new("New workspace…")
+                                        .action(Box::new(NewWorkspace)),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Manage workspaces…")
+                                        .action(Box::new(ManageWorkspaces)),
+                                )
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("Import workspace…")
+                                        .action(Box::new(ImportWorkspace)),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Export workspace…")
+                                        .action(Box::new(ExportWorkspace)),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Back up workspace…")
+                                        .action(Box::new(BackupWorkspace)),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Reveal workspace folder")
+                                        .action(Box::new(RevealWorkspaceFolder)),
+                                )
+                        })
                     })
                     .separator()
                     .item(PopupMenuItem::new("Quit Qrow").action(Box::new(Quit)))
@@ -774,13 +830,17 @@ impl Qrow {
         let shown =
             !(self.sidebar && self.sidebar_panel == panel) || self.assistant_covers_workspace(cx);
         self.uncover_workspace(window, cx);
-        if self.sidebar_panel != panel {
+        let panel_changed = self.sidebar_panel != panel;
+        if panel_changed {
             self.catalog
                 .state
                 .update(cx, |tree, cx| tree.set_selected_index(None, cx));
         }
         self.sidebar_panel = panel;
         self.set_sidebar(shown, window, cx);
+        if panel_changed {
+            self.changed(cx);
+        }
     }
 
     /// Shows or hides the sidebar. A hidden sidebar gives its focus to the
@@ -788,6 +848,7 @@ impl Qrow {
     /// handler. A focus outside the sidebar, like in Activity, stays.
     pub(super) fn set_sidebar(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
         let had_focus = self.sidebar && self.sidebar_focus.contains_focused(window, cx);
+        let changed = self.sidebar != shown;
         self.sidebar = shown;
         if !shown {
             self.catalog
@@ -798,7 +859,11 @@ impl Qrow {
             let editor = self.tabs[self.active].input.clone();
             editor.update(cx, |editor, cx| editor.focus(window, cx));
         }
-        cx.notify();
+        if changed {
+            self.changed(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     /// Activity keeps its icon, with a dot for unread errors or current work.
@@ -902,6 +967,7 @@ impl Qrow {
                             .test_support()
                             .role(Role::Label)
                             .min_w_0()
+                            .items_center()
                             .gap_1p5()
                             .aria_label(format!("Current connection: {connection_name}"))
                             .when_some(connected, |el, status| el.child(status.dot(cx)))
@@ -970,7 +1036,10 @@ impl Qrow {
                             this.shown_sidebar_width(window.viewport_size().width)
                         } else {
                             this.editor_height
+                                .min(window.viewport_size().height - this.ui_px(294.))
+                                .max(this.ui_px(100.))
                         },
+                        false,
                     ));
                     cx.stop_propagation();
                 }),
@@ -987,7 +1056,10 @@ impl Qrow {
             .relative()
             .flex_shrink_0()
             .bg(
-                if self.resize.is_some_and(|(axis, _, _)| axis == horizontal) {
+                if self
+                    .resize
+                    .is_some_and(|(axis, _, _, _)| axis == horizontal)
+                {
                     cx.theme().primary
                 } else {
                     cx.theme().border
@@ -1255,6 +1327,13 @@ impl Qrow {
             .on_action(cx.listener(Self::focus_results))
             .on_action(cx.listener(Self::focus_catalog))
             .on_action(cx.listener(Self::check_for_updates_now))
+            .on_action(cx.listener(Self::switch_to_workspace_action))
+            .on_action(cx.listener(Self::new_workspace_action))
+            .on_action(cx.listener(Self::manage_workspaces_action))
+            .on_action(cx.listener(Self::import_workspace_action))
+            .on_action(cx.listener(Self::export_workspace_action))
+            .on_action(cx.listener(Self::backup_workspace_action))
+            .on_action(cx.listener(Self::reveal_workspace_folder_action))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 if let Some((start, initial)) = this.assistant_state.resizing {
                     if e.pressed_button != Some(MouseButton::Left) {
@@ -1278,28 +1357,42 @@ impl Qrow {
                     this.changed(cx);
                     return;
                 }
-                let Some((horizontal, start, initial)) = this.resize else {
+                let Some((horizontal, start, initial, ref mut moved)) = this.resize else {
                     return;
                 };
                 if e.pressed_button != Some(MouseButton::Left) {
                     this.resize = None;
                     return;
                 }
+                *moved = true;
                 if horizontal {
                     this.sidebar_width = (initial + e.position.x - start.x)
                         .clamp(this.ui_px(180.), this.ui_px(360.));
                 } else {
-                    this.editor_height = (initial + e.position.y - start.y).clamp(
-                        this.ui_px(100.),
-                        window.viewport_size().height - this.ui_px(294.),
-                    );
+                    this.pending_editor_height_ratio = None;
+                    let min_height = this.ui_px(100.);
+                    let max_height =
+                        (window.viewport_size().height - this.ui_px(294.)).max(min_height);
+                    this.editor_height =
+                        (initial + e.position.y - start.y).clamp(min_height, max_height);
                 }
                 cx.notify();
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.resize = None;
+                cx.listener(|this, _, window, cx| {
+                    if let Some((horizontal, _, _, moved)) = this.resize.take()
+                        && moved
+                    {
+                        if !horizontal {
+                            this.editor_height_ratio = Some(ratio_for_editor_height(
+                                this.editor_height,
+                                window.viewport_size().height,
+                                this.settings.ui_scale,
+                            ));
+                        }
+                        this.changed(cx);
+                    }
                     this.assistant_state.resizing = None;
                 }),
             )
@@ -1452,16 +1545,25 @@ impl Render for Qrow {
     /// The workspace: the connections, the query tabs, the editor, and the
     /// results. The window shell around it has the assistant pane.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Apply a restored workspace ratio once the real viewport height is known;
+        // afterwards keep `self.editor_height` fixed in points across window resizes.
+        let viewport_height = window.viewport_size().height;
+        if viewport_height > px(0.)
+            && let Some(ratio) = self.pending_editor_height_ratio.take()
+        {
+            self.editor_height =
+                editor_height_for_ratio(ratio, viewport_height, self.settings.ui_scale);
+        }
         // Split positions are measured window geometry. Clamp without mutating retained state during render.
         let editor_height = self
             .editor_height
-            .min(window.viewport_size().height - self.ui_px(294.))
+            .min(viewport_height - self.ui_px(294.))
             .max(self.ui_px(100.));
         let results_expansion = motion::panel_fraction(
             "query-results",
             !self.settings.results_minimized,
             self.settings.smooth_transitions,
-            self.resize.is_some_and(|(horizontal, _, _)| !horizontal),
+            self.resize.is_some_and(|(horizontal, _, _, _)| !horizontal),
             window,
             cx,
         );
@@ -1472,7 +1574,7 @@ impl Render for Qrow {
             self.sidebar,
             sidebar_width,
             self.settings.smooth_transitions,
-            self.resize.is_some_and(|(horizontal, _, _)| horizontal),
+            self.resize.is_some_and(|(horizontal, _, _, _)| horizontal),
             window,
             cx,
         );

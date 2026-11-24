@@ -261,6 +261,11 @@ impl Activity {
         self.logs.remove(&connection);
     }
 
+    /// Clears all connection logs while preserving the application log.
+    pub fn clear_connections(&mut self) {
+        self.logs.retain(|id, _| *id == APPLICATION);
+    }
+
     pub fn mark_seen(&mut self, connection: Uuid) {
         if let Some(log) = self.logs.get_mut(&connection) {
             log.mark_seen();

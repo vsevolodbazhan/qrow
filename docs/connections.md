@@ -310,7 +310,7 @@ memory reservation until it stops. Failed cleanup closes the session.
   buffer has a 1 MiB limit. Qrow keeps a raw JSON page and decodes one row at a
   time. Decoding and one response page use memory in addition to the retained
   result limits. Direct fetches contain at most 1,000 rows and 48 MiB, with one
-  pending row of up to 16 MiB. See [Export downloaded rows](results.md#export-downloaded-rows).
+  pending row of up to 16 MiB. See [Export all rows](results.md#export-all-rows-and-reuse-a-download).
 - A schema can have 4,096 columns. Column names have a 1 KiB limit, type names
   have a 4 KiB limit, and their combined text has a 1 MiB limit. Session state
   can have 1,024 settings and 256 KiB of text. Each setting or encoded prepared
@@ -399,11 +399,13 @@ provider; the database HTTP client sends no credentials to it.
 
 ## Sign in with OpenID Connect
 
-A sign-in lets connections authenticate with an access token from an OpenID
-Connect provider, for example a Keycloak realm. You sign in once in the
-browser. Several connections can use the same sign-in. Each connection keeps
-its own host, database username, and session settings. Kyuubi checks that the
-signed-in identity can use the database username of the connection.
+A sign-in lets connections in the active workspace authenticate with an access
+token from an OpenID Connect provider, for example a Keycloak realm. Sign-ins
+belong to their workspace and are not shared across workspaces. You sign in
+once in the browser. Several connections in the same workspace can use the same
+sign-in. Each connection keeps its own host, database username, and session
+settings. Kyuubi checks that the signed-in identity can use the database
+username of the connection.
 
 The **Sign-Ins** sidebar shows each saved sign-in with its type, **OIDC**.
 Select a connection to start its sign-in when necessary. A query also starts

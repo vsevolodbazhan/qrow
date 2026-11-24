@@ -1,7 +1,7 @@
 use crate::sync::LockExt as _;
 use crate::{
     catalog::{CATALOG_VERSION, Catalog},
-    model::{WORKSPACE_VERSION, Workspace},
+    model::Workspace,
 };
 use anyhow::{Context, Result};
 use std::{
@@ -14,12 +14,22 @@ use std::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+pub mod migrations;
+pub mod store;
 mod unknown;
+pub mod window;
+use migrations::{ENVELOPE_KEYS, PreservedVersion, WORKSPACE_SPEC};
 use unknown::Unknown;
 
-/// The top-level key that names the Qrow version that last saved the
-/// workspace. It belongs to the file, not to the workspace model.
-const WRITTEN_BY: &str = "written_by";
+pub use store::{
+    DataStore, OpenedStore, SettingsFile, SettingsSaver, backups_directory, data_directory,
+    load_settings, registry_path, resolve_active_workspace_path, resolve_workspace_path_by_name,
+    settings_path, workspace_directory, workspace_file_path, workspace_local_directory,
+};
+pub use window::{
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+    SavedWindowBounds, load_window_bounds, save_window_bounds, window_state_path,
+};
 
 pub fn workspace_path() -> PathBuf {
     if let Some(path) = std::env::var_os("QROW_DATA_DIR") {
@@ -167,7 +177,13 @@ fn linux_workspace_uses_absolute_xdg_data_home() {
 
 /// Read a snapshot without claiming write access, for the read-only probe.
 pub fn load(path: &Path) -> Result<Workspace> {
-    Ok(read(path)?.workspace)
+    Ok(read(path, true)?.workspace)
+}
+
+/// Read an existing workspace snapshot without claiming write access. Fails if
+/// the file does not exist.
+pub fn load_existing(path: &Path) -> Result<Workspace> {
+    Ok(read(path, false)?.workspace)
 }
 
 /// A workspace file as read, with what this build does not know.
@@ -176,32 +192,41 @@ struct Read {
     unknown: Unknown,
     /// The Qrow version that saved the file, if it recorded one.
     written_by: Option<String>,
+    /// Set when the file was migrated upward from an older schema version.
+    migrated_from: Option<u32>,
+    /// Set when the file came from a forward-compatible newer schema.
+    preserved_version: Option<PreservedVersion>,
     data: Vec<u8>,
 }
 
-fn read(path: &Path) -> Result<Read> {
+fn read(path: &Path, allow_missing: bool) -> Result<Read> {
     let data = match fs::read(path) {
         Ok(data) => data,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && allow_missing => {
             return Ok(Read {
                 workspace: Workspace::default(),
                 unknown: Unknown::default(),
                 written_by: None,
+                migrated_from: None,
+                preserved_version: None,
                 data: Vec::new(),
             });
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!(
+                "Saved workspace file is missing at {}; refusing to overwrite it with an empty workspace",
+                path.display()
+            );
+        }
         Err(error) => return Err(error).context("Could not read saved workspace"),
     };
-    let (mut workspace, unknown): (Workspace, Unknown) = Unknown::read(&data, &[WRITTEN_BY])
-        .context("Saved workspace is invalid; the original file has been left untouched")?;
-    let written_by = serde_json::from_slice::<serde_json::Value>(&data)
-        .ok()
-        .and_then(|value| value.get(WRITTEN_BY)?.as_str().map(str::to_owned));
-    anyhow::ensure!(
-        (1..=WORKSPACE_VERSION).contains(&workspace.version),
-        "Unsupported workspace version {}; the file has been left untouched",
-        workspace.version
-    );
+    let mut migrated = migrations::migrate_bytes(&data, &WORKSPACE_SPEC)?;
+    if migrated.original_version == 9 && migrated.preserved_version.is_none() {
+        strip_retired_v9_fields(&mut migrated.value);
+    }
+    let (mut workspace, unknown): (Workspace, Unknown) =
+        Unknown::read_value(&migrated.value, &ENVELOPE_KEYS)
+            .context("Saved workspace is invalid; the original file has been left untouched")?;
     if workspace.tabs.is_empty() {
         workspace.tabs = Workspace::default().tabs;
     }
@@ -211,9 +236,29 @@ fn read(path: &Path) -> Result<Read> {
     Ok(Read {
         workspace,
         unknown,
-        written_by,
+        written_by: migrated.written_by,
+        migrated_from: migrated.migrated_from,
+        preserved_version: migrated.preserved_version,
         data,
     })
+}
+
+/// Drops retired pre-release v9 connection-group and environment-badge fields
+/// so workspaces written during development open cleanly without triggering a
+/// newer-data backup warning.
+fn strip_retired_v9_fields(value: &mut serde_json::Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+    root.remove("groups");
+    if let Some(profiles) = root.get_mut("profiles").and_then(|v| v.as_array_mut()) {
+        for profile in profiles {
+            if let Some(obj) = profile.as_object_mut() {
+                obj.remove("group_id");
+                obj.remove("environment");
+            }
+        }
+    }
 }
 
 /// Exclusive write access. The OS releases the lock even if the process crashes.
@@ -221,6 +266,20 @@ pub struct WorkspaceFile {
     path: PathBuf,
     /// Fields of a newer Qrow that each save keeps.
     unknown: Unknown,
+    /// Higher version metadata kept when saving a forward-compatible newer file.
+    preserved_version: Option<PreservedVersion>,
+    /// When true, `settings` live in `settings.json` and are omitted from
+    /// `workspace.json`.
+    omit_settings: bool,
+    /// When false, a missing workspace file is an error rather than a blank
+    /// default workspace (protects registered workspaces from sync/restore loss).
+    allow_missing: bool,
+    /// Optional backup folder for pre-migration backups. When `None`, pre-migration
+    /// backups are written next to `path`.
+    backup_dir: Option<PathBuf>,
+    /// Optional filename prefix (e.g. workspace UUID) so backups from different
+    /// workspaces never overwrite each other.
+    backup_prefix: Option<String>,
     _lock: fs::File,
 }
 
@@ -250,6 +309,45 @@ impl NewerData {
 
 impl WorkspaceFile {
     pub fn acquire(path: PathBuf) -> Result<Self> {
+        Self::acquire_with(path, false, true, None, None)
+    }
+
+    /// Acquires an existing workspace file managed inside a multi-workspace
+    /// [`DataStore`]. Fails if `workspace.json` is missing so a broken sync or
+    /// restore cannot overwrite it with a blank workspace.
+    pub fn acquire_managed(path: PathBuf, backup_dir: PathBuf, workspace_id: Uuid) -> Result<Self> {
+        Self::acquire_with(
+            path,
+            true,
+            false,
+            Some(backup_dir),
+            Some(workspace_id.to_string()),
+        )
+    }
+
+    /// Acquires a new workspace file inside a [`DataStore`] when creating or
+    /// duplicating a workspace.
+    pub fn acquire_managed_create(
+        path: PathBuf,
+        backup_dir: PathBuf,
+        workspace_id: Uuid,
+    ) -> Result<Self> {
+        Self::acquire_with(
+            path,
+            true,
+            true,
+            Some(backup_dir),
+            Some(workspace_id.to_string()),
+        )
+    }
+
+    fn acquire_with(
+        path: PathBuf,
+        omit_settings: bool,
+        allow_missing: bool,
+        backup_dir: Option<PathBuf>,
+        backup_prefix: Option<String>,
+    ) -> Result<Self> {
         let parent = path.parent().context("Invalid workspace path")?;
         fs::create_dir_all(parent).context("Could not create workspace directory")?;
         let path = parent
@@ -276,6 +374,11 @@ impl WorkspaceFile {
         Ok(Self {
             path,
             unknown: Unknown::default(),
+            preserved_version: None,
+            omit_settings,
+            allow_missing,
+            backup_dir,
+            backup_prefix,
             _lock: lock,
         })
     }
@@ -283,8 +386,22 @@ impl WorkspaceFile {
     /// Reads the workspace. When it has fields that this build does not
     /// know, saves a backup of the file and reports it.
     pub fn load(&mut self) -> Result<(Workspace, Option<NewerData>)> {
-        let read = read(&self.path)?;
-        let newer = if read.unknown.is_empty() {
+        let read = read(&self.path, self.allow_missing)?;
+        if let Some(from_version) = read.migrated_from {
+            let backup_dir = self
+                .backup_dir
+                .as_deref()
+                .or_else(|| self.path.parent())
+                .context("Invalid workspace path")?;
+            let _ = migrations::back_up_version(
+                &self.path,
+                backup_dir,
+                self.backup_prefix.as_deref(),
+                from_version,
+                &read.data,
+            )?;
+        }
+        let newer = if read.unknown.is_empty() && read.preserved_version.is_none() {
             None
         } else {
             Some(NewerData {
@@ -293,23 +410,56 @@ impl WorkspaceFile {
             })
         };
         self.unknown = read.unknown;
+        self.preserved_version = read.preserved_version;
         Ok((read.workspace, newer))
     }
 
     /// Writes `workspace` with the kept fields and the version of this build.
     pub fn save(&self, workspace: &Workspace) -> Result<()> {
+        self.save_to(workspace, &self.path)
+    }
+
+    /// Writes `workspace` to `destination`, restoring any kept unknown fields
+    /// and preserving any newer schema version metadata.
+    pub fn save_to(&self, workspace: &Workspace, destination: &Path) -> Result<()> {
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let mut value = serde_json::to_value(workspace)?;
         self.unknown.restore(&mut value);
-        if let Some(object) = value.as_object_mut() {
-            object.insert(WRITTEN_BY.into(), crate::build_info::RELEASE_VERSION.into());
+        if self.omit_settings
+            && let Some(object) = value.as_object_mut()
+        {
+            object.remove("settings");
         }
-        write_atomically(&self.path, &serde_json::to_vec_pretty(&value)?)
+        migrations::stamp_envelope(&mut value, &WORKSPACE_SPEC, self.preserved_version);
+        write_atomically(destination, &serde_json::to_vec_pretty(&value)?)
     }
+}
+
+/// Outcome of an atomic file replacement, distinguishing pre-rename failures
+/// from post-rename parent-directory sync failures.
+pub(crate) enum AtomicWriteOutcome {
+    /// The new file is published on disk and its parent directory was synced.
+    Published,
+    /// The rename published the new file on disk, but syncing the parent
+    /// directory afterward failed.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    PublishedDirSyncFailed(anyhow::Error),
 }
 
 /// Replace `path` with `data` so that a crash leaves the old or the new file,
 /// never a partial one. Only the owner can read the file.
 pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
+    match write_atomically_tracked(path, data)? {
+        AtomicWriteOutcome::Published => Ok(()),
+        AtomicWriteOutcome::PublishedDirSyncFailed(error) => Err(error),
+    }
+}
+
+/// Like [`write_atomically`], but reports whether the rename already published
+/// `data` on disk if syncing the parent directory fails afterward.
+pub(crate) fn write_atomically_tracked(path: &Path, data: &[u8]) -> Result<AtomicWriteOutcome> {
     let parent = path.parent().context("Invalid file path")?;
     let temporary = TemporaryFile(path.with_extension(format!("{}.tmp", Uuid::new_v4())));
     let mut options = fs::OpenOptions::new();
@@ -326,10 +476,12 @@ pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
     // Unix records the rename durably only after a sync of the folder.
     // Windows cannot open a folder as a file, and NTFS journals the rename.
     #[cfg(unix)]
-    fs::File::open(parent)?.sync_all()?;
+    if let Err(error) = fs::File::open(parent).and_then(|dir| dir.sync_all()) {
+        return Ok(AtomicWriteOutcome::PublishedDirSyncFailed(error.into()));
+    }
     #[cfg(not(unix))]
     let _ = parent;
-    Ok(())
+    Ok(AtomicWriteOutcome::Published)
 }
 
 struct TemporaryFile(PathBuf);
@@ -381,6 +533,7 @@ pub type SaveReceipt = mpsc::Receiver<SaveResult>;
 enum SaveCommand {
     Save(Workspace),
     Flush(Workspace, mpsc::Sender<SaveResult>),
+    Backup(Workspace, PathBuf, mpsc::Sender<SaveResult>),
     Stop,
 }
 
@@ -395,38 +548,66 @@ pub struct Saver {
 impl Saver {
     /// Lock before reading so the initial snapshot cannot come from another writer.
     pub fn open(path: PathBuf, wake: impl Fn() + Send + 'static) -> Result<(Workspace, Self)> {
-        let mut file = WorkspaceFile::acquire(path)?;
+        let file = WorkspaceFile::acquire(path)?;
+        Self::open_file(file, wake)
+    }
+
+    /// Lock and open an existing workspace managed inside a multi-workspace [`DataStore`].
+    pub fn open_managed(
+        path: PathBuf,
+        backup_dir: PathBuf,
+        workspace_id: Uuid,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<(Workspace, Self)> {
+        let file = WorkspaceFile::acquire_managed(path, backup_dir, workspace_id)?;
+        Self::open_file(file, wake)
+    }
+
+    fn open_file(
+        mut file: WorkspaceFile,
+        wake: impl Fn() + Send + 'static,
+    ) -> Result<(Workspace, Self)> {
         let (workspace, newer) = file.load()?;
         let (tx, rx) = mpsc::channel();
         let (errors_tx, errors) = mpsc::channel();
         let handle = thread::spawn(move || {
             let mut pending = None;
             while let Some(command) = pending.take().or_else(|| rx.recv().ok()) {
-                let (mut state, receipt) = match command {
-                    SaveCommand::Save(state) => (state, None),
-                    SaveCommand::Flush(state, receipt) => (state, Some(receipt)),
+                match command {
+                    SaveCommand::Backup(state, destination, receipt) => {
+                        let result = file
+                            .save_to(&state, &destination)
+                            .map_err(|e| format!("Workspace backup failed: {e:#}"));
+                        let _ = receipt.send(result);
+                        wake();
+                        continue;
+                    }
                     SaveCommand::Stop => break,
-                };
-                if receipt.is_none() {
-                    while let Ok(next) = rx.try_recv() {
-                        match next {
-                            SaveCommand::Save(next) => state = next,
-                            next => {
-                                pending = Some(next);
-                                break;
+                    SaveCommand::Save(mut state) => {
+                        while let Ok(next) = rx.try_recv() {
+                            match next {
+                                SaveCommand::Save(next) => state = next,
+                                next => {
+                                    pending = Some(next);
+                                    break;
+                                }
                             }
                         }
+                        if let Err(error) = file
+                            .save(&state)
+                            .map_err(|e| format!("Workspace save failed: {e:#}"))
+                        {
+                            let _ = errors_tx.send(error);
+                            wake();
+                        }
                     }
-                }
-                let result = file
-                    .save(&state)
-                    .map_err(|e| format!("Workspace save failed: {e:#}"));
-                if let Some(receipt) = receipt {
-                    let _ = receipt.send(result);
-                    wake();
-                } else if let Err(error) = result {
-                    let _ = errors_tx.send(error);
-                    wake();
+                    SaveCommand::Flush(state, receipt) => {
+                        let result = file
+                            .save(&state)
+                            .map_err(|e| format!("Workspace save failed: {e:#}"));
+                        let _ = receipt.send(result);
+                        wake();
+                    }
                 }
             }
         });
@@ -452,6 +633,16 @@ impl Saver {
         let (tx, rx) = mpsc::channel();
         self.tx
             .send(SaveCommand::Flush(state, tx))
+            .context("Workspace saver stopped")?;
+        Ok(rx)
+    }
+
+    /// Writes a full backup of `state` to `destination` on the saver thread,
+    /// preserving any unknown fields and newer-version metadata loaded from disk.
+    pub fn backup(&self, state: Workspace, destination: PathBuf) -> Result<SaveReceipt> {
+        let (tx, rx) = mpsc::channel();
+        self.tx
+            .send(SaveCommand::Backup(state, destination, tx))
             .context("Workspace saver stopped")?;
         Ok(rx)
     }
@@ -638,8 +829,14 @@ impl Credentials for Keychain {
     }
 
     fn delete_password(&self, id: Uuid) -> Result<()> {
-        security_framework::passwords::delete_generic_password(PASSWORD_SERVICE, &id.to_string())
-            .context("Could not delete the password from macOS Keychain")
+        match security_framework::passwords::delete_generic_password(
+            PASSWORD_SERVICE,
+            &id.to_string(),
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == ITEM_NOT_FOUND => Ok(()),
+            Err(error) => Err(error).context("Could not delete the password from macOS Keychain"),
+        }
     }
 }
 

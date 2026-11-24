@@ -8,10 +8,29 @@ use qrow::{
 use std::time::{Duration, Instant};
 
 fn main() -> Result<()> {
-    let name = std::env::args()
-        .nth(1)
-        .context("Usage: qrow-probe <saved-profile-name>")?;
-    let workspace = storage::load(&storage::workspace_path())?;
+    let mut args = std::env::args().skip(1);
+    let mut workspace_name = None;
+    let mut profile_name = None;
+    while let Some(arg) = args.next() {
+        if arg == "--workspace" {
+            workspace_name = Some(
+                args.next()
+                    .context("Usage: qrow-probe [--workspace <name>] <saved-profile-name>")?,
+            );
+        } else if profile_name.is_none() {
+            profile_name = Some(arg);
+        } else {
+            anyhow::bail!("Usage: qrow-probe [--workspace <name>] <saved-profile-name>");
+        }
+    }
+    let name =
+        profile_name.context("Usage: qrow-probe [--workspace <name>] <saved-profile-name>")?;
+    let data_dir = storage::data_directory();
+    let workspace_path = match workspace_name {
+        Some(ws) => storage::resolve_workspace_path_by_name(&data_dir, &ws)?,
+        None => storage::resolve_active_workspace_path(&data_dir)?,
+    };
+    let workspace = storage::load(&workspace_path)?;
     let profiles: Vec<_> = workspace
         .profiles
         .iter()

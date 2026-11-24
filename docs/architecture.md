@@ -12,10 +12,10 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [Application](../src/main.rs) | Select the user or demo environment and open the window. |
 | [UI entry points](../src/ui.rs) | Initialize GPUI Kit, themes, the SQL language, key bindings, and menus. Wrap the root view. |
 | [Shortcuts](../src/ui/shortcuts.rs) | List the commands that can have a shortcut and their defaults. Build the keymap from GPUI Kit's bindings and the user's changes, and set the menus again. The [Shortcuts page](../src/ui/shortcuts_page.rs) records and checks new shortcuts. |
-| [UI environment](../src/ui/environment.rs) | Select the workspace file, the password and token stores, and the trusted certificate authorities of a window. |
-| [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, Logs history, and commands. |
+| [UI environment](../src/ui/environment.rs) | Select the data directory, workspace store, password and token stores, and trusted certificate authorities of a window. |
+| [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, workspace switching, worker events, Logs history, and commands. |
 | [Export](../src/export.rs) | Keep shared preview snapshots, write CSV, and publish complete files. |
-| [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
+| [UI modules](../src/ui/) | Present workspace layout, workspace management, forms, settings, results, and Logs history. |
 | [Logs model](../src/logs.rs) | Group Logs entries, apply retention, and define panel transitions. |
 | [Activity model](../src/activity.rs) | Keep the Activity log of each connection, choose what goes to tab Logs, and count unseen errors. |
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |
@@ -30,7 +30,8 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [TLS](../src/tls.rs) | Verify servers against the system trust store, with the Windows certificate verifier on Windows, or a synthetic authority in tests. |
 | [Sign-ins](../src/oidc/) | Run the OpenID Connect browser sign-in, validate ID tokens, and give access tokens to connections. |
 | [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
-| [Storage](../src/storage.rs) | Lock and save the workspace. Define the password and token stores and their macOS Keychain implementation. |
+| [Storage](../src/storage.rs) | Manage `settings.json`, `workspaces.json`, per-workspace locks and background savers, machine-local `window.json`, sequential [schema migrations](../src/storage/migrations.rs), and password and token stores. |
+| [Workspace export](../src/model/workspace_export.rs) | Export and import portable `.qrow-workspace.json` bundles with an explicit field whitelist and fresh identifiers. |
 | [Updates](../src/update.rs) | Find a newer release of the build channel, verify its signed checksums and package, and install the Linux archive or the macOS DMG, or run the Windows installer. Detect installations that a package manager owns. |
 | [Update UI](../src/ui/updates.rs) | Run the daily check, download in the background, show the update toasts and the About status, restart into the new version, and report an update that did not install. |
 

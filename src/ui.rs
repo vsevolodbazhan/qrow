@@ -37,6 +37,7 @@ mod toast;
 mod unit_input;
 mod updates;
 mod workspace_view;
+mod workspaces;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
 pub use environment::{Browser, Environment};
@@ -132,12 +133,22 @@ actions!(
         FocusEditor,
         FocusResults,
         FocusCatalog,
-        CheckForUpdates
+        CheckForUpdates,
+        NewWorkspace,
+        ManageWorkspaces,
+        ImportWorkspace,
+        ExportWorkspace,
+        BackupWorkspace,
+        RevealWorkspaceFolder,
+        SubmitWorkspaceName
     ]
 );
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = qrow, no_json)]
 struct SelectTab(usize);
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = qrow, no_json)]
+pub struct SwitchToWorkspace(pub Uuid);
 
 /// Initializes GPUI Kit, themes, the SQL language, key bindings, and menus.
 /// Call once before opening a Qrow window.
@@ -236,6 +247,31 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         name: "View".into(),
         items: view,
     });
+    let (workspaces, active_workspace) = shortcuts::workspace_menu(cx);
+    if !workspaces.is_empty() {
+        let mut items: Vec<MenuItem> = workspaces
+            .into_iter()
+            .map(|(id, name)| {
+                MenuItem::action(name, SwitchToWorkspace(id)).checked(active_workspace == Some(id))
+            })
+            .collect();
+        items.push(MenuItem::separator());
+        items.push(MenuItem::action("New workspace…", NewWorkspace));
+        items.push(MenuItem::action("Manage workspaces…", ManageWorkspaces));
+        items.push(MenuItem::separator());
+        items.push(MenuItem::action("Import workspace…", ImportWorkspace));
+        items.push(MenuItem::action("Export workspace…", ExportWorkspace));
+        items.push(MenuItem::action("Back up workspace…", BackupWorkspace));
+        items.push(MenuItem::action(
+            "Reveal workspace folder",
+            RevealWorkspaceFolder,
+        ));
+        menus.push(Menu {
+            disabled: false,
+            name: "Workspace".into(),
+            items,
+        });
+    }
     cx.set_menus(menus);
 }
 /// The panel of the left sidebar.
@@ -243,6 +279,45 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
 enum SidebarPanel {
     Connections,
     SignIns,
+}
+
+impl From<crate::model::SavedSidebarPanel> for SidebarPanel {
+    fn from(panel: crate::model::SavedSidebarPanel) -> Self {
+        match panel {
+            crate::model::SavedSidebarPanel::Connections => Self::Connections,
+            crate::model::SavedSidebarPanel::SignIns => Self::SignIns,
+        }
+    }
+}
+
+impl From<SidebarPanel> for crate::model::SavedSidebarPanel {
+    fn from(panel: SidebarPanel) -> Self {
+        match panel {
+            SidebarPanel::Connections => Self::Connections,
+            SidebarPanel::SignIns => Self::SignIns,
+        }
+    }
+}
+
+/// Computes the vertical space available to the editor + results split.
+fn split_vertical_space(viewport_height: Pixels, scale: f32) -> f32 {
+    (f32::from(viewport_height) - 194. * scale).max(200. * scale)
+}
+
+/// Converts a saved `editor_height_ratio` into pixel height for `viewport_height`.
+fn editor_height_for_ratio(ratio: f32, viewport_height: Pixels, scale: f32) -> Pixels {
+    let available = split_vertical_space(viewport_height, scale);
+    let max_editor = (f32::from(viewport_height) - 294. * scale).max(100. * scale);
+    px((available * ratio).clamp(100. * scale, max_editor))
+}
+
+/// Converts a pixel `editor_height` back to a clamped `editor_height_ratio`.
+fn ratio_for_editor_height(editor_height: Pixels, viewport_height: Pixels, scale: f32) -> f32 {
+    let available = split_vertical_space(viewport_height, scale);
+    (f32::from(editor_height) / available).clamp(
+        crate::model::MIN_EDITOR_HEIGHT_RATIO,
+        crate::model::MAX_EDITOR_HEIGHT_RATIO,
+    )
 }
 
 struct Tab {
@@ -745,6 +820,15 @@ fn panel_empty_state(message: impl Into<SharedString>, cx: &App) -> Div {
         .child(message.into())
 }
 
+struct PendingQuit {
+    workspace: Workspace,
+    workspace_receipt: storage::SaveReceipt,
+    workspace_done: Option<storage::SaveResult>,
+    settings: Settings,
+    settings_receipt: Option<storage::SaveReceipt>,
+    settings_done: Option<storage::SaveResult>,
+}
+
 pub struct Qrow {
     settings: Settings,
     assistant: AssistantWorkspace,
@@ -793,11 +877,24 @@ pub struct Qrow {
     /// for suggestions, so that a cursor move or an edit does not read the
     /// whole SQL again.
     completion_statements: Option<(Uuid, crate::completion::Statements)>,
+    store: Option<storage::DataStore>,
+    settings_saver: Option<storage::SettingsSaver>,
+    last_saved_settings: Option<Settings>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
     message: Option<String>,
     demo: bool,
     credentials: Arc<dyn storage::Credentials>,
+    tokens: Arc<dyn storage::TokenStore>,
+    browser: Option<environment::Browser>,
+    workspace_manager_open: bool,
+    workspace_manager_selected: Option<Uuid>,
+    workspace_manager_focus: FocusHandle,
+    workspace_manager_scroll: ScrollHandle,
+    workspace_name_form: Option<workspaces::WorkspaceNameForm>,
+    export_workspace_form: Option<workspaces::ExportWorkspaceForm>,
+    workspace_switch_warning_open: bool,
+    workspace_summaries: std::collections::HashMap<Uuid, (usize, usize)>,
     /// Reusable sign-ins. The service owns their tokens and identities.
     sign_ins: Vec<crate::model::SignIn>,
     oidc: Arc<oidc::Service>,
@@ -811,14 +908,19 @@ pub struct Qrow {
     /// The focus inside the sidebar, which a hidden sidebar gives back.
     sidebar_focus: FocusHandle,
     editor_height: Pixels,
-    resize: Option<(bool, Point<Pixels>, Pixels)>,
+    editor_height_ratio: Option<f32>,
+    pending_editor_height_ratio: Option<f32>,
+    resize: Option<(bool, Point<Pixels>, Pixels, bool)>,
+    window_state_path: Option<std::path::PathBuf>,
+    window_bounds_dirty: Option<(Instant, storage::SavedWindowBounds)>,
     focus: FocusHandle,
     _quit: Subscription,
     _appearance: Subscription,
+    _window_bounds: Subscription,
     /// Gives the focus back when the focused element leaves the window.
     _focus_lost: Subscription,
     _assistant_submit: Subscription,
-    pending_quit: Option<(Workspace, storage::SaveReceipt)>,
+    pending_quit: Option<PendingQuit>,
     quit_warning_open: bool,
     quit_work_confirmed: bool,
     quit_confirmed: bool,
@@ -868,26 +970,78 @@ impl Qrow {
         } else {
             (None, None)
         };
-        let (mut workspace, mut message, saver) = if let Some(path) = environment.workspace() {
-            let path = path.clone();
-            match Saver::open(path, move || {
-                let _ = save_wake.try_send(());
-            }) {
-                Ok((workspace, saver)) => {
-                    let notice = saver.newer.as_ref().map(storage::NewerData::notice);
-                    (workspace, notice, Some(saver))
+        let (mut workspace, mut message, store, settings_saver, saver, workspace_local) =
+            if let Some(data_dir) = environment.data_directory() {
+                let data_dir = data_dir.clone();
+                let local_dir = environment
+                    .local_directory()
+                    .cloned()
+                    .unwrap_or_else(|| data_dir.clone());
+                match storage::DataStore::open(data_dir, local_dir, move || {
+                    let _ = save_wake.try_send(());
+                }) {
+                    Ok(opened) => {
+                        let mut workspace = opened.workspace;
+                        workspace.settings = opened.settings;
+                        let notice = (!opened.notices.is_empty()).then(|| opened.notices.join(" "));
+                        let local = Some(opened.store.active_local_directory());
+                        (
+                            workspace,
+                            notice,
+                            Some(opened.store),
+                            Some(opened.settings_saver),
+                            Some(opened.workspace_saver),
+                            local,
+                        )
+                    }
+                    Err(e) => (
+                        Workspace::default(),
+                        Some(format!(
+                            "Cannot open workspace: {e}. Saving disabled to protect the existing file."
+                        )),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
                 }
-                Err(e) => (
-                    Workspace::default(),
-                    Some(format!(
-                        "Cannot open workspace: {e}. Saving disabled to protect the existing file."
-                    )),
+            } else if let Some(path) = environment.workspace() {
+                let path = path.clone();
+                match Saver::open(path, move || {
+                    let _ = save_wake.try_send(());
+                }) {
+                    Ok((workspace, saver)) => {
+                        let notice = saver.newer.as_ref().map(storage::NewerData::notice);
+                        (
+                            workspace,
+                            notice,
+                            None,
+                            None,
+                            Some(saver),
+                            environment.local_directory().cloned(),
+                        )
+                    }
+                    Err(e) => (
+                        Workspace::default(),
+                        Some(format!(
+                            "Cannot open workspace: {e}. Saving disabled to protect the existing file."
+                        )),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                }
+            } else {
+                (
+                    demo_workspace(demo_manifest.as_ref()),
+                    demo_error,
                     None,
-                ),
-            }
-        } else {
-            (demo_workspace(demo_manifest.as_ref()), demo_error, None)
-        };
+                    None,
+                    None,
+                    None,
+                )
+            };
         let fonts = installed_fonts(cx);
         workspace.normalize();
         workspace.settings.sanitize();
@@ -1018,8 +1172,7 @@ impl Qrow {
                 editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
         });
-        let mut catalog =
-            catalog_tree::CatalogTree::new(environment.local_directory().cloned(), window, cx);
+        let mut catalog = catalog_tree::CatalogTree::new(workspace_local.clone(), window, cx);
         catalog.scope = workspace.search_scope.clone();
         let catalog_subscriptions = [
             cx.subscribe(
@@ -1039,21 +1192,33 @@ impl Qrow {
         // The saved dbt indexes are in the local data directory, which the
         // workspace lock protects. Without a saved workspace, they stay in
         // memory.
-        let dbt_directory = environment
-            .local_directory()
+        let dbt_directory = workspace_local
+            .as_ref()
             .filter(|_| saver.is_some() && !demo)
             .map(|local| storage::dbt_index_directory(local));
         let dbt = dbt::DbtProjects::new(dbt_directory, wake.clone());
         // Assistant transcripts follow the same rule as the dbt indexes.
         assistant_state.store = assistant_view::transcript_store(
-            environment
-                .local_directory()
-                .filter(|_| saver.is_some() && !demo)
-                .map(|local| local.as_path()),
+            workspace_local
+                .as_deref()
+                .filter(|_| saver.is_some() && !demo),
         );
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
         });
+        let window_bounds_sub = cx.observe_window_bounds(window, |this, window, cx| {
+            this.record_window_bounds(window, cx);
+        });
+        let initial_layout = workspace.layout.clone().unwrap_or_default();
+        let initial_editor_height = initial_layout
+            .editor_height_ratio
+            .map(|ratio| editor_height_for_ratio(ratio, window.viewport_size().height, scale))
+            .unwrap_or_else(|| px(285. * scale));
+        let window_state_path = environment
+            .local_directory()
+            .filter(|_| !demo && saver.is_some())
+            .map(|local| storage::window_state_path(local));
+        let last_saved_settings = Some(workspace.settings.clone());
         let mut this = Self {
             settings: workspace.settings,
             assistant: workspace.assistant,
@@ -1083,25 +1248,43 @@ impl Qrow {
             completion: None,
             completion_reads: std::collections::HashMap::new(),
             completion_statements: None,
+            store,
+            settings_saver,
+            last_saved_settings,
             saver,
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
             message,
             demo,
             credentials: environment.credentials(),
+            tokens: environment.tokens(),
+            browser: environment.browser(),
+            workspace_manager_open: false,
+            workspace_manager_selected: None,
+            workspace_manager_focus: cx.focus_handle().tab_stop(true),
+            workspace_manager_scroll: ScrollHandle::new(),
+            workspace_name_form: None,
+            export_workspace_form: None,
+            workspace_switch_warning_open: false,
+            workspace_summaries: std::collections::HashMap::new(),
             sign_ins: workspace.sign_ins,
             oidc,
             external_auth,
             sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
             connector: Arc::new(DatabaseConnector::new(environment.trust())),
-            sidebar: true,
-            sidebar_panel: SidebarPanel::Connections,
-            sidebar_width: px(240. * scale),
+            sidebar: initial_layout.sidebar_open,
+            sidebar_panel: initial_layout.sidebar_panel.into(),
+            sidebar_width: px(initial_layout.sidebar_width * scale),
             sidebar_focus: cx.focus_handle(),
-            editor_height: px(285. * scale),
+            editor_height: initial_editor_height,
+            editor_height_ratio: initial_layout.editor_height_ratio,
+            pending_editor_height_ratio: initial_layout.editor_height_ratio,
             resize: None,
+            window_state_path,
+            window_bounds_dirty: None,
             focus: cx.focus_handle(),
             _quit: quit,
             _appearance: appearance,
+            _window_bounds: window_bounds_sub,
             _focus_lost: focus_lost,
             _assistant_submit: assistant_submit,
             pending_quit: None,
@@ -1149,6 +1332,7 @@ impl Qrow {
             this.expand_demo_catalog();
         }
         this.rebuild_catalog_tree(cx);
+        this.sync_workspace_menus(cx);
         this.tabs[this.active]
             .input
             .update(cx, |s, cx| s.focus(window, cx));
@@ -1304,6 +1488,81 @@ impl Qrow {
                 .row_selectable(false)
         })
     }
+    pub(super) fn current_layout(&self) -> crate::model::WorkspaceLayout {
+        let mut layout = crate::model::WorkspaceLayout {
+            sidebar_open: self.sidebar,
+            sidebar_panel: self.sidebar_panel.into(),
+            sidebar_width: f32::from(self.sidebar_width) / self.settings.ui_scale,
+            editor_height_ratio: self.editor_height_ratio,
+        };
+        layout.sanitize();
+        layout
+    }
+
+    pub(super) fn apply_workspace_layout(
+        &mut self,
+        layout: Option<crate::model::WorkspaceLayout>,
+        window: &Window,
+    ) {
+        let mut layout = layout.unwrap_or_default();
+        layout.sanitize();
+        let scale = self.settings.ui_scale;
+        self.sidebar = layout.sidebar_open;
+        self.sidebar_panel = layout.sidebar_panel.into();
+        self.sidebar_width = px(layout.sidebar_width * scale);
+        self.editor_height_ratio = layout.editor_height_ratio;
+        let viewport_height = window.viewport_size().height;
+        if viewport_height > px(0.) {
+            self.pending_editor_height_ratio = None;
+            self.editor_height = layout
+                .editor_height_ratio
+                .map(|ratio| editor_height_for_ratio(ratio, viewport_height, scale))
+                .unwrap_or_else(|| px(285. * scale));
+        } else {
+            self.pending_editor_height_ratio = layout.editor_height_ratio;
+            self.editor_height = px(285. * scale);
+        }
+    }
+
+    fn record_window_bounds(&mut self, window: &Window, cx: &App) {
+        if self.window_state_path.is_none() {
+            return;
+        }
+        let wb = window.window_bounds();
+        let maximized = matches!(wb, WindowBounds::Maximized(_));
+        if matches!(wb, WindowBounds::Fullscreen(_)) {
+            return;
+        }
+        let rect = wb.get_bounds();
+        let display_uuid = window.display(cx).and_then(|display| display.uuid().ok());
+        let bounds = storage::SavedWindowBounds {
+            x: f32::from(rect.origin.x),
+            y: f32::from(rect.origin.y),
+            width: f32::from(rect.size.width),
+            height: f32::from(rect.size.height),
+            maximized,
+            display_uuid,
+        };
+        if bounds.is_finite_and_sized() {
+            self.window_bounds_dirty = Some((Instant::now(), bounds));
+            let _ = self.wake.try_send(());
+        }
+    }
+
+    fn flush_window_bounds(&mut self, force: bool) -> bool {
+        let Some((since, bounds)) = self.window_bounds_dirty else {
+            return false;
+        };
+        if !force && since.elapsed() < Duration::from_millis(500) {
+            return true;
+        }
+        self.window_bounds_dirty = None;
+        if let Some(path) = &self.window_state_path {
+            let _ = storage::save_window_bounds(path, bounds);
+        }
+        false
+    }
+
     fn snapshot(&self, cx: &App) -> Workspace {
         Workspace {
             version: WORKSPACE_VERSION,
@@ -1328,6 +1587,7 @@ impl Qrow {
             active_tabs: self.active_tabs.clone(),
             sign_ins: self.sign_ins.clone(),
             search_scope: self.catalog.scope.clone(),
+            layout: Some(self.current_layout()),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -1335,6 +1595,7 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        self.flush_window_bounds(true);
         cx.global::<crate::export::Jobs>().cancel();
         self.sign_in_ui.cancel_all();
         self.assistant_state.save_transcripts = None;
@@ -1354,6 +1615,16 @@ impl Qrow {
             );
         } else {
             self.assistant_state.shutdown();
+        }
+        if let Some(mut settings_saver) = self.settings_saver.take() {
+            let result = if self.quit_confirmed {
+                settings_saver.stop()
+            } else {
+                settings_saver.finish(self.settings.clone())
+            };
+            if let Err(error) = result {
+                eprintln!("Could not save settings during native termination: {error:#}");
+            }
         }
         if let Some(mut saver) = self.saver.take() {
             let result = if self.quit_confirmed {
@@ -1492,20 +1763,33 @@ impl Qrow {
             return;
         }
         let snapshot = self.snapshot(cx);
-        let result = self
+        let settings = self.settings.clone();
+        let workspace_result = self
             .saver
             .as_ref()
             .ok_or_else(|| {
                 anyhow::anyhow!("Workspace saving is disabled. Your edits have not been saved.")
             })
             .and_then(|saver| saver.flush(snapshot.clone()));
-        match result {
-            Ok(receipt) => {
-                self.pending_quit = Some((snapshot, receipt));
+        let settings_result = match &self.settings_saver {
+            Some(saver) => saver.flush(settings.clone()).map(Some),
+            None => Ok(None),
+        };
+        match (workspace_result, settings_result) {
+            (Ok(workspace_receipt), Ok(settings_receipt)) => {
+                let settings_done = settings_receipt.is_none().then_some(Ok(()));
+                self.pending_quit = Some(PendingQuit {
+                    workspace: snapshot,
+                    workspace_receipt,
+                    workspace_done: None,
+                    settings,
+                    settings_receipt,
+                    settings_done,
+                });
                 self.message = Some("Saving workspace before quitting…".into());
                 let _ = self.wake.try_send(());
             }
-            Err(error) => self.quit_failed(format!("{error:#}"), window, cx),
+            (Err(error), _) | (_, Err(error)) => self.quit_failed(format!("{error:#}"), window, cx),
         }
         cx.notify();
     }
@@ -1662,6 +1946,7 @@ impl Qrow {
         changed |= self.autosave(cx);
         changed |= self.finish_profile_save(window, cx);
         changed |= self.finish_quit(window, cx);
+        let window_bounds_pending = self.flush_window_bounds(false);
         self.sync_catalog_warmth();
         if changed {
             cx.notify();
@@ -1670,6 +1955,7 @@ impl Qrow {
             || catalog_calls
             || self.pending_quit.is_some()
             || self.form.as_ref().is_some_and(|f| f.saving.is_some())
+            || window_bounds_pending
     }
     /// Applies the Logs entries and the events that the tab workers sent.
     /// Each entry also goes to the Activity of the connection of the tab.
@@ -2050,17 +2336,35 @@ impl Qrow {
             .dirty
             .is_some_and(|t| t.elapsed() >= Duration::from_millis(400))
         {
-            if self.pending_quit.is_none()
-                && let Some(saver) = &self.saver
-                && let Err(error) = saver.save(self.snapshot(cx))
-            {
-                self.message = Some(format!("{error:#}"));
+            if self.pending_quit.is_none() {
+                if let Some(settings_saver) = &self.settings_saver
+                    && self.last_saved_settings.as_ref() != Some(&self.settings)
+                {
+                    if let Err(error) = settings_saver.save(self.settings.clone()) {
+                        self.last_saved_settings = None;
+                        self.message = Some(format!("{error:#}"));
+                    } else {
+                        self.last_saved_settings = Some(self.settings.clone());
+                    }
+                }
+                if let Some(saver) = &self.saver
+                    && let Err(error) = saver.save(self.snapshot(cx))
+                {
+                    self.message = Some(format!("{error:#}"));
+                }
             }
             self.dirty = None;
             changed = true;
         }
         if let Some(saver) = &self.saver {
             for error in saver.errors.try_iter() {
+                self.message = Some(error);
+                changed = true;
+            }
+        }
+        if let Some(settings_saver) = &self.settings_saver {
+            for error in settings_saver.errors.try_iter() {
+                self.last_saved_settings = None;
                 self.message = Some(error);
                 changed = true;
             }
@@ -2205,23 +2509,53 @@ impl Qrow {
     }
     /// Quits after the final save, or reports a failed save.
     fn finish_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let quit_result =
-            self.pending_quit
-                .as_ref()
-                .and_then(|(_, receipt)| match receipt.try_recv() {
-                    Ok(result) => Some(result),
-                    Err(mpsc::TryRecvError::Empty) => None,
-                    Err(mpsc::TryRecvError::Disconnected) => Some(Err(
-                        "Workspace saver stopped before confirming the save".into(),
-                    )),
-                });
-        let Some(result) = quit_result else {
+        let Some(pending) = &mut self.pending_quit else {
             return false;
         };
-        let (saved, _) = self.pending_quit.take().unwrap();
+        if pending.workspace_done.is_none() {
+            match pending.workspace_receipt.try_recv() {
+                Ok(result) => pending.workspace_done = Some(result),
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    pending.workspace_done = Some(Err(
+                        "Workspace saver stopped before confirming the save".into(),
+                    ));
+                }
+            }
+        }
+        if pending.settings_done.is_none()
+            && let Some(receipt) = &pending.settings_receipt
+        {
+            match receipt.try_recv() {
+                Ok(result) => pending.settings_done = Some(result),
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    pending.settings_done = Some(Err(
+                        "Settings saver stopped before confirming the save".into(),
+                    ));
+                }
+            }
+        }
+        if pending.workspace_done.is_none() || pending.settings_done.is_none() {
+            return false;
+        }
+        let pending = self.pending_quit.take().unwrap();
+        let workspace_done = pending.workspace_done.unwrap();
+        let settings_done = pending.settings_done.unwrap();
+        match &settings_done {
+            Ok(()) if pending.settings_receipt.is_some() => {
+                self.last_saved_settings = Some(pending.settings.clone());
+            }
+            Err(_) => {
+                self.last_saved_settings = None;
+            }
+            Ok(()) => {}
+        }
+        let result = workspace_done.and(settings_done);
         match result {
             Ok(())
-                if saved == self.snapshot(cx)
+                if pending.workspace == self.snapshot(cx)
+                    && pending.settings == self.settings
                     && !self.form.as_ref().is_some_and(|f| f.saving.is_some()) =>
             {
                 self.quit_confirmed = true;
@@ -2308,6 +2642,10 @@ impl Qrow {
             || self.result_form.is_some()
             || self.assistant_state.rename_form.is_some()
             || self.sign_in_ui.editor.is_some()
+            || self.workspace_manager_open
+            || self.workspace_name_form.is_some()
+            || self.export_workspace_form.is_some()
+            || self.workspace_switch_warning_open
     }
     fn select_tab(&mut self, action: &SelectTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -3170,13 +3508,13 @@ impl Qrow {
                 .any(|tab| tab.saved.profile == Some(id) && tab.can_disconnect());
         let disconnect =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.disconnect_profile(id, cx));
-        let ix = self
+        let index = self
             .profiles
             .iter()
-            .position(|profile| profile.id == id)
-            .unwrap();
-        let first = ix == 0;
-        let last = ix + 1 == self.profiles.len();
+            .position(|candidate| candidate.id == id)
+            .unwrap_or(0);
+        let first = index == 0;
+        let last = index + 1 >= self.profiles.len();
         let move_up =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.move_connection(id, false, cx));
         let move_down =
@@ -4411,6 +4749,7 @@ fn demo_workspace(manifest: Option<&tempfile::NamedTempFile>) -> Workspace {
         shared_catalogs,
         sign_ins: vec![],
         search_scope: Default::default(),
+        layout: None,
     }
 }
 

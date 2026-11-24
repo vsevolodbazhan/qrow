@@ -607,6 +607,7 @@ fn base_commands() -> Vec<Command> {
                 (SaveConnection, Some("ConnectionSettings")),
                 (SaveSignIn, Some("SignInSettings")),
                 (SubmitRename, Some("RenameDialog")),
+                (SubmitWorkspaceName, Some("WorkspaceNameDialog")),
             ]
         ),
         command!(
@@ -680,6 +681,46 @@ fn base_commands() -> Vec<Command> {
             [(FocusCatalog, None)]
         ),
         command!(
+            "new_workspace",
+            "New Workspace",
+            Application,
+            Window,
+            Unset,
+            [(NewWorkspace, None)]
+        ),
+        command!(
+            "manage_workspaces",
+            "Manage Workspaces",
+            Application,
+            Window,
+            Unset,
+            [(ManageWorkspaces, None)]
+        ),
+        command!(
+            "import_workspace",
+            "Import Workspace",
+            Application,
+            Window,
+            Unset,
+            [(ImportWorkspace, None)]
+        ),
+        command!(
+            "export_workspace",
+            "Export Workspace",
+            Application,
+            Window,
+            Unset,
+            [(ExportWorkspace, None)]
+        ),
+        command!(
+            "backup_workspace",
+            "Back Up Workspace",
+            Application,
+            Window,
+            Unset,
+            [(BackupWorkspace, None)]
+        ),
+        command!(
             "check_for_updates",
             "Check for Updates",
             Application,
@@ -744,6 +785,8 @@ impl Global for KitBindings {}
 /// The state that the menu bar needs when the shortcuts change.
 struct MenuState {
     assistant_enabled: bool,
+    workspaces: Vec<(Uuid, String)>,
+    active_workspace: Option<Uuid>,
 }
 
 impl Global for MenuState {}
@@ -774,6 +817,8 @@ pub(super) fn init(cx: &mut App) {
     cx.set_global(KitBindings { bindings, defaults });
     cx.set_global(MenuState {
         assistant_enabled: false,
+        workspaces: Vec::new(),
+        active_workspace: None,
     });
 }
 
@@ -1023,6 +1068,26 @@ pub(super) fn set_assistant_menu(cx: &mut App, assistant_enabled: bool) {
     if cx.has_global::<MenuState>() {
         cx.global_mut::<MenuState>().assistant_enabled = assistant_enabled;
     }
+}
+
+/// Remember the registered workspaces for the native Workspace menu.
+pub(super) fn set_workspace_menu(
+    cx: &mut App,
+    workspaces: Vec<(Uuid, String)>,
+    active_workspace: Option<Uuid>,
+) {
+    if cx.has_global::<MenuState>() {
+        let state = cx.global_mut::<MenuState>();
+        state.workspaces = workspaces;
+        state.active_workspace = active_workspace;
+    }
+}
+
+/// Return the workspaces and active workspace ID for the native Workspace menu.
+pub(super) fn workspace_menu(cx: &App) -> (Vec<(Uuid, String)>, Option<Uuid>) {
+    cx.try_global::<MenuState>()
+        .map(|state| (state.workspaces.clone(), state.active_workspace))
+        .unwrap_or_default()
 }
 
 /// The UI scale change that `pressed` asks for. The window handles the

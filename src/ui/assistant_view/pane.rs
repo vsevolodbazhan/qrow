@@ -250,6 +250,26 @@ impl AssistantPane {
         }
     }
 
+    /// Clears workspace-specific composer draft, thread search, and cached
+    /// transcript rows when switching workspaces.
+    pub(in crate::ui) fn reset_for_workspace(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.thread_search
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.lowercase.borrow_mut().clear();
+        self.thread_list_override = None;
+        self.rows = TranscriptRows::default();
+        self.message_views = MessageViews::default();
+        self.order_shift = 0;
+        self.transcript.update(cx, |list, cx| list.reset(0, cx));
+        cx.notify();
+    }
+
     /// Closes the thread list of a narrow pane after you select a conversation.
     pub fn thread_selected(&mut self, cx: &mut Context<Self>) {
         self.thread_list_override = thread_list_after_selection(self.thread_list_override);
