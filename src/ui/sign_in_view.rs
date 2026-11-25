@@ -168,9 +168,17 @@ pub(super) struct SignInWait {
 /// The sign-in to open in the browser after a sign-in error of `tab`, and the
 /// SQL to run after it. A query that already ran after an automatic sign-in
 /// gets none, so a sign-in that does not help ends in an error. A query that
-/// the user cancelled gets none, so it does not run after the sign-in.
-pub(super) fn automatic_sign_in(tab: &Tab, profiles: &[Profile]) -> Option<(Uuid, String)> {
-    if tab.signed_in_for_run || tab.cancelling || tab.batch_completed_any {
+/// the user cancelled, or a multi-statement run that already advanced past its
+/// first statement, gets none so completed statements are never replayed.
+pub(super) fn automatic_sign_in(
+    tab: &Tab,
+    queued_events: &[Event],
+    profiles: &[Profile],
+) -> Option<(Uuid, String)> {
+    let advanced_in_queue = queued_events
+        .iter()
+        .any(|event| matches!(event, Event::StatementStarted { index, .. } if *index > 1));
+    if tab.signed_in_for_run || tab.cancelling || tab.batch_completed_any || advanced_in_queue {
         return None;
     }
     let authentication = profiles

@@ -2007,7 +2007,7 @@ impl Qrow {
                         }
                     )
                 })
-                .then(|| sign_in_view::automatic_sign_in(tab, &self.profiles))
+                .then(|| sign_in_view::automatic_sign_in(tab, &events, &self.profiles))
                 .flatten();
             let logs: Vec<_> = tab
                 .worker
