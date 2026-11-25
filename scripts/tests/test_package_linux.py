@@ -18,6 +18,8 @@ class LinuxPackageTest(unittest.TestCase):
             (root / "tools").mkdir()
             (root / "scripts/package/linux.sh").write_bytes((ROOT / "scripts/package/linux.sh").read_bytes())
             (root / "assets/app-icons/qrow-256.png").write_bytes(b"synthetic icon")
+            (root / "assets/linux").mkdir()
+            (root / "assets/linux/qrow.desktop").write_bytes((ROOT / "assets/linux/qrow.desktop").read_bytes())
             for name in ("LICENSE", "NOTICE"):
                 (root / name).write_text("synthetic notice")
             commands = {
@@ -38,6 +40,9 @@ class LinuxPackageTest(unittest.TestCase):
                 files = {member.name.removeprefix("./") for member in bundle.getmembers()}
                 self.assertTrue({"bin/qrow", "share/applications/qrow.desktop", "share/icons/hicolor/256x256/apps/qrow.png", "share/licenses/qrow/THIRD_PARTY_NOTICES.txt"} <= files)
                 self.assertEqual(bundle.extractfile("./bin/qrow").read(), b"synthetic-binary")
+                desktop = bundle.extractfile("./share/applications/qrow.desktop").read().decode()
+                self.assertIn("\nExec=qrow\n", desktop)
+                self.assertIn("\nIcon=qrow\n", desktop)
                 directories = {member.name: member.mode for member in bundle.getmembers() if member.isdir()}
                 self.assertEqual(directories["."], 0o755)
                 self.assertTrue(all(mode & 0o755 == 0o755 and not mode & 0o022 for mode in directories.values()))

@@ -401,6 +401,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
         # Users verify downloads with the key in the installation guide.
         self.assertEqual(read("docs/installation.md").count(public_key), 2)
 
+    def test_aur_gets_each_release_after_publication(self):
+        binary, source = job("aur", RELEASE), job("aur-source", RELEASE)
+        # Both channels update the binary package. Only stable releases update qrow.
+        self.assertNotIn("if:", binary.split("steps:")[0])
+        self.assertIn("if: inputs.channel == 'stable'", source.split("steps:")[0])
+        self.assertIn("--package bin --sums", binary)
+        self.assertIn('--package source --commit "$TARGET_SHA"', source)
+        for body in (binary, source):
+            self.assertEqual(needs(body), ["resolve-target", "publish"])
+            self.assertIn("environment: release", body)
+            self.assertIn("AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}", body)
+            # The package is built and checked before the push.
+            self.assertLess(body.index("sh scripts/package/aur-build.sh aur"),
+                            body.index("sh scripts/package/aur-push.sh aur"))
+        # Only the pinned host key is trusted.
+        push = read("scripts/package/aur-push.sh")
+        self.assertIn("StrictHostKeyChecking=yes", push)
+        self.assertIn("aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN",
+                      push)
+        self.assertNotIn("ssh-keyscan", push)
+
 
 
 class WebsiteWorkflowTests(unittest.TestCase):

@@ -504,3 +504,70 @@ jobs:
             publish_args+=(--latest)
           fi
           gh "${publish_args[@]}"
+
+  aur:
+    name: aur
+    needs: [resolve-target, publish]
+    # Stable releases update qrow-bin. Nightly releases update qrow-nightly-bin.
+    # Only jobs in this environment can read the AUR SSH key.
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
+      - name: build-aur-package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir "$RUNNER_TEMP/release"
+          python3 scripts/package/aur.py "$RELEASE_VERSION" --package bin --sums "$RUNNER_TEMP/release/SHA256SUMS" --output aur
+          # Downloads the published archive, checks its checksum, installs the package, and runs namcap.
+          sh scripts/package/aur-build.sh aur
+      - name: push-aur-package
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+        run: sh scripts/package/aur-push.sh aur
+
+  aur-source:
+    name: aur-source
+    needs: [resolve-target, publish]
+    # The qrow package builds the release tag from source. Only stable releases update it.
+    if: inputs.channel == 'stable'
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
+      - name: build-aur-source-package
+        env:
+          RELEASE_TAG: ${{ needs.resolve-target.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+          TARGET_SHA: ${{ needs.resolve-target.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$RELEASE_TAG.tar.gz"
+          digest="$(curl --fail --silent --show-error --location "$archive" | sha256sum | cut -d ' ' -f 1)"
+          python3 scripts/package/aur.py "$RELEASE_VERSION" --package source --commit "$TARGET_SHA" \
+            --source-sha256 "$digest" --output aur
+          # Downloads the source archive, checks its checksum, builds Qrow with the Arch Linux Rust,
+          # installs the package, and runs namcap.
+          sh scripts/package/aur-build.sh aur
+      - name: push-aur-package
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+        run: sh scripts/package/aur-push.sh aur
