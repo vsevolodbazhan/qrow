@@ -1,5 +1,5 @@
-use crate::support::{MemoryCredentials, TestApp};
-use gpui_kit::{TestAppContext, test::TestWindowExt as _};
+use crate::support::{MemoryCredentials, TestApp, bounds_of, label};
+use gpui_kit::{TestAppContext, px, test::TestWindowExt as _};
 use qrow::storage;
 use std::time::Duration;
 
@@ -522,4 +522,57 @@ fn export_import_and_backup_workspace_workflow(cx: &mut TestAppContext) {
     app.wait_for(cx, "workspace-backup-toast");
     let backup_ws = storage::load(&backup_path).unwrap();
     assert_eq!(backup_ws.tabs[0].sql, "SELECT 'portable_bundle'");
+}
+
+#[gpui_kit::test]
+fn export_workspace_dialog_shows_single_line_option_checkboxes(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::launch_store(cx, dir, MemoryCredentials::default());
+
+    app.dispatch(cx, qrow::ui::ExportWorkspace);
+    app.wait_for(cx, "export-workspace-dialog");
+
+    let checkboxes = [
+        ("export-workspace-include-sql", "Include saved SQL"),
+        (
+            "export-workspace-include-parameters",
+            "Include session parameters",
+        ),
+        ("export-workspace-include-notes", "Include assistant notes"),
+    ];
+
+    app.update(cx, |window, _| {
+        let summary = label(window, "export-workspace-summary").unwrap_or_default();
+        assert!(summary.contains("as a portable file."), "{summary}");
+        assert!(!summary.contains(".qrow-workspace.json"), "{summary}");
+
+        // Small checkboxes use 0.875 rem text with 1.25 relative line height,
+        // stacked with `gap_2()` (0.5 rem) like the Export Results dialog.
+        let single_line = window.rem_size() * 0.875 * 1.25;
+        let expected_gap = window.rem_size() * 0.5;
+        let mut previous_bottom = None;
+        for (id, expected_label) in checkboxes {
+            assert_eq!(label(window, id).as_deref(), Some(expected_label));
+            let bounds = bounds_of(window, id);
+            let height = bounds.size.height;
+            assert!(
+                (height - single_line).abs() <= px(2.),
+                "{id}: height {height:?} should match a single label line (~{single_line:?})"
+            );
+            if let Some(prev_bottom) = previous_bottom {
+                let gap = bounds.top() - prev_bottom;
+                assert!(
+                    (gap - expected_gap).abs() <= px(1.),
+                    "{id}: gap {gap:?} should match Export Results gap_2 ({expected_gap:?})"
+                );
+            }
+            previous_bottom = Some(bounds.bottom());
+        }
+    });
+
+    for (id, _) in checkboxes {
+        app.click(cx, id);
+    }
+    app.press(cx, "escape");
+    app.wait_gone(cx, "export-workspace-dialog");
 }

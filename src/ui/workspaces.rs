@@ -250,13 +250,7 @@ impl Qrow {
             return div().into_any_element();
         };
         let options = form.options;
-        let summary = "Export this workspace as a portable .qrow-workspace.json file. Passwords, sign-in tokens, account identities, dbt manifest paths, custom keep-alive SQL, settings, and assistant transcripts are never exported.";
-        let option_description = |text: &'static str, cx: &Context<Self>| {
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(text)
-        };
+        let summary = "Export this workspace as a portable file. Passwords, sign-in tokens, account identities, dbt manifest paths, custom keep-alive SQL, settings, and assistant transcripts are never exported.";
         v_flex()
             .id("export-workspace-dialog")
             .test_support()
@@ -264,66 +258,52 @@ impl Qrow {
             .gap_3()
             .child(
                 div()
+                    .id("export-workspace-summary")
+                    .test_support()
+                    .aria_label(summary)
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(summary),
             )
             .child(
-                v_form()
+                v_flex()
                     .w_full()
+                    .gap_2()
                     .child(
-                        field().label_indent(false).child(
-                            Checkbox::new("export-workspace-include-sql")
-                                .small()
-                                .label("Include saved SQL")
-                                .checked(options.include_sql)
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    if let Some(form) = &mut this.export_workspace_form {
-                                        form.options.include_sql = *checked;
-                                    }
-                                    cx.notify();
-                                }))
-                                .child(option_description(
-                                    "Saved SQL is exported as plain text.",
-                                    cx,
-                                )),
-                        ),
+                        Checkbox::new("export-workspace-include-sql")
+                            .small()
+                            .label("Include saved SQL")
+                            .checked(options.include_sql)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                if let Some(form) = &mut this.export_workspace_form {
+                                    form.options.include_sql = *checked;
+                                }
+                                cx.notify();
+                            })),
                     )
                     .child(
-                        field().label_indent(false).child(
-                            Checkbox::new("export-workspace-include-parameters")
-                                .small()
-                                .label("Include session parameters")
-                                .checked(options.include_parameters)
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    if let Some(form) = &mut this.export_workspace_form {
-                                        form.options.include_parameters = *checked;
-                                    }
-                                    cx.notify();
-                                }))
-                                .child(option_description(
-                                    "Session parameters can contain secrets.",
-                                    cx,
-                                )),
-                        ),
+                        Checkbox::new("export-workspace-include-parameters")
+                            .small()
+                            .label("Include session parameters")
+                            .checked(options.include_parameters)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                if let Some(form) = &mut this.export_workspace_form {
+                                    form.options.include_parameters = *checked;
+                                }
+                                cx.notify();
+                            })),
                     )
                     .child(
-                        field().label_indent(false).child(
-                            Checkbox::new("export-workspace-include-notes")
-                                .small()
-                                .label("Include assistant notes")
-                                .checked(options.include_assistant_notes)
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    if let Some(form) = &mut this.export_workspace_form {
-                                        form.options.include_assistant_notes = *checked;
-                                    }
-                                    cx.notify();
-                                }))
-                                .child(option_description(
-                                    "Assistant notes are exported as plain text.",
-                                    cx,
-                                )),
-                        ),
+                        Checkbox::new("export-workspace-include-notes")
+                            .small()
+                            .label("Include assistant notes")
+                            .checked(options.include_assistant_notes)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                if let Some(form) = &mut this.export_workspace_form {
+                                    form.options.include_assistant_notes = *checked;
+                                }
+                                cx.notify();
+                            })),
                     ),
             )
             .into_any_element()
