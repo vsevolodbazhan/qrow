@@ -2090,6 +2090,11 @@ enum ScriptedReply {
         column: String,
         rows: Vec<String>,
     },
+    RowsThenFetchError {
+        column: String,
+        rows: Vec<String>,
+        error: String,
+    },
     Error(String),
     WaitCancel,
 }
@@ -2166,9 +2171,11 @@ impl Session for ScriptedSession {
     fn poll(&mut self) -> Result<QueryState> {
         match self.current.as_ref() {
             Some(ScriptedReply::NoResults) => Ok(QueryState::Finished { has_results: false }),
-            Some(ScriptedReply::EmptySchema | ScriptedReply::Rows { .. }) => {
-                Ok(QueryState::Finished { has_results: true })
-            }
+            Some(
+                ScriptedReply::EmptySchema
+                | ScriptedReply::Rows { .. }
+                | ScriptedReply::RowsThenFetchError { .. },
+            ) => Ok(QueryState::Finished { has_results: true }),
             Some(ScriptedReply::WaitCancel) => {
                 if self.cancelled.load(Ordering::SeqCst) {
                     Ok(QueryState::Cancelled)
@@ -2182,7 +2189,10 @@ impl Session for ScriptedSession {
     fn columns(&mut self) -> Result<Vec<Column>> {
         match self.current.as_ref() {
             Some(ScriptedReply::EmptySchema) => Ok(vec![]),
-            Some(ScriptedReply::Rows { column, .. }) => Ok(vec![Column {
+            Some(
+                ScriptedReply::Rows { column, .. }
+                | ScriptedReply::RowsThenFetchError { column, .. },
+            ) => Ok(vec![Column {
                 name: column.clone(),
                 data_type: "STRING".into(),
             }]),
@@ -2199,6 +2209,19 @@ impl Session for ScriptedSession {
                     .collect();
                 self.offset = end;
                 Ok(Batch { rows: slice })
+            }
+            Some(ScriptedReply::RowsThenFetchError { rows, error, .. }) => {
+                if self.offset < rows.len() {
+                    let end = (self.offset + count).min(rows.len());
+                    let slice = rows[self.offset..end]
+                        .iter()
+                        .map(|value| vec![Some(value.clone())])
+                        .collect();
+                    self.offset = end;
+                    Ok(Batch { rows: slice })
+                } else {
+                    Err(qrow::connector::QueryError(error.clone()).into())
+                }
             }
             _ => Ok(Batch { rows: vec![] }),
         }
@@ -2545,6 +2568,40 @@ fn sequential_statements_close_non_final_cursors_and_keep_final_cursor_open() {
     }
     assert_eq!(emitted_columns, vec!["second_col"]);
     assert_eq!(emitted_rows, vec![vec![Some("2".into())]]);
+
+    // Mid-fetch error on a buffered non-final statement flushes already-downloaded rows.
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::RowsThenFetchError {
+            column: "partial_col".into(),
+            rows: vec!["p1".into(), "p2".into()],
+            error: "fetch exploded".into(),
+        },
+        ScriptedReply::NoResults,
+    ]);
+    let worker = scripted_worker(connector);
+    worker.run_statements(
+        Profile::default(),
+        vec!["SELECT partial;".into(), "COMMIT;".into()],
+    );
+    let mut partial_columns = Vec::new();
+    let mut partial_rows = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::Columns(cols) => partial_columns.push(cols[0].name.clone()),
+            Event::Rows(batch) => partial_rows.extend(batch),
+            Event::Error { message, .. } => {
+                assert!(message.contains("fetch exploded"));
+                break;
+            }
+            Event::Ready { .. } => panic!("Expected error"),
+            _ => {}
+        }
+    }
+    assert_eq!(partial_columns, vec!["partial_col"]);
+    assert_eq!(
+        partial_rows,
+        vec![vec![Some("p1".into())], vec![Some("p2".into())]]
+    );
 }
 
 #[test]
