@@ -1,7 +1,8 @@
-use crate::sql::StatementIndex;
+use crate::{model::DatabaseType, sql::StatementIndex};
 use gpui_kit::component::{Rope, input::EditorState};
 use gpui_kit::{AppContext as _, Context, Entity, Subscription, Task};
 use std::{cell::RefCell, ops::Range, rc::Rc};
+use uuid::Uuid;
 
 /// SQL up to this size indexes its statements on the UI thread. Larger SQL
 /// indexes on a background thread, and the tint follows when it ends.
@@ -10,16 +11,18 @@ const BACKGROUND_INDEX_BYTES: usize = 64 * 1024;
 /// The statements of one text of the editor.
 struct Indexed {
     text: Rope,
+    database_type: DatabaseType,
     sql: String,
     statements: StatementIndex,
 }
 
 impl Indexed {
-    fn new(text: Rope) -> Self {
+    fn new(text: Rope, database_type: DatabaseType) -> Self {
         let sql = text.to_string();
-        let statements = StatementIndex::new(&sql);
+        let statements = StatementIndex::new_for(&sql, database_type);
         Self {
             text,
+            database_type,
             sql,
             statements,
         }
@@ -35,16 +38,29 @@ impl Indexed {
 #[derive(Default)]
 struct State {
     index: Option<Indexed>,
-    /// The text that indexes on a background thread, with its task. An edit
-    /// replaces it; a cursor move or a caret blink waits for it.
-    indexing: Option<(Rope, Task<()>)>,
+    /// The text and dialect that index on a background thread, with its task.
+    /// An edit or dialect change replaces it; a cursor move or caret blink waits for it.
+    indexing: Option<(Rope, DatabaseType, Task<()>)>,
 }
 
 /// Tints the statement that Run uses when nothing is selected, and keeps the
-/// tint on that statement while the cursor moves and the SQL changes.
-pub(super) fn track<T: 'static>(input: &Entity<EditorState>, cx: &mut Context<T>) -> Subscription {
+/// tint on that statement while the cursor moves, the SQL changes, or the
+/// connection dialect changes.
+pub(super) fn track(
+    input: &Entity<EditorState>,
+    tab_id: Uuid,
+    initial_database_type: DatabaseType,
+    cx: &mut Context<super::Qrow>,
+) -> Subscription {
     let state: Rc<RefCell<State>> = Rc::default();
-    let subscription = cx.observe(input, move |_, input, cx| {
+    let subscription = cx.observe(input, move |this, input, cx| {
+        let database_type = this
+            .tabs
+            .iter()
+            .find(|tab| tab.saved.id == tab_id)
+            .map_or(initial_database_type, |tab| {
+                this.tab_database_type(tab.saved.profile)
+            });
         let (text, selection) = {
             let editor = input.read(cx);
             (editor.text().clone(), editor.selected_range())
@@ -52,11 +68,9 @@ pub(super) fn track<T: 'static>(input: &Entity<EditorState>, cx: &mut Context<T>
         let target = if !selection.is_empty() {
             None
         } else {
-            let current = state
-                .borrow()
-                .index
-                .as_ref()
-                .is_some_and(|indexed| indexed.text == text);
+            let current = state.borrow().index.as_ref().is_some_and(|indexed| {
+                indexed.text == text && indexed.database_type == database_type
+            });
             if !current && text.len() > BACKGROUND_INDEX_BYTES {
                 // The tint stays until the index of this text is ready. The
                 // editor then notifies, and this observer runs again.
@@ -64,7 +78,9 @@ pub(super) fn track<T: 'static>(input: &Entity<EditorState>, cx: &mut Context<T>
                 if pending
                     .indexing
                     .as_ref()
-                    .is_some_and(|(indexing, _)| *indexing == text)
+                    .is_some_and(|(indexing, dialect, _)| {
+                        *indexing == text && *dialect == database_type
+                    })
                 {
                     return;
                 }
@@ -72,14 +88,18 @@ pub(super) fn track<T: 'static>(input: &Entity<EditorState>, cx: &mut Context<T>
                 let input = input.downgrade();
                 let indexing = text.clone();
                 let task = cx.spawn(async move |_, cx| {
-                    let indexed = cx.background_spawn(async move { Indexed::new(text) }).await;
+                    let indexed = cx
+                        .background_spawn(async move { Indexed::new(text, database_type) })
+                        .await;
                     {
                         let mut state = finished.borrow_mut();
                         if state
                             .indexing
                             .as_ref()
-                            .is_some_and(|(indexing, _)| *indexing == indexed.text)
-                            && let Some((_, task)) = state.indexing.take()
+                            .is_some_and(|(indexing, dialect, _)| {
+                                *indexing == indexed.text && *dialect == indexed.database_type
+                            })
+                            && let Some((_, _, task)) = state.indexing.take()
                         {
                             // This task runs now, so it must not cancel itself.
                             task.detach();
@@ -88,13 +108,13 @@ pub(super) fn track<T: 'static>(input: &Entity<EditorState>, cx: &mut Context<T>
                     }
                     let _ = input.update(cx, |_, cx| cx.notify());
                 });
-                pending.indexing = Some((indexing, task));
+                pending.indexing = Some((indexing, database_type, task));
                 return;
             }
             let mut state = state.borrow_mut();
             if !current {
                 state.indexing = None;
-                state.index = Some(Indexed::new(text));
+                state.index = Some(Indexed::new(text, database_type));
             }
             state
                 .index

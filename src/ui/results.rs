@@ -121,7 +121,7 @@ pub struct Results {
     pub export: crate::export::Settings,
     pub copy_format: CopyFormat,
     export_profile: Option<(uuid::Uuid, u8)>,
-    pub empty_message: Option<&'static str>,
+    pub empty_message: Option<SharedString>,
     headers: Vec<Column>,
     /// The width of each result column that shows its full header.
     widths: Vec<Pixels>,
@@ -187,18 +187,32 @@ impl Results {
             self.schema(self.columns.clone(), cx);
         }
     }
-    pub fn query_event(&mut self, event: &Event, cancelling: bool) -> bool {
-        let message = match event {
-            Event::Ready { limited: true, .. } => Some("No rows fit within the preview limit"),
-            Event::Ready { .. } if cancelling => Some("Fetching stopped before any rows arrived"),
-            Event::Ready { .. } if self.columns.is_empty() => {
-                Some("Statement completed without a result set")
+    pub fn query_event(&mut self, event: &Event, cancelling: bool, statement_count: usize) -> bool {
+        let message: Option<SharedString> = match event {
+            Event::ResultFinished { partial: true, .. } if self.rows.is_empty() => {
+                Some("No rows fit within the preview limit".into())
             }
-            Event::Ready { .. } => Some("Query returned no rows"),
-            Event::Downloaded { .. } => Some("Query returned no rows"),
-            Event::DownloadFailed { .. } => Some("Export download stopped before any rows arrived"),
-            Event::Cancelled => Some("Query cancelled before any rows arrived"),
-            Event::Error { .. } => Some("Query failed before any rows arrived"),
+            Event::ResultFinished { .. } if !self.columns.is_empty() && self.rows.is_empty() => {
+                Some("Query returned no rows".into())
+            }
+            Event::Ready { limited: true, .. } => {
+                Some("No rows fit within the preview limit".into())
+            }
+            Event::Ready { .. } if cancelling => {
+                Some("Fetching stopped before any rows arrived".into())
+            }
+            Event::Ready { .. } if self.columns.is_empty() => Some(if statement_count > 1 {
+                format!("{statement_count} statements completed without a result set").into()
+            } else {
+                "Statement completed without a result set".into()
+            }),
+            Event::Ready { .. } => Some("Query returned no rows".into()),
+            Event::Downloaded { .. } => Some("Query returned no rows".into()),
+            Event::DownloadFailed { .. } => {
+                Some("Export download stopped before any rows arrived".into())
+            }
+            Event::Cancelled => Some("Query cancelled before any rows arrived".into()),
+            Event::Error { .. } => Some("Query failed before any rows arrived".into()),
             _ => None,
         };
         if let Some(message) = message {
@@ -571,8 +585,8 @@ impl Results {
     }
 
     fn empty_state(&self, cx: &App) -> Div {
-        let message: SharedString = match self.empty_message {
-            Some(message) => message.into(),
+        let message: SharedString = match &self.empty_message {
+            Some(message) => message.clone(),
             None => match super::shortcuts::action_display(&super::RunQuery, cx) {
                 Some(keys) => format!("Press {keys} to run a query and preview its results").into(),
                 None => "Run a query to preview its results".into(),
@@ -1655,13 +1669,13 @@ mod tests {
             results.rows = vec![vec![Some("value".into())]; 1250].into();
             assert!(results.pagination.select(1, results.rows.len()));
             results.selection = Some(super::Selection::cell(1000, 0));
-            results.query_event(&Event::Cancelled, false);
+            results.query_event(&Event::Cancelled, false, 1);
 
             results.set_ui_scale(1.5, cx);
             assert_eq!(results.pagination.range(results.rows.len()), 1000..1250);
             assert_eq!(results.selection, Some(super::Selection::cell(1000, 0)));
             assert_eq!(
-                results.empty_message,
+                results.empty_message.as_deref(),
                 Some("Query cancelled before any rows arrived")
             );
             assert_eq!(results.px(48.), px(72.));

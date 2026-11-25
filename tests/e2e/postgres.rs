@@ -673,3 +673,33 @@ fn logged_query_actions_remain_inside_code_after_execution(cx: &mut TestAppConte
         |window, _| crate::support::labelled(window, "Collapse query").is_some(),
     );
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn selected_transaction_statements_run_sequentially_and_keep_select_results(
+    cx: &mut TestAppContext,
+) {
+    let sql = concat!(
+        "BEGIN;\n",
+        "CREATE TEMP TABLE qrow_seq_tx (id int, label text) ON COMMIT DROP;\n",
+        "INSERT INTO qrow_seq_tx VALUES (1, 'first;row'), (2, '日本語😀');\n",
+        "SELECT id, label FROM qrow_seq_tx ORDER BY id;\n",
+        "COMMIT;",
+    );
+    let (workspace, credentials) = workspace(sql);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 2, "first;row");
+    app.wait_cell(cx, 1, 2, "日本語😀");
+    app.click(cx, "copy-result-query");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("SELECT id, label FROM qrow_seq_tx ORDER BY id;".into())
+    );
+    let logs = app.logs(cx);
+    assert!(logs.contains("Submitted statement 1 of 5:\nBEGIN;"));
+    assert!(logs.contains("Submitted statement 5 of 5:\nCOMMIT;"));
+}

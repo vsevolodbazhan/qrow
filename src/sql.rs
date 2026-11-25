@@ -388,6 +388,44 @@ fn same_line_space(text: &str) -> bool {
         .all(|c| c.is_whitespace() && !matches!(c, '\n' | '\r'))
 }
 
+/// Returns whether `sql` begins with a query keyword (or parenthesized query)
+/// rather than a DDL/DML command, ignoring leading whitespace and comments.
+pub fn starts_with_query_keyword(sql: &str, database_type: crate::model::DatabaseType) -> bool {
+    for (range, kind) in tokens_for(sql, database_type) {
+        if kind == Kind::Comment {
+            continue;
+        }
+        let token = sql[range].trim();
+        if token.is_empty() || token == "(" {
+            continue;
+        }
+        return kind == Kind::Plain
+            && matches!(
+                token.to_ascii_uppercase().as_str(),
+                "SELECT" | "WITH" | "VALUES" | "TABLE" | "SHOW" | "DESCRIBE" | "DESC" | "EXPLAIN"
+            );
+    }
+    false
+}
+
+/// Splits `sql` into its executable statements using the connection's quoting rules.
+/// A single statement keeps its exact text (including leading comments or hints).
+pub fn statements_for(
+    sql: &str,
+    database_type: crate::model::DatabaseType,
+) -> anyhow::Result<Vec<String>> {
+    let ranges = statement_ranges_for(sql, database_type);
+    anyhow::ensure!(!ranges.is_empty(), "Write or select a SQL statement first.");
+    if ranges.len() == 1 {
+        Ok(vec![sql.to_owned()])
+    } else {
+        Ok(ranges
+            .into_iter()
+            .map(|range| sql[range].to_owned())
+            .collect())
+    }
+}
+
 pub fn validate_single(sql: &str) -> anyhow::Result<()> {
     validate_single_for(sql, crate::model::DatabaseType::Kyuubi)
 }

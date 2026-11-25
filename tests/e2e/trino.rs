@@ -711,3 +711,22 @@ fn format_sql_preserves_dialect_literals_and_undo(cx: &mut TestAppContext) {
         |_, _| app.saved().tabs[0].sql == sql,
     );
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn selected_statements_run_sequentially_on_the_same_trino_session(cx: &mut TestAppContext) {
+    let sql = concat!(
+        "USE tpch.sf1;\n",
+        "SELECT current_schema AS schema_name;\n",
+        "USE tpch.tiny;",
+    );
+    let app = launch(cx, sql);
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "sf1");
+    let logs = app.logs(cx);
+    assert!(logs.contains("Submitted statement 1 of 3:\nUSE tpch.sf1;"));
+    assert!(logs.contains("Submitted statement 3 of 3:\nUSE tpch.tiny;"));
+}
