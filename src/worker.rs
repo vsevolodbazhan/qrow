@@ -266,6 +266,7 @@ impl Worker {
                     if error.is::<crate::export::Cancelled>()
                         || (transport_aborted && runner.cancelled.load(Ordering::SeqCst))
                     {
+                        let was_connected = runner.session.is_some();
                         let message = if runner.execution.is_some() {
                             "Execution cancelled before the server returned a query handle"
                         } else {
@@ -279,7 +280,9 @@ impl Worker {
                             message,
                             runner.execution_duration(),
                         );
-                        runner.emit(Event::Disconnected);
+                        if was_connected {
+                            runner.emit(Event::Disconnected);
+                        }
                         runner.emit(Event::Cancelled);
                         idle_started = Instant::now();
                         continue;
@@ -675,9 +678,15 @@ impl Runner {
                     control.register(transport)?;
                 }
             }
+            let had_session = self.session.is_some();
             self.disconnect();
-            if let Some(control) = control {
-                control.check()?;
+            if let Some(control) = control
+                && let Err(error) = control.check()
+            {
+                if had_session {
+                    self.emit(Event::Disconnected);
+                }
+                return Err(error);
             }
             let connect_started = Instant::now();
             self.emit(Event::Connecting);

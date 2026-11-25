@@ -2192,7 +2192,6 @@ fn trino_cancel_interrupts_stalled_connect_and_allows_reconnecting() {
 
     let started = Instant::now();
     worker.cancel();
-    assert!(matches!(next(&worker), Event::Disconnected));
     assert!(matches!(next(&worker), Event::Cancelled));
     assert!(
         started.elapsed() < Duration::from_secs(2),
