@@ -525,3 +525,55 @@ fn statement_index_finds_the_same_statements_as_each_lookup() {
         assert_eq!(index.range_at(sql, offset), statement_range_at(sql, offset));
     }
 }
+
+#[test]
+fn statements_for_splits_selected_statements_with_dialect_quoting() {
+    use crate::model::DatabaseType;
+
+    // A single statement keeps its exact text, including leading comments.
+    let single = "-- hint\nSELECT 'a;b' AS value;";
+    assert_eq!(
+        statements_for(single, DatabaseType::Kyuubi).unwrap(),
+        vec![single]
+    );
+
+    // Multiple statements split at SQL-aware boundaries across comments and strings.
+    let multi = "BEGIN;\n-- comment with ;\nSELECT 'a;b' /* ; */ AS v;\nCOMMIT;";
+    assert_eq!(
+        statements_for(multi, DatabaseType::Postgres).unwrap(),
+        vec!["BEGIN;", "SELECT 'a;b' /* ; */ AS v;", "COMMIT;"]
+    );
+
+    // Postgres dollar quotes keep semicolons inside function bodies.
+    let pg = "CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql;\nSELECT f();";
+    assert_eq!(
+        statements_for(pg, DatabaseType::Postgres).unwrap(),
+        vec![
+            "CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql;",
+            "SELECT f();",
+        ]
+    );
+
+    // Trino double-quoted identifiers keep semicolons intact.
+    let trino = "USE memory.default;\nSELECT 1 AS \"a;b\";";
+    assert_eq!(
+        statements_for(trino, DatabaseType::Trino).unwrap(),
+        vec!["USE memory.default;", "SELECT 1 AS \"a;b\";"]
+    );
+
+    // Kyuubi backtick identifiers keep semicolons intact.
+    let kyuubi = "CREATE TEMP VIEW `t;1` AS SELECT 1;\nSELECT * FROM `t;1`;";
+    assert_eq!(
+        statements_for(kyuubi, DatabaseType::Kyuubi).unwrap(),
+        vec![
+            "CREATE TEMP VIEW `t;1` AS SELECT 1;",
+            "SELECT * FROM `t;1`;",
+        ]
+    );
+
+    // Empty, comment-only, and separator-only selections are rejected.
+    for empty in ["", "   \n\t ", "-- only comment;\n/* block ; */", "; ;"] {
+        let error = statements_for(empty, DatabaseType::Kyuubi).unwrap_err();
+        assert_eq!(error.to_string(), "Write or select a SQL statement first.");
+    }
+}

@@ -2079,3 +2079,420 @@ fn run_export_commits_after_append_before_preview_drain_and_continues_empty_boun
         drop(download);
     }
 }
+
+/// Scripted connector for multi-statement sequential worker tests.
+#[derive(Clone)]
+enum ScriptedReply {
+    NoResults,
+    /// HiveServer2 quirk: `has_results: true` with an empty schema.
+    EmptySchema,
+    Rows {
+        column: String,
+        rows: Vec<String>,
+    },
+    Error(String),
+    WaitCancel,
+}
+
+struct ScriptedConnector {
+    connects: AtomicUsize,
+    executions: Arc<Mutex<Vec<String>>>,
+    closes: Arc<AtomicUsize>,
+    cancels: Arc<AtomicUsize>,
+    replies: Mutex<std::collections::VecDeque<ScriptedReply>>,
+}
+
+impl ScriptedConnector {
+    fn new(replies: impl Into<Vec<ScriptedReply>>) -> Arc<Self> {
+        Arc::new(Self {
+            connects: AtomicUsize::new(0),
+            executions: Arc::new(Mutex::new(Vec::new())),
+            closes: Arc::new(AtomicUsize::new(0)),
+            cancels: Arc::new(AtomicUsize::new(0)),
+            replies: Mutex::new(replies.into().into()),
+        })
+    }
+}
+
+struct ScriptedSession {
+    executions: Arc<Mutex<Vec<String>>>,
+    closes: Arc<AtomicUsize>,
+    cancels: Arc<AtomicUsize>,
+    replies: Arc<Mutex<std::collections::VecDeque<ScriptedReply>>>,
+    current: Option<ScriptedReply>,
+    offset: usize,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Connector for ScriptedConnector {
+    fn connect(&self, _: &Profile, _: Secret) -> Result<Box<dyn Session>> {
+        self.connects.fetch_add(1, Ordering::SeqCst);
+        let remaining = std::mem::take(&mut *self.replies.lock().unwrap());
+        Ok(Box::new(ScriptedSession {
+            executions: self.executions.clone(),
+            closes: self.closes.clone(),
+            cancels: self.cancels.clone(),
+            replies: Arc::new(Mutex::new(remaining)),
+            current: None,
+            offset: 0,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }))
+    }
+}
+
+impl Session for ScriptedSession {
+    fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.executions.lock().unwrap().push(sql.to_owned());
+        self.offset = 0;
+        self.cancelled = Arc::new(AtomicBool::new(false));
+        let reply = self
+            .replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted reply for statement");
+        if let ScriptedReply::Error(message) = reply {
+            return Err(qrow::connector::QueryError(message).into());
+        }
+        self.current = Some(reply);
+        Ok(Arc::new(Cancel(
+            self.cancelled.clone(),
+            self.cancels.clone(),
+        )))
+    }
+    fn execute_metadata(&mut self, _: &MetadataRequest) -> Result<Arc<dyn Cancellation>> {
+        unreachable!()
+    }
+    fn poll(&mut self) -> Result<QueryState> {
+        match self.current.as_ref() {
+            Some(ScriptedReply::NoResults) => Ok(QueryState::Finished { has_results: false }),
+            Some(ScriptedReply::EmptySchema | ScriptedReply::Rows { .. }) => {
+                Ok(QueryState::Finished { has_results: true })
+            }
+            Some(ScriptedReply::WaitCancel) => {
+                if self.cancelled.load(Ordering::SeqCst) {
+                    Ok(QueryState::Cancelled)
+                } else {
+                    Ok(QueryState::Running)
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    fn columns(&mut self) -> Result<Vec<Column>> {
+        match self.current.as_ref() {
+            Some(ScriptedReply::EmptySchema) => Ok(vec![]),
+            Some(ScriptedReply::Rows { column, .. }) => Ok(vec![Column {
+                name: column.clone(),
+                data_type: "STRING".into(),
+            }]),
+            _ => unreachable!(),
+        }
+    }
+    fn fetch(&mut self, count: usize) -> Result<Batch> {
+        match self.current.as_ref() {
+            Some(ScriptedReply::Rows { rows, .. }) => {
+                let end = (self.offset + count).min(rows.len());
+                let slice = rows[self.offset..end]
+                    .iter()
+                    .map(|value| vec![Some(value.clone())])
+                    .collect();
+                self.offset = end;
+                Ok(Batch { rows: slice })
+            }
+            _ => Ok(Batch { rows: vec![] }),
+        }
+    }
+    fn close_operation(&mut self) -> Result<()> {
+        self.current = None;
+        self.closes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn execute_keep_alive(&mut self, _: &str) -> Result<Arc<dyn Cancellation>> {
+        unreachable!()
+    }
+    fn close_keep_alive(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn scripted_worker(connector: Arc<ScriptedConnector>) -> Worker {
+    Worker::with_connector(
+        Arc::new(|| {}),
+        connector,
+        Arc::new(|_| Ok(Secret::password("secret"))),
+    )
+}
+
+#[test]
+fn sequential_statements_keep_the_last_result_set_across_non_result_commands() {
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::NoResults,
+        ScriptedReply::Rows {
+            column: "first".into(),
+            rows: vec!["a".into()],
+        },
+        ScriptedReply::Rows {
+            column: "second".into(),
+            rows: vec!["b".into(), "c".into()],
+        },
+        ScriptedReply::NoResults,
+        ScriptedReply::EmptySchema,
+    ]);
+    let worker = scripted_worker(connector.clone());
+    let exec_id = worker.run_statements(
+        Profile::default(),
+        vec![
+            "BEGIN;".into(),
+            "SELECT 'a' AS first;".into(),
+            "SELECT 'b' AS second;".into(),
+            "COMMIT;".into(),
+            "SET x = 1;".into(),
+        ],
+    );
+    let mut started = Vec::new();
+    let mut results_started = Vec::new();
+    let mut results_finished = Vec::new();
+    let mut latest_columns = Vec::new();
+    let mut latest_rows = Vec::new();
+    let mut final_cursor = None;
+    loop {
+        match next(&worker) {
+            Event::StatementStarted { index, total } => started.push((index, total)),
+            Event::ResultStarted { sql } => {
+                results_started.push(sql);
+                latest_columns.clear();
+                latest_rows.clear();
+            }
+            Event::Columns(cols) => latest_columns = cols,
+            Event::Rows(rows) => latest_rows.extend(rows),
+            Event::Cursor { state, .. } => final_cursor = Some(state),
+            Event::ResultFinished { partial, .. } => results_finished.push(partial),
+            Event::Ready { more, limited } => {
+                assert!(!more);
+                assert!(!limited);
+                break;
+            }
+            Event::Error { message, .. } => panic!("Unexpected error: {message}"),
+            Event::Cancelled => panic!("Unexpected cancellation"),
+            _ => {}
+        }
+    }
+    assert_eq!(connector.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *connector.executions.lock().unwrap(),
+        vec![
+            "BEGIN;",
+            "SELECT 'a' AS first;",
+            "SELECT 'b' AS second;",
+            "COMMIT;",
+            "SET x = 1;",
+        ]
+    );
+    assert_eq!(started, vec![(1, 5), (2, 5), (3, 5), (4, 5), (5, 5)]);
+    assert_eq!(
+        results_started,
+        vec!["SELECT 'a' AS first;", "SELECT 'b' AS second;"]
+    );
+    assert_eq!(results_finished, vec![false, false]);
+    assert_eq!(latest_columns[0].name, "second");
+    assert_eq!(
+        latest_rows,
+        vec![vec![Some("b".into())], vec![Some("c".into())]]
+    );
+    assert_eq!(final_cursor, Some(qrow::worker::Cursor::Complete));
+
+    // All statement logs share the same ExecutionId group.
+    let logs: Vec<_> = worker.logs.try_iter().collect();
+    let submitted: Vec<_> = logs
+        .iter()
+        .filter(|event| event.kind == LogKind::Submitted)
+        .collect();
+    assert_eq!(submitted.len(), 5);
+    assert!(
+        submitted
+            .iter()
+            .all(|event| event.execution_id == Some(exec_id))
+    );
+    assert!(
+        submitted[0]
+            .text
+            .starts_with("Submitted statement 1 of 5:\nBEGIN;")
+    );
+    assert!(
+        submitted[4]
+            .text
+            .starts_with("Submitted statement 5 of 5:\nSET x = 1;")
+    );
+}
+
+#[test]
+fn sequential_statements_close_non_final_cursors_and_keep_final_cursor_open() {
+    let many: Vec<String> = (0..1250).map(|i| format!("r{i}")).collect();
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::NoResults,
+        ScriptedReply::Rows {
+            column: "val".into(),
+            rows: many.clone(),
+        },
+        ScriptedReply::NoResults,
+    ]);
+    let worker = scripted_worker(connector.clone());
+    worker.run_statements(
+        Profile::default(),
+        vec!["BEGIN;".into(), "SELECT big;".into(), "COMMIT;".into()],
+    );
+    let mut rows = Vec::new();
+    let mut partials = Vec::new();
+    let mut final_cursor = None;
+    loop {
+        match next(&worker) {
+            Event::Rows(batch) => rows.extend(batch),
+            Event::Cursor { state, .. } => final_cursor = Some(state),
+            Event::ResultFinished { partial, .. } => partials.push(partial),
+            Event::Ready { more, limited } => {
+                assert!(!more);
+                assert!(!limited);
+                break;
+            }
+            Event::Error { message, .. } => panic!("Unexpected error: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(rows.len(), 1000);
+    assert_eq!(partials, vec![true]);
+    assert_eq!(final_cursor, Some(qrow::worker::Cursor::Unavailable));
+    assert_eq!(connector.closes.load(Ordering::SeqCst), 3);
+
+    // When the final statement has >1,000 rows, its live cursor remains open for Next page.
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::NoResults,
+        ScriptedReply::Rows {
+            column: "val".into(),
+            rows: many,
+        },
+    ]);
+    let worker = scripted_worker(connector);
+    worker.run_statements(
+        Profile::default(),
+        vec!["SET a = 1;".into(), "SELECT big;".into()],
+    );
+    let mut page1 = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::Rows(batch) => page1.extend(batch),
+            Event::ResultFinished { partial, .. } => assert!(!partial),
+            Event::Ready { more, limited } => {
+                assert!(more);
+                assert!(!limited);
+                break;
+            }
+            Event::Error { message, .. } => panic!("Unexpected error: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(page1.len(), 1000);
+    worker.more();
+    let mut page2 = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::Rows(batch) => page2.extend(batch),
+            Event::Ready { more, limited } => {
+                assert!(!more);
+                assert!(!limited);
+                break;
+            }
+            Event::Error { message, .. } => panic!("Unexpected error: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(page2.len(), 250);
+}
+
+#[test]
+fn sequential_statements_stop_on_first_error_and_cancel_skips_remaining() {
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::Rows {
+            column: "ok".into(),
+            rows: vec!["1".into()],
+        },
+        ScriptedReply::Error("boom".into()),
+        ScriptedReply::NoResults,
+    ]);
+    let worker = scripted_worker(connector.clone());
+    worker.run_statements(
+        Profile::default(),
+        vec![
+            "SELECT 1;".into(),
+            "SELECT bad;".into(),
+            "SELECT never;".into(),
+        ],
+    );
+    loop {
+        match next(&worker) {
+            Event::Error {
+                message,
+                disconnected,
+                ..
+            } => {
+                assert!(message.contains("boom"));
+                assert!(!disconnected);
+                break;
+            }
+            Event::Ready { .. } => panic!("Expected error"),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        *connector.executions.lock().unwrap(),
+        vec!["SELECT 1;", "SELECT bad;"]
+    );
+    let logs: Vec<_> = worker.logs.try_iter().collect();
+    assert_eq!(
+        logs.iter()
+            .filter(|event| event.kind == LogKind::Submitted)
+            .count(),
+        2
+    );
+
+    // Cancel while statement 2 runs prevents statement 3 from starting.
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::NoResults,
+        ScriptedReply::WaitCancel,
+        ScriptedReply::NoResults,
+    ]);
+    let worker = scripted_worker(connector.clone());
+    worker.run_statements(
+        Profile::default(),
+        vec!["BEGIN;".into(), "SELECT slow;".into(), "COMMIT;".into()],
+    );
+    loop {
+        if matches!(
+            next(&worker),
+            Event::StatementStarted { index: 2, total: 3 }
+        ) {
+            break;
+        }
+    }
+    // Wait until statement 2 is registered on the session, then cancel.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while connector.executions.lock().unwrap().len() < 2 {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    worker.cancel();
+    loop {
+        match next(&worker) {
+            Event::Cancelled => break,
+            Event::Ready { .. } => panic!("Expected cancellation"),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        *connector.executions.lock().unwrap(),
+        vec!["BEGIN;", "SELECT slow;"]
+    );
+}

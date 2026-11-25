@@ -636,3 +636,23 @@ fn toggle_comment_runs_uncommented_sql(cx: &mut TestAppContext) {
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "日本語😀");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn selected_statements_run_sequentially_in_the_same_session(cx: &mut TestAppContext) {
+    let sql = concat!(
+        "CREATE OR REPLACE TEMP VIEW qrow_seq_v AS SELECT '日本語😀' AS value;\n",
+        "SELECT value FROM qrow_seq_v;\n",
+        "DROP VIEW qrow_seq_v;",
+    );
+    let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀");
+    let logs = app.logs(cx);
+    assert!(logs.contains("Submitted statement 1 of 3:"));
+    assert!(logs.contains("Submitted statement 3 of 3:\nDROP VIEW qrow_seq_v;"));
+}

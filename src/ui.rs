@@ -377,6 +377,16 @@ struct Tab {
     /// A sign-out or another account released the session while the tab was
     /// busy. The next query closes it first.
     release_pending: bool,
+    /// Current `(index, total)` while a multi-statement run executes.
+    statement_progress: Option<(usize, usize)>,
+    /// Total statements in the active or last run.
+    batch_total: usize,
+    /// Rows for the active statement's result are currently being fetched.
+    fetching_result: bool,
+    /// A result-producing statement already finished in the current batch.
+    result_finished: bool,
+    /// At least one statement in the current batch already executed on the server.
+    batch_completed_any: bool,
 }
 impl Tab {
     fn set_status(&mut self, status: impl Into<String>) {
@@ -809,6 +819,7 @@ fn text_width(window: &mut Window, text: &str, font: &Font, size: Pixels) -> Pix
 }
 
 fn panel_empty_state(message: impl Into<SharedString>, cx: &App) -> Div {
+    let message = message.into();
     div()
         .size_full()
         .flex()
@@ -817,7 +828,13 @@ fn panel_empty_state(message: impl Into<SharedString>, cx: &App) -> Div {
         .font_family(cx.theme().font_family.clone())
         .text_size(rems(13. / 14.))
         .text_color(cx.theme().muted_foreground)
-        .child(message.into())
+        .child(
+            div()
+                .id("panel-empty-state")
+                .test_support()
+                .aria_label(message.clone())
+                .child(message),
+        )
 }
 
 struct PendingQuit {
@@ -1459,6 +1476,11 @@ impl Qrow {
             cancelled_sign_in: None,
             signed_in_for_run: false,
             release_pending: false,
+            statement_progress: None,
+            batch_total: 1,
+            fetching_result: false,
+            result_finished: false,
+            batch_completed_any: false,
             next_execution_id: 1,
         }
     }
@@ -2062,16 +2084,20 @@ impl Qrow {
     ) {
         let live = tab.live_result().map(|result| result.table.clone());
         // A fetch that stops early after rows arrived leaves a partial result.
-        let fetching = tab.started.is_some() && tab.sign_in_wait.is_none();
+        let fetching = tab.fetching_result && tab.sign_in_wait.is_none();
         let has_rows = |cx: &App| {
             live.as_ref()
                 .is_some_and(|table| !table.read(cx).delegate().rows.is_empty())
         };
         if tab.started.is_some()
+            && !tab.result_finished
             && let Some(table) = &live
         {
             table.update(cx, |table, cx| {
-                if table.delegate_mut().query_event(&event, tab.cancelling) {
+                if table
+                    .delegate_mut()
+                    .query_event(&event, tab.cancelling, tab.batch_total)
+                {
                     cx.notify();
                 }
             });
@@ -2173,6 +2199,53 @@ impl Qrow {
                 tab.busy = true;
                 tab.set_status("Executing…");
             }
+            Event::StatementStarted { index, total } => {
+                tab.busy = true;
+                tab.statement_progress = Some((index, total));
+                if index > 1 {
+                    tab.batch_completed_any = true;
+                }
+                tab.set_status(format!("Executing {index}/{total}…"));
+            }
+            Event::ResultStarted { sql } => {
+                tab.close_cursor();
+                tab.preview_complete = false;
+                tab.cursor = crate::worker::Cursor::Unavailable;
+                tab.replay = None;
+                tab.download = None;
+                tab.result_finished = false;
+                if let Some(id) = tab.live
+                    && let Some(result) = tab.result_mut(id)
+                {
+                    result.sql = Some(sql);
+                    result.elapsed = None;
+                    result.unfetched = false;
+                    result.complete = false;
+                    result.table.update(cx, |t, cx| {
+                        t.delegate_mut().clear();
+                        t.delegate_mut().empty_message = Some("Waiting for query results…".into());
+                        t.clear_selection(cx);
+                        t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
+                        t.scroll_to_row(0, cx);
+                        results::refresh(t, cx);
+                    });
+                }
+            }
+            Event::ResultFinished { duration, partial } => {
+                tab.fetching_result = false;
+                tab.result_finished = true;
+                if let Some(id) = tab.live
+                    && let Some(result) = tab.result_mut(id)
+                {
+                    result.elapsed = Some(duration);
+                }
+                if partial {
+                    tab.mark_partial();
+                    tab.preview_complete = false;
+                } else {
+                    tab.preview_complete = true;
+                }
+            }
             Event::KeepAliveStarted => {
                 tab.busy = true;
                 tab.set_status("Sending keep-alive…");
@@ -2217,13 +2290,18 @@ impl Qrow {
                 }
             }
             Event::Columns(columns) => {
+                tab.fetching_result = true;
                 if let Some(table) = &live {
                     table.update(cx, |t, cx| {
                         t.delegate_mut().schema(columns, cx);
                         results::refresh(t, cx);
                     });
                 }
-                tab.set_status("Fetching preview…");
+                if let Some((index, total)) = tab.statement_progress {
+                    tab.set_status(format!("Fetching preview {index}/{total}…"));
+                } else {
+                    tab.set_status("Fetching preview…");
+                }
             }
             Event::Rows(rows) => {
                 if let Some(table) = &live {
@@ -2245,12 +2323,19 @@ impl Qrow {
             }
             Event::Ready { more, limited } => {
                 let was_cancelling = tab.cancelling;
+                let result_unfetched = tab.live_result().is_some_and(|result| result.unfetched);
                 tab.more = more && live.is_some();
-                tab.preview_complete = !more && !limited && !was_cancelling;
+                tab.preview_complete = !more && !limited && !was_cancelling && !result_unfetched;
                 tab.pending_page = None;
                 tab.busy = false;
                 tab.cancelling = false;
-                tab.stop_timing();
+                tab.fetching_result = false;
+                tab.statement_progress = None;
+                if tab.result_finished {
+                    tab.started = None;
+                } else {
+                    tab.stop_timing();
+                }
                 if limited || was_cancelling && has_rows(cx) {
                     tab.mark_partial();
                 }
@@ -2274,11 +2359,17 @@ impl Qrow {
                 tab.cursor = crate::worker::Cursor::Consumed;
                 tab.busy = false;
                 tab.cancelling = false;
+                tab.fetching_result = false;
+                tab.statement_progress = None;
                 if fetching && has_rows(cx) {
                     tab.mark_partial();
                 }
                 tab.close_cursor();
-                tab.stop_timing();
+                if tab.result_finished {
+                    tab.started = None;
+                } else {
+                    tab.stop_timing();
+                }
                 tab.set_status_detail("Cancelled", "Partial preview retained");
             }
             Event::Error {
@@ -2288,6 +2379,8 @@ impl Qrow {
             } => {
                 tab.busy = false;
                 tab.cancelling = false;
+                tab.fetching_result = false;
+                tab.statement_progress = None;
                 if fetching && has_rows(cx) {
                     tab.mark_partial();
                 }
@@ -2297,7 +2390,11 @@ impl Qrow {
                 if disconnected {
                     tab.connected = false;
                 }
-                tab.stop_timing();
+                if tab.result_finished {
+                    tab.started = None;
+                } else {
+                    tab.stop_timing();
+                }
                 if sign_in_required {
                     tab.set_status_detail("Error", "Sign-in required");
                 } else if disconnected && !was_connected {
@@ -2320,6 +2417,8 @@ impl Qrow {
                 tab.close_cursor();
                 tab.busy = false;
                 tab.cancelling = false;
+                tab.fetching_result = false;
+                tab.statement_progress = None;
                 if matches!(event, Event::IdleDisconnected) {
                     tab.set_status_detail("Disconnected", "Idle timeout");
                 } else {
@@ -2845,6 +2944,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<String, &'static str> {
+        let database_type = self.tab_database_type(self.tabs[index].saved.profile);
         self.tabs[index].input.update(cx, |s, cx| {
             let selected = s
                 .selected_text_range(false, window, cx)
@@ -2854,9 +2954,13 @@ impl Qrow {
                 .map(Ok)
                 .unwrap_or_else(|| {
                     let text = s.value();
-                    sql::statement_range_at(&text, s.selected_range().start)
+                    sql::statement_range_at_for(&text, s.selected_range().start, database_type)
                         .map(|range| text[range].to_string())
-                        .or_else(|| sql::statement_ranges(&text).is_empty().then(String::new))
+                        .or_else(|| {
+                            sql::statement_ranges_for(&text, database_type)
+                                .is_empty()
+                                .then(String::new)
+                        })
                         .ok_or("Move the cursor into a SQL statement or select SQL to run.")
                 })
         })
@@ -2892,17 +2996,20 @@ impl Qrow {
             && !self.assistant_maximized();
         let database_type = self.tab_database_type(self.tabs[index].saved.profile);
         let tab = &mut self.tabs[index];
-        if let Err(e) = sql::validate_single_for(&query, database_type) {
-            let message = e.to_string();
-            Self::record_log(
-                tab,
-                LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
-            );
-            Self::record_failure(tab, active);
-            tab.set_status_detail("Rejected", message);
-            cx.notify();
-            return false;
-        }
+        let statements = match sql::statements_for(&query, database_type) {
+            Ok(statements) => statements,
+            Err(e) => {
+                let message = e.to_string();
+                Self::record_log(
+                    tab,
+                    LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
+                );
+                Self::record_failure(tab, active);
+                tab.set_status_detail("Rejected", message);
+                cx.notify();
+                return false;
+            }
+        };
         let Some(profile) = self
             .profiles
             .iter()
@@ -2977,29 +3084,38 @@ impl Qrow {
             cx,
         );
         tab.busy = true;
+        tab.batch_total = statements.len();
+        tab.statement_progress = None;
+        tab.fetching_result = false;
+        tab.result_finished = false;
+        tab.batch_completed_any = false;
         tab.panel.execution_started();
         tab.cancelling = false;
         tab.started = Some(Instant::now());
         tab.set_status("Preparing query…");
         let execution_id = Self::allocate_execution_id(tab);
         tab.worker_profile = Some(profile.id);
-        tab.worker
-            .as_ref()
-            .unwrap()
-            .run_with_id(profile.clone(), query.clone(), execution_id);
+        let multi = statements.len() > 1;
+        tab.worker.as_ref().unwrap().run_statements_with_id(
+            profile.clone(),
+            statements,
+            execution_id,
+        );
         tab.current_execution = Some(execution_id);
-        let submission = LogEvent::new(
-            Some(execution_id),
-            Severity::Info,
-            LogKind::Submitted,
-            format!("Submitted query:\n{query}"),
-        )
-        .with_connection(profile.name)
-        .with_sql(query);
-        let entry = crate::activity::from_tab(&submission, tab.saved.id, &tab.saved.title);
-        Self::record_log(tab, submission);
-        if let Some(entry) = entry {
-            self.record_activity(profile.id, entry, cx);
+        if !multi {
+            let submission = LogEvent::new(
+                Some(execution_id),
+                Severity::Info,
+                LogKind::Submitted,
+                format!("Submitted query:\n{query}"),
+            )
+            .with_connection(profile.name)
+            .with_sql(query);
+            let entry = crate::activity::from_tab(&submission, tab.saved.id, &tab.saved.title);
+            Self::record_log(tab, submission);
+            if let Some(entry) = entry {
+                self.record_activity(profile.id, entry, cx);
+            }
         }
         cx.notify();
         true
@@ -3043,6 +3159,11 @@ impl Qrow {
         tab.cursor = crate::worker::Cursor::Unavailable;
         tab.replay = None;
         tab.download = None;
+        tab.statement_progress = None;
+        tab.batch_total = 1;
+        tab.fetching_result = false;
+        tab.result_finished = false;
+        tab.batch_completed_any = false;
         let target = Self::run_target(tab);
         let result = tab.result_mut(target).expect("the run target exists");
         result.sql = Some(sql);
@@ -3055,7 +3176,7 @@ impl Qrow {
             if let Some(profile) = profile {
                 t.delegate_mut().set_export_profile(profile);
             }
-            t.delegate_mut().empty_message = message;
+            t.delegate_mut().empty_message = message.map(Into::into);
             t.clear_selection(cx);
             t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
             t.scroll_to_row(0, cx);
@@ -3086,6 +3207,8 @@ impl Qrow {
             tab.pending_page = Some(page);
             tab.busy = true;
             tab.cancelling = false;
+            tab.fetching_result = true;
+            tab.result_finished = false;
             tab.started = Some(Instant::now());
             worker.more();
             tab.set_status("Fetching next page…");

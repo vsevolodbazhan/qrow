@@ -170,7 +170,7 @@ pub(super) struct SignInWait {
 /// gets none, so a sign-in that does not help ends in an error. A query that
 /// the user cancelled gets none, so it does not run after the sign-in.
 pub(super) fn automatic_sign_in(tab: &Tab, profiles: &[Profile]) -> Option<(Uuid, String)> {
-    if tab.signed_in_for_run || tab.cancelling {
+    if tab.signed_in_for_run || tab.cancelling || tab.batch_completed_any {
         return None;
     }
     let authentication = profiles

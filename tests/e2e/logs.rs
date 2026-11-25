@@ -98,7 +98,7 @@ fn logs_record_when_older_entries_are_removed(cx: &mut TestAppContext) {
     // request. Logs keep 50 such groups, and they do not remove query history.
     app.run_complete(cx, "SELECT 'retention-oldest' AS value");
     app.wait_cell(cx, 0, 1, "retention-oldest");
-    app.type_sql(cx, "SELECT 'retention-rejected'; SELECT 2");
+    app.type_sql(cx, "-- retention-rejected;");
     app.press(cx, "secondary-a");
     for _ in 0..100 {
         app.click(cx, "run");
@@ -118,7 +118,8 @@ fn logs_record_when_older_entries_are_removed(cx: &mut TestAppContext) {
     );
     assert!(logs.contains("retention-latest"));
     assert_eq!(
-        logs.matches("Run one statement at a time").count(),
+        logs.matches("Write or select a SQL statement first.")
+            .count(),
         qrow::logs::MAX_NON_EXECUTION_GROUPS
     );
 }

@@ -46,7 +46,12 @@ fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestApp
     app.click(cx, "sql-editor");
     app.press(cx, "secondary-a");
     app.press(cx, "secondary-enter");
-    assert!(app.logs(cx).contains("Run one statement at a time."));
+    assert_eq!(
+        app.logs(cx)
+            .matches("Choose a connection before running SQL.")
+            .count(),
+        2
+    );
     assert_eq!(app.credentials.reads(), 0);
 
     for (index, text) in ["", "\n-- only a comment;\n/* another ; */\n", "   "]
@@ -738,7 +743,7 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
 fn activity_does_not_read_a_hidden_tabs_local_error(cx: &mut TestAppContext) {
     let profile = crate::support::offline_profile("Synthetic");
     let mut first = SavedTab::new(1, Some(profile.id));
-    first.sql = "SELECT 1; SELECT 2;".into();
+    first.sql = "-- only a comment;".into();
     let app = TestApp::launch_with(
         cx,
         Workspace {
@@ -1343,4 +1348,234 @@ fn toggle_comment_selection_cursor_undo_and_redo(cx: &mut TestAppContext) {
         app.saved().tabs[0].sql == "  -- SELECT '日本語😀';\n\n\tSELECT 2;"
     });
     assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+fn selected_statements_run_sequentially_and_keep_the_last_result_set(cx: &mut TestAppContext) {
+    use crate::support::trino_protocol::{Reply, Server, done};
+    use serde_json::json;
+
+    let server = Server::new(
+        false,
+        vec![
+            // 0: Trino connect probe (SELECT 1)
+            done(),
+            // 1: START TRANSACTION -> no result set
+            Reply::page(json!({
+                "id": "q1",
+                "stats": { "state": "FINISHED" },
+                "updateType": "START TRANSACTION"
+            }))
+            .header("X-Trino-Started-Transaction-Id", "tx-1"),
+            // 2: SELECT 1 -> result set (replaced by statement 3)
+            Reply::page(json!({
+                "id": "q2",
+                "columns": [{ "name": "first", "type": "varchar" }],
+                "data": [["one"]],
+                "stats": { "state": "FINISHED" }
+            })),
+            // 3: SELECT 2 -> last result set (preserved across COMMIT)
+            Reply::page(json!({
+                "id": "q3",
+                "columns": [{ "name": "final_col", "type": "varchar" }],
+                "data": [["日本語😀"]],
+                "stats": { "state": "FINISHED" }
+            })),
+            // 4: COMMIT -> no result set
+            Reply::page(json!({
+                "id": "q4",
+                "stats": { "state": "FINISHED" },
+                "updateType": "COMMIT"
+            }))
+            .header("X-Trino-Clear-Transaction-Id", "true"),
+        ],
+    );
+    let credentials = MemoryCredentials::default();
+    credentials.set_password(server.profile.id, "").unwrap();
+    let sql =
+        "START TRANSACTION;\nSELECT 'one' AS first;\nSELECT '日本語😀' AS final_col;\nCOMMIT;";
+    let mut tab = SavedTab::new(1, Some(server.profile.id));
+    tab.sql = sql.into();
+    let app = TestApp::launch_with(
+        cx,
+        Workspace {
+            profiles: vec![server.profile.clone()],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        credentials,
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "日本語😀");
+
+    // Copy query copies the statement that produced the shown result set.
+    app.click(cx, "copy-result-query");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("SELECT '日本語😀' AS final_col;".into())
+    );
+    // Partial badge is absent because all rows were fetched.
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-partial").is_none());
+    });
+
+    // Logs show all 4 statements in order.
+    let logs = app.logs(cx);
+    assert!(logs.contains("Submitted statement 1 of 4:\nSTART TRANSACTION;"));
+    assert!(logs.contains("Submitted statement 2 of 4:\nSELECT 'one' AS first;"));
+    assert!(logs.contains("Submitted statement 3 of 4:\nSELECT '日本語😀' AS final_col;"));
+    assert!(logs.contains("Submitted statement 4 of 4:\nCOMMIT;"));
+
+    // All 4 statements ran sequentially on the same transaction session (after connect probe).
+    let requests = server.requests();
+    assert_eq!(requests.len(), 5);
+    assert!(requests[1].ends_with("START TRANSACTION"));
+    assert!(
+        requests[2]
+            .to_ascii_lowercase()
+            .contains("x-trino-transaction-id: tx-1")
+    );
+    assert!(
+        requests[3]
+            .to_ascii_lowercase()
+            .contains("x-trino-transaction-id: tx-1")
+    );
+    assert!(requests[4].ends_with("COMMIT"));
+}
+
+#[gpui_kit::test]
+fn sequential_commands_without_result_sets_and_mid_batch_errors(cx: &mut TestAppContext) {
+    use crate::support::trino_protocol::{Reply, Server, done};
+    use serde_json::json;
+
+    // 1. Two DDL commands with no result sets show the statement count message.
+    let server = Server::new(
+        false,
+        vec![
+            done(),
+            Reply::page(json!({
+                "id": "d1",
+                "stats": { "state": "FINISHED" },
+                "updateType": "DROP TABLE"
+            })),
+            Reply::page(json!({
+                "id": "d2",
+                "stats": { "state": "FINISHED" },
+                "updateType": "CREATE TABLE"
+            })),
+            // Second run: statement 1 returns a row, statement 2 fails, statement 3 must not run.
+            Reply::page(json!({
+                "id": "e1",
+                "columns": [{ "name": "kept", "type": "varchar" }],
+                "data": [["kept_value"]],
+                "stats": { "state": "FINISHED" }
+            })),
+            Reply::page(json!({
+                "id": "e2",
+                "stats": { "state": "FAILED" },
+                "error": {
+                    "errorName": "COLUMN_NOT_FOUND",
+                    "message": "Column 'missing' cannot be resolved"
+                }
+            })),
+        ],
+    );
+    let credentials = MemoryCredentials::default();
+    credentials.set_password(server.profile.id, "").unwrap();
+    let mut tab = SavedTab::new(1, Some(server.profile.id));
+    tab.sql = "DROP TABLE IF EXISTS t;\nCREATE TABLE t (id int);".into();
+    let app = TestApp::launch_with(
+        cx,
+        Workspace {
+            profiles: vec![server.profile.clone()],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        credentials,
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.update(cx, |window, _| {
+        assert!(
+            labelled(window, "2 statements completed without a result set").is_some(),
+            "Expected multi-statement empty result message"
+        );
+    });
+
+    // 2. Error on statement 2 stops before statement 3 and keeps statement 1's complete result.
+    app.type_sql(
+        cx,
+        "SELECT 'kept_value' AS kept;\nSELECT missing;\nSELECT 'never_runs';",
+    );
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Error: Query failed");
+    let logs = app.logs(cx);
+    assert!(logs.contains("Submitted statement 1 of 3:\nSELECT 'kept_value' AS kept;"));
+    assert!(logs.contains("Submitted statement 2 of 3:\nSELECT missing;"));
+    assert!(!logs.contains("never_runs"));
+    assert_eq!(server.requests().len(), 5);
+
+    // Switching back to Results shows statement 1's rows without a false Partial tag.
+    app.click(cx, "results-panel-tab");
+    app.wait_cell(cx, 0, 1, "kept_value");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-partial").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn non_final_large_result_marks_partial_when_followed_by_commit(cx: &mut TestAppContext) {
+    use crate::support::trino_protocol::{Reply, Server, done};
+    use serde_json::json;
+
+    let rows: Vec<_> = (1..=1005).map(|i| json!([i.to_string()])).collect();
+    let server = Server::new(
+        false,
+        vec![
+            done(),
+            // Page 1 returns 1,005 rows; worker reads 1,000 then finishes & closes before COMMIT.
+            Reply::page(json!({
+                "id": "big1",
+                "columns": [{ "name": "n", "type": "varchar" }],
+                "data": rows,
+                "stats": { "state": "FINISHED" }
+            })),
+            Reply::page(json!({
+                "id": "c1",
+                "stats": { "state": "FINISHED" },
+                "updateType": "COMMIT"
+            })),
+        ],
+    );
+    let credentials = MemoryCredentials::default();
+    credentials.set_password(server.profile.id, "").unwrap();
+    let mut tab = SavedTab::new(1, Some(server.profile.id));
+    tab.sql = "SELECT n FROM big_table;\nCOMMIT;".into();
+    let app = TestApp::launch_with(
+        cx,
+        Workspace {
+            profiles: vec![server.profile.clone()],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        credentials,
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "secondary-enter");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "1");
+    app.update(cx, |window, _| {
+        assert!(
+            window.try_find("result-partial").is_some(),
+            "Expected Partial badge when cursor closed before COMMIT"
+        );
+    });
+    assert_eq!(server.requests().len(), 3);
 }

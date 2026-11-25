@@ -41,7 +41,7 @@ struct Pending {
 
 enum Command {
     RunExport(Box<run_export::Request>),
-    Run(Box<Profile>, String, ExecutionId),
+    Run(Box<Profile>, Vec<String>, ExecutionId),
     UpdateProfile(Box<Profile>),
     More,
     Drain(Box<Drain>),
@@ -65,6 +65,20 @@ pub enum Event {
     Authenticating(bool),
     Connected,
     Running,
+    /// One statement in a multi-statement run started on the session.
+    StatementStarted {
+        index: usize,
+        total: usize,
+    },
+    /// A statement in a multi-statement run is about to send a result set.
+    ResultStarted {
+        sql: String,
+    },
+    /// A statement in a multi-statement run finished fetching its preview.
+    ResultFinished {
+        duration: Duration,
+        partial: bool,
+    },
     Columns(Vec<Column>),
     ExportContext(crate::export::Context),
     Cursor {
@@ -210,8 +224,8 @@ impl Worker {
                         runner.run_export(*request);
                         Ok(())
                     }
-                    Command::Run(profile, sql, execution_id) => {
-                        runner.run(*profile, sql, execution_id)
+                    Command::Run(profile, statements, execution_id) => {
+                        runner.run(*profile, statements, execution_id)
                     }
                     Command::UpdateProfile(profile) => {
                         runner.update_profile(*profile);
@@ -320,11 +334,23 @@ impl Worker {
         sql: String,
         execution_id: ExecutionId,
     ) -> ExecutionId {
+        self.run_statements_with_id(profile, vec![sql], execution_id)
+    }
+    pub fn run_statements(&self, profile: Profile, statements: Vec<String>) -> ExecutionId {
+        let execution_id = ExecutionId(self.next_execution.fetch_add(1, Ordering::SeqCst));
+        self.run_statements_with_id(profile, statements, execution_id)
+    }
+    pub fn run_statements_with_id(
+        &self,
+        profile: Profile,
+        statements: Vec<String>,
+        execution_id: ExecutionId,
+    ) -> ExecutionId {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
         let _ = self
             .tx
-            .send(Command::Run(Box::new(profile), sql, execution_id));
+            .send(Command::Run(Box::new(profile), statements, execution_id));
         execution_id
     }
     pub fn more(&self) {
@@ -486,6 +512,11 @@ struct FetchSummary {
     fetched: usize,
     more: bool,
     limited: bool,
+}
+
+enum PreviewOutcome {
+    Ready { more: bool, limited: bool },
+    Cancelled,
 }
 
 impl Runner {
@@ -655,7 +686,19 @@ impl Runner {
         self.session.as_deref().context("Session is disconnected")
     }
 
-    fn run(&mut self, profile: Profile, sql: String, execution_id: ExecutionId) -> Result<()> {
+    fn run(
+        &mut self,
+        profile: Profile,
+        statements: Vec<String>,
+        execution_id: ExecutionId,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            !statements.is_empty(),
+            "Write or select a SQL statement first."
+        );
+        let total = statements.len();
+        let multi = total > 1;
+        let profile_name = profile.name.clone();
         self.cursor = Cursor::Unavailable;
         self.pending = None;
         self.current_execution = Some(execution_id);
@@ -663,6 +706,20 @@ impl Runner {
         profile.lifecycle.validate()?;
         self.rows = 0;
         self.bytes = 0;
+        if multi {
+            let first = &statements[0];
+            self.emit_log(
+                LogEvent::at(
+                    SystemTime::now(),
+                    Some(execution_id),
+                    Severity::Info,
+                    LogKind::Submitted,
+                    format!("Submitted statement 1 of {total}:\n{first}"),
+                )
+                .with_connection(profile_name.clone())
+                .with_sql(first.clone()),
+            );
+        }
         self.prepare_session(profile, execution_id, None, self.cancelled.clone())?;
         if self.cancelled.load(Ordering::SeqCst) {
             self.log(
@@ -675,84 +732,141 @@ impl Runner {
             self.emit(Event::Cancelled);
             return Ok(());
         }
-        self.emit(Event::Running);
-        self.execution = Some(ExecutionTiming {
-            id: execution_id,
-            started: Instant::now(),
-            fetch_page: 0,
-            execution_completed: false,
-        });
-        *self.target.lock_unpoisoned() = None;
-        let cancellation = self.session_mut()?.execute(&sql)?;
-        *self.target.lock_unpoisoned() = Some(cancellation.clone());
-        self.emit_session(execution_id);
-        self.log(
-            Some(execution_id),
-            Severity::Info,
-            LogKind::ExecutionStarted,
-            "SQL accepted by the server",
-            None,
-        );
-        // Catch cancellation requested before ExecuteStatement returned its handle.
-        if self.cancelled.load(Ordering::SeqCst) {
-            cancellation.cancel()?;
-        }
-        let state = wait_for_result(self.session_mut()?, None)?;
-        let finished = matches!(state, QueryState::Finished { .. });
-        match state {
-            QueryState::Cancelled => {
-                self.session_mut()?.close_operation()?;
-                *self.target.lock_unpoisoned() = None;
-                self.log(
-                    Some(execution_id),
-                    Severity::Info,
-                    LogKind::Cancelled,
-                    "Query cancelled by the server",
-                    self.execution_duration(),
-                );
-                self.emit(Event::Cancelled);
-                Ok(())
-            }
-            QueryState::Streaming { has_results } | QueryState::Finished { has_results } => {
+        let mut last_result_limited = false;
+        for (offset, sql) in statements.into_iter().enumerate() {
+            let index = offset + 1;
+            let is_last = index == total;
+            if offset > 0 {
                 if self.cancelled.load(Ordering::SeqCst) {
+                    self.log(
+                        Some(execution_id),
+                        Severity::Info,
+                        LogKind::Cancelled,
+                        format!("Execution cancelled before statement {index} of {total}"),
+                        None,
+                    );
+                    self.emit(Event::Cancelled);
+                    return Ok(());
+                }
+                self.emit_log(
+                    LogEvent::at(
+                        SystemTime::now(),
+                        Some(execution_id),
+                        Severity::Info,
+                        LogKind::Submitted,
+                        format!("Submitted statement {index} of {total}:\n{sql}"),
+                    )
+                    .with_connection(profile_name.clone())
+                    .with_sql(sql.clone()),
+                );
+            }
+            if multi {
+                self.emit(Event::StatementStarted { index, total });
+            } else {
+                self.emit(Event::Running);
+            }
+            self.rows = 0;
+            self.bytes = 0;
+            self.pending = None;
+            self.execution = Some(ExecutionTiming {
+                id: execution_id,
+                started: Instant::now(),
+                fetch_page: 0,
+                execution_completed: false,
+            });
+            *self.target.lock_unpoisoned() = None;
+            let cancellation = self.session_mut()?.execute(&sql)?;
+            *self.target.lock_unpoisoned() = Some(cancellation.clone());
+            self.emit_session(execution_id);
+            self.log(
+                Some(execution_id),
+                Severity::Info,
+                LogKind::ExecutionStarted,
+                "SQL accepted by the server",
+                None,
+            );
+            // Catch cancellation requested before ExecuteStatement returned its handle.
+            if self.cancelled.load(Ordering::SeqCst) {
+                cancellation.cancel()?;
+            }
+            let state = wait_for_result(self.session_mut()?, None)?;
+            let finished = matches!(state, QueryState::Finished { .. });
+            match state {
+                QueryState::Cancelled => {
                     self.session_mut()?.close_operation()?;
                     *self.target.lock_unpoisoned() = None;
                     self.log(
                         Some(execution_id),
                         Severity::Info,
                         LogKind::Cancelled,
-                        "Query finished after cancellation was requested",
+                        "Query cancelled by the server",
                         self.execution_duration(),
                     );
-                    self.emit(Event::Ready {
-                        more: false,
-                        limited: false,
-                    });
+                    self.emit(Event::Cancelled);
                     return Ok(());
                 }
-                if !has_results {
-                    if !finished && self.finish_preview_execution()? {
+                QueryState::Streaming { has_results } | QueryState::Finished { has_results } => {
+                    if self.cancelled.load(Ordering::SeqCst) {
+                        self.session_mut()?.close_operation()?;
+                        *self.target.lock_unpoisoned() = None;
+                        self.log(
+                            Some(execution_id),
+                            Severity::Info,
+                            LogKind::Cancelled,
+                            "Query finished after cancellation was requested",
+                            self.execution_duration(),
+                        );
+                        if multi {
+                            self.emit(Event::Cancelled);
+                        } else {
+                            self.emit(Event::Ready {
+                                more: false,
+                                limited: false,
+                            });
+                        }
                         return Ok(());
                     }
-                    self.session_mut()?.close_operation()?;
-                    *self.target.lock_unpoisoned() = None;
-                    self.complete_execution(false);
-                    self.emit(Event::Ready {
-                        more: false,
-                        limited: false,
-                    });
-                    return Ok(());
+                    let columns = if has_results {
+                        self.session_mut()?.columns()?
+                    } else {
+                        Vec::new()
+                    };
+                    if columns.is_empty() {
+                        if !finished && self.finish_preview_execution()? {
+                            return Ok(());
+                        }
+                        self.session_mut()?.close_operation()?;
+                        *self.target.lock_unpoisoned() = None;
+                        self.complete_execution(false);
+                        continue;
+                    }
+                    if finished {
+                        self.complete_execution(true);
+                    }
+                    if multi {
+                        self.emit(Event::ResultStarted { sql });
+                    }
+                    self.emit(Event::Columns(columns));
+                    self.emit(Event::ExportContext(self.session_ref()?.export_context()));
+                    match self.fetch_preview_for(is_last, multi)? {
+                        PreviewOutcome::Cancelled => return Ok(()),
+                        PreviewOutcome::Ready { more, limited } => {
+                            if is_last {
+                                self.emit(Event::Ready { more, limited });
+                                return Ok(());
+                            }
+                            last_result_limited = limited;
+                        }
+                    }
                 }
-                let columns = self.session_mut()?.columns()?;
-                if finished {
-                    self.complete_execution(true);
-                }
-                self.emit(Event::Columns(columns));
-                self.emit(Event::ExportContext(self.session_ref()?.export_context()));
-                self.fetch_preview()
+                QueryState::Running => anyhow::bail!("The query result is not ready"),
             }
-            QueryState::Running => anyhow::bail!("The query result is not ready"),
         }
+        self.emit(Event::Ready {
+            more: false,
+            limited: last_result_limited,
+        });
+        Ok(())
     }
 
     fn finish_preview_execution(&mut self) -> Result<bool> {
@@ -776,13 +890,19 @@ impl Runner {
     }
 
     fn fetch_preview(&mut self) -> Result<()> {
+        if let PreviewOutcome::Ready { more, limited } = self.fetch_preview_for(true, false)? {
+            self.emit(Event::Ready { more, limited });
+        }
+        Ok(())
+    }
+
+    fn fetch_preview_for(&mut self, keep_cursor: bool, multi: bool) -> Result<PreviewOutcome> {
         if self.pending.is_some() {
             self.set_cursor(Cursor::Available);
-            self.emit(Event::Ready {
+            return Ok(PreviewOutcome::Ready {
                 more: false,
                 limited: true,
             });
-            return Ok(());
         }
         let execution_id = self.execution_id();
         let fetch_started = Instant::now();
@@ -805,7 +925,7 @@ impl Runner {
         let mut fetched = 0;
         while fetched < PREVIEW_ROWS {
             if self.finish_cancelled_fetch()? {
-                return Ok(());
+                return Ok(PreviewOutcome::Cancelled);
             }
             let live_cursor = self
                 .profile
@@ -817,7 +937,7 @@ impl Runner {
             let batch = self.session_mut()?.fetch(PREVIEW_ROWS - fetched)?;
             // A blocked fetch may return after Cancel was requested.
             if self.finish_cancelled_fetch()? {
-                return Ok(());
+                return Ok(PreviewOutcome::Cancelled);
             }
             let count = batch.rows.len();
             anyhow::ensure!(
@@ -837,9 +957,14 @@ impl Runner {
                 || self.bytes.saturating_add(bytes) > MAX_RESULT_BYTES;
             if limited || count == 0 {
                 if self.finish_preview_execution()? {
-                    return Ok(());
+                    return Ok(PreviewOutcome::Cancelled);
                 }
-                if limited && count > 0 && live_cursor && !self.session_ref()?.result_limited() {
+                if keep_cursor
+                    && limited
+                    && count > 0
+                    && live_cursor
+                    && !self.session_ref()?.result_limited()
+                {
                     self.pending = Some(Pending {
                         rows: batch.rows,
                         _memory: fetch_memory.unwrap(),
@@ -848,6 +973,7 @@ impl Runner {
                 } else {
                     self.session_mut()?.close_operation()?;
                     *self.target.lock_unpoisoned() = None;
+                    self.pending = None;
                     self.set_cursor(if limited {
                         Cursor::Unavailable
                     } else {
@@ -863,11 +989,16 @@ impl Runner {
                     more: false,
                     limited,
                 });
-                self.emit(Event::Ready {
+                if multi {
+                    self.emit(Event::ResultFinished {
+                        duration: self.execution_duration().unwrap_or_default(),
+                        partial: limited,
+                    });
+                }
+                return Ok(PreviewOutcome::Ready {
                     more: false,
                     limited,
                 });
-                return Ok(());
             }
             fetched += count;
             self.rows += count;
@@ -884,7 +1015,23 @@ impl Runner {
             limited: false,
         });
         if self.finish_preview_execution()? {
-            return Ok(());
+            return Ok(PreviewOutcome::Cancelled);
+        }
+        if !keep_cursor {
+            self.session_mut()?.close_operation()?;
+            *self.target.lock_unpoisoned() = None;
+            self.pending = None;
+            self.set_cursor(Cursor::Unavailable);
+            if multi {
+                self.emit(Event::ResultFinished {
+                    duration: self.execution_duration().unwrap_or_default(),
+                    partial: true,
+                });
+            }
+            return Ok(PreviewOutcome::Ready {
+                more: false,
+                limited: false,
+            });
         }
         self.set_cursor(
             if self
@@ -897,11 +1044,16 @@ impl Runner {
                 Cursor::Unavailable
             },
         );
-        self.emit(Event::Ready {
+        if multi {
+            self.emit(Event::ResultFinished {
+                duration: self.execution_duration().unwrap_or_default(),
+                partial: false,
+            });
+        }
+        Ok(PreviewOutcome::Ready {
             more: true,
             limited: false,
-        });
-        Ok(())
+        })
     }
 
     fn set_cursor(&mut self, state: Cursor) {

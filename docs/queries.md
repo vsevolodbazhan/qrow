@@ -48,9 +48,25 @@ If the cursor is on a blank line or a comment between statements, Qrow does
 not run SQL. Move the cursor into a statement, or select SQL text.
 Blank lines and comments inside a statement belong to that statement.
 
-If you select text, Qrow runs that text. Each execution must contain one SQL
-statement. Qrow rejects a selection with multiple statements before it sends
-SQL to the server.
+If you select text, Qrow runs that text. If the selection contains several
+statements, Qrow splits them at SQL statement boundaries and runs them in
+sequence, from top to bottom, on the tab's session. Session changes from
+earlier statements remain active for later statements.
+
+During a multi-statement run, statements that do not return a result set (for
+example `BEGIN`, `COMMIT`, `SET`, `CREATE`, or `DROP`) do not replace an
+earlier result set from the same run. When several statements return a result
+set, the result tab shows the last one. When no statement returns a result set,
+the result tab shows a completion message. Only the final statement in the
+selection can keep a live cursor for **Next page** or cursor export. An earlier
+result set keeps its first preview page and shows a **Partial** tag if more
+rows existed.
+
+Qrow stops a multi-statement run on the first error and does not run the
+remaining statements. **Cancel** cancels the active statement and stops the
+remaining statements from starting. Neither action rolls back completed
+statements. Logs show each statement that Qrow submitted, with its outcome and
+duration, in one execution group.
 
 The editor shows the statement that **Run** uses with a light tint. On a line
 that contains only that statement, the tint goes across the full width. When
