@@ -2293,11 +2293,9 @@ fn sequential_statements_keep_the_last_result_set_across_non_result_commands() {
         ]
     );
     assert_eq!(started, vec![(1, 5), (2, 5), (3, 5), (4, 5), (5, 5)]);
-    assert_eq!(
-        results_started,
-        vec!["SELECT 'a' AS first;", "SELECT 'b' AS second;"]
-    );
-    assert_eq!(results_finished, vec![false, false]);
+    // Intermediate result sets are buffered in the worker so the UI never flashes earlier results.
+    assert_eq!(results_started, vec!["SELECT 'b' AS second;"]);
+    assert_eq!(results_finished, vec![false]);
     assert_eq!(latest_columns[0].name, "second");
     assert_eq!(
         latest_rows,
@@ -2517,6 +2515,36 @@ fn sequential_statements_close_non_final_cursors_and_keep_final_cursor_open() {
     }
     assert_eq!(final_columns[0].name, "Result");
     assert!(final_rows.is_empty());
+
+    // `SELECT 1; SELECT 2;` never emits `SELECT 1`'s columns or rows to the UI.
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::Rows {
+            column: "first_col".into(),
+            rows: vec!["1".into()],
+        },
+        ScriptedReply::Rows {
+            column: "second_col".into(),
+            rows: vec!["2".into()],
+        },
+    ]);
+    let worker = scripted_worker(connector);
+    worker.run_statements(
+        Profile::default(),
+        vec!["SELECT 1;".into(), "SELECT 2;".into()],
+    );
+    let mut emitted_columns = Vec::new();
+    let mut emitted_rows = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::Columns(cols) => emitted_columns.push(cols[0].name.clone()),
+            Event::Rows(batch) => emitted_rows.extend(batch),
+            Event::Ready { .. } => break,
+            Event::Error { message, .. } => panic!("Unexpected error: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(emitted_columns, vec!["second_col"]);
+    assert_eq!(emitted_rows, vec![vec![Some("2".into())]]);
 }
 
 #[test]

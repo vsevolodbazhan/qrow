@@ -187,6 +187,7 @@ impl Worker {
             download: download.clone(),
             cursor: Cursor::Unavailable,
             pending: None,
+            buffered_result: None,
         };
         thread::spawn(move || {
             let mut idle_started = Instant::now();
@@ -237,6 +238,7 @@ impl Worker {
                         Ok(())
                     }
                     Command::Disconnect => {
+                        runner.buffered_result = None;
                         runner.disconnect();
                         runner.log(
                             None,
@@ -252,6 +254,7 @@ impl Worker {
                 };
                 if let Err(error) = result {
                     if error.is::<crate::external_auth::Cancelled>() {
+                        runner.buffered_result = None;
                         runner.disconnect();
                         *runner.target.lock_unpoisoned() = None;
                         runner.emit(Event::Disconnected);
@@ -259,6 +262,7 @@ impl Worker {
                         idle_started = Instant::now();
                         continue;
                     }
+                    runner.flush_buffered_result();
                     let message = crate::connector::error_message(&error);
                     let execution_completed = runner
                         .execution
@@ -495,6 +499,27 @@ struct Runner {
     download: Arc<Mutex<Option<Arc<Download>>>>,
     cursor: Cursor,
     pending: Option<Pending>,
+    /// Buffered preview of the latest non-final result-producing statement in a
+    /// multi-statement run, flushed only if no later statement produces results.
+    buffered_result: Option<BufferedResult>,
+}
+
+struct BufferedResult {
+    sql: String,
+    columns: Vec<Column>,
+    export_context: crate::export::Context,
+    rows: Vec<Row>,
+    cursor: Cursor,
+    duration: Duration,
+    partial: bool,
+    limited: bool,
+}
+
+struct BufferDraft {
+    sql: String,
+    columns: Vec<Column>,
+    export_context: crate::export::Context,
+    rows: Vec<Row>,
 }
 
 struct ExecutionTiming {
@@ -701,6 +726,7 @@ impl Runner {
         let profile_name = profile.name.clone();
         self.cursor = Cursor::Unavailable;
         self.pending = None;
+        self.buffered_result = None;
         self.current_execution = Some(execution_id);
         self.execution = None;
         profile.lifecycle.validate()?;
@@ -732,12 +758,12 @@ impl Runner {
             self.emit(Event::Cancelled);
             return Ok(());
         }
-        let mut last_result_limited = false;
         for (offset, sql) in statements.into_iter().enumerate() {
             let index = offset + 1;
             let is_last = index == total;
             if offset > 0 {
                 if self.cancelled.load(Ordering::SeqCst) {
+                    self.flush_buffered_result();
                     self.log(
                         Some(execution_id),
                         Severity::Info,
@@ -795,6 +821,7 @@ impl Runner {
                 QueryState::Cancelled => {
                     self.session_mut()?.close_operation()?;
                     *self.target.lock_unpoisoned() = None;
+                    self.flush_buffered_result();
                     self.log(
                         Some(execution_id),
                         Severity::Info,
@@ -809,6 +836,7 @@ impl Runner {
                     if self.cancelled.load(Ordering::SeqCst) {
                         self.session_mut()?.close_operation()?;
                         *self.target.lock_unpoisoned() = None;
+                        self.flush_buffered_result();
                         self.log(
                             Some(execution_id),
                             Severity::Info,
@@ -879,30 +907,70 @@ impl Runner {
                     if finished {
                         self.complete_execution(true);
                     }
-                    if multi {
-                        self.emit(Event::ResultStarted { sql });
-                    }
-                    self.emit(Event::Columns(columns));
-                    self.emit(Event::ExportContext(self.session_ref()?.export_context()));
-                    match self.fetch_preview_for(is_last, multi, initial_batch)? {
-                        PreviewOutcome::Cancelled => return Ok(()),
-                        PreviewOutcome::Ready { more, limited } => {
-                            if is_last {
+                    let export_context = self.session_ref()?.export_context();
+                    if is_last {
+                        self.buffered_result = None;
+                        if multi {
+                            self.emit(Event::ResultStarted { sql });
+                        }
+                        self.emit(Event::Columns(columns));
+                        self.emit(Event::ExportContext(export_context));
+                        match self.fetch_preview_for(true, multi, initial_batch, None)? {
+                            PreviewOutcome::Cancelled => return Ok(()),
+                            PreviewOutcome::Ready { more, limited } => {
                                 self.emit(Event::Ready { more, limited });
                                 return Ok(());
                             }
-                            last_result_limited = limited;
+                        }
+                    } else {
+                        let draft = BufferDraft {
+                            sql,
+                            columns,
+                            export_context,
+                            rows: Vec::new(),
+                        };
+                        match self.fetch_preview_for(false, multi, initial_batch, Some(draft))? {
+                            PreviewOutcome::Cancelled => return Ok(()),
+                            PreviewOutcome::Ready { .. } => {}
                         }
                     }
                 }
                 QueryState::Running => anyhow::bail!("The query result is not ready"),
             }
         }
+        let limited = self.flush_buffered_result();
         self.emit(Event::Ready {
             more: false,
-            limited: last_result_limited,
+            limited,
         });
         Ok(())
+    }
+
+    /// Emits any buffered non-final result set to the UI once, returning whether
+    /// it hit the preview limit.
+    fn flush_buffered_result(&mut self) -> bool {
+        let Some(result) = self.buffered_result.take() else {
+            return false;
+        };
+        let execution_id = self.current_execution;
+        self.emit(Event::ResultStarted { sql: result.sql });
+        self.emit(Event::Columns(result.columns));
+        self.emit(Event::ExportContext(result.export_context));
+        if !result.rows.is_empty() {
+            self.emit(Event::Rows(result.rows));
+        }
+        self.cursor = result.cursor;
+        if let Some(execution) = execution_id {
+            self.emit(Event::Cursor {
+                execution,
+                state: result.cursor,
+            });
+        }
+        self.emit(Event::ResultFinished {
+            duration: result.duration,
+            partial: result.partial,
+        });
+        result.limited
     }
 
     fn finish_preview_execution(&mut self) -> Result<bool> {
@@ -927,7 +995,7 @@ impl Runner {
 
     fn fetch_preview(&mut self) -> Result<()> {
         if let PreviewOutcome::Ready { more, limited } =
-            self.fetch_preview_for(true, false, None)?
+            self.fetch_preview_for(true, false, None, None)?
         {
             self.emit(Event::Ready { more, limited });
         }
@@ -939,6 +1007,7 @@ impl Runner {
         keep_cursor: bool,
         multi: bool,
         mut initial_batch: Option<crate::model::Batch>,
+        mut buffer: Option<BufferDraft>,
     ) -> Result<PreviewOutcome> {
         if self.pending.is_some() {
             self.set_cursor(Cursor::Available);
@@ -971,7 +1040,9 @@ impl Runner {
             .as_ref()
             .is_some_and(|profile| profile.database_type == crate::model::DatabaseType::Kyuubi);
         while fetched < PREVIEW_ROWS {
-            if self.finish_cancelled_fetch()? {
+            if self.cancelled.load(Ordering::SeqCst) {
+                self.flush_cancelled_buffer(buffer);
+                self.finish_cancelled_fetch()?;
                 return Ok(PreviewOutcome::Cancelled);
             }
             let fetch_memory = live_cursor
@@ -982,7 +1053,9 @@ impl Runner {
                 None => self.session_mut()?.fetch(PREVIEW_ROWS - fetched)?,
             };
             // A blocked fetch may return after Cancel was requested.
-            if self.finish_cancelled_fetch()? {
+            if self.cancelled.load(Ordering::SeqCst) {
+                self.flush_cancelled_buffer(buffer);
+                self.finish_cancelled_fetch()?;
                 return Ok(PreviewOutcome::Cancelled);
             }
             let count = batch.rows.len();
@@ -1002,7 +1075,7 @@ impl Runner {
                 || self.rows + count > MAX_RESULT_ROWS
                 || self.bytes.saturating_add(bytes) > MAX_RESULT_BYTES;
             if limited || count == 0 {
-                if self.finish_preview_execution()? {
+                if self.finish_preview_execution_with_buffer(&mut buffer)? {
                     return Ok(PreviewOutcome::Cancelled);
                 }
                 if keep_cursor
@@ -1020,11 +1093,16 @@ impl Runner {
                     self.session_mut()?.close_operation()?;
                     *self.target.lock_unpoisoned() = None;
                     self.pending = None;
-                    self.set_cursor(if limited {
+                    let cursor = if limited {
                         Cursor::Unavailable
                     } else {
                         Cursor::Complete
-                    });
+                    };
+                    if buffer.is_some() {
+                        self.cursor = cursor;
+                    } else {
+                        self.set_cursor(cursor);
+                    }
                 }
                 self.fetch_completed(FetchSummary {
                     execution_id,
@@ -1035,9 +1113,21 @@ impl Runner {
                     more: false,
                     limited,
                 });
-                if multi {
+                let duration = self.execution_duration().unwrap_or_default();
+                if let Some(draft) = buffer {
+                    self.buffered_result = Some(BufferedResult {
+                        sql: draft.sql,
+                        columns: draft.columns,
+                        export_context: draft.export_context,
+                        rows: draft.rows,
+                        cursor: self.cursor,
+                        duration,
+                        partial: limited,
+                        limited,
+                    });
+                } else if multi {
                     self.emit(Event::ResultFinished {
-                        duration: self.execution_duration().unwrap_or_default(),
+                        duration,
                         partial: limited,
                     });
                 }
@@ -1049,14 +1139,20 @@ impl Runner {
             fetched += count;
             self.rows += count;
             self.bytes += bytes;
-            self.emit(Event::Rows(batch.rows));
+            if let Some(draft) = &mut buffer {
+                draft.rows.extend(batch.rows);
+            } else {
+                self.emit(Event::Rows(batch.rows));
+            }
         }
         if !keep_cursor {
             // Probe for one more row before closing so an exact page-sized result
             // (for example 1,000 rows followed by COMMIT) stays complete, not partial.
             let mut has_more = self.session_ref()?.result_limited();
             if !has_more {
-                if self.finish_cancelled_fetch()? {
+                if self.cancelled.load(Ordering::SeqCst) {
+                    self.flush_cancelled_buffer(buffer);
+                    self.finish_cancelled_fetch()?;
                     return Ok(PreviewOutcome::Cancelled);
                 }
                 let _fetch_memory = live_cursor
@@ -1065,7 +1161,9 @@ impl Runner {
                     })
                     .transpose()?;
                 let probe = self.session_mut()?.fetch(1)?;
-                if self.finish_cancelled_fetch()? {
+                if self.cancelled.load(Ordering::SeqCst) {
+                    self.flush_cancelled_buffer(buffer);
+                    self.finish_cancelled_fetch()?;
                     return Ok(PreviewOutcome::Cancelled);
                 }
                 has_more = !probe.rows.is_empty() || self.session_ref()?.result_limited();
@@ -1079,22 +1177,38 @@ impl Runner {
                 more: has_more,
                 limited: false,
             });
-            if self.finish_preview_execution()? {
+            if self.finish_preview_execution_with_buffer(&mut buffer)? {
                 return Ok(PreviewOutcome::Cancelled);
             }
             self.session_mut()?.close_operation()?;
             *self.target.lock_unpoisoned() = None;
             self.pending = None;
-            self.set_cursor(if has_more {
+            let cursor = if has_more {
                 Cursor::Unavailable
             } else {
                 Cursor::Complete
-            });
-            if multi {
-                self.emit(Event::ResultFinished {
-                    duration: self.execution_duration().unwrap_or_default(),
+            };
+            let duration = self.execution_duration().unwrap_or_default();
+            if let Some(draft) = buffer {
+                self.cursor = cursor;
+                self.buffered_result = Some(BufferedResult {
+                    sql: draft.sql,
+                    columns: draft.columns,
+                    export_context: draft.export_context,
+                    rows: draft.rows,
+                    cursor,
+                    duration,
                     partial: has_more,
+                    limited: false,
                 });
+            } else {
+                self.set_cursor(cursor);
+                if multi {
+                    self.emit(Event::ResultFinished {
+                        duration,
+                        partial: has_more,
+                    });
+                }
             }
             return Ok(PreviewOutcome::Ready {
                 more: false,
@@ -1128,6 +1242,50 @@ impl Runner {
             more: true,
             limited: false,
         })
+    }
+
+    fn flush_cancelled_buffer(&mut self, buffer: Option<BufferDraft>) {
+        if let Some(draft) = buffer {
+            if !draft.rows.is_empty() {
+                self.buffered_result = None;
+                self.emit(Event::ResultStarted { sql: draft.sql });
+                self.emit(Event::Columns(draft.columns));
+                self.emit(Event::ExportContext(draft.export_context));
+                self.emit(Event::Rows(draft.rows));
+            } else {
+                self.flush_buffered_result();
+            }
+        }
+    }
+
+    fn finish_preview_execution_with_buffer(
+        &mut self,
+        buffer: &mut Option<BufferDraft>,
+    ) -> Result<bool> {
+        if self
+            .execution
+            .as_ref()
+            .is_some_and(|execution| !execution.execution_completed)
+        {
+            let completion = self.session_mut()?.finish_execution()?;
+            if completion == Completion::Cancelled {
+                self.cancelled.store(true, Ordering::SeqCst);
+            }
+            if self.cancelled.load(Ordering::SeqCst) {
+                self.flush_cancelled_buffer(buffer.take());
+                self.finish_cancelled_fetch()?;
+                return Ok(true);
+            }
+            if let Completion::Finished { has_results } = completion {
+                self.complete_execution(has_results);
+            }
+        }
+        if self.cancelled.load(Ordering::SeqCst) {
+            self.flush_cancelled_buffer(buffer.take());
+            self.finish_cancelled_fetch()?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn set_cursor(&mut self, state: Cursor) {
@@ -1383,6 +1541,7 @@ impl Runner {
         *self.target.lock_unpoisoned() = None;
         self.pending = None;
         self.cursor = Cursor::Consumed;
+        self.flush_buffered_result();
         self.log(
             self.execution_id(),
             Severity::Info,
