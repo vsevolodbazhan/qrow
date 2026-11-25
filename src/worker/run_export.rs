@@ -251,7 +251,7 @@ impl Runner {
             }
         };
         if !changed {
-            *self.target.lock().unwrap() = None;
+            self.clear_target();
         }
         *self.download.lock().unwrap() = None;
         drop(request);
@@ -281,7 +281,8 @@ impl Runner {
                     .register_transport(transport)?;
                 Ok(())
             }),
-        );
+        )
+        .for_export();
         self.prepare_session(
             request.profile.clone(),
             request.execution,
@@ -302,7 +303,7 @@ impl Runner {
             fetch_page: 0,
             execution_completed: false,
         });
-        *self.target.lock().unwrap() = None;
+        self.clear_target();
         let target = match self
             .session
             .as_mut()
@@ -320,7 +321,7 @@ impl Runner {
         request
             .download
             .bind(target.clone(), request.guard.fork())?;
-        *self.target.lock().unwrap() = Some(target);
+        self.set_operation_target(target);
         self.emit_session(request.execution);
         self.log(
             Some(request.execution),

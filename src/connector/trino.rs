@@ -731,13 +731,24 @@ impl TrinoSession {
 
 impl Session for TrinoSession {
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.execute_controlled(sql, &ConnectionControl::default())
+    }
+    fn execute_controlled(
+        &mut self,
+        sql: &str,
+        control: &ConnectionControl,
+    ) -> Result<Arc<dyn Cancellation>> {
         anyhow::ensure!(
             !self.http.transport.is_closed(),
             "Trino session is closed; reconnect"
         );
+        control.check()?;
+        if let Some(transport) = self.transport_cancellation() {
+            control.register(transport)?;
+        }
         self.close_keep_alive()?;
         self.close_operation()?;
-        let operation = self.start(sql, false)?;
+        let operation = self.start_controlled(sql, false, control)?;
         let cancel = operation.cancel.clone();
         self.operation = Some(operation);
         Ok(cancel)

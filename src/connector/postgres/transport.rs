@@ -1,15 +1,19 @@
 //! Socket interruption and a plaintext message ceiling before driver decoding.
 use super::cancellation::Endpoint;
 use crate::connector::Cancellation;
+use crate::sync::LockExt as _;
 use anyhow::Result;
-use futures_util::task::AtomicWaker;
+use futures_util::{
+    future::{AbortHandle, Abortable},
+    task::AtomicWaker,
+};
 use std::{
     future::Future,
     io,
     net::Shutdown,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll, ready},
@@ -128,6 +132,69 @@ impl Cancellation for Abort {
         // Wake the readers and writers so that they see the abort.
         self.wakers.read.wake();
         self.wakers.write.wake();
+    }
+}
+
+/// Interrupts DNS resolution, TCP connect, and the connected socket during setup.
+pub(super) struct ConnectAbort {
+    closed: AtomicBool,
+    handle: Mutex<Option<AbortHandle>>,
+    socket: Mutex<Option<Arc<Abort>>>,
+}
+
+impl ConnectAbort {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self {
+            closed: AtomicBool::new(false),
+            handle: Mutex::new(None),
+            socket: Mutex::new(None),
+        })
+    }
+
+    pub(super) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn attach(&self, socket: Arc<Abort>) -> Result<()> {
+        let mut slot = self.socket.lock_unpoisoned();
+        if self.closed.load(Ordering::SeqCst) {
+            drop(slot);
+            socket.abort_transport();
+            return Err(crate::export::Cancelled.into());
+        }
+        *slot = Some(socket);
+        Ok(())
+    }
+
+    pub(super) async fn run<T>(&self, future: impl Future<Output = Result<T>>) -> Result<T> {
+        let (handle, registration) = AbortHandle::new_pair();
+        {
+            let mut slot = self.handle.lock_unpoisoned();
+            if self.closed.load(Ordering::SeqCst) {
+                return Err(crate::export::Cancelled.into());
+            }
+            *slot = Some(handle);
+        }
+        let result = Abortable::new(future, registration).await;
+        *self.handle.lock_unpoisoned() = None;
+        result.map_err(|_| anyhow::Error::new(crate::export::Cancelled))?
+    }
+}
+
+impl Cancellation for ConnectAbort {
+    fn cancel(&self) -> Result<()> {
+        self.abort_transport();
+        Ok(())
+    }
+
+    fn abort_transport(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.lock_unpoisoned().take() {
+            handle.abort();
+        }
+        if let Some(socket) = self.socket.lock_unpoisoned().clone() {
+            socket.abort_transport();
+        }
     }
 }
 

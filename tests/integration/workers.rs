@@ -2079,3 +2079,304 @@ fn run_export_commits_after_append_before_preview_drain_and_continues_empty_boun
         drop(download);
     }
 }
+
+fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    let mut byte = [0];
+    while !bytes.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).unwrap();
+        bytes.push(byte[0]);
+    }
+    let headers = String::from_utf8(bytes).unwrap();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    let mut body = vec![0; content_length];
+    if content_length > 0 {
+        stream.read_exact(&mut body).unwrap();
+    }
+    format!("{headers}{}", String::from_utf8_lossy(&body))
+}
+
+fn wait_socket_eof(stream: &mut std::net::TcpStream) {
+    use std::io::Read;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(4)))
+        .unwrap();
+    let mut buf = [0; 256];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                return;
+            }
+            Err(error) => panic!("expected peer socket close after cancel: {error}"),
+        }
+    }
+}
+
+fn write_trino_json(stream: &mut std::net::TcpStream, body: &str) {
+    use std::io::Write;
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes()).unwrap();
+    stream.flush().unwrap();
+}
+
+#[test]
+fn trino_cancel_interrupts_stalled_connect_and_allows_reconnecting() {
+    use qrow::{connector::DatabaseConnector, model::DatabaseType};
+    use std::{net::TcpListener, sync::mpsc, time::Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stalled_tx, stalled_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        // Attempt 1: stall on the initial SELECT 1 probe (like an unreachable VPN peer).
+        let (mut stalled, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stalled);
+        assert!(request.starts_with("POST /v1/statement "));
+        assert!(request.ends_with("SELECT 1"));
+        stalled_tx.send(()).unwrap();
+        wait_socket_eof(&mut stalled);
+
+        // Attempt 2: answer SELECT 1 probe, then answer SELECT 42.
+        let (mut probe, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut probe);
+        assert!(request.ends_with("SELECT 1"));
+        write_trino_json(&mut probe, r#"{}"#);
+
+        let (mut query, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut query);
+        assert!(request.ends_with("SELECT 42"));
+        write_trino_json(
+            &mut query,
+            r#"{"columns":[{"name":"value","type":"integer"}],"data":[[42]]}"#,
+        );
+    });
+
+    let mut profile = Profile {
+        database_type: DatabaseType::Trino,
+        host: addr.ip().to_string(),
+        port: addr.port(),
+        tls: false,
+        username: "synthetic".into(),
+        ..Profile::default()
+    };
+    profile.lifecycle.response_timeout_seconds = 300;
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(DatabaseConnector::default()),
+        Arc::new(|_| Ok(Secret::password(""))),
+    );
+    worker.run(profile.clone(), "SELECT 42".into());
+    assert!(matches!(next(&worker), Event::Connecting));
+    stalled_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+
+    let started = Instant::now();
+    worker.cancel();
+    assert!(matches!(next(&worker), Event::Disconnected));
+    assert!(matches!(next(&worker), Event::Cancelled));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "cancel must not wait for the 300 s response timeout"
+    );
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "no stray error or CancelError event after transport cancel"
+    );
+    let logs: Vec<_> = worker.logs.try_iter().collect();
+    assert!(logs.iter().any(|entry| entry.kind == LogKind::Cancelled));
+
+    // Reconnecting on the next Run must succeed cleanly.
+    worker.run(profile, "SELECT 42".into());
+    let mut rows = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::Rows(batch) => rows.extend(batch),
+            Event::Ready { .. } => break,
+            Event::Error { message, .. } => panic!("reconnect failed: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(rows, vec![vec![Some("42".into())]]);
+    server.join().unwrap();
+}
+
+#[test]
+fn trino_cancel_interrupts_stalled_submission_on_existing_session_and_reconnects() {
+    use qrow::{connector::DatabaseConnector, model::DatabaseType};
+    use std::{net::TcpListener, sync::mpsc, time::Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stalled_tx, stalled_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        // Initial connect + first query succeed.
+        let (mut probe, _) = listener.accept().unwrap();
+        assert!(read_http_request(&mut probe).ends_with("SELECT 1"));
+        write_trino_json(&mut probe, r#"{}"#);
+
+        let (mut first, _) = listener.accept().unwrap();
+        assert!(read_http_request(&mut first).ends_with("SELECT 10"));
+        write_trino_json(
+            &mut first,
+            r#"{"columns":[{"name":"value","type":"integer"}],"data":[[10]]}"#,
+        );
+
+        // Second query stalls on POST /v1/statement (VPN disabled while connected).
+        let (mut stalled, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stalled);
+        assert!(request.starts_with("POST /v1/statement "));
+        assert!(request.ends_with("SELECT 20"));
+        stalled_tx.send(()).unwrap();
+        wait_socket_eof(&mut stalled);
+
+        // Third query reconnects cleanly and succeeds.
+        let (mut probe2, _) = listener.accept().unwrap();
+        assert!(read_http_request(&mut probe2).ends_with("SELECT 1"));
+        write_trino_json(&mut probe2, r#"{}"#);
+
+        let (mut third, _) = listener.accept().unwrap();
+        assert!(read_http_request(&mut third).ends_with("SELECT 30"));
+        write_trino_json(
+            &mut third,
+            r#"{"columns":[{"name":"value","type":"integer"}],"data":[[30]]}"#,
+        );
+    });
+
+    let mut profile = Profile {
+        database_type: DatabaseType::Trino,
+        host: addr.ip().to_string(),
+        port: addr.port(),
+        tls: false,
+        username: "synthetic".into(),
+        ..Profile::default()
+    };
+    profile.lifecycle.response_timeout_seconds = 300;
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(DatabaseConnector::default()),
+        Arc::new(|_| Ok(Secret::password(""))),
+    );
+    worker.run(profile.clone(), "SELECT 10".into());
+    assert_eq!(ready(&worker), (1, false));
+    assert!(worker.session_generation(&profile).is_some());
+
+    worker.run(profile.clone(), "SELECT 20".into());
+    assert!(matches!(next(&worker), Event::Running));
+    stalled_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+
+    let started = Instant::now();
+    worker.cancel();
+    assert!(matches!(next(&worker), Event::Disconnected));
+    assert!(matches!(next(&worker), Event::Cancelled));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(worker.session_generation(&profile).is_none());
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
+
+    worker.run(profile, "SELECT 30".into());
+    let mut rows = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::Rows(batch) => rows.extend(batch),
+            Event::Ready { .. } => break,
+            Event::Error { message, .. } => panic!("reconnect failed: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(rows, vec![vec![Some("30".into())]]);
+    server.join().unwrap();
+}
+
+#[test]
+fn trino_cancel_interrupts_stalled_keep_alive_submission() {
+    use qrow::{connector::DatabaseConnector, model::DatabaseType};
+    use std::{net::TcpListener, sync::mpsc, time::Instant};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stalled_tx, stalled_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut probe, _) = listener.accept().unwrap();
+        assert!(read_http_request(&mut probe).ends_with("SELECT 1"));
+        write_trino_json(&mut probe, r#"{}"#);
+
+        let (mut first, _) = listener.accept().unwrap();
+        assert!(read_http_request(&mut first).ends_with("SELECT 10"));
+        write_trino_json(
+            &mut first,
+            r#"{"columns":[{"name":"value","type":"integer"}],"data":[[10]]}"#,
+        );
+
+        let (mut keep_alive, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut keep_alive);
+        assert!(request.ends_with("SELECT 1"));
+        stalled_tx.send(()).unwrap();
+        wait_socket_eof(&mut keep_alive);
+    });
+
+    let mut profile = Profile {
+        database_type: DatabaseType::Trino,
+        host: addr.ip().to_string(),
+        port: addr.port(),
+        tls: false,
+        username: "synthetic".into(),
+        ..Profile::default()
+    };
+    profile.lifecycle.response_timeout_seconds = 300;
+    profile.lifecycle.keep_alive_seconds = 1;
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(DatabaseConnector::default()),
+        Arc::new(|_| Ok(Secret::password(""))),
+    );
+    worker.run(profile, "SELECT 10".into());
+    assert_eq!(ready(&worker), (1, false));
+    assert!(matches!(next(&worker), Event::KeepAliveStarted));
+    stalled_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+
+    let started = Instant::now();
+    worker.cancel();
+    match next(&worker) {
+        Event::Error {
+            message,
+            disconnected,
+            ..
+        } => {
+            assert!(disconnected);
+            assert!(
+                message.contains("Keep-alive was cancelled"),
+                "unexpected keep-alive message: {message}"
+            );
+        }
+        _ => panic!("expected keep-alive error after transport abort"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(2));
+    server.join().unwrap();
+}

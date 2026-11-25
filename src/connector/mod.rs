@@ -59,6 +59,7 @@ pub struct ConnectionControl {
     cancelled: Option<Arc<AtomicBool>>,
     register: Option<RegisterTransport>,
     allowance: Option<Arc<crate::export::budget::Allowance>>,
+    export: bool,
 }
 
 impl ConnectionControl {
@@ -67,7 +68,17 @@ impl ConnectionControl {
             cancelled: Some(cancelled),
             register: Some(register),
             allowance: None,
+            export: false,
         }
+    }
+
+    pub(crate) fn for_export(mut self) -> Self {
+        self.export = true;
+        self
+    }
+
+    pub(crate) fn is_export(&self) -> bool {
+        self.export
     }
 
     pub(crate) fn with_allowance(
@@ -135,6 +146,19 @@ pub enum MetadataRequest {
 
 pub trait Session: Send {
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>>;
+    /// Start one execution with cancellation wired for submission before an
+    /// operation handle arrives.
+    fn execute_controlled(
+        &mut self,
+        sql: &str,
+        control: &ConnectionControl,
+    ) -> Result<Arc<dyn Cancellation>> {
+        control.check()?;
+        if let Some(transport) = self.transport_cancellation() {
+            control.register(transport)?;
+        }
+        self.execute(sql)
+    }
     /// Start one execution whose result is consumed without preview limits.
     fn execute_export(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
         self.execute(sql)

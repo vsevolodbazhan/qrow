@@ -219,6 +219,45 @@ fn query_error(error: tokio_postgres::Error) -> anyhow::Error {
     }
 }
 
+async fn connect_addresses(
+    addresses: impl IntoIterator<Item = std::net::SocketAddr>,
+    config: &Config,
+    tls: Option<&MakeRustlsConnect>,
+    host: &str,
+    limit: usize,
+    connect_abort: &Arc<transport::ConnectAbort>,
+    control: Option<&ConnectionControl>,
+) -> Result<(Client, tokio::task::JoinHandle<()>, Arc<transport::Abort>)> {
+    let mut last_error = None;
+    for address in addresses {
+        if let Some(control) = control {
+            control.check()?;
+        }
+        let (socket, transport) = match transport::Abort::tcp(address, limit).await {
+            Ok(connected) => connected,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
+        connect_abort.attach(transport.clone())?;
+        if let Some(control) = control {
+            control.register(connect_abort.clone())?;
+        }
+        let connected = connect_client(config, tls, host, socket, &transport).await;
+        match connected {
+            Ok((client, connection)) => {
+                return Ok((client, connection, transport));
+            }
+            Err(error) => {
+                transport.abort_transport();
+                last_error = Some(error);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Postgres host has no addresses")))
+}
+
 async fn connect_client<
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 >(
@@ -328,19 +367,24 @@ impl PostgresConnector {
                 (*self.trust.client_config()?).clone(),
             )),
         };
-        let limit = if control.is_some() {
+        let limit = if control.is_some_and(ConnectionControl::is_export) {
             transport::EXPORT_FRAME_BYTES
         } else {
             transport::PREVIEW_FRAME_BYTES
         };
-        let (client, connection, transport) = runtime.block_on(async {
+        let connect_abort = transport::ConnectAbort::new();
+        if let Some(control) = control {
+            control.register(connect_abort.clone())?;
+        }
+        let connected = runtime.block_on(connect_abort.run(async {
             tokio::time::timeout(timeout, async {
                 #[cfg(unix)]
                 if let [tokio_postgres::config::Host::Unix(directory)] = config.get_hosts() {
                     let path = directory.join(format!(".s.PGSQL.{}", profile.port));
                     let (socket, transport) = transport::Abort::unix(&path, limit).await?;
+                    connect_abort.attach(transport.clone())?;
                     if let Some(control) = control {
-                        control.register(transport.clone())?;
+                        control.register(connect_abort.clone())?;
                     }
                     let connected =
                         connect_client(&config, tls.as_ref(), &profile.host, socket, &transport)
@@ -355,37 +399,16 @@ impl PostgresConnector {
                 }
                 let addresses =
                     tokio::net::lookup_host((profile.host.as_str(), profile.port)).await?;
-                let mut last_error = None;
-                for address in addresses {
-                    if let Some(control) = control {
-                        control.check()?;
-                    }
-                    let (socket, transport) = match transport::Abort::tcp(address, limit).await {
-                        Ok(connected) => connected,
-                        Err(error) => {
-                            last_error = Some(error);
-                            continue;
-                        }
-                    };
-                    if let Some(control) = control {
-                        control.register(transport.clone())?;
-                    }
-                    let connected =
-                        connect_client(&config, tls.as_ref(), &profile.host, socket, &transport)
-                            .await;
-                    match connected {
-                        Ok((client, connection)) => {
-                            return Ok((client, connection, transport));
-                        }
-                        Err(error) => {
-                            transport.abort_transport();
-                            last_error = Some(error);
-                        }
-                    }
-                }
-                Err::<_, anyhow::Error>(
-                    last_error.unwrap_or_else(|| anyhow::anyhow!("Postgres host has no addresses")),
+                connect_addresses(
+                    addresses,
+                    &config,
+                    tls.as_ref(),
+                    &profile.host,
+                    limit,
+                    &connect_abort,
+                    control,
                 )
+                .await
             })
             .await
             .context("Postgres did not answer the connection request in time")?
@@ -395,7 +418,19 @@ impl PostgresConnector {
                     profile.database
                 )
             })
-        })?;
+        }));
+        let (client, connection, transport) = match connected {
+            Ok(connected) => connected,
+            Err(error) => {
+                if connect_abort.is_closed() {
+                    runtime.shutdown_background();
+                }
+                return Err(error);
+            }
+        };
+        if let Some(control) = control {
+            control.register(transport.clone())?;
+        }
         // Parameters remain separate from SQL, including names and values with quotes.
         runtime.block_on(async {
             for (name, value) in &profile.parameters {

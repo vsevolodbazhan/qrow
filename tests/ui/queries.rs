@@ -1344,3 +1344,161 @@ fn toggle_comment_selection_cursor_undo_and_redo(cx: &mut TestAppContext) {
     });
     assert_eq!(app.credentials.reads(), 0);
 }
+
+#[gpui_kit::test]
+fn cancel_stops_a_stalled_trino_connect_and_submission_immediately(cx: &mut TestAppContext) {
+    use qrow::model::DatabaseType;
+    use std::{
+        io::{Read, Write},
+        sync::mpsc,
+        time::Instant,
+    };
+
+    fn read_request(stream: &mut std::net::TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut byte = [0];
+        while !bytes.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            bytes.push(byte[0]);
+        }
+        let headers = String::from_utf8(bytes).unwrap();
+        let length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        let mut body = vec![0; length];
+        if length > 0 {
+            stream.read_exact(&mut body).unwrap();
+        }
+        format!("{headers}{}", String::from_utf8_lossy(&body))
+    }
+
+    fn write_json(stream: &mut std::net::TcpStream, body: &str) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    }
+
+    fn wait_eof(stream: &mut std::net::TcpStream) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut buf = [0; 256];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::BrokenPipe
+                    ) =>
+                {
+                    return;
+                }
+                Err(error) => panic!("expected socket close after cancel: {error}"),
+            }
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stalled_connect_tx, stalled_connect_rx) = mpsc::channel();
+    let (stalled_submit_tx, stalled_submit_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        // 1. Initial connection probe stalls (simulating VPN disabled).
+        let (mut stalled_connect, _) = listener.accept().unwrap();
+        assert!(read_request(&mut stalled_connect).ends_with("SELECT 1"));
+        stalled_connect_tx.send(()).unwrap();
+        wait_eof(&mut stalled_connect);
+
+        // 2. Next run connects and finishes normally.
+        let (mut probe, _) = listener.accept().unwrap();
+        assert!(read_request(&mut probe).ends_with("SELECT 1"));
+        write_json(&mut probe, r#"{}"#);
+
+        let (mut first, _) = listener.accept().unwrap();
+        assert!(read_request(&mut first).ends_with("SELECT 10"));
+        write_json(
+            &mut first,
+            r#"{"columns":[{"name":"value","type":"integer"}],"data":[[10]]}"#,
+        );
+
+        // 3. Subsequent submission on the live session stalls (VPN disabled mid-session).
+        let (mut stalled_submit, _) = listener.accept().unwrap();
+        assert!(read_request(&mut stalled_submit).ends_with("SELECT 10"));
+        stalled_submit_tx.send(()).unwrap();
+        wait_eof(&mut stalled_submit);
+    });
+
+    let mut profile = Profile {
+        database_type: DatabaseType::Trino,
+        name: "Trino VPN".into(),
+        host: addr.ip().to_string(),
+        port: addr.port(),
+        tls: false,
+        username: "synthetic".into(),
+        ..Profile::default()
+    };
+    profile.lifecycle.response_timeout_seconds = 300;
+    let credentials = MemoryCredentials::default();
+    credentials.set_password(profile.id, "").unwrap();
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 10".into();
+    let app = TestApp::launch_with(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        credentials,
+    );
+
+    // Phase 1: cancel during stalled initial connect.
+    app.click(cx, "run");
+    app.wait_for(cx, "cancel");
+    stalled_connect_rx
+        .recv_timeout(Duration::from_secs(4))
+        .unwrap();
+    let started = Instant::now();
+    app.click(cx, "cancel");
+    app.wait_for(cx, "run");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    app.wait_status(cx, "Cancelled");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("disconnect").is_none());
+    });
+
+    // Phase 2: connect and run normally once reachable.
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_for(cx, "disconnect");
+
+    // Phase 3: cancel during stalled submission on an already-connected session.
+    app.click(cx, "run");
+    app.wait_for(cx, "cancel");
+    stalled_submit_rx
+        .recv_timeout(Duration::from_secs(4))
+        .unwrap();
+    let started = Instant::now();
+    app.click(cx, "cancel");
+    app.wait_for(cx, "run");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    app.wait_status(cx, "Cancelled");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("disconnect").is_none());
+    });
+
+    server.join().unwrap();
+}

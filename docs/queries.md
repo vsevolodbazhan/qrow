@@ -237,10 +237,13 @@ approval. Switching connections or tabs does not stop work in another tab. See [
 Click **Cancel** to request cancellation. A request does not prove that the
 server has stopped the query. Cancellation cannot roll back completed SQL.
 
-During connection setup, Qrow records the request. It prevents submission of
-the user's SQL after setup returns. It does not immediately interrupt every
-setup step. During result fetching, cancellation releases the cursor and keeps
-rows that Qrow has already downloaded.
+During connection setup and query submission, Qrow interrupts active Trino and
+Postgres transports, and interrupts Kyuubi after TCP connection. Qrow then
+closes the session so the next **Run** reconnects. It cannot stop a system DNS
+lookup or a Kyuubi TCP connection attempt that has already started in the OS;
+for Trino and Postgres, Qrow stops waiting for that lookup immediately. During
+result fetching, cancellation releases the cursor and keeps rows that Qrow has
+already downloaded.
 
 For Kyuubi, each network read waits up to the
 [response timeout](connections.md#authentication-and-connection-failures) of
