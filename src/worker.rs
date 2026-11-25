@@ -840,6 +840,37 @@ impl Runner {
                         self.complete_execution(false);
                         continue;
                     }
+                    // Kyuubi/Spark synthesizes a 1-column `Result: STRING` schema with 0 rows for
+                    // DDL and DML commands such as `CREATE VIEW` and `DROP VIEW`. Peek the first
+                    // batch in multi-statement runs so empty command placeholders do not overwrite
+                    // an earlier result set.
+                    let is_kyuubi = self.profile.as_ref().is_some_and(|profile| {
+                        profile.database_type == crate::model::DatabaseType::Kyuubi
+                    });
+                    let initial_batch =
+                        if multi && is_kyuubi && is_kyuubi_placeholder_schema(&columns) {
+                            if self.finish_cancelled_fetch()? {
+                                return Ok(());
+                            }
+                            let _fetch_memory = crate::export::budget::GLOBAL
+                                .acquire(128 * crate::export::budget::MIB)?;
+                            let batch = self.session_mut()?.fetch(PREVIEW_ROWS)?;
+                            if self.finish_cancelled_fetch()? {
+                                return Ok(());
+                            }
+                            if batch.rows.is_empty() && !self.session_ref()?.result_limited() {
+                                if !finished && self.finish_preview_execution()? {
+                                    return Ok(());
+                                }
+                                self.session_mut()?.close_operation()?;
+                                *self.target.lock_unpoisoned() = None;
+                                self.complete_execution(false);
+                                continue;
+                            }
+                            Some(batch)
+                        } else {
+                            None
+                        };
                     if finished {
                         self.complete_execution(true);
                     }
@@ -848,7 +879,7 @@ impl Runner {
                     }
                     self.emit(Event::Columns(columns));
                     self.emit(Event::ExportContext(self.session_ref()?.export_context()));
-                    match self.fetch_preview_for(is_last, multi)? {
+                    match self.fetch_preview_for(is_last, multi, initial_batch)? {
                         PreviewOutcome::Cancelled => return Ok(()),
                         PreviewOutcome::Ready { more, limited } => {
                             if is_last {
@@ -890,13 +921,20 @@ impl Runner {
     }
 
     fn fetch_preview(&mut self) -> Result<()> {
-        if let PreviewOutcome::Ready { more, limited } = self.fetch_preview_for(true, false)? {
+        if let PreviewOutcome::Ready { more, limited } =
+            self.fetch_preview_for(true, false, None)?
+        {
             self.emit(Event::Ready { more, limited });
         }
         Ok(())
     }
 
-    fn fetch_preview_for(&mut self, keep_cursor: bool, multi: bool) -> Result<PreviewOutcome> {
+    fn fetch_preview_for(
+        &mut self,
+        keep_cursor: bool,
+        multi: bool,
+        mut initial_batch: Option<crate::model::Batch>,
+    ) -> Result<PreviewOutcome> {
         if self.pending.is_some() {
             self.set_cursor(Cursor::Available);
             return Ok(PreviewOutcome::Ready {
@@ -923,18 +961,21 @@ impl Runner {
         );
         let start_row = self.rows;
         let mut fetched = 0;
+        let live_cursor = self
+            .profile
+            .as_ref()
+            .is_some_and(|profile| profile.database_type == crate::model::DatabaseType::Kyuubi);
         while fetched < PREVIEW_ROWS {
             if self.finish_cancelled_fetch()? {
                 return Ok(PreviewOutcome::Cancelled);
             }
-            let live_cursor = self
-                .profile
-                .as_ref()
-                .is_some_and(|profile| profile.database_type == crate::model::DatabaseType::Kyuubi);
             let fetch_memory = live_cursor
                 .then(|| crate::export::budget::GLOBAL.acquire(128 * crate::export::budget::MIB))
                 .transpose()?;
-            let batch = self.session_mut()?.fetch(PREVIEW_ROWS - fetched)?;
+            let batch = match initial_batch.take() {
+                Some(batch) => batch,
+                None => self.session_mut()?.fetch(PREVIEW_ROWS - fetched)?,
+            };
             // A blocked fetch may return after Cancel was requested.
             if self.finish_cancelled_fetch()? {
                 return Ok(PreviewOutcome::Cancelled);
@@ -1005,6 +1046,56 @@ impl Runner {
             self.bytes += bytes;
             self.emit(Event::Rows(batch.rows));
         }
+        if !keep_cursor {
+            // Probe for one more row before closing so an exact page-sized result
+            // (for example 1,000 rows followed by COMMIT) stays complete, not partial.
+            let mut has_more = self.session_ref()?.result_limited();
+            if !has_more {
+                if self.finish_cancelled_fetch()? {
+                    return Ok(PreviewOutcome::Cancelled);
+                }
+                let _fetch_memory = live_cursor
+                    .then(|| {
+                        crate::export::budget::GLOBAL.acquire(128 * crate::export::budget::MIB)
+                    })
+                    .transpose()?;
+                let probe = self.session_mut()?.fetch(1)?;
+                if self.finish_cancelled_fetch()? {
+                    return Ok(PreviewOutcome::Cancelled);
+                }
+                has_more = !probe.rows.is_empty() || self.session_ref()?.result_limited();
+            }
+            self.fetch_completed(FetchSummary {
+                execution_id,
+                started: fetch_started,
+                page,
+                start_row,
+                fetched,
+                more: has_more,
+                limited: false,
+            });
+            if self.finish_preview_execution()? {
+                return Ok(PreviewOutcome::Cancelled);
+            }
+            self.session_mut()?.close_operation()?;
+            *self.target.lock_unpoisoned() = None;
+            self.pending = None;
+            self.set_cursor(if has_more {
+                Cursor::Unavailable
+            } else {
+                Cursor::Complete
+            });
+            if multi {
+                self.emit(Event::ResultFinished {
+                    duration: self.execution_duration().unwrap_or_default(),
+                    partial: has_more,
+                });
+            }
+            return Ok(PreviewOutcome::Ready {
+                more: false,
+                limited: false,
+            });
+        }
         self.fetch_completed(FetchSummary {
             execution_id,
             started: fetch_started,
@@ -1017,33 +1108,11 @@ impl Runner {
         if self.finish_preview_execution()? {
             return Ok(PreviewOutcome::Cancelled);
         }
-        if !keep_cursor {
-            self.session_mut()?.close_operation()?;
-            *self.target.lock_unpoisoned() = None;
-            self.pending = None;
-            self.set_cursor(Cursor::Unavailable);
-            if multi {
-                self.emit(Event::ResultFinished {
-                    duration: self.execution_duration().unwrap_or_default(),
-                    partial: true,
-                });
-            }
-            return Ok(PreviewOutcome::Ready {
-                more: false,
-                limited: false,
-            });
-        }
-        self.set_cursor(
-            if self
-                .profile
-                .as_ref()
-                .is_some_and(|profile| profile.database_type == crate::model::DatabaseType::Kyuubi)
-            {
-                Cursor::Available
-            } else {
-                Cursor::Unavailable
-            },
-        );
+        self.set_cursor(if live_cursor {
+            Cursor::Available
+        } else {
+            Cursor::Unavailable
+        });
         if multi {
             self.emit(Event::ResultFinished {
                 duration: self.execution_duration().unwrap_or_default(),
@@ -1319,6 +1388,13 @@ impl Runner {
         self.emit(Event::Cancelled);
         Ok(true)
     }
+}
+
+fn is_kyuubi_placeholder_schema(columns: &[Column]) -> bool {
+    matches!(
+        columns,
+        [column] if column.name == "Result" && column.data_type.eq_ignore_ascii_case("STRING")
+    )
 }
 
 fn format_duration(duration: Duration) -> String {

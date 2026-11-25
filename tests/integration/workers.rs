@@ -2410,6 +2410,76 @@ fn sequential_statements_close_non_final_cursors_and_keep_final_cursor_open() {
         }
     }
     assert_eq!(page2.len(), 250);
+
+    // An exact 1,000-row non-final result probes EOF and stays Complete (not Partial).
+    let exact_page: Vec<String> = (0..1000).map(|i| format!("e{i}")).collect();
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::Rows {
+            column: "val".into(),
+            rows: exact_page,
+        },
+        ScriptedReply::NoResults,
+    ]);
+    let worker = scripted_worker(connector);
+    worker.run_statements(
+        Profile::default(),
+        vec!["SELECT exact_1000;".into(), "COMMIT;".into()],
+    );
+    let mut exact_rows = Vec::new();
+    let mut exact_partials = Vec::new();
+    let mut exact_cursor = None;
+    loop {
+        match next(&worker) {
+            Event::Rows(batch) => exact_rows.extend(batch),
+            Event::Cursor { state, .. } => exact_cursor = Some(state),
+            Event::ResultFinished { partial, .. } => exact_partials.push(partial),
+            Event::Ready { more, limited } => {
+                assert!(!more);
+                assert!(!limited);
+                break;
+            }
+            Event::Error { message, .. } => panic!("Unexpected error: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(exact_rows.len(), 1000);
+    assert_eq!(exact_partials, vec![false]);
+    assert_eq!(exact_cursor, Some(qrow::worker::Cursor::Complete));
+
+    // Kyuubi's synthetic `Result: STRING` 0-row schema for DDL does not overwrite an earlier
+    // result set, while a query that returns rows in a `Result` column still replaces it.
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::Rows {
+            column: "value".into(),
+            rows: vec!["kept".into()],
+        },
+        ScriptedReply::Rows {
+            column: "Result".into(),
+            rows: vec![],
+        },
+    ]);
+    let worker = scripted_worker(connector);
+    worker.run_statements(
+        Profile::default(),
+        vec!["SELECT 'kept' AS value;".into(), "DROP VIEW v;".into()],
+    );
+    let mut kept_columns = Vec::new();
+    let mut kept_rows = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::ResultStarted { .. } => {
+                kept_columns.clear();
+                kept_rows.clear();
+            }
+            Event::Columns(cols) => kept_columns = cols,
+            Event::Rows(batch) => kept_rows.extend(batch),
+            Event::Ready { .. } => break,
+            Event::Error { message, .. } => panic!("Unexpected error: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(kept_columns[0].name, "value");
+    assert_eq!(kept_rows, vec![vec![Some("kept".into())]]);
 }
 
 #[test]

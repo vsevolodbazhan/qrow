@@ -1436,7 +1436,8 @@ impl Qrow {
                 this.preload_completion(tab_id);
             }
         });
-        let run_highlight = run_highlight::track(&input, cx);
+        let run_highlight =
+            run_highlight::track(&input, saved.id, self.tab_database_type(saved.profile), cx);
         let table = self.result_table(saved.profile, window, cx);
         Tab {
             saved,
@@ -2593,6 +2594,11 @@ impl Qrow {
                 self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
                     self.tabs[self.active].saved.profile = Some(id);
+                }
+                for tab in &self.tabs {
+                    if tab.saved.profile == Some(id) {
+                        tab.input.update(cx, |_, cx| cx.notify());
+                    }
                 }
                 self.form = None;
                 window.close_dialog(cx);

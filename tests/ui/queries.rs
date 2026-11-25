@@ -1579,3 +1579,35 @@ fn non_final_large_result_marks_partial_when_followed_by_commit(cx: &mut TestApp
     });
     assert_eq!(server.requests().len(), 3);
 }
+
+#[gpui_kit::test]
+fn run_highlight_uses_the_connection_dialect(cx: &mut TestAppContext) {
+    let mut profile = crate::support::offline_profile("Postgres dialect");
+    profile.database_type = qrow::model::DatabaseType::Postgres;
+    let sql = "SELECT '\\'; SELECT 2;";
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = sql.into();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "secondary-a");
+    app.press(cx, "left");
+    let first = run_tint(&app, cx);
+    assert_eq!(first.len(), 1, "{first:?}");
+    for _ in 0.."SELECT '\\'; ".len() {
+        app.press(cx, "right");
+    }
+    let second = run_tint(&app, cx);
+    assert_eq!(second.len(), 1, "{second:?}");
+    // In Postgres, `\` does not escape `'`, so `SELECT 2;` is a separate statement to the right.
+    assert!(
+        second[0].left() > first[0].right(),
+        "{first:?} vs {second:?}"
+    );
+}
