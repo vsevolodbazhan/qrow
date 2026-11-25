@@ -112,7 +112,19 @@ struct SessionIdentity {
     profile: Profile,
 }
 
-type Target = Arc<Mutex<Option<Arc<dyn Cancellation>>>>;
+#[derive(Clone)]
+enum CancelTarget {
+    Transport(Arc<dyn Cancellation>),
+    Operation(Arc<dyn Cancellation>),
+}
+
+#[derive(Default)]
+struct CancelState {
+    target: Option<CancelTarget>,
+    transport_aborted: bool,
+}
+
+type Target = Arc<Mutex<CancelState>>;
 /// Returns the password or the access tokens of a connection. It runs on the
 /// worker thread before each new session.
 pub type CredentialProvider = Arc<dyn Fn(&Profile) -> Result<Secret> + Send + Sync>;
@@ -146,7 +158,7 @@ impl Worker {
         let (event_tx, events) = mpsc::channel();
         let (log_tx, logs) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
-        let target = Arc::new(Mutex::new(None));
+        let target = Arc::new(Mutex::new(CancelState::default()));
         let generation = Arc::new(AtomicU64::new(0));
         let (done_tx, done) = mpsc::channel();
         let stopped = Arc::new(AtomicBool::new(false));
@@ -237,10 +249,40 @@ impl Worker {
                     Command::Shutdown => break,
                 };
                 if let Err(error) = result {
+                    let transport_aborted = {
+                        let mut state = runner.target.lock_unpoisoned();
+                        let aborted = state.transport_aborted;
+                        state.target = None;
+                        state.transport_aborted = false;
+                        aborted
+                    };
                     if error.is::<crate::external_auth::Cancelled>() {
                         runner.disconnect();
-                        *runner.target.lock_unpoisoned() = None;
                         runner.emit(Event::Disconnected);
+                        runner.emit(Event::Cancelled);
+                        idle_started = Instant::now();
+                        continue;
+                    }
+                    if error.is::<crate::export::Cancelled>()
+                        || (transport_aborted && runner.cancelled.load(Ordering::SeqCst))
+                    {
+                        let was_connected = runner.session.is_some();
+                        let message = if runner.execution.is_some() {
+                            "Execution cancelled before the server returned a query handle"
+                        } else {
+                            "Connection cancelled"
+                        };
+                        runner.disconnect();
+                        runner.log(
+                            runner.execution_id(),
+                            Severity::Info,
+                            LogKind::Cancelled,
+                            message,
+                            runner.execution_duration(),
+                        );
+                        if was_connected {
+                            runner.emit(Event::Disconnected);
+                        }
                         runner.emit(Event::Cancelled);
                         idle_started = Instant::now();
                         continue;
@@ -261,7 +303,7 @@ impl Worker {
                     if disconnected {
                         runner.disconnect();
                     }
-                    *runner.target.lock_unpoisoned() = None;
+                    runner.clear_target();
                     runner.log(
                         runner.execution_id(),
                         Severity::Error,
@@ -423,22 +465,40 @@ impl Worker {
             return;
         }
         self.cancelled.store(true, Ordering::SeqCst);
-        let cancellation = self.target.lock_unpoisoned().clone();
-        if let Some(cancellation) = cancellation {
-            let tx = self.event_tx.clone();
-            let wake = self.wake.clone();
-            let generation = self.generation.clone();
-            let current = generation.load(Ordering::SeqCst);
-            thread::spawn(move || {
-                if let Err(error) = cancellation.cancel()
-                    && generation.load(Ordering::SeqCst) == current
-                {
-                    let _ = tx.send(Event::CancelError(format!(
-                        "Cancellation request failed: {error:#}"
-                    )));
-                    wake();
+        let cancellation = {
+            let mut state = self.target.lock_unpoisoned();
+            match state.target.clone() {
+                Some(CancelTarget::Transport(transport)) => {
+                    state.transport_aborted = true;
+                    Some(CancelTarget::Transport(transport))
                 }
-            });
+                Some(CancelTarget::Operation(operation)) => {
+                    Some(CancelTarget::Operation(operation))
+                }
+                None => None,
+            }
+        };
+        match cancellation {
+            Some(CancelTarget::Transport(transport)) => {
+                transport.abort_transport();
+            }
+            Some(CancelTarget::Operation(cancellation)) => {
+                let tx = self.event_tx.clone();
+                let wake = self.wake.clone();
+                let generation = self.generation.clone();
+                let current = generation.load(Ordering::SeqCst);
+                thread::spawn(move || {
+                    if let Err(error) = cancellation.cancel()
+                        && generation.load(Ordering::SeqCst) == current
+                    {
+                        let _ = tx.send(Event::CancelError(format!(
+                            "Cancellation request failed: {error:#}"
+                        )));
+                        wake();
+                    }
+                });
+            }
+            None => {}
         }
     }
 }
@@ -545,14 +605,44 @@ impl Runner {
             Some(duration),
         );
     }
+    fn clear_target(&self) {
+        let mut state = self.target.lock_unpoisoned();
+        state.target = None;
+        state.transport_aborted = false;
+    }
+
+    fn set_operation_target(&self, cancellation: Arc<dyn Cancellation>) {
+        let mut state = self.target.lock_unpoisoned();
+        state.target = Some(CancelTarget::Operation(cancellation));
+    }
+
+    fn connection_control(&self) -> crate::connector::ConnectionControl {
+        let target = self.target.clone();
+        let cancelled = self.cancelled.clone();
+        crate::connector::ConnectionControl::new(
+            cancelled.clone(),
+            Arc::new(move |transport| {
+                let mut state = target.lock_unpoisoned();
+                if cancelled.load(Ordering::SeqCst) || state.transport_aborted {
+                    state.transport_aborted = true;
+                    drop(state);
+                    transport.abort_transport();
+                    return Err(crate::export::Cancelled.into());
+                }
+                state.target = Some(CancelTarget::Transport(transport));
+                Ok(())
+            }),
+        )
+    }
+
     fn disconnect(&mut self) {
         *self.session_identity.lock_unpoisoned() = None;
         self.cursor = Cursor::Unavailable;
         self.pending = None;
-        *self.target.lock_unpoisoned() = None;
         if let Some(mut session) = self.session.take() {
             let _ = session.close();
         }
+        self.target.lock_unpoisoned().target = None;
         self.profile = None;
     }
     fn update_profile(&mut self, profile: Profile) {
@@ -588,9 +678,15 @@ impl Runner {
                     control.register(transport)?;
                 }
             }
+            let had_session = self.session.is_some();
             self.disconnect();
-            if let Some(control) = control {
-                control.check()?;
+            if let Some(control) = control
+                && let Err(error) = control.check()
+            {
+                if had_session {
+                    self.emit(Event::Disconnected);
+                }
+                return Err(error);
             }
             let connect_started = Instant::now();
             self.emit(Event::Connecting);
@@ -663,8 +759,29 @@ impl Runner {
         profile.lifecycle.validate()?;
         self.rows = 0;
         self.bytes = 0;
-        self.prepare_session(profile, execution_id, None, self.cancelled.clone())?;
-        if self.cancelled.load(Ordering::SeqCst) {
+        self.clear_target();
+        let control = self.connection_control();
+        self.prepare_session(
+            profile,
+            execution_id,
+            Some(&control),
+            self.cancelled.clone(),
+        )?;
+        let (was_aborted, was_cancelled) = {
+            let mut state = self.target.lock_unpoisoned();
+            if state.transport_aborted {
+                (true, true)
+            } else if self.cancelled.load(Ordering::SeqCst) {
+                state.target = None;
+                (false, true)
+            } else {
+                (false, false)
+            }
+        };
+        if was_aborted {
+            return Err(crate::export::Cancelled.into());
+        }
+        if was_cancelled {
             self.log(
                 Some(execution_id),
                 Severity::Info,
@@ -682,9 +799,17 @@ impl Runner {
             fetch_page: 0,
             execution_completed: false,
         });
-        *self.target.lock_unpoisoned() = None;
-        let cancellation = self.session_mut()?.execute(&sql)?;
-        *self.target.lock_unpoisoned() = Some(cancellation.clone());
+        let cancellation = self.session_mut()?.execute_controlled(&sql, &control)?;
+        let (was_aborted, was_cancelled) = {
+            let mut state = self.target.lock_unpoisoned();
+            let was_aborted = state.transport_aborted;
+            let was_cancelled = self.cancelled.load(Ordering::SeqCst);
+            state.target = Some(CancelTarget::Operation(cancellation.clone()));
+            (was_aborted, was_cancelled)
+        };
+        if was_aborted {
+            return Err(crate::export::Cancelled.into());
+        }
         self.emit_session(execution_id);
         self.log(
             Some(execution_id),
@@ -694,7 +819,7 @@ impl Runner {
             None,
         );
         // Catch cancellation requested before ExecuteStatement returned its handle.
-        if self.cancelled.load(Ordering::SeqCst) {
+        if was_cancelled {
             cancellation.cancel()?;
         }
         let state = wait_for_result(self.session_mut()?, None)?;
@@ -702,7 +827,7 @@ impl Runner {
         match state {
             QueryState::Cancelled => {
                 self.session_mut()?.close_operation()?;
-                *self.target.lock_unpoisoned() = None;
+                self.clear_target();
                 self.log(
                     Some(execution_id),
                     Severity::Info,
@@ -716,7 +841,7 @@ impl Runner {
             QueryState::Streaming { has_results } | QueryState::Finished { has_results } => {
                 if self.cancelled.load(Ordering::SeqCst) {
                     self.session_mut()?.close_operation()?;
-                    *self.target.lock_unpoisoned() = None;
+                    self.clear_target();
                     self.log(
                         Some(execution_id),
                         Severity::Info,
@@ -735,7 +860,7 @@ impl Runner {
                         return Ok(());
                     }
                     self.session_mut()?.close_operation()?;
-                    *self.target.lock_unpoisoned() = None;
+                    self.clear_target();
                     self.complete_execution(false);
                     self.emit(Event::Ready {
                         more: false,
@@ -847,7 +972,7 @@ impl Runner {
                     self.set_cursor(Cursor::Available);
                 } else {
                     self.session_mut()?.close_operation()?;
-                    *self.target.lock_unpoisoned() = None;
+                    self.clear_target();
                     self.set_cursor(if limited {
                         Cursor::Unavailable
                     } else {
@@ -945,7 +1070,10 @@ impl Runner {
             });
             return;
         }
-        let target = self.target.lock_unpoisoned().clone();
+        let target = match self.target.lock_unpoisoned().target.clone() {
+            Some(CancelTarget::Operation(target)) => Some(target),
+            _ => None,
+        };
         let Some(target) = target else {
             let message = "The result cursor is no longer available.".to_owned();
             download
@@ -1064,7 +1192,7 @@ impl Runner {
         }
         let event = match result {
             Ok(()) => {
-                *self.target.lock_unpoisoned() = None;
+                self.clear_target();
                 *self.download.lock_unpoisoned() = None;
                 self.set_cursor(Cursor::Downloaded);
                 Event::Downloaded {
@@ -1080,7 +1208,7 @@ impl Runner {
                     .as_mut()
                     .is_none_or(|session| session.close_operation().is_err());
                 let disconnected = !download.stopped() || close;
-                *self.target.lock_unpoisoned() = None;
+                self.clear_target();
                 *self.download.lock_unpoisoned() = None;
                 if disconnected {
                     self.disconnect();
@@ -1154,7 +1282,7 @@ impl Runner {
         }
         // The operation owns cancellation cleanup. Closing does not roll back SQL.
         self.session_mut()?.close_operation()?;
-        *self.target.lock_unpoisoned() = None;
+        self.clear_target();
         self.pending = None;
         self.cursor = Cursor::Consumed;
         self.log(

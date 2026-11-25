@@ -584,14 +584,16 @@ fn failed_heartbeat_disconnects_and_stops_background_queries() -> Result<()> {
 #[test]
 #[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
 fn cancellation_during_setup_prevents_user_sql_submission() -> Result<()> {
-    // Delay only credential delivery. The subsequent authentication/session setup uses real Kyuubi.
+    // Delay only the first credential delivery. The next run connects to real Kyuubi.
     let (release, gate) = std::sync::mpsc::channel();
-    let passwords = std::sync::Mutex::new(gate);
+    let passwords = std::sync::Mutex::new(Some(gate));
     let worker = Worker::with_connector(
         Arc::new(|| {}),
         Arc::new(HiveConnector::default()),
         Arc::new(move |_| {
-            passwords.lock().unwrap().recv_timeout(TIMEOUT)?;
+            if let Some(gate) = passwords.lock().unwrap().take() {
+                gate.recv_timeout(TIMEOUT)?;
+            }
             Ok(Secret::password("qrow-test-password"))
         }),
     );
@@ -612,7 +614,7 @@ fn cancellation_during_setup_prevents_user_sql_submission() -> Result<()> {
             _ => anyhow::bail!("User SQL progressed after setup cancellation"),
         }
     }
-    // Same real session must exist, but the cancelled CREATE must never have reached it.
+    // Setup stopped before submission, so the cancelled CREATE must never have run.
     client.run("SELECT * FROM qrow_cancelled_setup");
     ensure!(!client.failure()?);
     scalar(&client.query("SELECT 53")?, "53");

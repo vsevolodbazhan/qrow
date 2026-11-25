@@ -1,4 +1,4 @@
-use super::{Event, LogEvent, LogKind, Runner, Severity, format_duration};
+use super::{CancelTarget, Event, LogEvent, LogKind, Runner, Severity, format_duration};
 use crate::connector::{Completion, wait_for_completion};
 use crate::sync::LockExt as _;
 use anyhow::Result;
@@ -98,11 +98,36 @@ impl Runner {
 
     fn keep_alive(&mut self, sql: &str) -> Result<()> {
         anyhow::ensure!(!self.stopped.load(Ordering::SeqCst), "Disconnect requested");
-        let previous_target = self.target.lock_unpoisoned().take();
+        let previous_target = {
+            let mut state = self.target.lock_unpoisoned();
+            state.transport_aborted = false;
+            state.target.take()
+        };
         let result = (|| -> Result<()> {
+            if let Some(transport) = self.session_ref()?.transport_cancellation() {
+                let mut state = self.target.lock_unpoisoned();
+                if self.cancelled.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {
+                    state.transport_aborted = true;
+                    drop(state);
+                    transport.abort_transport();
+                    anyhow::bail!("Keep-alive was cancelled");
+                }
+                state.target = Some(CancelTarget::Transport(transport));
+            }
             let cancellation = self.session_mut()?.execute_keep_alive(sql)?;
-            *self.target.lock_unpoisoned() = Some(cancellation.clone());
-            if self.cancelled.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {
+            let (was_aborted, stop) = {
+                let mut state = self.target.lock_unpoisoned();
+                let was_aborted = state.transport_aborted;
+                state.target = Some(CancelTarget::Operation(cancellation.clone()));
+                (
+                    was_aborted,
+                    self.cancelled.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst),
+                )
+            };
+            if was_aborted {
+                anyhow::bail!("Keep-alive was cancelled");
+            }
+            if stop {
                 cancellation.cancel()?;
             }
             match wait_for_completion(self.session_mut()?, None)? {
@@ -111,7 +136,20 @@ impl Runner {
             }
         })();
         let closed = self.session_mut()?.close_keep_alive();
-        *self.target.lock_unpoisoned() = previous_target;
+        let transport_aborted = {
+            let mut state = self.target.lock_unpoisoned();
+            let aborted = state.transport_aborted;
+            state.target = if aborted { None } else { previous_target };
+            state.transport_aborted = false;
+            aborted
+        };
+        let result = result.map_err(|error| {
+            if transport_aborted || error.is::<crate::export::Cancelled>() {
+                anyhow::anyhow!("Keep-alive was cancelled")
+            } else {
+                error
+            }
+        });
         result.and(closed)
     }
 }
