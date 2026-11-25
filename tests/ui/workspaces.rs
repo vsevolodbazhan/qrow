@@ -542,16 +542,31 @@ fn export_workspace_dialog_shows_single_line_option_checkboxes(cx: &mut TestAppC
     ];
 
     app.update(cx, |window, _| {
+        let summary = label(window, "export-workspace-summary").unwrap_or_default();
+        assert!(summary.contains("as a portable file."), "{summary}");
+        assert!(!summary.contains(".qrow-workspace.json"), "{summary}");
+
         // Small checkboxes use 0.875 rem text with 1.25 relative line height,
-        // without secondary description lines underneath.
+        // stacked with `gap_2()` (0.5 rem) like the Export Results dialog.
         let single_line = window.rem_size() * 0.875 * 1.25;
+        let expected_gap = window.rem_size() * 0.5;
+        let mut previous_bottom = None;
         for (id, expected_label) in checkboxes {
             assert_eq!(label(window, id).as_deref(), Some(expected_label));
-            let height = bounds_of(window, id).size.height;
+            let bounds = bounds_of(window, id);
+            let height = bounds.size.height;
             assert!(
                 (height - single_line).abs() <= px(2.),
                 "{id}: height {height:?} should match a single label line (~{single_line:?})"
             );
+            if let Some(prev_bottom) = previous_bottom {
+                let gap = bounds.top() - prev_bottom;
+                assert!(
+                    (gap - expected_gap).abs() <= px(1.),
+                    "{id}: gap {gap:?} should match Export Results gap_2 ({expected_gap:?})"
+                );
+            }
+            previous_bottom = Some(bounds.bottom());
         }
     });
 
