@@ -847,30 +847,35 @@ impl Runner {
                     let is_kyuubi = self.profile.as_ref().is_some_and(|profile| {
                         profile.database_type == crate::model::DatabaseType::Kyuubi
                     });
-                    let initial_batch =
-                        if multi && is_kyuubi && is_kyuubi_placeholder_schema(&columns) {
-                            if self.finish_cancelled_fetch()? {
+                    let initial_batch = if multi
+                        && is_kyuubi
+                        && is_kyuubi_placeholder_schema(&columns)
+                        && !crate::sql::starts_with_query_keyword(
+                            &sql,
+                            crate::model::DatabaseType::Kyuubi,
+                        ) {
+                        if self.finish_cancelled_fetch()? {
+                            return Ok(());
+                        }
+                        let _fetch_memory = crate::export::budget::GLOBAL
+                            .acquire(128 * crate::export::budget::MIB)?;
+                        let batch = self.session_mut()?.fetch(PREVIEW_ROWS)?;
+                        if self.finish_cancelled_fetch()? {
+                            return Ok(());
+                        }
+                        if batch.rows.is_empty() && !self.session_ref()?.result_limited() {
+                            if !finished && self.finish_preview_execution()? {
                                 return Ok(());
                             }
-                            let _fetch_memory = crate::export::budget::GLOBAL
-                                .acquire(128 * crate::export::budget::MIB)?;
-                            let batch = self.session_mut()?.fetch(PREVIEW_ROWS)?;
-                            if self.finish_cancelled_fetch()? {
-                                return Ok(());
-                            }
-                            if batch.rows.is_empty() && !self.session_ref()?.result_limited() {
-                                if !finished && self.finish_preview_execution()? {
-                                    return Ok(());
-                                }
-                                self.session_mut()?.close_operation()?;
-                                *self.target.lock_unpoisoned() = None;
-                                self.complete_execution(false);
-                                continue;
-                            }
-                            Some(batch)
-                        } else {
-                            None
-                        };
+                            self.session_mut()?.close_operation()?;
+                            *self.target.lock_unpoisoned() = None;
+                            self.complete_execution(false);
+                            continue;
+                        }
+                        Some(batch)
+                    } else {
+                        None
+                    };
                     if finished {
                         self.complete_execution(true);
                     }

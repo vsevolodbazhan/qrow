@@ -388,6 +388,26 @@ fn same_line_space(text: &str) -> bool {
         .all(|c| c.is_whitespace() && !matches!(c, '\n' | '\r'))
 }
 
+/// Returns whether `sql` begins with a query keyword (or parenthesized query)
+/// rather than a DDL/DML command, ignoring leading whitespace and comments.
+pub fn starts_with_query_keyword(sql: &str, database_type: crate::model::DatabaseType) -> bool {
+    for (range, kind) in tokens_for(sql, database_type) {
+        if kind == Kind::Comment {
+            continue;
+        }
+        let token = sql[range].trim();
+        if token.is_empty() || token == "(" {
+            continue;
+        }
+        return kind == Kind::Plain
+            && matches!(
+                token.to_ascii_uppercase().as_str(),
+                "SELECT" | "WITH" | "VALUES" | "TABLE" | "SHOW" | "DESCRIBE" | "DESC" | "EXPLAIN"
+            );
+    }
+    false
+}
+
 /// Splits `sql` into its executable statements using the connection's quoting rules.
 /// A single statement keeps its exact text (including leading comments or hints).
 pub fn statements_for(

@@ -2480,6 +2480,43 @@ fn sequential_statements_close_non_final_cursors_and_keep_final_cursor_open() {
     }
     assert_eq!(kept_columns[0].name, "value");
     assert_eq!(kept_rows, vec![vec![Some("kept".into())]]);
+
+    // A genuine empty query returning a single `Result: STRING` column is NOT discarded.
+    let connector = ScriptedConnector::new(vec![
+        ScriptedReply::Rows {
+            column: "value".into(),
+            rows: vec!["old".into()],
+        },
+        ScriptedReply::Rows {
+            column: "Result".into(),
+            rows: vec![],
+        },
+    ]);
+    let worker = scripted_worker(connector);
+    worker.run_statements(
+        Profile::default(),
+        vec![
+            "SELECT 'old' AS value;".into(),
+            "SELECT 'new' AS Result WHERE false;".into(),
+        ],
+    );
+    let mut final_columns = Vec::new();
+    let mut final_rows = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::ResultStarted { .. } => {
+                final_columns.clear();
+                final_rows.clear();
+            }
+            Event::Columns(cols) => final_columns = cols,
+            Event::Rows(batch) => final_rows.extend(batch),
+            Event::Ready { .. } => break,
+            Event::Error { message, .. } => panic!("Unexpected error: {message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(final_columns[0].name, "Result");
+    assert!(final_rows.is_empty());
 }
 
 #[test]
